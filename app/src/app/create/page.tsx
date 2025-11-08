@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { validateMarketQuestion, validateMarketDescription } from '@/utils/bannedWords';
 import { useRouter } from 'next/navigation';
+import { CATEGORIES, CategoryId } from '@/utils/categories';
 
 export default function CreateMarket() {
   const { publicKey, connected } = useWallet();
@@ -12,6 +13,7 @@ export default function CreateMarket() {
 
   const [question, setQuestion] = useState('');
   const [description, setDescription] = useState('');
+  const [category, setCategory] = useState<CategoryId>('crypto');
   const [resolutionDays, setResolutionDays] = useState(7);
 
   const [questionError, setQuestionError] = useState<string | null>(null);
@@ -34,6 +36,7 @@ export default function CreateMarket() {
     question.length >= 10 &&
     !questionError &&
     !descriptionError &&
+    category &&
     resolutionDays > 0;
 
   async function handleCreateMarket() {
@@ -45,6 +48,7 @@ export default function CreateMarket() {
       console.log('Creating market:', {
         question,
         description,
+        category,
         resolutionTime: Math.floor(Date.now() / 1000) + resolutionDays * 86400,
       });
 
@@ -117,10 +121,31 @@ export default function CreateMarket() {
           )}
         </div>
 
+        {/* Category */}
+        <div className="mb-6">
+          <label className="block text-white font-semibold mb-2">
+            Category *
+          </label>
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value as CategoryId)}
+            className="input-pump w-full"
+          >
+            {CATEGORIES.map((cat) => (
+              <option key={cat.id} value={cat.id}>
+                {cat.icon} {cat.label}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-gray-500 mt-2">
+            Choose the category that best fits your market
+          </p>
+        </div>
+
         {/* Resolution Time */}
         <div className="mb-8">
           <label className="block text-white font-semibold mb-2">
-            Resolution Time
+            Resolution Time *
           </label>
           <select
             value={resolutionDays}
