@@ -90,11 +90,13 @@ pub mod funmarket_pump {
         let current_supply = if is_yes { market.yes_supply } else { market.no_supply };
         let cost = calculate_bonding_curve_cost(current_supply, amount);
 
-        // 1% fee to creator
-        let fee = cost / 100;
-        let total_cost = cost + fee;
+        // 1% fee to creator + 1% fee to platform = 2% total
+        let creator_fee = cost / 100;
+        let platform_fee = cost / 100;
+        let total_fees = creator_fee + platform_fee;
+        let total_cost = cost + total_fees;
 
-        // Transfer SOL from buyer
+        // Transfer SOL from buyer to market
         system_program::transfer(
             CpiContext::new(
                 ctx.accounts.system_program.to_account_info(),
@@ -106,7 +108,7 @@ pub mod funmarket_pump {
             cost,
         )?;
 
-        // Transfer fee to creator
+        // Transfer 1% fee to creator
         system_program::transfer(
             CpiContext::new(
                 ctx.accounts.system_program.to_account_info(),
@@ -115,7 +117,19 @@ pub mod funmarket_pump {
                     to: ctx.accounts.creator.to_account_info(),
                 },
             ),
-            fee,
+            creator_fee,
+        )?;
+
+        // Transfer 1% fee to platform
+        system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.buyer.to_account_info(),
+                    to: ctx.accounts.platform_wallet.to_account_info(),
+                },
+            ),
+            platform_fee,
         )?;
 
         // Update supply
@@ -125,7 +139,7 @@ pub mod funmarket_pump {
             market.no_supply += amount;
         }
         market.total_volume += total_cost;
-        market.fees_collected += fee;
+        market.fees_collected += total_fees;
 
         // Initialize or update user position
         let position = &mut ctx.accounts.user_position;
@@ -142,7 +156,8 @@ pub mod funmarket_pump {
             position.no_shares += amount;
         }
 
-        msg!("Bought {} {} shares for {} lamports (fee: {})", amount, if is_yes { "YES" } else { "NO" }, cost, fee);
+        msg!("Bought {} {} shares for {} lamports (creator fee: {}, platform fee: {}, total: {})",
+             amount, if is_yes { "YES" } else { "NO" }, cost, creator_fee, platform_fee, total_cost);
         Ok(())
     }
 
@@ -165,17 +180,23 @@ pub mod funmarket_pump {
         let current_supply = if is_yes { market.yes_supply } else { market.no_supply };
         let refund = calculate_bonding_curve_cost(current_supply - amount, amount);
 
-        // 1% fee on sell too
-        let fee = refund / 100;
-        let net_refund = refund - fee;
+        // 1% fee to creator + 1% fee to platform = 2% total on sell
+        let creator_fee = refund / 100;
+        let platform_fee = refund / 100;
+        let total_fees = creator_fee + platform_fee;
+        let net_refund = refund - total_fees;
 
         // Transfer refund to seller
         **ctx.accounts.market.to_account_info().try_borrow_mut_lamports()? -= net_refund;
         **ctx.accounts.seller.to_account_info().try_borrow_mut_lamports()? += net_refund;
 
-        // Transfer fee to creator
-        **ctx.accounts.market.to_account_info().try_borrow_mut_lamports()? -= fee;
-        **ctx.accounts.creator.to_account_info().try_borrow_mut_lamports()? += fee;
+        // Transfer 1% fee to creator
+        **ctx.accounts.market.to_account_info().try_borrow_mut_lamports()? -= creator_fee;
+        **ctx.accounts.creator.to_account_info().try_borrow_mut_lamports()? += creator_fee;
+
+        // Transfer 1% fee to platform
+        **ctx.accounts.market.to_account_info().try_borrow_mut_lamports()? -= platform_fee;
+        **ctx.accounts.platform_wallet.to_account_info().try_borrow_mut_lamports()? += platform_fee;
 
         // Update supply
         if is_yes {
@@ -183,7 +204,7 @@ pub mod funmarket_pump {
         } else {
             market.no_supply -= amount;
         }
-        market.fees_collected += fee;
+        market.fees_collected += total_fees;
 
         // Update position
         if is_yes {
@@ -192,7 +213,8 @@ pub mod funmarket_pump {
             position.no_shares -= amount;
         }
 
-        msg!("Sold {} {} shares for {} lamports (fee: {})", amount, if is_yes { "YES" } else { "NO" }, net_refund, fee);
+        msg!("Sold {} {} shares for {} lamports (creator fee: {}, platform fee: {})",
+             amount, if is_yes { "YES" } else { "NO" }, net_refund, creator_fee, platform_fee);
         Ok(())
     }
 
@@ -327,9 +349,13 @@ pub struct BuyShares<'info> {
     #[account(mut)]
     pub buyer: Signer<'info>,
 
-    /// CHECK: Creator receives fees
+    /// CHECK: Creator receives 1% fee
     #[account(mut, address = market.creator)]
     pub creator: AccountInfo<'info>,
+
+    /// CHECK: Platform wallet receives 1% fee
+    #[account(mut)]
+    pub platform_wallet: AccountInfo<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -349,9 +375,13 @@ pub struct SellShares<'info> {
     #[account(mut)]
     pub seller: Signer<'info>,
 
-    /// CHECK: Creator receives fees
+    /// CHECK: Creator receives 1% fee
     #[account(mut, address = market.creator)]
     pub creator: AccountInfo<'info>,
+
+    /// CHECK: Platform wallet receives 1% fee
+    #[account(mut)]
+    pub platform_wallet: AccountInfo<'info>,
 
     pub system_program: Program<'info, System>,
 }

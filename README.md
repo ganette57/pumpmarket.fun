@@ -9,7 +9,7 @@
 
 - ✅ **Prediction Markets** - Create YES/NO markets on anything
 - ✅ **Bonding Curve Pricing** - Early buyers get better prices
-- ✅ **1% Creator Fees** - Earn fees on every trade in your market
+- ✅ **2% Fees Split** - 1% to creator + 1% to platform on every trade
 - ✅ **Banned Words Filter** - Strict content moderation (no illegal/NSFW content)
 - ✅ **Rate Limiting** - Max 5 active markets per wallet
 - ✅ **Admin Resolution** - Market creators resolve outcomes (MVP)
@@ -182,8 +182,10 @@ const BANNED_WORDS: [&str; 20] = [
 ```
 Price = base_price + (current_supply / 100000)
 Cost = amount * price
-Fee = cost * 0.01 (1%)
-Total = cost + fee
+Creator Fee = cost * 0.01 (1%)
+Platform Fee = cost * 0.01 (1%)
+Total Fees = 2%
+Total = cost + creator_fee + platform_fee
 ```
 
 ## 📊 Program Accounts

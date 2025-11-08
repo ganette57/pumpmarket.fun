@@ -42,20 +42,23 @@ price_per_share = base_price + (current_supply / 100000)
 
 ### 3. Fee System
 
-**Creator Fees: 1%**
+**Split Fees: 2% Total (1% Creator + 1% Platform)**
 - Charged on every trade (buy & sell)
-- Paid directly to market creator
+- 1% paid to market creator
+- 1% paid to platform wallet
 - Incentivizes quality market creation
-- Passive income for creators
+- Sustainable revenue model
 
 **Example Trade**
 ```
 Buy 100 shares at 0.01 SOL each
 Cost: 1.00 SOL
-Fee: 0.01 SOL (1%)
-Total: 1.01 SOL
+Creator Fee: 0.01 SOL (1%)
+Platform Fee: 0.01 SOL (1%)
+Total: 1.02 SOL
 
 Creator receives: 0.01 SOL
+Platform receives: 0.01 SOL
 Market receives: 1.00 SOL
 ```
 
