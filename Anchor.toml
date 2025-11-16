@@ -5,10 +5,10 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-funmarket_pump = "FunMktPumpXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+funmarket_pump = "BV6q3zDwjaXdcn3DmqroHbeNuTDxtrpyYXvGNeYec6Wy"
 
 [programs.localnet]
-funmarket_pump = "FunMktPumpXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+funmarket_pump = "BV6q3zDwjaXdcn3DmqroHbeNuTDxtrpyYXvGNeYec6Wy"
 
 [registry]
 url = "https://api.apr.dev"

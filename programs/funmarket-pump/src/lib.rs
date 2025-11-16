@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 
-declare_id!("FunMktPumpXXXXXXXXXXXXXXXXXXXXXXXXXXXXX");
+declare_id!("BV6q3zDwjaXdcn3DmqroHbeNuTDxtrpyYXvGNeYec6Wy");
 
 #[program]
 pub mod funmarket_pump {
@@ -102,7 +102,7 @@ pub mod funmarket_pump {
                 ctx.accounts.system_program.to_account_info(),
                 system_program::Transfer {
                     from: ctx.accounts.buyer.to_account_info(),
-                    to: ctx.accounts.market.to_account_info(),
+                    to: market.to_account_info().clone(),
                 },
             ),
             cost,
@@ -167,6 +167,7 @@ pub mod funmarket_pump {
         amount: u64,
         is_yes: bool,
     ) -> Result<()> {
+        let market_info = ctx.accounts.market.to_account_info();
         let market = &mut ctx.accounts.market;
         let position = &mut ctx.accounts.user_position;
 
@@ -187,15 +188,15 @@ pub mod funmarket_pump {
         let net_refund = refund - total_fees;
 
         // Transfer refund to seller
-        **ctx.accounts.market.to_account_info().try_borrow_mut_lamports()? -= net_refund;
+        **market_info.try_borrow_mut_lamports()? -= net_refund;
         **ctx.accounts.seller.to_account_info().try_borrow_mut_lamports()? += net_refund;
 
         // Transfer 1% fee to creator
-        **ctx.accounts.market.to_account_info().try_borrow_mut_lamports()? -= creator_fee;
+        **market_info.try_borrow_mut_lamports()? -= creator_fee;
         **ctx.accounts.creator.to_account_info().try_borrow_mut_lamports()? += creator_fee;
 
         // Transfer 1% fee to platform
-        **ctx.accounts.market.to_account_info().try_borrow_mut_lamports()? -= platform_fee;
+        **market_info.try_borrow_mut_lamports()? -= platform_fee;
         **ctx.accounts.platform_wallet.to_account_info().try_borrow_mut_lamports()? += platform_fee;
 
         // Update supply
