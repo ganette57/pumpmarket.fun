@@ -2,7 +2,7 @@ import { Connection, PublicKey, clusterApiUrl } from '@solana/web3.js';
 import { Program, AnchorProvider, Idl, setProvider } from '@coral-xyz/anchor';
 import { AnchorWallet } from '@solana/wallet-adapter-react';
 
-export const PROGRAM_ID = new PublicKey('FunMktPumpXXXXXXXXXXXXXXXXXXXXXXXXXXXXX');
+export const PROGRAM_ID = new PublicKey('BV6q3zDwjaXdcn3DmqroHbeNuTDxtrpyYXvGNeYec6Wy');
 export const NETWORK = clusterApiUrl('devnet');
 
 export function getConnection(): Connection {
