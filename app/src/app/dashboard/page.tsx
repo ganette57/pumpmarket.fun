@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import Link from 'next/link';
 import { lamportsToSol } from '@/utils/solana';
+import { Heart, ExternalLink } from 'lucide-react';
 
 interface UserMarket {
   publicKey: string;
@@ -27,12 +28,14 @@ export default function Dashboard() {
   const { publicKey, connected } = useWallet();
   const [myMarkets, setMyMarkets] = useState<UserMarket[]>([]);
   const [myPositions, setMyPositions] = useState<UserPosition[]>([]);
+  const [bookmarkedMarketIds, setBookmarkedMarketIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (connected && publicKey) {
       loadUserData();
     }
+    loadBookmarkedMarkets();
   }, [connected, publicKey]);
 
   async function loadUserData() {
@@ -44,6 +47,27 @@ export default function Dashboard() {
       console.error('Error loading user data:', error);
     } finally {
       setLoading(false);
+    }
+  }
+
+  function loadBookmarkedMarkets() {
+    try {
+      const savedMarkets = localStorage.getItem('savedMarkets');
+      if (savedMarkets) {
+        setBookmarkedMarketIds(JSON.parse(savedMarkets));
+      }
+    } catch (error) {
+      console.error('Error loading bookmarked markets:', error);
+    }
+  }
+
+  function removeBookmark(marketId: string) {
+    try {
+      const updatedMarkets = bookmarkedMarketIds.filter((id) => id !== marketId);
+      localStorage.setItem('savedMarkets', JSON.stringify(updatedMarkets));
+      setBookmarkedMarketIds(updatedMarkets);
+    } catch (error) {
+      console.error('Error removing bookmark:', error);
     }
   }
 
@@ -145,6 +169,57 @@ export default function Dashboard() {
                   {market.resolved && (
                     <span className="text-pump-green font-semibold">RESOLVED</span>
                   )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Bookmarked Markets */}
+      <div className="mb-12">
+        <div className="flex items-center space-x-2 mb-6">
+          <Heart className="w-6 h-6 text-pump-green fill-pump-green" />
+          <h2 className="text-2xl font-bold text-white">Saved Markets</h2>
+        </div>
+
+        {bookmarkedMarketIds.length === 0 ? (
+          <div className="card-pump text-center py-12">
+            <Heart className="w-16 h-16 text-gray-700 mx-auto mb-4" />
+            <p className="text-gray-400 mb-4">No saved markets yet</p>
+            <p className="text-gray-500 text-sm mb-4">
+              Click the <Heart className="w-4 h-4 inline" /> icon on any market to save it here
+            </p>
+            <Link href="/">
+              <button className="btn-pump">Browse Markets</button>
+            </Link>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {bookmarkedMarketIds.map((marketId) => (
+              <div key={marketId} className="card-pump">
+                <div className="flex justify-between items-center">
+                  <div className="flex-1">
+                    <p className="text-white font-semibold mb-1">Market ID: {marketId.slice(0, 20)}...</p>
+                    <p className="text-xs text-gray-500">
+                      Click "View Market" to see full details and trade
+                    </p>
+                  </div>
+                  <div className="flex items-center space-x-3">
+                    <Link href={`/trade/${marketId}`}>
+                      <button className="btn-pump px-4 py-2 text-sm flex items-center space-x-2">
+                        <span>View Market</span>
+                        <ExternalLink className="w-4 h-4" />
+                      </button>
+                    </Link>
+                    <button
+                      onClick={() => removeBookmark(marketId)}
+                      className="w-10 h-10 rounded-full bg-pump-gray border border-gray-700 hover:border-pump-red text-gray-400 hover:text-pump-red transition flex items-center justify-center"
+                      title="Remove bookmark"
+                    >
+                      <Heart className="w-5 h-5 fill-current" />
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}

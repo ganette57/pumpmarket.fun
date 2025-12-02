@@ -5,6 +5,10 @@ import { useParams } from 'next/navigation';
 import { useWallet } from '@solana/wallet-adapter-react';
 import BondingCurveChart from '@/components/BondingCurveChart';
 import { calculateBuyCost, lamportsToSol } from '@/utils/solana';
+import CreatorSocialLinks from '@/components/CreatorSocialLinks';
+import MarketActions from '@/components/MarketActions';
+import CommentsSection from '@/components/CommentsSection';
+import { SocialLinks } from '@/components/SocialLinksForm';
 
 interface Market {
   publicKey: string;
@@ -17,6 +21,7 @@ interface Market {
   resolutionTime: number;
   resolved: boolean;
   winningOutcome?: boolean;
+  socialLinks?: SocialLinks;
 }
 
 export default function TradePage() {
@@ -45,6 +50,11 @@ export default function TradePage() {
         totalVolume: 50_000_000_000,
         resolutionTime: Math.floor(Date.now() / 1000) + 86400 * 30,
         resolved: false,
+        socialLinks: {
+          twitter: 'https://x.com/solana',
+          telegram: 'https://t.me/solana',
+          website: 'https://solana.com',
+        },
       };
       setMarket(exampleMarket);
     } catch (error) {
@@ -101,7 +111,19 @@ export default function TradePage() {
         {/* Left: Market Info */}
         <div className="lg:col-span-2">
           <div className="card-pump mb-6">
-            <h1 className="text-3xl font-bold text-white mb-4">{market.question}</h1>
+            {/* Title with Bookmark + Share */}
+            <div className="flex items-start justify-between mb-4">
+              <h1 className="text-3xl font-bold text-white flex-1">{market.question}</h1>
+              <MarketActions marketId={market.publicKey} question={market.question} />
+            </div>
+
+            {/* Creator Social Links */}
+            {market.socialLinks && (
+              <div className="mb-4">
+                <CreatorSocialLinks socialLinks={market.socialLinks} />
+              </div>
+            )}
+
             <p className="text-gray-400 mb-6">{market.description}</p>
 
             {/* Current Odds */}
@@ -230,6 +252,11 @@ export default function TradePage() {
             )}
           </div>
         </div>
+      </div>
+
+      {/* Comments Section - Full Width */}
+      <div className="mt-8">
+        <CommentsSection marketId={market.publicKey} />
       </div>
     </div>
   );

@@ -5,6 +5,7 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { validateMarketQuestion, validateMarketDescription } from '@/utils/bannedWords';
 import { useRouter } from 'next/navigation';
 import { CATEGORIES, CategoryId } from '@/utils/categories';
+import SocialLinksForm, { SocialLinks } from '@/components/SocialLinksForm';
 
 export default function CreateMarket() {
   const { publicKey, connected } = useWallet();
@@ -15,6 +16,7 @@ export default function CreateMarket() {
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState<CategoryId>('crypto');
   const [resolutionDays, setResolutionDays] = useState(7);
+  const [socialLinks, setSocialLinks] = useState<SocialLinks>({});
 
   const [questionError, setQuestionError] = useState<string | null>(null);
   const [descriptionError, setDescriptionError] = useState<string | null>(null);
@@ -50,6 +52,7 @@ export default function CreateMarket() {
         description,
         category,
         resolutionTime: Math.floor(Date.now() / 1000) + resolutionDays * 86400,
+        socialLinks,
       });
 
       alert('Market created! (Demo mode - program not deployed yet)');
@@ -160,6 +163,11 @@ export default function CreateMarket() {
             <option value={90}>3 Months</option>
             <option value={180}>6 Months</option>
           </select>
+        </div>
+
+        {/* Social Links */}
+        <div className="mb-8 pb-8 border-b border-gray-800">
+          <SocialLinksForm value={socialLinks} onChange={setSocialLinks} />
         </div>
 
         {/* Submit */}
