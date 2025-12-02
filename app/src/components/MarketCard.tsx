@@ -1,13 +1,18 @@
 'use client';
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { lamportsToSol } from '@/utils/solana';
+import CategoryImagePlaceholder from './CategoryImagePlaceholder';
+import { useState } from 'react';
 
 interface MarketCardProps {
   market: {
     publicKey: string;
     question: string;
     description: string;
+    category?: string;
+    imageUrl?: string;
     yesSupply: number;
     noSupply: number;
     totalVolume: number;
@@ -17,6 +22,7 @@ interface MarketCardProps {
 }
 
 export default function MarketCard({ market }: MarketCardProps) {
+  const [imageError, setImageError] = useState(false);
   const totalSupply = market.yesSupply + market.noSupply;
   const yesPercent = totalSupply > 0 ? (market.yesSupply / totalSupply) * 100 : 50;
   const noPercent = 100 - yesPercent;
@@ -28,8 +34,26 @@ export default function MarketCard({ market }: MarketCardProps) {
 
   return (
     <Link href={`/trade/${market.publicKey}`}>
-      <div className="card-pump cursor-pointer">
-        <div className="mb-4">
+      <div className="bg-pump-gray border border-gray-800 rounded-xl overflow-hidden hover:border-pump-green transition-all duration-200 hover:shadow-lg cursor-pointer group">
+        {/* Market Image */}
+        <div className="relative w-full h-48 overflow-hidden bg-pump-dark">
+          {market.imageUrl && !imageError ? (
+            <Image
+              src={market.imageUrl}
+              alt={market.question}
+              fill
+              className="object-cover group-hover:scale-105 transition-transform duration-300"
+              onError={() => setImageError(true)}
+            />
+          ) : (
+            <CategoryImagePlaceholder category={market.category} className="w-full h-full" />
+          )}
+          {/* Gradient overlay */}
+          <div className="absolute inset-0 bg-gradient-to-t from-pump-dark/80 to-transparent"></div>
+        </div>
+
+        <div className="p-6">
+          <div className="mb-4">
           <h3 className="text-xl font-bold text-white mb-2 line-clamp-2">
             {market.question}
           </h3>
@@ -76,3 +100,4 @@ export default function MarketCard({ market }: MarketCardProps) {
     </Link>
   );
 }
+
