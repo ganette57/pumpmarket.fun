@@ -8,7 +8,9 @@ import { CATEGORIES, CategoryId } from '@/utils/categories';
 import SocialLinksForm, { SocialLinks } from '@/components/SocialLinksForm';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
-import { Calendar } from 'lucide-react';
+import { Calendar, Image as ImageIcon } from 'lucide-react';
+import Image from 'next/image';
+import CategoryImagePlaceholder from '@/components/CategoryImagePlaceholder';
 
 export default function CreateMarket() {
   const { publicKey, connected } = useWallet();
@@ -18,6 +20,8 @@ export default function CreateMarket() {
   const [question, setQuestion] = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState<CategoryId>('crypto');
+  const [imageUrl, setImageUrl] = useState('');
+  const [imageError, setImageError] = useState(false);
   // Default: 7 days from now
   const [resolutionDate, setResolutionDate] = useState<Date>(() => {
     const date = new Date();
@@ -60,6 +64,7 @@ export default function CreateMarket() {
         question,
         description,
         category,
+        imageUrl: imageUrl || undefined,
         resolutionTime: Math.floor(resolutionDate.getTime() / 1000),
         socialLinks,
       });
@@ -152,6 +157,67 @@ export default function CreateMarket() {
           <p className="text-xs text-gray-500 mt-2">
             Choose the category that best fits your market
           </p>
+        </div>
+
+        {/* Market Image */}
+        <div className="mb-6">
+          <label className="block text-white font-semibold mb-2">
+            Market Image (Optional)
+          </label>
+          <div className="relative">
+            <ImageIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-500 pointer-events-none" />
+            <input
+              type="url"
+              value={imageUrl}
+              onChange={(e) => {
+                setImageUrl(e.target.value);
+                setImageError(false);
+              }}
+              placeholder="https://example.com/image.jpg"
+              className="input-pump w-full pl-10"
+            />
+          </div>
+          <p className="text-xs text-gray-500 mt-2">
+            Add an image URL to make your market stand out (16:9 ratio recommended)
+          </p>
+
+          {/* Image Preview */}
+          {imageUrl && (
+            <div className="mt-4">
+              <p className="text-sm text-gray-400 mb-2">Preview:</p>
+              <div className="relative w-full h-48 rounded-lg overflow-hidden bg-pump-dark border border-gray-700">
+                {!imageError ? (
+                  <Image
+                    src={imageUrl}
+                    alt="Market preview"
+                    fill
+                    className="object-cover"
+                    onError={() => setImageError(true)}
+                  />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center">
+                    <div className="text-center text-gray-500">
+                      <ImageIcon className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                      <p className="text-sm">Invalid image URL</p>
+                    </div>
+                  </div>
+                )}
+                {!imageError && imageUrl && (
+                  <div className="absolute inset-0 bg-gradient-to-t from-pump-dark/80 to-transparent"></div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Placeholder preview when no URL */}
+          {!imageUrl && (
+            <div className="mt-4">
+              <p className="text-sm text-gray-400 mb-2">Default placeholder for {category}:</p>
+              <div className="relative w-full h-48 rounded-lg overflow-hidden">
+                <CategoryImagePlaceholder category={category} className="w-full h-full" />
+              </div>
+            </div>
+          )}
         </div>
 
         {/* End Date & Time */}
