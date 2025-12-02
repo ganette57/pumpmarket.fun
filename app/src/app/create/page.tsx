@@ -6,6 +6,9 @@ import { validateMarketQuestion, validateMarketDescription } from '@/utils/banne
 import { useRouter } from 'next/navigation';
 import { CATEGORIES, CategoryId } from '@/utils/categories';
 import SocialLinksForm, { SocialLinks } from '@/components/SocialLinksForm';
+import DatePicker from 'react-datepicker';
+import 'react-datepicker/dist/react-datepicker.css';
+import { Calendar } from 'lucide-react';
 
 export default function CreateMarket() {
   const { publicKey, connected } = useWallet();
@@ -15,7 +18,12 @@ export default function CreateMarket() {
   const [question, setQuestion] = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState<CategoryId>('crypto');
-  const [resolutionDays, setResolutionDays] = useState(7);
+  // Default: 7 days from now
+  const [resolutionDate, setResolutionDate] = useState<Date>(() => {
+    const date = new Date();
+    date.setDate(date.getDate() + 7);
+    return date;
+  });
   const [socialLinks, setSocialLinks] = useState<SocialLinks>({});
 
   const [questionError, setQuestionError] = useState<string | null>(null);
@@ -39,7 +47,8 @@ export default function CreateMarket() {
     !questionError &&
     !descriptionError &&
     category &&
-    resolutionDays > 0;
+    resolutionDate &&
+    resolutionDate > new Date(); // Must be in the future
 
   async function handleCreateMarket() {
     if (!canSubmit || !publicKey) return;
@@ -51,7 +60,7 @@ export default function CreateMarket() {
         question,
         description,
         category,
-        resolutionTime: Math.floor(Date.now() / 1000) + resolutionDays * 86400,
+        resolutionTime: Math.floor(resolutionDate.getTime() / 1000),
         socialLinks,
       });
 
@@ -145,24 +154,28 @@ export default function CreateMarket() {
           </p>
         </div>
 
-        {/* Resolution Time */}
+        {/* End Date & Time */}
         <div className="mb-8">
           <label className="block text-white font-semibold mb-2">
-            Resolution Time *
+            End Date & Time *
           </label>
-          <select
-            value={resolutionDays}
-            onChange={(e) => setResolutionDays(parseInt(e.target.value))}
-            className="input-pump w-full"
-          >
-            <option value={1}>1 Day</option>
-            <option value={3}>3 Days</option>
-            <option value={7}>1 Week</option>
-            <option value={14}>2 Weeks</option>
-            <option value={30}>1 Month</option>
-            <option value={90}>3 Months</option>
-            <option value={180}>6 Months</option>
-          </select>
+          <div className="relative">
+            <DatePicker
+              selected={resolutionDate}
+              onChange={(date: Date | null) => date && setResolutionDate(date)}
+              showTimeSelect
+              timeFormat="HH:mm"
+              timeIntervals={15}
+              dateFormat="MMMM d, yyyy h:mm aa"
+              minDate={new Date()}
+              className="input-pump w-full pl-10"
+              placeholderText="Select end date and time"
+            />
+            <Calendar className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-500 pointer-events-none" />
+          </div>
+          <p className="text-xs text-gray-500 mt-2">
+            Market will close and be ready for resolution at this time (UTC)
+          </p>
         </div>
 
         {/* Social Links */}

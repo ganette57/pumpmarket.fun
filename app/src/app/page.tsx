@@ -6,6 +6,7 @@ import MarketCard from '@/components/MarketCard';
 import MarketCarousel from '@/components/MarketCarousel';
 import CategoryMenu from '@/components/CategoryMenu';
 import GeoblockModal from '@/components/GeoblockModal';
+import FilterDropdown from '@/components/FilterDropdown';
 import Link from 'next/link';
 import { CategoryId } from '@/utils/categories';
 
@@ -108,65 +109,33 @@ export default function Home() {
       {/* Geoblock Modal */}
       <GeoblockModal />
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Hero */}
-        <div className="text-center mb-12">
-          <h1 className="text-5xl md:text-6xl font-bold mb-4 bg-gradient-to-r from-pump-green via-blue-400 to-pump-red bg-clip-text text-transparent">
-            Degen Prediction Markets
-          </h1>
-          <p className="text-xl text-gray-400 mb-8">
-            Polymarket vibes meets PumpFun energy on Solana 🚀
-          </p>
-          <Link href="/create">
-            <button className="btn-pump text-lg glow-green px-8 py-4">
-              Create Market 🎯
-            </button>
-          </Link>
-        </div>
-
-        {/* Featured Markets Carousel */}
-        <MarketCarousel />
-
-        {/* Category Menu */}
-        <div className="mb-8">
+      {/* Category Menu - Just below header */}
+      <div className="border-b border-gray-800 bg-pump-dark/50 sticky top-16 z-30">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <CategoryMenu
             selectedCategory={selectedCategory}
             onSelectCategory={setSelectedCategory}
           />
         </div>
+      </div>
 
-        {/* Status Filters */}
-        <div className="flex justify-center space-x-4 mb-8">
-          <button
-            onClick={() => setFilter('all')}
-            className={`px-6 py-2 rounded-lg font-semibold transition ${
-              filter === 'all'
-                ? 'bg-pump-green text-black'
-                : 'bg-pump-gray text-gray-400 hover:text-white'
-            }`}
-          >
-            All Markets
-          </button>
-          <button
-            onClick={() => setFilter('active')}
-            className={`px-6 py-2 rounded-lg font-semibold transition ${
-              filter === 'active'
-                ? 'bg-pump-green text-black'
-                : 'bg-pump-gray text-gray-400 hover:text-white'
-            }`}
-          >
-            Active
-          </button>
-          <button
-            onClick={() => setFilter('resolved')}
-            className={`px-6 py-2 rounded-lg font-semibold transition ${
-              filter === 'resolved'
-                ? 'bg-pump-green text-black'
-                : 'bg-pump-gray text-gray-400 hover:text-white'
-            }`}
-          >
-            Resolved
-          </button>
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Simplified Hero */}
+        <div className="mb-8">
+          <h1 className="text-2xl md:text-3xl font-semibold text-white mb-1">
+            Prediction Markets
+          </h1>
+          <p className="text-sm text-gray-500">
+            Trade on future outcomes
+          </p>
+        </div>
+
+        {/* Featured Markets Carousel */}
+        <MarketCarousel />
+
+        {/* Filter Dropdown */}
+        <div className="flex justify-end mb-6 mt-8">
+          <FilterDropdown value={filter} onChange={setFilter} />
         </div>
 
         {/* Markets Grid */}
