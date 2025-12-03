@@ -32,72 +32,66 @@ export default function MarketCard({ market }: MarketCardProps) {
   const daysLeft = Math.max(0, Math.floor(timeLeft / 86400));
   const hoursLeft = Math.max(0, Math.floor((timeLeft % 86400) / 3600));
 
+  // Format volume
+  const volumeInSol = lamportsToSol(market.totalVolume);
+  const volumeDisplay = volumeInSol >= 1000
+    ? `${(volumeInSol / 1000).toFixed(1)}k`
+    : volumeInSol.toFixed(0);
+
   return (
     <Link href={`/trade/${market.publicKey}`}>
-      <div className="bg-pump-gray border border-gray-800 rounded-xl overflow-hidden hover:border-pump-green transition-all duration-200 hover:shadow-lg cursor-pointer group">
-        {/* Market Image */}
-        <div className="relative w-full h-48 overflow-hidden bg-pump-dark">
-          {market.imageUrl && !imageError ? (
-            <Image
-              src={market.imageUrl}
-              alt={market.question}
-              fill
-              className="object-cover group-hover:scale-105 transition-transform duration-300"
-              onError={() => setImageError(true)}
-            />
-          ) : (
-            <CategoryImagePlaceholder category={market.category} className="w-full h-full" />
-          )}
-          {/* Gradient overlay */}
-          <div className="absolute inset-0 bg-gradient-to-t from-pump-dark/80 to-transparent"></div>
-        </div>
-        </div>
-        <div className="p-6">
-          <div className="mb-4">
-          <h3 className="text-xl font-bold text-white mb-2 line-clamp-2">
-            {market.question}
-          </h3>
-          <p className="text-gray-400 text-sm line-clamp-2">
-            {market.description}
-          </p>
-        </div>
-
-        {/* Price indicators */}
-        <div className="grid grid-cols-2 gap-3 mb-4">
-          <div className="bg-blue-500/20 border border-blue-500/50 rounded-lg p-3">
-            <div className="text-xs text-blue-400 mb-1">YES</div>
-            <div className="text-2xl font-bold text-blue-400">
-              {yesPercent.toFixed(0)}%
-            </div>
-          </div>
-          <div className="bg-red-500/20 border border-red-500/50 rounded-lg p-3">
-            <div className="text-xs text-red-400 mb-1">NO</div>
-            <div className="text-2xl font-bold text-red-400">
-              {noPercent.toFixed(0)}%
-            </div>
-          </div>
-        </div>
-
-        {/* Stats */}
-        <div className="flex justify-between text-sm text-gray-400 pt-4 border-t border-gray-700">
-          <div>
-            <span className="text-gray-500">Volume:</span>{' '}
-            <span className="text-white font-semibold">
-              {lamportsToSol(market.totalVolume).toFixed(2)} SOL
-            </span>
-          </div>
-          <div>
-            {market.resolved ? (
-              <span className="text-pump-green font-semibold">RESOLVED</span>
+      <div className="bg-pump-gray border border-gray-800 rounded-xl hover:border-pump-green transition-all duration-200 hover:shadow-lg cursor-pointer p-4">
+        <div className="flex gap-3">
+          {/* Small Square Image Left */}
+          <div className="flex-shrink-0 w-20 h-20 rounded-lg overflow-hidden bg-pump-dark">
+            {market.imageUrl && !imageError ? (
+              <Image
+                src={market.imageUrl}
+                alt={market.question}
+                width={80}
+                height={80}
+                className="object-cover w-full h-full"
+                onError={() => setImageError(true)}
+              />
             ) : (
-              <span>
-                {daysLeft}d {hoursLeft}h left
-              </span>
+              <div className="w-full h-full scale-[0.4]">
+                <CategoryImagePlaceholder category={market.category} className="w-full h-full" />
+              </div>
             )}
+          </div>
+
+          {/* Content Right */}
+          <div className="flex-1 min-w-0">
+            {/* Title */}
+            <h3 className="text-base font-bold text-white mb-1 line-clamp-2 leading-tight">
+              {market.question}
+            </h3>
+
+            {/* YES/NO Inline */}
+            <div className="flex gap-3 mb-2">
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-blue-400 font-medium">YES</span>
+                <span className="text-sm font-bold text-blue-400">{yesPercent.toFixed(0)}%</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-red-400 font-medium">NO</span>
+                <span className="text-sm font-bold text-red-400">{noPercent.toFixed(0)}%</span>
+              </div>
+            </div>
+
+            {/* Stats Bottom */}
+            <div className="flex items-center gap-2 text-xs text-gray-500">
+              <span>${volumeDisplay} Vol</span>
+              <span>•</span>
+              {market.resolved ? (
+                <span className="text-pump-green font-semibold">RESOLVED</span>
+              ) : (
+                <span>{daysLeft}d left</span>
+              )}
+            </div>
           </div>
         </div>
       </div>
     </Link>
   );
 }
-
