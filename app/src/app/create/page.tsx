@@ -8,7 +8,7 @@ import { CATEGORIES, CategoryId } from '@/utils/categories';
 import SocialLinksForm, { SocialLinks } from '@/components/SocialLinksForm';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
-import { Calendar, Image as ImageIcon } from 'lucide-react';
+import { Calendar, Image as ImageIcon, Upload, X } from 'lucide-react';
 import Image from 'next/image';
 import CategoryImagePlaceholder from '@/components/CategoryImagePlaceholder';
 
@@ -20,8 +20,9 @@ export default function CreateMarket() {
   const [question, setQuestion] = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState<CategoryId>('crypto');
-  const [imageUrl, setImageUrl] = useState('');
-  const [imageError, setImageError] = useState(false);
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string>('');
+  const [imageError, setImageError] = useState<string>('');
   // Default: 7 days from now
   const [resolutionDate, setResolutionDate] = useState<Date>(() => {
     const date = new Date();
@@ -45,6 +46,40 @@ export default function CreateMarket() {
     setDescriptionError(validation.valid ? null : validation.error || null);
   };
 
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate file size (5MB max)
+    const maxSize = 5 * 1024 * 1024; // 5MB in bytes
+    if (file.size > maxSize) {
+      setImageError('Image must be less than 5MB');
+      return;
+    }
+
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      setImageError('File must be an image');
+      return;
+    }
+
+    setImageError('');
+    setImageFile(file);
+
+    // Create preview using FileReader
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setImagePreview(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const removeImage = () => {
+    setImageFile(null);
+    setImagePreview('');
+    setImageError('');
+  };
+
   const canSubmit =
     connected &&
     question.length >= 10 &&
@@ -59,12 +94,20 @@ export default function CreateMarket() {
 
     setLoading(true);
     try {
+      // TODO: Upload image to IPFS/storage service and get URL
+      let imageUrl: string | undefined = undefined;
+      if (imageFile) {
+        console.log('Image file to upload:', imageFile.name, imageFile.size);
+        // TODO: Implement actual upload to IPFS/Cloudinary/etc
+        // imageUrl = await uploadImage(imageFile);
+      }
+
       // TODO: Call Solana program to create market
       console.log('Creating market:', {
         question,
         description,
         category,
-        imageUrl: imageUrl || undefined,
+        imageUrl,
         resolutionTime: Math.floor(resolutionDate.getTime() / 1000),
         socialLinks,
       });
@@ -164,59 +207,77 @@ export default function CreateMarket() {
           <label className="block text-white font-semibold mb-2">
             Market Image (Optional)
           </label>
-          <div className="relative">
-            <ImageIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-500 pointer-events-none" />
-            <input
-              type="url"
-              value={imageUrl}
-              onChange={(e) => {
-                setImageUrl(e.target.value);
-                setImageError(false);
-              }}
-              placeholder="https://example.com/image.jpg"
-              className="input-pump w-full pl-10"
-            />
-          </div>
-          <p className="text-xs text-gray-500 mt-2">
-            Add an image URL to make your market stand out (16:9 ratio recommended)
-          </p>
 
-          {/* Image Preview */}
-          {imageUrl && (
-            <div className="mt-4">
-              <p className="text-sm text-gray-400 mb-2">Preview:</p>
-              <div className="relative w-full h-48 rounded-lg overflow-hidden bg-pump-dark border border-gray-700">
-                {!imageError ? (
+          {!imagePreview ? (
+            <>
+              {/* File Upload Input */}
+              <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-gray-700 rounded-lg cursor-pointer hover:border-pump-green transition-colors bg-pump-dark/50">
+                <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                  <Upload className="w-10 h-10 text-gray-500 mb-2" />
+                  <p className="text-sm text-gray-400 mb-1">
+                    <span className="font-semibold text-pump-green">Click to upload</span> or drag and drop
+                  </p>
+                  <p className="text-xs text-gray-500">PNG, JPG, GIF up to 5MB</p>
+                </div>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleImageUpload}
+                  className="hidden"
+                />
+              </label>
+
+              {imageError && (
+                <p className="text-pump-red text-sm mt-2 font-semibold">
+                  ❌ {imageError}
+                </p>
+              )}
+
+              {/* Placeholder preview when no image */}
+              <div className="mt-4">
+                <p className="text-sm text-gray-400 mb-2">Default placeholder for {category}:</p>
+                <div className="relative w-full h-48 rounded-lg overflow-hidden">
+                  <CategoryImagePlaceholder category={category} className="w-full h-full" />
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              {/* Image Preview with Remove Button */}
+              <div className="mt-4 relative">
+                <div className="relative w-full h-48 rounded-lg overflow-hidden bg-pump-dark border border-gray-700">
                   <Image
-                    src={imageUrl}
-                    alt="Market preview"
+                    src={imagePreview}
+                    alt="Uploaded preview"
                     fill
                     className="object-cover"
-                    onError={() => setImageError(true)}
                   />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center">
-                    <div className="text-center text-gray-500">
-                      <ImageIcon className="w-12 h-12 mx-auto mb-2 opacity-50" />
-                      <p className="text-sm">Invalid image URL</p>
-                    </div>
-                  </div>
-                )}
-                {!imageError && imageUrl && (
                   <div className="absolute inset-0 bg-gradient-to-t from-pump-dark/80 to-transparent"></div>
-                )}
-              </div>
-            </div>
-          )}
+                </div>
 
-          {/* Placeholder preview when no URL */}
-          {!imageUrl && (
-            <div className="mt-4">
-              <p className="text-sm text-gray-400 mb-2">Default placeholder for {category}:</p>
-              <div className="relative w-full h-48 rounded-lg overflow-hidden">
-                <CategoryImagePlaceholder category={category} className="w-full h-full" />
+                {/* Remove Button */}
+                <button
+                  type="button"
+                  onClick={removeImage}
+                  className="absolute top-2 right-2 w-8 h-8 bg-pump-red hover:bg-red-600 rounded-full flex items-center justify-center transition-colors shadow-lg"
+                  title="Remove image"
+                >
+                  <X className="w-5 h-5 text-white" />
+                </button>
               </div>
-            </div>
+
+              {/* File Info */}
+              {imageFile && (
+                <div className="mt-2 flex items-center justify-between text-sm">
+                  <span className="text-gray-400 truncate flex-1">
+                    {imageFile.name}
+                  </span>
+                  <span className="text-gray-500 ml-2">
+                    {(imageFile.size / 1024).toFixed(0)} KB
+                  </span>
+                </div>
+              )}
+            </>
           )}
         </div>
 
