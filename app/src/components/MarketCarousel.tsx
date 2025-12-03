@@ -164,68 +164,68 @@ export default function MarketCarousel() {
       >
         {FEATURED_MARKETS.map((market) => (
           <Link key={market.id} href={`/trade/${market.id}`}>
-            <div className="flex-shrink-0 w-[500px] bg-pump-gray border border-gray-700 hover:border-pump-green rounded-xl overflow-hidden transition-all duration-300 hover:shadow-2xl cursor-pointer group">
-              {/* Market Image */}
-              <div className="relative w-full h-48 overflow-hidden bg-pump-dark">
-                {market.image ? (
-                  <Image
-                    src={market.image}
-                    alt={market.question}
-                    fill
-                    className="object-cover"
-                  />
-                ) : (
-                  <CategoryImagePlaceholder category={market.category.toLowerCase()} className="w-full h-full" />
-                )}
-                {/* Gradient overlay */}
-                <div className="absolute inset-0 bg-gradient-to-t from-pump-dark/90 to-transparent"></div>
-              </div>
+            <div className="flex-shrink-0 w-[500px] bg-pump-gray border border-gray-700 hover:border-pump-green rounded-xl transition-all duration-300 hover:shadow-2xl cursor-pointer group p-5">
+              <div className="flex gap-4">
+                {/* Image à gauche - carrée */}
+                <div className="flex-shrink-0 w-32 h-32 rounded-xl overflow-hidden bg-pump-dark">
+                  {market.image ? (
+                    <Image
+                      src={market.image}
+                      alt={market.question}
+                      width={128}
+                      height={128}
+                      className="object-cover w-full h-full"
+                    />
+                  ) : (
+                    <div className="w-full h-full scale-[0.5]">
+                      <CategoryImagePlaceholder category={market.category.toLowerCase()} className="w-full h-full" />
+                    </div>
+                  )}
+                </div>
 
-              {/* Top Section */}
-              <div className="p-6 pb-4">
-                <div className="flex items-start justify-between mb-4">
-                  <div className="flex-1">
-                    <div className="inline-block px-3 py-1 bg-blue-500/20 border border-blue-500/30 rounded-full text-blue-400 text-xs font-semibold mb-3">
+                {/* Contenu à droite */}
+                <div className="flex-1 min-w-0 flex flex-col">
+                  {/* Category badge + Title */}
+                  <div className="mb-3">
+                    <div className="inline-block px-2 py-1 bg-blue-500/20 border border-blue-500/30 rounded-full text-blue-400 text-xs font-semibold mb-2">
                       {market.category}
                     </div>
-                    <h3 className="text-lg font-bold text-white group-hover:text-pump-green transition line-clamp-2">
+                    <h3 className="text-lg font-bold text-white group-hover:text-pump-green transition line-clamp-2 leading-tight">
                       {market.question}
                     </h3>
                   </div>
-                </div>
 
-                {/* Stats */}
-                <div className="flex items-center justify-between text-sm mb-4">
-                  <div className="flex items-center space-x-4">
-                    <div className="flex items-center text-gray-400">
-                      <TrendingUp className="w-4 h-4 mr-1" />
+                  {/* Stats inline */}
+                  <div className="flex items-center gap-4 text-xs text-gray-400 mb-3">
+                    <div className="flex items-center gap-1">
+                      <TrendingUp className="w-3 h-3" />
                       <span className="font-semibold text-white">
                         {(market.volume / 1_000_000_000).toFixed(0)}k SOL
                       </span>
                     </div>
-                    <div className="flex items-center text-gray-400">
-                      <Clock className="w-4 h-4 mr-1" />
-                      <span>Ends in {market.daysLeft}d</span>
+                    <div className="flex items-center gap-1">
+                      <Clock className="w-3 h-3" />
+                      <span>{market.daysLeft}d left</span>
                     </div>
                   </div>
-                </div>
 
-                {/* Percentages */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3">
-                    <div className="text-xs text-blue-400 mb-1">YES</div>
-                    <div className="text-3xl font-bold text-blue-400">{market.yesPercent}%</div>
+                  {/* YES/NO inline */}
+                  <div className="flex gap-3 mb-3">
+                    <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg px-3 py-2 flex items-center gap-2">
+                      <span className="text-xs text-blue-400">YES</span>
+                      <span className="text-xl font-bold text-blue-400">{market.yesPercent}%</span>
+                    </div>
+                    <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2 flex items-center gap-2">
+                      <span className="text-xs text-red-400">NO</span>
+                      <span className="text-xl font-bold text-red-400">{market.noPercent}%</span>
+                    </div>
                   </div>
-                  <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
-                    <div className="text-xs text-red-400 mb-1">NO</div>
-                    <div className="text-3xl font-bold text-red-400">{market.noPercent}%</div>
+
+                  {/* Chart */}
+                  <div className="h-16 flex-grow">
+                    <Line data={getChartData(market.priceHistory)} options={chartOptions} />
                   </div>
                 </div>
-              </div>
-
-              {/* Chart */}
-              <div className="h-24 px-6 pb-4">
-                <Line data={getChartData(market.priceHistory)} options={chartOptions} />
               </div>
             </div>
           </Link>
