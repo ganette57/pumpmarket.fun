@@ -3,6 +3,8 @@
 import { useState, useRef } from 'react';
 import { ChevronLeft, ChevronRight, TrendingUp, Clock } from 'lucide-react';
 import Link from 'next/link';
+import Image from 'next/image';
+import CategoryImagePlaceholder from './CategoryImagePlaceholder';
 import { Line } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
@@ -137,32 +139,21 @@ export default function MarketCarousel() {
   };
 
   return (
-    <div className="relative py-8">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-2xl font-bold text-white flex items-center">
-            <TrendingUp className="w-6 h-6 mr-2 text-pump-green" />
-            Featured Markets
-          </h2>
-          <p className="text-gray-400 text-sm mt-1">Trending predictions with high volume</p>
-        </div>
-
-        {/* Navigation Buttons */}
-        <div className="flex space-x-2">
-          <button
-            onClick={() => handleScroll('left')}
-            className="p-2 bg-pump-gray hover:bg-pump-dark border border-gray-700 rounded-lg transition"
-          >
-            <ChevronLeft className="w-5 h-5 text-white" />
-          </button>
-          <button
-            onClick={() => handleScroll('right')}
-            className="p-2 bg-pump-gray hover:bg-pump-dark border border-gray-700 rounded-lg transition"
-          >
-            <ChevronRight className="w-5 h-5 text-white" />
-          </button>
-        </div>
+    <div className="relative">
+      {/* Navigation Buttons */}
+      <div className="absolute right-0 -top-10 flex space-x-2 z-10">
+        <button
+          onClick={() => handleScroll('left')}
+          className="p-2 bg-pump-gray hover:bg-pump-dark border border-gray-700 rounded-lg transition"
+        >
+          <ChevronLeft className="w-5 h-5 text-white" />
+        </button>
+        <button
+          onClick={() => handleScroll('right')}
+          className="p-2 bg-pump-gray hover:bg-pump-dark border border-gray-700 rounded-lg transition"
+        >
+          <ChevronRight className="w-5 h-5 text-white" />
+        </button>
       </div>
 
       {/* Carousel */}
@@ -173,7 +164,23 @@ export default function MarketCarousel() {
       >
         {FEATURED_MARKETS.map((market) => (
           <Link key={market.id} href={`/trade/${market.id}`}>
-            <div className="flex-shrink-0 w-[500px] bg-pump-gray border border-gray-700 hover:border-pump-green rounded-xl overflow-hidden transition-all duration-300 hover:shadow-2xl hover:scale-[1.02] cursor-pointer group">
+            <div className="flex-shrink-0 w-[500px] bg-pump-gray border border-gray-700 hover:border-pump-green rounded-xl overflow-hidden transition-all duration-300 hover:shadow-2xl cursor-pointer group">
+              {/* Market Image */}
+              <div className="relative w-full h-48 overflow-hidden bg-pump-dark">
+                {market.image ? (
+                  <Image
+                    src={market.image}
+                    alt={market.question}
+                    fill
+                    className="object-cover"
+                  />
+                ) : (
+                  <CategoryImagePlaceholder category={market.category.toLowerCase()} className="w-full h-full" />
+                )}
+                {/* Gradient overlay */}
+                <div className="absolute inset-0 bg-gradient-to-t from-pump-dark/90 to-transparent"></div>
+              </div>
+
               {/* Top Section */}
               <div className="p-6 pb-4">
                 <div className="flex items-start justify-between mb-4">

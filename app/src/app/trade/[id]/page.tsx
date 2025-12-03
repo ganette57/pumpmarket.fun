@@ -3,18 +3,22 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import { useWallet } from '@solana/wallet-adapter-react';
+import Image from 'next/image';
 import BondingCurveChart from '@/components/BondingCurveChart';
 import { lamportsToSol } from '@/utils/solana';
 import CreatorSocialLinks from '@/components/CreatorSocialLinks';
 import MarketActions from '@/components/MarketActions';
 import CommentsSection from '@/components/CommentsSection';
 import TradingPanel from '@/components/TradingPanel';
+import CategoryImagePlaceholder from '@/components/CategoryImagePlaceholder';
 import { SocialLinks } from '@/components/SocialLinksForm';
 
 interface Market {
   publicKey: string;
   question: string;
   description: string;
+  category?: string;
+  imageUrl?: string;
   creator: string;
   yesSupply: number;
   noSupply: number;
@@ -43,6 +47,8 @@ export default function TradePage() {
         publicKey: params.id as string,
         question: 'Will SOL reach $500 in 2025?',
         description: 'Market resolves when SOL/USD hits $500 or on Dec 31, 2025',
+        category: 'crypto',
+        imageUrl: undefined, // Will use placeholder
         creator: 'ExampleCreator...',
         yesSupply: 1000,
         noSupply: 800,
@@ -109,23 +115,58 @@ export default function TradePage() {
         {/* Left: Market Info */}
         <div className="lg:col-span-2">
           <div className="card-pump mb-6">
-            {/* Title with Bookmark + Share */}
-            <div className="flex items-start justify-between mb-4">
-              <h1 className="text-3xl font-bold text-white flex-1">{market.question}</h1>
-              <MarketActions marketId={market.publicKey} question={market.question} />
+            <div className="flex items-start gap-4">
+              {/* Image carrée à gauche */}
+              <div className="flex-shrink-0 w-20 h-20 rounded-xl overflow-hidden bg-pump-dark">
+                {market.imageUrl ? (
+                  <Image
+                    src={market.imageUrl}
+                    alt={market.question}
+                    width={80}
+                    height={80}
+                    className="object-cover w-full h-full"
+                  />
+                ) : (
+                  <CategoryImagePlaceholder category={market.category || 'crypto'} className="w-full h-full scale-[0.4]" />
+                )}
+              </div>
+
+              {/* Titre + Bookmark/Share à droite de l'image */}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-start justify-between mb-3">
+                  <h1 className="text-3xl font-bold text-white flex-1 leading-tight">{market.question}</h1>
+                  <MarketActions marketId={market.publicKey} question={market.question} />
+                </div>
+
+                {/* Creator Social Links */}
+                {market.socialLinks && (
+                  <div className="mb-0">
+                    <CreatorSocialLinks socialLinks={market.socialLinks} />
+                  </div>
+                )}
+              </div>
             </div>
 
-            {/* Creator Social Links */}
-            {market.socialLinks && (
-              <div className="mb-4">
-                <CreatorSocialLinks socialLinks={market.socialLinks} />
+            {/* Volume + Time left */}
+            <div className="flex gap-4 text-sm text-gray-400 mt-4 pt-4 border-t border-gray-800">
+              <div>
+                <span className="text-gray-500">
+                  ${(lamportsToSol(market.totalVolume) / 1000).toFixed(0)}k Vol
+                </span>
               </div>
-            )}
+              <div>
+                {new Date(market.resolutionTime * 1000).toLocaleDateString('en-US', {
+                  month: 'short',
+                  day: 'numeric',
+                  year: 'numeric',
+                })}
+              </div>
+            </div>
 
-            <p className="text-gray-400 mb-6">{market.description}</p>
+            <p className="text-gray-400 mt-4 mb-6">{market.description}</p>
 
             {/* Current Odds */}
-            <div className="grid grid-cols-2 gap-4 mb-6">
+            <div className="grid grid-cols-2 gap-4">
               <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
                 <div className="text-sm text-blue-400 mb-1">YES</div>
                 <div className="text-3xl font-bold text-blue-400">{yesPercent.toFixed(1)}%</div>

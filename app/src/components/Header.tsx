@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
-import { HelpCircle, Menu, X, Target } from 'lucide-react';
+import { HelpCircle, Menu, X, Target, LayoutDashboard } from 'lucide-react';
 import SearchBar from './SearchBar';
 import HowItWorksModal from './HowItWorksModal';
 
@@ -46,6 +46,16 @@ export default function Header() {
                 <button className="hidden sm:flex items-center space-x-2 px-4 py-2 bg-pump-green hover:bg-green-400 text-black font-semibold rounded-lg transition-all hover:scale-105">
                   <Target className="w-4 h-4" />
                   <span>Create Market</span>
+                </button>
+              </Link>
+
+              {/* Dashboard Icon */}
+              <Link href="/dashboard">
+                <button
+                  className="hidden sm:flex items-center justify-center p-2 rounded-lg bg-gray-800 hover:bg-gray-700 transition text-gray-300 hover:text-white"
+                  title="Dashboard"
+                >
+                  <LayoutDashboard className="w-5 h-5" />
                 </button>
               </Link>
 

@@ -6,7 +6,6 @@ import MarketCard from '@/components/MarketCard';
 import MarketCarousel from '@/components/MarketCarousel';
 import CategoryMenu from '@/components/CategoryMenu';
 import GeoblockModal from '@/components/GeoblockModal';
-import FilterDropdown from '@/components/FilterDropdown';
 import Link from 'next/link';
 import { CategoryId } from '@/utils/categories';
 
@@ -120,19 +119,19 @@ export default function Home() {
       </div>
 
       {/* Featured Markets Carousel - Directly under categories */}
-      <div className="py-8">
+      <div className="py-2">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center space-x-2 mb-2">
+            <h2 className="text-2xl font-bold text-white">📈 Featured Markets</h2>
+            <p className="text-gray-400 text-sm">Trending predictions with high volume</p>
+          </div>
           <MarketCarousel />
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Filter Dropdown */}
-        <div className="flex justify-end mb-6 mt-8">
-          <FilterDropdown value={filter} onChange={setFilter} />
-        </div>
-
-        {/* Markets Grid */}
+      {/* Markets Grid - directly after carousel */}
+      <div className="py-2">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {loading ? (
           <div className="text-center py-20">
             <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-pump-green"></div>
@@ -166,6 +165,7 @@ export default function Home() {
             )}
           </>
         )}
+        </div>
       </div>
     </>
   );
