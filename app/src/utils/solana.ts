@@ -4,6 +4,7 @@ import { AnchorWallet } from '@solana/wallet-adapter-react';
 
 export const PROGRAM_ID = new PublicKey('BV6q3zDwjaXdcn3DmqroHbeNuTDxtrpyYXvGNeYec6Wy');
 export const NETWORK = clusterApiUrl('devnet');
+export const PLATFORM_WALLET = new PublicKey('7DVR8gnBbLYN1aAAhbEJpNLxdzPzuqwAPaLRCRt4v93Z');
 
 export function getConnection(): Connection {
   return new Connection(NETWORK, 'confirmed');

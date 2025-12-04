@@ -5,7 +5,10 @@ import { useParams } from 'next/navigation';
 import { useWallet } from '@solana/wallet-adapter-react';
 import Image from 'next/image';
 import BondingCurveChart from '@/components/BondingCurveChart';
-import { lamportsToSol } from '@/utils/solana';
+import { lamportsToSol, calculateBuyCost, getUserPositionPDA, PLATFORM_WALLET } from '@/utils/solana';
+import { useProgram } from '@/hooks/useProgram';
+import { PublicKey, SystemProgram } from '@solana/web3.js';
+import { BN } from '@coral-xyz/anchor';
 import CreatorSocialLinks from '@/components/CreatorSocialLinks';
 import MarketActions from '@/components/MarketActions';
 import CommentsSection from '@/components/CommentsSection';
@@ -32,9 +35,11 @@ interface Market {
 export default function TradePage() {
   const params = useParams();
   const { publicKey, connected } = useWallet();
+  const program = useProgram();
   const [market, setMarket] = useState<Market | null>(null);
   const [loading, setLoading] = useState(true);
   const [userPosition, setUserPosition] = useState({ yesShares: 0, noShares: 0 });
+  const [buying, setBuying] = useState(false);
 
   useEffect(() => {
     loadMarket();
@@ -93,19 +98,74 @@ export default function TradePage() {
   const noPercent = 100 - yesPercent;
 
   async function handleTrade(dollarAmount: number, isYes: boolean) {
-    if (!connected || !publicKey) {
-      alert('Please connect your wallet');
+    if (!connected || !publicKey || !program) {
+      if (!publicKey) alert('Please connect your wallet');
+      if (!program) alert('Program not loaded');
       return;
     }
 
-    console.log('Trading:', { dollarAmount, isYes });
+    if (!market) {
+      alert('Market not loaded');
+      return;
+    }
 
+    setBuying(true);
     try {
-      // TODO: Call Solana program to execute trade
-      alert(`Demo: Buying $${dollarAmount} of ${isYes ? 'YES' : 'NO'} shares`);
-    } catch (error) {
-      console.error('Trade failed:', error);
-      alert('Trade failed: ' + (error as Error).message);
+      const marketPubkey = new PublicKey(params.id as string);
+      const [positionPDA] = getUserPositionPDA(marketPubkey, publicKey);
+      const creatorPubkey = new PublicKey(market.creator);
+
+      // Convert dollar amount to shares (simplified - using dollarAmount directly)
+      // In production, calculate based on bonding curve
+      const amountBN = new BN(dollarAmount);
+
+      console.log('Buying shares:', {
+        market: marketPubkey.toBase58(),
+        position: positionPDA.toBase58(),
+        amount: dollarAmount,
+        isYes,
+        creator: creatorPubkey.toBase58(),
+      });
+
+      const tx = await program.methods
+        .buyShares(amountBN, isYes)
+        .accounts({
+          market: marketPubkey,
+          buyer: publicKey,
+          userPosition: positionPDA,
+          creator: creatorPubkey,
+          platformWallet: PLATFORM_WALLET,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+
+      console.log('Shares bought! Transaction:', tx);
+
+      alert(`Success! 🎉\n\nBought $${dollarAmount} of ${isYes ? 'YES' : 'NO'} shares\n\nTransaction: ${tx.slice(0, 16)}...\n\nView on Explorer: https://explorer.solana.com/tx/${tx}?cluster=devnet`);
+
+      // Reload market data
+      await loadMarket();
+
+      // TODO: Fetch user position to update userPosition state
+
+    } catch (error: any) {
+      console.error('Buy shares error:', error);
+
+      // Parse error message
+      let errorMsg = 'Failed to buy shares';
+      if (error.message) {
+        if (error.message.includes('insufficient')) {
+          errorMsg = 'Insufficient SOL balance. Please add funds to your wallet.';
+        } else if (error.message.includes('resolved')) {
+          errorMsg = 'Market is already resolved. You cannot buy shares.';
+        } else {
+          errorMsg = error.message;
+        }
+      }
+
+      alert(`Error: ${errorMsg}`);
+    } finally {
+      setBuying(false);
     }
   }
 

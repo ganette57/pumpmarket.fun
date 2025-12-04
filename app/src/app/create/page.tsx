@@ -11,10 +11,15 @@ import 'react-datepicker/dist/react-datepicker.css';
 import { Calendar, Image as ImageIcon, Upload, X } from 'lucide-react';
 import Image from 'next/image';
 import CategoryImagePlaceholder from '@/components/CategoryImagePlaceholder';
+import { useProgram } from '@/hooks/useProgram';
+import { getUserCounterPDA, getMarketPDA } from '@/utils/solana';
+import { SystemProgram } from '@solana/web3.js';
+import { BN } from '@coral-xyz/anchor';
 
 export default function CreateMarket() {
   const { publicKey, connected } = useWallet();
   const router = useRouter();
+  const program = useProgram();
   const [loading, setLoading] = useState(false);
 
   const [question, setQuestion] = useState('');
@@ -90,7 +95,11 @@ export default function CreateMarket() {
     resolutionDate > new Date(); // Must be in the future
 
   async function handleCreateMarket() {
-    if (!canSubmit || !publicKey) return;
+    if (!canSubmit || !publicKey || !program) {
+      if (!publicKey) alert('Please connect your wallet');
+      if (!program) alert('Program not loaded');
+      return;
+    }
 
     setLoading(true);
     try {
@@ -102,21 +111,89 @@ export default function CreateMarket() {
         // imageUrl = await uploadImage(imageFile);
       }
 
-      // TODO: Call Solana program to create market
-      console.log('Creating market:', {
+      // 1. Get PDAs
+      const [userCounterPDA] = getUserCounterPDA(publicKey);
+      const [marketPDA] = getMarketPDA(publicKey, question);
+
+      console.log('PDAs:', {
+        userCounter: userCounterPDA.toBase58(),
+        market: marketPDA.toBase58(),
+      });
+
+      // 2. Check if user counter exists, if not initialize it
+      try {
+        await program.account.userCounter.fetch(userCounterPDA);
+        console.log('User counter exists');
+      } catch (e) {
+        // User counter doesn't exist, initialize it
+        console.log('Initializing user counter...');
+        const initTx = await program.methods
+          .initializeUserCounter()
+          .accounts({
+            userCounter: userCounterPDA,
+            authority: publicKey,
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc();
+
+        console.log('User counter initialized:', initTx);
+
+        // Wait for confirmation
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+
+      // 3. Create market
+      const resolutionTimestamp = Math.floor(resolutionDate.getTime() / 1000);
+
+      console.log('Creating market with:', {
         question,
         description,
+        resolutionTimestamp,
         category,
         imageUrl,
-        resolutionTime: Math.floor(resolutionDate.getTime() / 1000),
         socialLinks,
       });
 
-      alert('Market created! (Demo mode - program not deployed yet)');
-      router.push('/');
-    } catch (error) {
-      console.error('Error creating market:', error);
-      alert('Error creating market: ' + (error as Error).message);
+      const tx = await program.methods
+        .createMarket(
+          question,
+          description,
+          new BN(resolutionTimestamp)
+        )
+        .accounts({
+          market: marketPDA,
+          creator: publicKey,
+          userCounter: userCounterPDA,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+
+      console.log('Market created! Transaction:', tx);
+
+      // Show success message
+      alert(`Market created successfully! 🎉\n\nTransaction: ${tx.slice(0, 16)}...\n\nView on Solana Explorer: https://explorer.solana.com/tx/${tx}?cluster=devnet`);
+
+      // Redirect to market page
+      router.push(`/trade/${marketPDA.toBase58()}`);
+
+    } catch (error: any) {
+      console.error('Create market error:', error);
+
+      // Parse error message
+      let errorMsg = 'Failed to create market';
+      if (error.message) {
+        if (error.message.includes('banned') || error.message.includes('Banned')) {
+          errorMsg = 'Market contains banned words. Please use appropriate language.';
+        } else if (error.message.includes('rate limit') || error.message.includes('RateLimit')) {
+          errorMsg = 'Rate limit exceeded. You can only create 5 markets per account.';
+        } else if (error.message.includes('insufficient')) {
+          errorMsg = 'Insufficient SOL balance. Please add funds to your wallet.';
+        } else {
+          errorMsg = error.message;
+        }
+      }
+
+      alert(`Error: ${errorMsg}`);
     } finally {
       setLoading(false);
     }
