@@ -17,6 +17,7 @@
     "@solana/web3.js": "^1.87.6",
     "@types/react-datepicker": "^6.2.0",
     "chart.js": "^4.4.0",
+    "framer-motion": "^12.23.25",
     "lucide-react": "^0.294.0",
     "next": "14.0.4",
     "react": "^18",
