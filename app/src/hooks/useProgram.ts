@@ -1,24 +1,4 @@
-import { useAnchorWallet, useConnection } from '@solana/wallet-adapter-react';
-import { Program, AnchorProvider, Idl } from '@coral-xyz/anchor';
-import { useMemo } from 'react';
-import { PROGRAM_ID } from '@/utils/solana';
-import idl from '@/idl/funmarket_pump.json';
-
 export function useProgram() {
-  const { connection } = useConnection();
-  const wallet = useAnchorWallet();
-
-  const program = useMemo(() => {
-    if (!wallet) return null;
-
-    const provider = new AnchorProvider(
-      connection,
-      wallet,
-      { commitment: 'confirmed' }
-    );
-
-    return new Program(idl as any, provider);
-  }, [connection, wallet]);
-
-  return program;
+  // Temporairement désactivé pour debug
+  return null;
 }
