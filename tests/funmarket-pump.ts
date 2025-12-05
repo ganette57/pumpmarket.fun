@@ -11,6 +11,7 @@ describe("funmarket-pump", () => {
 
   const program = anchor.workspace.FunmarketPump as Program<FunmarketPump>;
   const creator = provider.wallet as anchor.Wallet;
+  const platformWallet = anchor.web3.Keypair.generate().publicKey;
 
   let userCounterPDA: PublicKey;
   let marketPDA: PublicKey;
@@ -152,6 +153,7 @@ describe("funmarket-pump", () => {
         userPosition: userPositionPDA,
         buyer: creator.publicKey,
         creator: creator.publicKey,
+        platformWallet: platformWallet,
         systemProgram: SystemProgram.programId,
       })
       .rpc();
@@ -176,6 +178,7 @@ describe("funmarket-pump", () => {
         userPosition: userPositionPDA,
         buyer: creator.publicKey,
         creator: creator.publicKey,
+        platformWallet: platformWallet,
         systemProgram: SystemProgram.programId,
       })
       .rpc();
