@@ -1,7 +1,7 @@
 import { useAnchorWallet, useConnection } from '@solana/wallet-adapter-react';
 import { Program, AnchorProvider, Idl } from '@coral-xyz/anchor';
 import { useMemo } from 'react';
-import { PROGRAM_ID } from '@/utils/solana';
+import { PublicKey } from '@solana/web3.js';
 import idl from '@/idl/funmarket_pump.json';
 
 export function useProgram() {
@@ -17,7 +17,10 @@ export function useProgram() {
       { commitment: 'confirmed' }
     );
 
-    return new Program(idl as Idl, PROGRAM_ID, provider);
+    // Extract programId from IDL (Anchor 0.32 format)
+    const programId = new PublicKey((idl as any).address);
+
+    return new Program(idl as Idl, programId, provider);
   }, [connection, wallet]);
 
   return program;
