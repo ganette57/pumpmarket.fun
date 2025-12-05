@@ -19,7 +19,7 @@ import { BN } from '@coral-xyz/anchor';
 export default function CreateMarket() {
   const { publicKey, connected } = useWallet();
   const router = useRouter();
-  const program = null;
+  const program = useProgram();
   const [loading, setLoading] = useState(false);
 
   const [question, setQuestion] = useState('');
