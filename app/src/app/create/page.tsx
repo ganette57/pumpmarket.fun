@@ -15,6 +15,7 @@ import { useProgram } from '@/hooks/useProgram';
 import { getUserCounterPDA, getMarketPDA } from '@/utils/solana';
 import { SystemProgram } from '@solana/web3.js';
 import { BN } from '@coral-xyz/anchor';
+import { supabase } from '@/utils/supabase';
 
 export default function CreateMarket() {
   const { publicKey, connected } = useWallet();
@@ -172,7 +173,31 @@ export default function CreateMarket() {
 
       // Show success message
       alert(`Market created successfully! 🎉\n\nTransaction: ${tx.slice(0, 16)}...\n\nView on Solana Explorer: https://explorer.solana.com/tx/${tx}?cluster=devnet`);
+// === INDEXATION SUPABASE - MARCHÉ APPARAÎT INSTANTANÉMENT ===
+try {
+  const { error } = await supabase.from('markets').insert({
+    market_address: marketPDA.toBase58(),
+    question,
+    description: description || null,
+    category: selectedCategory || null,
+    image_url: null,
+    end_date: resolutionDate.toISOString(),
+    creator: publicKey?.toBase58() || 'unknown',
+    yes_supply: 0,
+    no_supply: 0,
+    total_volume: 0,
+    resolved: false,
+  });
 
+  if (error) {
+    console.error("Erreur Supabase:", error);
+  } else {
+    console.log("Marché indexé dans Supabase !");
+  }
+} catch (err) {
+  console.error("Supabase crash:", err);
+}
+// =====================================================
       // Redirect to market page
       router.push(`/trade/${marketPDA.toBase58()}`);
 
