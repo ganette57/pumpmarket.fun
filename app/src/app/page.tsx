@@ -11,6 +11,7 @@ import GeoblockModal from '@/components/GeoblockModal';
 import { SkeletonCard, SkeletonFeaturedCard } from '@/components/SkeletonCard';
 import Link from 'next/link';
 import { CategoryId } from '@/utils/categories';
+import { getAllMarkets } from '@/lib/markets';
 
 interface Market {
   publicKey: string;
@@ -71,76 +72,25 @@ export default function Home() {
 
   async function loadMarkets() {
     try {
-      // TODO: Fetch markets from program
-      // For now, show example markets with categories
-      const exampleMarkets: Market[] = [
-        {
-          publicKey: 'example1',
-          question: 'Will SOL reach $500 in 2025?',
-          description: 'Market resolves when SOL/USD hits $500 or on Dec 31, 2025',
-          category: 'crypto',
-          yesSupply: 1000,
-          noSupply: 800,
-          totalVolume: 50_000_000_000,
-          resolutionTime: Math.floor(Date.now() / 1000) + 86400 * 30,
-          resolved: false,
-          creator: 'CryptoTrader.sol',
-          socialLinks: {
-            twitter: 'https://twitter.com/solana',
-            website: 'https://solana.com',
-          },
-        },
-        {
-          publicKey: 'example2',
-          question: 'Will Bitcoin ETF approval pump BTC above $100k?',
-          description: 'Resolves YES if BTC/USD > $100k within 60 days of ETF approval',
-          category: 'crypto',
-          yesSupply: 2000,
-          noSupply: 500,
-          totalVolume: 120_000_000_000,
-          resolutionTime: Math.floor(Date.now() / 1000) + 86400 * 60,
-          resolved: false,
-          creator: 'BTCMaxi',
-        },
-        {
-          publicKey: 'example3',
-          question: 'Will Trump win 2024 election?',
-          description: 'Presidential election results',
-          category: 'politics',
-          yesSupply: 5000,
-          noSupply: 4800,
-          totalVolume: 250_000_000_000,
-          resolutionTime: Math.floor(Date.now() / 1000) + 86400 * 120,
-          resolved: false,
-          creator: 'PoliticsWatcher',
-        },
-        {
-          publicKey: 'example4',
-          question: 'Will Lakers win NBA championship?',
-          description: 'NBA Finals 2024-2025 season',
-          category: 'sports',
-          yesSupply: 800,
-          noSupply: 1200,
-          totalVolume: 35_000_000_000,
-          resolutionTime: Math.floor(Date.now() / 1000) + 86400 * 90,
-          resolved: false,
-        },
-        // Duplicate for testing pagination
-        ...Array(20)
-          .fill(null)
-          .map((_, i) => ({
-            publicKey: `example${i + 5}`,
-            question: `Will something interesting happen in ${2025 + i}?`,
-            description: `Market for testing purposes #${i + 1}`,
-            category: ['crypto', 'politics', 'sports', 'tech', 'finance'][i % 5],
-            yesSupply: 1000 + i * 100,
-            noSupply: 800 + i * 80,
-            totalVolume: (50 + i * 10) * 1_000_000_000,
-            resolutionTime: Math.floor(Date.now() / 1000) + 86400 * (30 + i),
-            resolved: false,
-          })),
-      ];
-      setMarkets(exampleMarkets);
+      // Fetch markets from Supabase
+      const supabaseMarkets = await getAllMarkets();
+      
+      // Transform Supabase format to component format
+      const transformedMarkets: Market[] = supabaseMarkets.map((m) => ({
+        publicKey: m.market_address,
+        question: m.question,
+        description: m.description || '',
+        category: m.category || 'other',
+        imageUrl: m.image_url || undefined,
+        yesSupply: m.yes_supply,
+        noSupply: m.no_supply,
+        totalVolume: m.total_volume,
+        resolutionTime: Math.floor(new Date(m.end_date).getTime() / 1000),
+        resolved: m.resolved,
+        creator: m.creator,
+      }));
+      
+      setMarkets(transformedMarkets);
     } catch (error) {
       console.error('Error loading markets:', error);
     } finally {

@@ -5,6 +5,7 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import Link from 'next/link';
 import { lamportsToSol } from '@/utils/solana';
 import { Heart, ExternalLink } from 'lucide-react';
+import { getMarketsByCreator } from '@/lib/markets';
 
 interface UserMarket {
   publicKey: string;
@@ -34,14 +35,32 @@ export default function Dashboard() {
   useEffect(() => {
     if (connected && publicKey) {
       loadUserData();
+    } else {
+      setLoading(false);
     }
     loadBookmarkedMarkets();
   }, [connected, publicKey]);
 
   async function loadUserData() {
     try {
-      // TODO: Fetch user's markets and positions from program
-      setMyMarkets([]);
+      if (!publicKey) return;
+      
+      // Fetch user's created markets from Supabase
+      const createdMarkets = await getMarketsByCreator(publicKey.toBase58());
+      
+      // Transform to component format
+      const transformedMarkets: UserMarket[] = createdMarkets.map((m) => ({
+        publicKey: m.market_address,
+        question: m.question,
+        totalVolume: m.total_volume,
+        feesCollected: 0, // TODO: Calculate from transactions
+        resolved: m.resolved,
+        resolutionTime: Math.floor(new Date(m.end_date).getTime() / 1000),
+      }));
+      
+      setMyMarkets(transformedMarkets);
+      
+      // TODO: Fetch user positions from on-chain
       setMyPositions([]);
     } catch (error) {
       console.error('Error loading user data:', error);
@@ -134,7 +153,11 @@ export default function Dashboard() {
               <div key={market.publicKey} className="card-pump">
                 <div className="flex justify-between items-start mb-4">
                   <div className="flex-1">
-                    <h3 className="text-xl font-bold text-white mb-2">{market.question}</h3>
+                    <Link href={`/trade/${market.publicKey}`}>
+                      <h3 className="text-xl font-bold text-white mb-2 hover:text-pump-green transition cursor-pointer">
+                        {market.question}
+                      </h3>
+                    </Link>
                     <div className="flex space-x-6 text-sm">
                       <div>
                         <span className="text-gray-500">Volume:</span>{' '}

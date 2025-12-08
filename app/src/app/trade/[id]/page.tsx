@@ -15,6 +15,7 @@ import CommentsSection from '@/components/CommentsSection';
 import TradingPanel from '@/components/TradingPanel';
 import CategoryImagePlaceholder from '@/components/CategoryImagePlaceholder';
 import { SocialLinks } from '@/components/SocialLinksForm';
+import { getMarketByAddress } from '@/lib/markets';
 
 interface Market {
   publicKey: string;
@@ -47,26 +48,33 @@ export default function TradePage() {
 
   async function loadMarket() {
     try {
-      // TODO: Fetch market from program
-      const exampleMarket: Market = {
-        publicKey: params.id as string,
-        question: 'Will SOL reach $500 in 2025?',
-        description: 'Market resolves when SOL/USD hits $500 or on Dec 31, 2025',
-        category: 'crypto',
-        imageUrl: undefined, // Will use placeholder
-        creator: 'ExampleCreator...',
-        yesSupply: 1000,
-        noSupply: 800,
-        totalVolume: 50_000_000_000,
-        resolutionTime: Math.floor(Date.now() / 1000) + 86400 * 30,
-        resolved: false,
-        socialLinks: {
-          twitter: 'https://x.com/solana',
-          telegram: 'https://t.me/solana',
-          website: 'https://solana.com',
-        },
+      const marketAddress = params.id as string;
+      
+      // Fetch market from Supabase
+      const supabaseMarket = await getMarketByAddress(marketAddress);
+      
+      if (!supabaseMarket) {
+        console.error('Market not found in Supabase');
+        setLoading(false);
+        return;
+      }
+      
+      // Transform to component format
+      const transformedMarket: Market = {
+        publicKey: supabaseMarket.market_address,
+        question: supabaseMarket.question,
+        description: supabaseMarket.description || '',
+        category: supabaseMarket.category || 'other',
+        imageUrl: supabaseMarket.image_url || undefined,
+        creator: supabaseMarket.creator,
+        yesSupply: supabaseMarket.yes_supply,
+        noSupply: supabaseMarket.no_supply,
+        totalVolume: supabaseMarket.total_volume,
+        resolutionTime: Math.floor(new Date(supabaseMarket.end_date).getTime() / 1000),
+        resolved: supabaseMarket.resolved,
       };
-      setMarket(exampleMarket);
+      
+      setMarket(transformedMarket);
     } catch (error) {
       console.error('Error loading market:', error);
     } finally {

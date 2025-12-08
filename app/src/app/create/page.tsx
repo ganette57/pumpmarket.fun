@@ -16,6 +16,7 @@ import { getUserCounterPDA, getMarketPDA } from '@/utils/solana';
 import { SystemProgram } from '@solana/web3.js';
 import { BN } from '@coral-xyz/anchor';
 import { supabase } from '@/utils/supabase';
+import { indexMarket } from '@/lib/markets';
 
 export default function CreateMarket() {
   const { publicKey, connected } = useWallet();
@@ -173,31 +174,31 @@ export default function CreateMarket() {
 
       // Show success message
       alert(`Market created successfully! 🎉\n\nTransaction: ${tx.slice(0, 16)}...\n\nView on Solana Explorer: https://explorer.solana.com/tx/${tx}?cluster=devnet`);
-      // INDEXATION SUPABASE – LE MARCHÉ APPARAÎT INSTANTANÉMENT
-      try {
-        const { error } = await supabase.from('markets').insert({
-          market_address: marketPDA.toBase58(),
-          question: question.slice(0, 60),           // évite le bug "Max seed length"
-          description: description || null,
-          category: category || 'Other',
-          image_url: imagePreview || null,
-          end_date: resolutionDate.toISOString(),
-          creator: publicKey?.toBase58() || 'unknown',
-          yes_supply: 0,
-          no_supply: 0,
-          total_volume: 0,
-          resolved: false,
-        });
+      // INDEXATION SUPABASE AVEC RETRY
+try {
+  const indexed = await indexMarket({
+    market_address: marketPDA.toBase58(),
+    question: question.slice(0, 60),
+    description: description || undefined,
+    category: category || 'Other',
+    image_url: imagePreview || undefined,
+    end_date: resolutionDate.toISOString(),
+    creator: publicKey?.toBase58() || 'unknown',
+    yes_supply: 0,
+    no_supply: 0,
+    total_volume: 0,
+    resolved: false,
+  });
+  
+  if (indexed) {
+    console.log('✅ Market indexed in Supabase!');
+  } else {
+    console.error('❌ Failed to index market after 3 retries');
+  }
+} catch (err) {
+  console.error('❌ Indexation error:', err);
+}
 
-        if (error) {
-          console.error('Supabase error:', error);
-        } else {
-          console.log('Marché indexé dans Supabase !');
-        }
-      } catch (err) {
-        console.error('Supabase insert failed:', err);
-      }
-      // =====================================================
       // Redirect to market page
       router.push(`/trade/${marketPDA.toBase58()}`);
 
