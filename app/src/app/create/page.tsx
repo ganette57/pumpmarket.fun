@@ -173,31 +173,31 @@ export default function CreateMarket() {
 
       // Show success message
       alert(`Market created successfully! 🎉\n\nTransaction: ${tx.slice(0, 16)}...\n\nView on Solana Explorer: https://explorer.solana.com/tx/${tx}?cluster=devnet`);
-// === INDEXATION SUPABASE - MARCHÉ APPARAÎT INSTANTANÉMENT ===
-try {
-  const { error } = await supabase.from('markets').insert({
-    market_address: marketPDA.toBase58(),
-    question,
-    description: description || null,
-    category: selectedCategory || null,
-    image_url: null,
-    end_date: resolutionDate.toISOString(),
-    creator: publicKey?.toBase58() || 'unknown',
-    yes_supply: 0,
-    no_supply: 0,
-    total_volume: 0,
-    resolved: false,
-  });
+      // INDEXATION SUPABASE – LE MARCHÉ APPARAÎT INSTANTANÉMENT
+      try {
+        const { error } = await supabase.from('markets').insert({
+          market_address: marketPDA.toBase58(),
+          question: question.slice(0, 60),           // évite le bug "Max seed length"
+          description: description || null,
+          category: category || 'Other',
+          image_url: imagePreview || null,
+          end_date: resolutionDate.toISOString(),
+          creator: publicKey?.toBase58() || 'unknown',
+          yes_supply: 0,
+          no_supply: 0,
+          total_volume: 0,
+          resolved: false,
+        });
 
-  if (error) {
-    console.error("Erreur Supabase:", error);
-  } else {
-    console.log("Marché indexé dans Supabase !");
-  }
-} catch (err) {
-  console.error("Supabase crash:", err);
-}
-// =====================================================
+        if (error) {
+          console.error('Supabase error:', error);
+        } else {
+          console.log('Marché indexé dans Supabase !');
+        }
+      } catch (err) {
+        console.error('Supabase insert failed:', err);
+      }
+      // =====================================================
       // Redirect to market page
       router.push(`/trade/${marketPDA.toBase58()}`);
 
