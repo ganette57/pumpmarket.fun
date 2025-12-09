@@ -1,5 +1,4 @@
 'use client';
-
 import Link from 'next/link';
 import Image from 'next/image';
 import { lamportsToSol } from '@/utils/solana';
@@ -18,15 +17,27 @@ interface MarketCardProps {
     totalVolume: number;
     resolutionTime: number;
     resolved: boolean;
+    // Multi-choice fields
+    marketType?: number;
+    outcomeNames?: string[];
+    outcomeSupplies?: number[];
   };
 }
 
 export default function MarketCard({ market }: MarketCardProps) {
   const [imageError, setImageError] = useState(false);
-  const totalSupply = market.yesSupply + market.noSupply;
-  const yesPercent = totalSupply > 0 ? (market.yesSupply / totalSupply) * 100 : 50;
-  const noPercent = 100 - yesPercent;
-
+  
+  // Determine if binary or multi-choice
+  const isBinary = !market.marketType || market.marketType === 0;
+  const outcomes = market.outcomeNames || ['YES', 'NO'];
+  const supplies = market.outcomeSupplies || [market.yesSupply, market.noSupply];
+  
+  // Calculate percentages
+  const totalSupply = supplies.reduce((sum, s) => sum + (s || 0), 0);
+  const percentages = supplies.map(s => 
+    totalSupply > 0 ? ((s || 0) / totalSupply) * 100 : 100 / supplies.length
+  );
+  
   const now = Date.now() / 1000;
   const timeLeft = market.resolutionTime - now;
   const daysLeft = Math.max(0, Math.floor(timeLeft / 86400));
@@ -39,63 +50,83 @@ export default function MarketCard({ market }: MarketCardProps) {
     : volumeInSol.toFixed(0);
 
   return (
-    <Link href={`/trade/${market.publicKey}`} className="h-full block">
-      <div className="bg-pump-gray border border-gray-800 rounded-xl hover:border-pump-green transition-all duration-200 hover:shadow-lg cursor-pointer p-5 h-full flex flex-col">
-        <div className="flex gap-4 flex-1">
-          {/* Square Image Left - Increased size */}
-          <div className="flex-shrink-0 w-24 h-24 rounded-lg overflow-hidden bg-pump-dark">
-            {market.imageUrl && !imageError ? (
-              <Image
-                src={market.imageUrl}
-                alt={market.question}
-                width={96}
-                height={96}
-                className="object-cover w-full h-full"
-                onError={() => setImageError(true)}
-              />
-            ) : (
-              <div className="w-full h-full scale-[0.4]">
-                <CategoryImagePlaceholder category={market.category} className="w-full h-full" />
+    <Link href={`/trade/${market.publicKey}`}>
+      <div className="card-pump h-full flex flex-col transition-all duration-300 hover:scale-[1.02] hover:border-pump-green/50 cursor-pointer group">
+        {/* Image */}
+        <div className="relative w-full h-40 mb-4 rounded-lg overflow-hidden bg-pump-dark">
+          {market.imageUrl && !imageError ? (
+            <Image
+              src={market.imageUrl}
+              alt={market.question}
+              fill
+              className="object-cover group-hover:scale-105 transition-transform duration-300"
+              onError={() => setImageError(true)}
+            />
+          ) : (
+            <CategoryImagePlaceholder category={market.category || 'other'} className="w-full h-full" />
+          )}
+          <div className="absolute inset-0 bg-gradient-to-t from-pump-dark/80 to-transparent"></div>
+          
+          {/* Category badge */}
+          {market.category && (
+            <div className="absolute top-2 left-2">
+              <span className="px-2 py-1 text-xs font-semibold bg-pump-dark/80 backdrop-blur-sm rounded-full border border-gray-700 text-gray-300 capitalize">
+                {market.category}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 flex flex-col">
+          {/* Question */}
+          <h3 className="text-base font-bold text-white mb-2 line-clamp-2 group-hover:text-pump-green transition-colors">
+            {market.question}
+          </h3>
+
+          {/* Description */}
+          <p className="text-sm text-gray-400 mb-3 line-clamp-2 leading-snug">
+            {market.description}
+          </p>
+
+          {/* Spacer to push outcomes and stats to bottom */}
+          <div className="flex-1"></div>
+
+          {/* Outcomes Display - Dynamic */}
+          <div className="flex gap-3 mb-3 flex-wrap">
+            {outcomes.slice(0, 2).map((outcome, index) => (
+              <div key={index} className="flex items-center gap-1">
+                <span className={`text-xs font-medium uppercase ${
+                  index === 0 ? 'text-blue-400' : 'text-red-400'
+                }`}>
+                  {outcome.length > 8 ? outcome.slice(0, 8) + '...' : outcome}
+                </span>
+                <span className={`text-sm font-bold ${
+                  index === 0 ? 'text-blue-400' : 'text-red-400'
+                }`}>
+                  {percentages[index]?.toFixed(0)}%
+                </span>
+              </div>
+            ))}
+            {outcomes.length > 2 && (
+              <div className="flex items-center gap-1">
+                <span className="text-xs font-medium text-gray-400">
+                  +{outcomes.length - 2} more
+                </span>
               </div>
             )}
           </div>
 
-          {/* Content Right */}
-          <div className="flex-1 min-w-0 py-1 flex flex-col">
-            {/* Title */}
-            <h3 className="text-lg font-bold text-white mb-2 line-clamp-2 leading-tight">
-              {market.question}
-            </h3>
-
-            {/* Description */}
-            <p className="text-sm text-gray-400 mb-3 line-clamp-2 leading-snug">
-              {market.description}
-            </p>
-
-            {/* Spacer to push YES/NO and stats to bottom */}
-            <div className="flex-1"></div>
-
-            {/* YES/NO Inline */}
-            <div className="flex gap-3 mb-3">
-              <div className="flex items-center gap-1">
-                <span className="text-xs text-blue-400 font-medium">YES</span>
-                <span className="text-sm font-bold text-blue-400">{yesPercent.toFixed(0)}%</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <span className="text-xs text-red-400 font-medium">NO</span>
-                <span className="text-sm font-bold text-red-400">{noPercent.toFixed(0)}%</span>
-              </div>
+          {/* Stats Bottom */}
+          <div className="flex items-center justify-between text-xs text-gray-500 pt-3 border-t border-gray-800">
+            <div className="flex items-center space-x-1">
+              <span className="text-pump-green font-semibold">${volumeDisplay}</span>
+              <span>Vol</span>
             </div>
-
-            {/* Stats Bottom */}
-            <div className="flex items-center gap-2 text-xs text-gray-500">
-              <span>${volumeDisplay} Vol</span>
-              <span>•</span>
-              {market.resolved ? (
-                <span className="text-pump-green font-semibold">RESOLVED</span>
-              ) : (
-                <span>{daysLeft}d left</span>
-              )}
+            <div className="flex items-center space-x-1">
+              <span className="text-gray-400">
+                {daysLeft > 0 ? `${daysLeft}d left` : `${hoursLeft}h left`}
+              </span>
             </div>
           </div>
         </div>

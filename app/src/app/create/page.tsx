@@ -8,7 +8,7 @@ import { CATEGORIES, CategoryId } from '@/utils/categories';
 import SocialLinksForm, { SocialLinks } from '@/components/SocialLinksForm';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
-import { Calendar, Image as ImageIcon, Upload, X } from 'lucide-react';
+import { Calendar, Image as ImageIcon, Upload, X, Plus, Trash2 } from 'lucide-react';
 import Image from 'next/image';
 import CategoryImagePlaceholder from '@/components/CategoryImagePlaceholder';
 import { useProgram } from '@/hooks/useProgram';
@@ -17,6 +17,8 @@ import { SystemProgram } from '@solana/web3.js';
 import { BN } from '@coral-xyz/anchor';
 import { supabase } from '@/utils/supabase';
 import { indexMarket } from '@/lib/markets';
+
+type MarketType = 'binary' | 'multi';
 
 export default function CreateMarket() {
   const { publicKey, connected } = useWallet();
@@ -30,6 +32,12 @@ export default function CreateMarket() {
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string>('');
   const [imageError, setImageError] = useState<string>('');
+  
+  // Multi-choice support
+  const [marketType, setMarketType] = useState<MarketType>('binary');
+  const [outcomes, setOutcomes] = useState<string[]>(['YES', 'NO']);
+  const [outcomesError, setOutcomesError] = useState<string>('');
+  
   // Default: 7 days from now
   const [resolutionDate, setResolutionDate] = useState<Date>(() => {
     const date = new Date();
@@ -51,6 +59,48 @@ export default function CreateMarket() {
     setDescription(value);
     const validation = validateMarketDescription(value);
     setDescriptionError(validation.valid ? null : validation.error || null);
+  };
+
+  const handleMarketTypeChange = (type: MarketType) => {
+    setMarketType(type);
+    if (type === 'binary') {
+      setOutcomes(['YES', 'NO']);
+      setOutcomesError('');
+    } else {
+      setOutcomes(['', '', '']);
+    }
+  };
+
+  const addOutcome = () => {
+    if (outcomes.length < 10) {
+      setOutcomes([...outcomes, '']);
+    }
+  };
+
+  const removeOutcome = (index: number) => {
+    if (outcomes.length > 2) {
+      setOutcomes(outcomes.filter((_, i) => i !== index));
+    }
+  };
+
+  const updateOutcome = (index: number, value: string) => {
+    const newOutcomes = [...outcomes];
+    newOutcomes[index] = value;
+    setOutcomes(newOutcomes);
+    
+    // Validate outcomes
+    if (marketType === 'multi') {
+      const nonEmpty = newOutcomes.filter(o => o.trim().length > 0);
+      if (nonEmpty.length < 2) {
+        setOutcomesError('At least 2 outcomes required');
+      } else if (nonEmpty.length > 10) {
+        setOutcomesError('Maximum 10 outcomes allowed');
+      } else if (nonEmpty.some(o => o.length > 50)) {
+        setOutcomesError('Outcome names must be 50 characters or less');
+      } else {
+        setOutcomesError('');
+      }
+    }
   };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -92,9 +142,11 @@ export default function CreateMarket() {
     question.length >= 10 &&
     !questionError &&
     !descriptionError &&
+    !outcomesError &&
     category &&
     resolutionDate &&
-    resolutionDate > new Date(); // Must be in the future
+    resolutionDate > new Date() &&
+    (marketType === 'binary' || outcomes.filter(o => o.trim().length > 0).length >= 2);
 
   async function handleCreateMarket() {
     if (!canSubmit || !publicKey || !program) {
@@ -113,6 +165,11 @@ export default function CreateMarket() {
         // imageUrl = await uploadImage(imageFile);
       }
 
+      // Prepare outcomes array
+      const finalOutcomes = marketType === 'binary' 
+        ? ['YES', 'NO']
+        : outcomes.filter(o => o.trim().length > 0);
+
       // 1. Get PDAs
       const [userCounterPDA] = getUserCounterPDA(publicKey);
       const [marketPDA] = getMarketPDA(publicKey, question);
@@ -124,7 +181,7 @@ export default function CreateMarket() {
 
       // 2. Check if user counter exists, if not initialize it
       try {
-        await program.account.userCounter.fetch(userCounterPDA);
+        await (program.account as any).userCounter.fetch(userCounterPDA);
         console.log('User counter exists');
       } catch (e) {
         // User counter doesn't exist, initialize it
@@ -146,21 +203,23 @@ export default function CreateMarket() {
 
       // 3. Create market
       const resolutionTimestamp = Math.floor(resolutionDate.getTime() / 1000);
+      const marketTypeValue = marketType === 'binary' ? 0 : 1;
 
       console.log('Creating market with:', {
         question,
         description,
         resolutionTimestamp,
-        category,
-        imageUrl,
-        socialLinks,
+        marketType: marketTypeValue,
+        outcomes: finalOutcomes,
       });
 
       const tx = await program.methods
         .createMarket(
           question,
           description,
-          new BN(resolutionTimestamp)
+          new BN(resolutionTimestamp),
+          marketTypeValue,
+          finalOutcomes
         )
         .accounts({
           market: marketPDA,
@@ -174,30 +233,34 @@ export default function CreateMarket() {
 
       // Show success message
       alert(`Market created successfully! 🎉\n\nTransaction: ${tx.slice(0, 16)}...\n\nView on Solana Explorer: https://explorer.solana.com/tx/${tx}?cluster=devnet`);
+      
       // INDEXATION SUPABASE AVEC RETRY
-try {
-  const indexed = await indexMarket({
-    market_address: marketPDA.toBase58(),
-    question: question.slice(0, 60),
-    description: description || undefined,
-    category: category || 'Other',
-    image_url: imagePreview || undefined,
-    end_date: resolutionDate.toISOString(),
-    creator: publicKey?.toBase58() || 'unknown',
-    yes_supply: 0,
-    no_supply: 0,
-    total_volume: 0,
-    resolved: false,
-  });
-  
-  if (indexed) {
-    console.log('✅ Market indexed in Supabase!');
-  } else {
-    console.error('❌ Failed to index market after 3 retries');
-  }
-} catch (err) {
-  console.error('❌ Indexation error:', err);
-}
+      try {
+        const indexed = await indexMarket({
+          market_address: marketPDA.toBase58(),
+          question: question.slice(0, 200),
+          description: description || undefined,
+          category: category || 'Other',
+          image_url: imagePreview || undefined,
+          end_date: resolutionDate.toISOString(),
+          creator: publicKey?.toBase58() || 'unknown',
+          market_type: marketTypeValue,
+          outcome_names: finalOutcomes,
+          outcome_supplies: new Array(finalOutcomes.length).fill(0),
+          yes_supply: 0,
+          no_supply: 0,
+          total_volume: 0,
+          resolved: false,
+        });
+        
+        if (indexed) {
+          console.log('✅ Market indexed in Supabase!');
+        } else {
+          console.error('❌ Failed to index market after 3 retries');
+        }
+      } catch (err) {
+        console.error('❌ Indexation error:', err);
+      }
 
       // Redirect to market page
       router.push(`/trade/${marketPDA.toBase58()}`);
@@ -235,6 +298,92 @@ try {
       </div>
 
       <div className="card-pump">
+        {/* Market Type Selection */}
+        <div className="mb-6">
+          <label className="block text-white font-semibold mb-3">
+            Market Type *
+          </label>
+          <div className="grid grid-cols-2 gap-4">
+            <button
+              type="button"
+              onClick={() => handleMarketTypeChange('binary')}
+              className={`p-4 rounded-lg border-2 transition-all ${
+                marketType === 'binary'
+                  ? 'border-pump-green bg-pump-green/10 text-white'
+                  : 'border-gray-700 bg-pump-dark text-gray-400 hover:border-gray-600'
+              }`}
+            >
+              <div className="font-bold mb-1">Binary (YES/NO)</div>
+              <div className="text-sm">Simple yes or no outcome</div>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleMarketTypeChange('multi')}
+              className={`p-4 rounded-lg border-2 transition-all ${
+                marketType === 'multi'
+                  ? 'border-pump-green bg-pump-green/10 text-white'
+                  : 'border-gray-700 bg-pump-dark text-gray-400 hover:border-gray-600'
+              }`}
+            >
+              <div className="font-bold mb-1">Multi-Choice</div>
+              <div className="text-sm">Multiple possible outcomes</div>
+            </button>
+          </div>
+        </div>
+
+        {/* Outcomes (Multi-Choice Only) */}
+        {marketType === 'multi' && (
+          <div className="mb-6">
+            <label className="block text-white font-semibold mb-2">
+              Outcomes * (2-10 options)
+            </label>
+            <div className="space-y-2">
+              {outcomes.map((outcome, index) => (
+                <div key={index} className="flex gap-2">
+                  <input
+                    type="text"
+                    value={outcome}
+                    onChange={(e) => updateOutcome(index, e.target.value)}
+                    placeholder={`Option ${index + 1} (e.g., BTC, ETH, SOL)`}
+                    maxLength={50}
+                    className="input-pump flex-1"
+                  />
+                  {outcomes.length > 2 && (
+                    <button
+                      type="button"
+                      onClick={() => removeOutcome(index)}
+                      className="w-10 h-10 rounded-lg bg-pump-red/20 hover:bg-pump-red/30 text-pump-red transition flex items-center justify-center"
+                      title="Remove outcome"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            {outcomes.length < 10 && (
+              <button
+                type="button"
+                onClick={addOutcome}
+                className="mt-2 flex items-center gap-2 text-pump-green hover:text-green-400 transition"
+              >
+                <Plus className="w-4 h-4" />
+                Add Option
+              </button>
+            )}
+            {outcomesError && (
+              <p className="text-pump-red text-sm mt-2 font-semibold">
+                ❌ {outcomesError}
+              </p>
+            )}
+            {!outcomesError && outcomes.filter(o => o.trim()).length >= 2 && (
+              <p className="text-pump-green text-sm mt-2">
+                ✓ {outcomes.filter(o => o.trim()).length} outcomes
+              </p>
+            )}
+          </div>
+        )}
+
         {/* Question */}
         <div className="mb-6">
           <label className="block text-white font-semibold mb-2">
@@ -247,7 +396,7 @@ try {
             type="text"
             value={question}
             onChange={(e) => handleQuestionChange(e.target.value)}
-            placeholder="Will SOL reach $500 in 2025?"
+            placeholder={marketType === 'binary' ? "Will SOL reach $500 in 2025?" : "Which privacy coin will have the higher price on Christmas Day?"}
             maxLength={200}
             className={`input-pump w-full ${questionError ? 'input-error' : ''}`}
           />

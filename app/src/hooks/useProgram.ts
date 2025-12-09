@@ -1,5 +1,5 @@
 import { useAnchorWallet, useConnection } from '@solana/wallet-adapter-react';
-import { Program, AnchorProvider } from '@coral-xyz/anchor';
+import { Program, AnchorProvider, Idl } from '@coral-xyz/anchor';
 import { useMemo } from 'react';
 import idl from '@/idl/funmarket_pump.json';
 
@@ -10,7 +10,7 @@ export function useProgram() {
   return useMemo(() => {
     if (!wallet) return null;
     const provider = new AnchorProvider(connection, wallet, { commitment: 'confirmed' });
-    // Anchor 0.30+ lit l'address directement dans l'IDL
-    return new Program(idl, provider);
+    // Force cast to Idl to avoid version compatibility issues
+    return new Program(idl as unknown as Idl, provider);
   }, [connection, wallet]);
 }

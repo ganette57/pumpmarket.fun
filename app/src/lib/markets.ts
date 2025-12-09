@@ -4,9 +4,16 @@ import { Market } from '@/types/market';
 export async function indexMarket(marketData: Omit<Market, 'id' | 'created_at' | 'updated_at'>): Promise<boolean> {
   for (let i = 0; i < 3; i++) {
     try {
+      // Ensure outcome_names and outcome_supplies are properly formatted as JSONB
+      const dataToInsert = {
+        ...marketData,
+        outcome_names: JSON.stringify(marketData.outcome_names),
+        outcome_supplies: JSON.stringify(marketData.outcome_supplies),
+      };
+      
       const { error } = await supabase
         .from('markets')
-        .insert(marketData);
+        .insert(dataToInsert);
       
       if (!error) {
         console.log('✅ Market indexed successfully:', marketData.market_address);
@@ -37,8 +44,19 @@ export async function getAllMarkets(): Promise<Market[]> {
       return [];
     }
     
-    console.log(`✅ Retrieved ${data?.length || 0} markets from Supabase`);
-    return data as Market[];
+    // Parse JSONB fields
+    const markets = (data || []).map(market => ({
+      ...market,
+      outcome_names: typeof market.outcome_names === 'string' 
+        ? JSON.parse(market.outcome_names) 
+        : market.outcome_names,
+      outcome_supplies: typeof market.outcome_supplies === 'string'
+        ? JSON.parse(market.outcome_supplies)
+        : market.outcome_supplies,
+    }));
+    
+    console.log(`✅ Retrieved ${markets.length} markets from Supabase`);
+    return markets as Market[];
   } catch (err) {
     console.error('❌ Exception in getAllMarkets:', err);
     return [];
@@ -58,12 +76,24 @@ export async function getMarketByAddress(marketAddress: string): Promise<Market 
       return null;
     }
     
-    return data as Market;
+    // Parse JSONB fields
+    const market = {
+      ...data,
+      outcome_names: typeof data.outcome_names === 'string'
+        ? JSON.parse(data.outcome_names)
+        : data.outcome_names,
+      outcome_supplies: typeof data.outcome_supplies === 'string'
+        ? JSON.parse(data.outcome_supplies)
+        : data.outcome_supplies,
+    };
+    
+    return market as Market;
   } catch (err) {
     console.error('❌ Exception in getMarketByAddress:', err);
     return null;
   }
 }
+
 /**
  * Retrieves markets created by a specific creator
  */
@@ -80,8 +110,19 @@ export async function getMarketsByCreator(creatorAddress: string): Promise<Marke
       return [];
     }
     
-    console.log(`✅ Retrieved ${data?.length || 0} markets for creator ${creatorAddress}`);
-    return data as Market[];
+    // Parse JSONB fields
+    const markets = (data || []).map(market => ({
+      ...market,
+      outcome_names: typeof market.outcome_names === 'string'
+        ? JSON.parse(market.outcome_names)
+        : market.outcome_names,
+      outcome_supplies: typeof market.outcome_supplies === 'string'
+        ? JSON.parse(market.outcome_supplies)
+        : market.outcome_supplies,
+    }));
+    
+    console.log(`✅ Retrieved ${markets.length} markets for creator ${creatorAddress}`);
+    return markets as Market[];
   } catch (err) {
     console.error('❌ Exception in getMarketsByCreator:', err);
     return [];

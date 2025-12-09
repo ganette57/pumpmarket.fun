@@ -154,12 +154,14 @@ export default function FeaturedMarketCardFull({ market }: FeaturedMarketCardFul
                 </div>
               </div>
             </div>
-
-            {/* Right: Bonding Curve Chart (40%) */}
-            <div className="w-[40%] bg-pump-dark/50 p-6 border-l border-gray-800 flex items-center">
+{/* Right: Bonding Curve Chart (40%) */}
+<div className="w-[40%] bg-pump-dark/50 p-6 border-l border-gray-800 flex items-center">
               <div className="w-full">
                 <h3 className="text-sm font-semibold text-gray-400 mb-4">Price History</h3>
-                <BondingCurveChart yesSupply={market.yesSupply} noSupply={market.noSupply} />
+                <BondingCurveChart 
+                  currentSupply={market.yesSupply + market.noSupply} 
+                  isYes={market.yesPercent >= 50} 
+                />
               </div>
             </div>
           </div>
@@ -226,7 +228,10 @@ export default function FeaturedMarketCardFull({ market }: FeaturedMarketCardFul
               <div className="bg-pump-dark/50 p-4 rounded-lg border border-gray-800">
                 <h3 className="text-xs font-semibold text-gray-400 mb-3">Price History</h3>
                 <div className="h-48">
-                  <BondingCurveChart yesSupply={market.yesSupply} noSupply={market.noSupply} />
+                  <BondingCurveChart 
+  currentSupply={market.yesSupply + market.noSupply} 
+  isYes={market.yesPercent >= 50} 
+/>
                 </div>
               </div>
             </div>

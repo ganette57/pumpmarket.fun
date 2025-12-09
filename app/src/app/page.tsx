@@ -1,5 +1,4 @@
 'use client';
-
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useConnection } from '@solana/wallet-adapter-react';
 import { motion } from 'framer-motion';
@@ -13,7 +12,8 @@ import Link from 'next/link';
 import { CategoryId } from '@/utils/categories';
 import { getAllMarkets } from '@/lib/markets';
 
-interface Market {
+// Interface for display in components
+interface DisplayMarket {
   publicKey: string;
   question: string;
   description: string;
@@ -24,51 +24,59 @@ interface Market {
   totalVolume: number;
   resolutionTime: number;
   resolved: boolean;
-  creator?: string;
+  creator: string;
   socialLinks?: {
     twitter?: string;
     telegram?: string;
     website?: string;
+    discord?: string;
   };
+  // Multi-choice fields
+  marketType: number;
+  outcomeNames?: string[];
+  outcomeSupplies?: number[];
 }
 
-export default function Home() {
+export default function HomePage() {
   const { connection } = useConnection();
-  const [markets, setMarkets] = useState<Market[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
+  const [markets, setMarkets] = useState<DisplayMarket[]>([]);
+  const [filteredMarkets, setFilteredMarkets] = useState<DisplayMarket[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<CategoryId | 'all'>('all');
-  const [currentFeaturedIndex, setCurrentFeaturedIndex] = useState(0);
+  const [loading, setLoading] = useState(true);
   const [displayedCount, setDisplayedCount] = useState(12);
-
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [showGeoblockModal, setShowGeoblockModal] = useState(false);
+  const [currentFeaturedIndex, setCurrentFeaturedIndex] = useState(0);
+  const autoScrollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const observerTarget = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     loadMarkets();
+    checkGeoblock();
   }, []);
 
-  // Infinite scroll observer
+  useEffect(() => {
+    if (selectedCategory === 'all') {
+      setFilteredMarkets(markets);
+    } else {
+      setFilteredMarkets(markets.filter(m => m.category === selectedCategory));
+    }
+    setDisplayedCount(12);
+  }, [selectedCategory, markets]);
+
   useEffect(() => {
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting && !loading && filteredMarkets.length > displayedCount) {
+        if (entries[0].isIntersecting && !loading && displayedCount < filteredMarkets.length) {
           loadMore();
         }
       },
-      { threshold: 0.1 }
+      { threshold: 0.5 }
     );
 
-    const currentTarget = observerTarget.current;
-    if (currentTarget) {
-      observer.observe(currentTarget);
-    }
-
-    return () => {
-      if (currentTarget) {
-        observer.unobserve(currentTarget);
-      }
-    };
-  }, [displayedCount, loading]);
+    if (observerTarget.current) observer.observe(observerTarget.current);
+    return () => observer.disconnect();
+  }, [displayedCount, loading, filteredMarkets.length]);
 
   async function loadMarkets() {
     try {
@@ -76,18 +84,22 @@ export default function Home() {
       const supabaseMarkets = await getAllMarkets();
       
       // Transform Supabase format to component format
-      const transformedMarkets: Market[] = supabaseMarkets.map((m) => ({
+      const transformedMarkets: DisplayMarket[] = supabaseMarkets.map((m) => ({
         publicKey: m.market_address,
-        question: m.question,
+        question: m.question || '',
         description: m.description || '',
         category: m.category || 'other',
         imageUrl: m.image_url || undefined,
-        yesSupply: m.yes_supply,
-        noSupply: m.no_supply,
-        totalVolume: m.total_volume,
+        yesSupply: m.yes_supply || 0,
+        noSupply: m.no_supply || 0,
+        totalVolume: m.total_volume || 0,
         resolutionTime: Math.floor(new Date(m.end_date).getTime() / 1000),
-        resolved: m.resolved,
-        creator: m.creator,
+        resolved: m.resolved || false,
+        creator: m.creator || '',
+        // Multi-choice fields
+        marketType: m.market_type || 0,
+        outcomeNames: m.outcome_names,
+        outcomeSupplies: m.outcome_supplies,
       }));
       
       setMarkets(transformedMarkets);
@@ -98,20 +110,18 @@ export default function Home() {
     }
   }
 
+  async function checkGeoblock() {
+    // Implement geoblock check if needed
+  }
+
   const loadMore = useCallback(() => {
     if (loadingMore) return;
     setLoadingMore(true);
     setTimeout(() => {
-      setDisplayedCount((prev) => prev + 12);
+      setDisplayedCount((prev) => Math.min(prev + 12, filteredMarkets.length));
       setLoadingMore(false);
     }, 500);
-  }, [loadingMore]);
-
-  const filteredMarkets = markets.filter((market) => {
-    const categoryMatch = selectedCategory === 'all' || market.category === selectedCategory;
-    const statusMatch = !market.resolved; // Only show active markets
-    return statusMatch && categoryMatch;
-  });
+  }, [loadingMore, filteredMarkets.length]);
 
   // Featured markets (top 3 by volume)
   const featuredMarkets = [...markets]

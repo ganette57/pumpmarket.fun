@@ -77,7 +77,7 @@ export default function BondingCurveChart({ currentSupply, isYes }: BondingCurve
             borderWidth: 1,
             callbacks: {
               label: (context) => {
-                return `${context.parsed.y.toFixed(4)} SOL`;
+                return `${(context.parsed.y ?? 0).toFixed(4)} SOL`;
               },
             },
           },

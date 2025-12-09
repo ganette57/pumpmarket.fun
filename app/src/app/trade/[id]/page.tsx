@@ -62,16 +62,16 @@ export default function TradePage() {
       // Transform to component format
       const transformedMarket: Market = {
         publicKey: supabaseMarket.market_address,
-        question: supabaseMarket.question,
+        question: supabaseMarket.question || '',
         description: supabaseMarket.description || '',
         category: supabaseMarket.category || 'other',
         imageUrl: supabaseMarket.image_url || undefined,
-        creator: supabaseMarket.creator,
-        yesSupply: supabaseMarket.yes_supply,
-        noSupply: supabaseMarket.no_supply,
-        totalVolume: supabaseMarket.total_volume,
+        creator: supabaseMarket.creator || '',
+        yesSupply: supabaseMarket.yes_supply || 0,
+        noSupply: supabaseMarket.no_supply || 0,
+        totalVolume: supabaseMarket.total_volume || 0,
         resolutionTime: Math.floor(new Date(supabaseMarket.end_date).getTime() / 1000),
-        resolved: supabaseMarket.resolved,
+        resolved: supabaseMarket.resolved || false,
       };
       
       setMarket(transformedMarket);
