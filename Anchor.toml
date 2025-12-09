@@ -5,7 +5,7 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-funmarket_pump = "BV6q3zDwjaXdcn3DmqroHbeNuTDxtrpyYXvGNeYec6Wy"
+funmarket_pump = "3y1PZrQ8RpCyXTGpNsUwV74uBr9Nqf3BeBNCTb1hDx7D"
 
 [programs.localnet]
 funmarket_pump = "BV6q3zDwjaXdcn3DmqroHbeNuTDxtrpyYXvGNeYec6Wy"

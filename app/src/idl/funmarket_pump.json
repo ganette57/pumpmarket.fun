@@ -1,5 +1,5 @@
 {
-  "address": "BV6q3zDwjaXdcn3DmqroHbeNuTDxtrpyYXvGNeYec6Wy",
+  "address": "3y1PZrQ8RpCyXTGpNsUwV74uBr9Nqf3BeBNCTb1hDx7D",
   "metadata": {
     "name": "funmarket_pump",
     "version": "0.1.0",
@@ -10,7 +10,7 @@
     {
       "name": "buy_shares",
       "docs": [
-        "Buy YES or NO shares with bonding curve pricing"
+        "Buy shares for a specific outcome with bonding curve pricing"
       ],
       "discriminator": [
         40,
@@ -80,8 +80,8 @@
           "type": "u64"
         },
         {
-          "name": "is_yes",
-          "type": "bool"
+          "name": "outcome_index",
+          "type": "u8"
         }
       ]
     },
@@ -145,7 +145,7 @@
     {
       "name": "create_market",
       "docs": [
-        "Create a new prediction market with strict filters"
+        "Create a new prediction market with multi-choice support"
       ],
       "discriminator": [
         103,
@@ -236,6 +236,16 @@
         {
           "name": "resolution_time",
           "type": "i64"
+        },
+        {
+          "name": "market_type",
+          "type": "u8"
+        },
+        {
+          "name": "outcome_names",
+          "type": {
+            "vec": "string"
+          }
         }
       ]
     },
@@ -299,7 +309,7 @@
     {
       "name": "resolve_market",
       "docs": [
-        "Resolve market (admin/creator only for MVP, Chainlink later)"
+        "Resolve market with winning outcome index"
       ],
       "discriminator": [
         155,
@@ -355,8 +365,8 @@
       ],
       "args": [
         {
-          "name": "yes_wins",
-          "type": "bool"
+          "name": "winning_outcome_index",
+          "type": "u8"
         }
       ]
     },
@@ -433,8 +443,8 @@
           "type": "u64"
         },
         {
-          "name": "is_yes",
-          "type": "bool"
+          "name": "outcome_index",
+          "type": "u8"
         }
       ]
     }
@@ -540,6 +550,36 @@
       "code": 6011,
       "name": "TooManyActiveMarkets",
       "msg": "You have too many active markets (max 5)"
+    },
+    {
+      "code": 6012,
+      "name": "InvalidMarketType",
+      "msg": "Invalid market type (must be 0 or 1)"
+    },
+    {
+      "code": 6013,
+      "name": "InvalidOutcomeCount",
+      "msg": "Invalid outcome count (must be 2-10)"
+    },
+    {
+      "code": 6014,
+      "name": "BinaryMustHaveTwoOutcomes",
+      "msg": "Binary markets must have exactly 2 outcomes"
+    },
+    {
+      "code": 6015,
+      "name": "InvalidOutcomeName",
+      "msg": "Invalid outcome name (must be 1-50 characters)"
+    },
+    {
+      "code": 6016,
+      "name": "InvalidOutcomeIndex",
+      "msg": "Invalid outcome index"
+    },
+    {
+      "code": 6017,
+      "name": "AlreadyClaimed",
+      "msg": "Already claimed winnings"
     }
   ],
   "types": [
@@ -565,12 +605,30 @@
             "type": "i64"
           },
           {
-            "name": "yes_supply",
-            "type": "u64"
+            "name": "market_type",
+            "type": "u8"
           },
           {
-            "name": "no_supply",
-            "type": "u64"
+            "name": "outcome_count",
+            "type": "u8"
+          },
+          {
+            "name": "outcome_names",
+            "type": {
+              "array": [
+                "string",
+                10
+              ]
+            }
+          },
+          {
+            "name": "outcome_supplies",
+            "type": {
+              "array": [
+                "u64",
+                10
+              ]
+            }
           },
           {
             "name": "total_volume",
@@ -587,7 +645,7 @@
           {
             "name": "winning_outcome",
             "type": {
-              "option": "bool"
+              "option": "u8"
             }
           },
           {
@@ -627,12 +685,17 @@
             "type": "pubkey"
           },
           {
-            "name": "yes_shares",
-            "type": "u64"
+            "name": "shares",
+            "type": {
+              "array": [
+                "u64",
+                10
+              ]
+            }
           },
           {
-            "name": "no_shares",
-            "type": "u64"
+            "name": "claimed",
+            "type": "bool"
           }
         ]
       }

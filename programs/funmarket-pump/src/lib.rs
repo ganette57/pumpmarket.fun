@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 
-declare_id!("BV6q3zDwjaXdcn3DmqroHbeNuTDxtrpyYXvGNeYec6Wy");
+declare_id!("3y1PZrQ8RpCyXTGpNsUwV74uBr9Nqf3BeBNCTb1hDx7D");
 
 #[program]
 pub mod funmarket_pump {
@@ -15,13 +15,32 @@ pub mod funmarket_pump {
         Ok(())
     }
 
-    /// Create a new prediction market with strict filters
+    /// Create a new prediction market with multi-choice support
     pub fn create_market(
         ctx: Context<CreateMarket>,
         question: String,
         description: String,
         resolution_time: i64,
+        market_type: u8,              // 0 = Binary, 1 = Multi-choice
+        outcome_names: Vec<String>,   // ["YES", "NO"] or ["ZEC", "XMR", "DASH"]
     ) -> Result<()> {
+        // Validate market type
+        require!(market_type <= 1, ErrorCode::InvalidMarketType);
+        
+        // Validate outcome count
+        let outcome_count = outcome_names.len() as u8;
+        require!(outcome_count >= 2 && outcome_count <= 10, ErrorCode::InvalidOutcomeCount);
+        
+        // Binary markets must have exactly 2 outcomes
+        if market_type == 0 {
+            require!(outcome_count == 2, ErrorCode::BinaryMustHaveTwoOutcomes);
+        }
+
+        // Validate outcome names
+        for name in outcome_names.iter() {
+            require!(name.len() > 0 && name.len() <= 50, ErrorCode::InvalidOutcomeName);
+        }
+
         // Banned words filter - STRICT
         const BANNED_WORDS: [&str; 20] = [
             "pedo", "child", "rape", "suicide", "kill", "porn", "dick", "cock",
@@ -57,8 +76,16 @@ pub mod funmarket_pump {
         market.question = question;
         market.description = description;
         market.resolution_time = resolution_time;
-        market.yes_supply = 0;
-        market.no_supply = 0;
+        market.market_type = market_type;
+        market.outcome_count = outcome_count;
+        let mut names_array: [String; 10] = Default::default();
+        for (i, name) in outcome_names.iter().enumerate() {
+            if i < 10 {
+                names_array[i] = name.clone();
+            }
+        }
+        market.outcome_names = names_array;
+        market.outcome_supplies = [0; 10];
         market.total_volume = 0;
         market.fees_collected = 0;
         market.resolved = false;
@@ -68,26 +95,26 @@ pub mod funmarket_pump {
         // Increment user's active market count
         user_counter.active_markets += 1;
 
-        msg!("Market created: {}", market.question);
+        msg!("Market created: {} (type: {}, outcomes: {})", market.question, market_type, outcome_count);
         Ok(())
     }
 
-    /// Buy YES or NO shares with bonding curve pricing
+    /// Buy shares for a specific outcome with bonding curve pricing
     pub fn buy_shares(
         ctx: Context<BuyShares>,
         amount: u64,
-        is_yes: bool,
+        outcome_index: u8,
     ) -> Result<()> {
         let market = &mut ctx.accounts.market;
 
         require!(!market.resolved, ErrorCode::MarketResolved);
+        require!(outcome_index < market.outcome_count, ErrorCode::InvalidOutcomeIndex);
 
         let clock = Clock::get()?;
         require!(clock.unix_timestamp < market.resolution_time, ErrorCode::MarketExpired);
 
         // Bonding curve: price = 10 * sqrt(supply)
-        // Cost = integral from current_supply to (current_supply + amount)
-        let current_supply = if is_yes { market.yes_supply } else { market.no_supply };
+        let current_supply = market.outcome_supplies[outcome_index as usize];
         let cost = calculate_bonding_curve_cost(current_supply, amount);
 
         // 1% fee to creator + 1% fee to platform = 2% total
@@ -133,11 +160,7 @@ pub mod funmarket_pump {
         )?;
 
         // Update supply
-        if is_yes {
-            market.yes_supply += amount;
-        } else {
-            market.no_supply += amount;
-        }
+        market.outcome_supplies[outcome_index as usize] += amount;
         market.total_volume += total_cost;
         market.fees_collected += total_fees;
 
@@ -146,18 +169,14 @@ pub mod funmarket_pump {
         if position.market == Pubkey::default() {
             position.market = market.key();
             position.user = ctx.accounts.buyer.key();
-            position.yes_shares = 0;
-            position.no_shares = 0;
+            position.shares = [0; 10];
+            position.claimed = false;
         }
 
-        if is_yes {
-            position.yes_shares += amount;
-        } else {
-            position.no_shares += amount;
-        }
+        position.shares[outcome_index as usize] += amount;
 
-        msg!("Bought {} {} shares for {} lamports (creator fee: {}, platform fee: {}, total: {})",
-             amount, if is_yes { "YES" } else { "NO" }, cost, creator_fee, platform_fee, total_cost);
+        msg!("Bought {} shares for outcome {} ({}) - cost: {} lamports",
+             amount, outcome_index, market.outcome_names[outcome_index as usize], total_cost);
         Ok(())
     }
 
@@ -165,20 +184,21 @@ pub mod funmarket_pump {
     pub fn sell_shares(
         ctx: Context<SellShares>,
         amount: u64,
-        is_yes: bool,
+        outcome_index: u8,
     ) -> Result<()> {
         let market_info = ctx.accounts.market.to_account_info();
         let market = &mut ctx.accounts.market;
         let position = &mut ctx.accounts.user_position;
 
         require!(!market.resolved, ErrorCode::MarketResolved);
+        require!(outcome_index < market.outcome_count, ErrorCode::InvalidOutcomeIndex);
 
         // Check user has enough shares
-        let user_shares = if is_yes { position.yes_shares } else { position.no_shares };
+        let user_shares = position.shares[outcome_index as usize];
         require!(user_shares >= amount, ErrorCode::InsufficientShares);
 
         // Calculate refund using bonding curve
-        let current_supply = if is_yes { market.yes_supply } else { market.no_supply };
+        let current_supply = market.outcome_supplies[outcome_index as usize];
         let refund = calculate_bonding_curve_cost(current_supply - amount, amount);
 
         // 1% fee to creator + 1% fee to platform = 2% total on sell
@@ -200,45 +220,38 @@ pub mod funmarket_pump {
         **ctx.accounts.platform_wallet.to_account_info().try_borrow_mut_lamports()? += platform_fee;
 
         // Update supply
-        if is_yes {
-            market.yes_supply -= amount;
-        } else {
-            market.no_supply -= amount;
-        }
+        market.outcome_supplies[outcome_index as usize] -= amount;
         market.fees_collected += total_fees;
 
         // Update position
-        if is_yes {
-            position.yes_shares -= amount;
-        } else {
-            position.no_shares -= amount;
-        }
+        position.shares[outcome_index as usize] -= amount;
 
-        msg!("Sold {} {} shares for {} lamports (creator fee: {}, platform fee: {})",
-             amount, if is_yes { "YES" } else { "NO" }, net_refund, creator_fee, platform_fee);
+        msg!("Sold {} shares for outcome {} - refund: {} lamports",
+             amount, outcome_index, net_refund);
         Ok(())
     }
 
-    /// Resolve market (admin/creator only for MVP, Chainlink later)
+    /// Resolve market with winning outcome index
     pub fn resolve_market(
         ctx: Context<ResolveMarket>,
-        yes_wins: bool,
+        winning_outcome_index: u8,
     ) -> Result<()> {
         let market = &mut ctx.accounts.market;
 
         require!(!market.resolved, ErrorCode::AlreadyResolved);
+        require!(winning_outcome_index < market.outcome_count, ErrorCode::InvalidOutcomeIndex);
 
         let clock = Clock::get()?;
         require!(clock.unix_timestamp >= market.resolution_time, ErrorCode::TooEarlyToResolve);
 
         market.resolved = true;
-        market.winning_outcome = Some(yes_wins);
+        market.winning_outcome = Some(winning_outcome_index);
 
         // Decrement creator's active market count
         let user_counter = &mut ctx.accounts.user_counter;
         user_counter.active_markets = user_counter.active_markets.saturating_sub(1);
 
-        msg!("Market resolved: {} wins", if yes_wins { "YES" } else { "NO" });
+        msg!("Market resolved: {} wins", market.outcome_names[winning_outcome_index as usize]);
         Ok(())
     }
 
@@ -248,42 +261,42 @@ pub mod funmarket_pump {
         let position = &mut ctx.accounts.user_position;
 
         require!(market.resolved, ErrorCode::MarketNotResolved);
+        require!(!position.claimed, ErrorCode::AlreadyClaimed);
 
-        let winning_outcome = market.winning_outcome.ok_or(ErrorCode::MarketNotResolved)?;
-        let winning_shares = if winning_outcome { position.yes_shares } else { position.no_shares };
+        let winning_index = market.winning_outcome.ok_or(ErrorCode::MarketNotResolved)? as usize;
+        let winning_shares = position.shares[winning_index];
 
         require!(winning_shares > 0, ErrorCode::NoWinningShares);
 
-        // Payout = 1 SOL per winning share (simplified for MVP)
-        let payout = winning_shares * 1_000_000_000; // 1 SOL in lamports
+        // Calculate payout proportional to winning shares
+        let total_winning_supply = market.outcome_supplies[winning_index];
+        let market_balance = ctx.accounts.market.to_account_info().lamports();
+        
+        // Payout = (user_shares / total_winning_shares) * market_balance
+        let payout = (winning_shares as u128)
+            .checked_mul(market_balance as u128)
+            .unwrap()
+            .checked_div(total_winning_supply as u128)
+            .unwrap() as u64;
 
         // Transfer payout
         **ctx.accounts.market.to_account_info().try_borrow_mut_lamports()? -= payout;
         **ctx.accounts.user.to_account_info().try_borrow_mut_lamports()? += payout;
 
-        // Clear position
-        if winning_outcome {
-            position.yes_shares = 0;
-        } else {
-            position.no_shares = 0;
-        }
+        // Mark as claimed
+        position.claimed = true;
 
-        msg!("Claimed {} lamports", payout);
+        msg!("Claimed {} lamports for {} winning shares", payout, winning_shares);
         Ok(())
     }
 }
 
 /// Calculate cost for buying shares on bonding curve
-/// Formula: cost = integral of (10 * sqrt(x)) from current_supply to (current_supply + amount)
-/// Simplified: cost = 10 * (2/3) * [(current_supply + amount)^(3/2) - current_supply^(3/2)]
 fn calculate_bonding_curve_cost(current_supply: u64, amount: u64) -> u64 {
     if amount == 0 {
         return 0;
     }
 
-    // For simplicity, use linear approximation: price = base + supply * increment
-    // This avoids floating point in production. For MVP, use simple formula:
-    // cost = amount * (base_price + current_supply / 100)
     let base_price = 10_000_000; // 0.01 SOL in lamports
     let price_per_unit = base_price + (current_supply * 1000);
     amount * price_per_unit
@@ -432,12 +445,18 @@ pub struct Market {
     #[max_len(500)]
     pub description: String,
     pub resolution_time: i64,
-    pub yes_supply: u64,
-    pub no_supply: u64,
+    
+    // Multi-choice support
+    pub market_type: u8,              // 0 = Binary, 1 = Multi-choice
+    pub outcome_count: u8,            // 2-10 outcomes
+    #[max_len(10)]
+    pub outcome_names: [String; 10],   // Outcome names (fixed array)
+    pub outcome_supplies: [u64; 10],  // Supply for each outcome
+    
     pub total_volume: u64,
     pub fees_collected: u64,
     pub resolved: bool,
-    pub winning_outcome: Option<bool>,
+    pub winning_outcome: Option<u8>,  // Index of winning outcome
     pub bump: u8,
 }
 
@@ -446,8 +465,8 @@ pub struct Market {
 pub struct UserPosition {
     pub market: Pubkey,
     pub user: Pubkey,
-    pub yes_shares: u64,
-    pub no_shares: u64,
+    pub shares: [u64; 10],  // Shares for each outcome
+    pub claimed: bool,      // Has claimed winnings
 }
 
 #[account]
@@ -485,4 +504,16 @@ pub enum ErrorCode {
     TooEarlyToResolve,
     #[msg("You have too many active markets (max 5)")]
     TooManyActiveMarkets,
+    #[msg("Invalid market type (must be 0 or 1)")]
+    InvalidMarketType,
+    #[msg("Invalid outcome count (must be 2-10)")]
+    InvalidOutcomeCount,
+    #[msg("Binary markets must have exactly 2 outcomes")]
+    BinaryMustHaveTwoOutcomes,
+    #[msg("Invalid outcome name (must be 1-50 characters)")]
+    InvalidOutcomeName,
+    #[msg("Invalid outcome index")]
+    InvalidOutcomeIndex,
+    #[msg("Already claimed winnings")]
+    AlreadyClaimed,
 }
