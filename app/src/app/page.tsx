@@ -148,6 +148,10 @@ export default function HomePage() {
         socialLinks: market.socialLinks,
         yesSupply: market.yesSupply,
         noSupply: market.noSupply,
+        // Multi-choice fields - AJOUTE CES 3 LIGNES !
+        marketType: market.marketType,
+        outcomeNames: market.outcomeNames,
+        outcomeSupplies: market.outcomeSupplies,
       };
     });
 
