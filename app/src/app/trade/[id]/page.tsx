@@ -31,6 +31,10 @@ interface Market {
   resolved: boolean;
   winningOutcome?: boolean;
   socialLinks?: SocialLinks;
+  // Multi-choice fields
+  marketType?: number;
+  outcomeNames?: string[];
+  outcomeSupplies?: number[];
 }
 
 export default function TradePage() {
@@ -72,6 +76,10 @@ export default function TradePage() {
         totalVolume: supabaseMarket.total_volume || 0,
         resolutionTime: Math.floor(new Date(supabaseMarket.end_date).getTime() / 1000),
         resolved: supabaseMarket.resolved || false,
+        // Multi-choice fields
+        marketType: supabaseMarket.market_type,
+        outcomeNames: supabaseMarket.outcome_names,
+        outcomeSupplies: supabaseMarket.outcome_supplies,
       };
       
       setMarket(transformedMarket);
@@ -101,9 +109,13 @@ export default function TradePage() {
     );
   }
 
-  const totalSupply = market.yesSupply + market.noSupply;
-  const yesPercent = totalSupply > 0 ? (market.yesSupply / totalSupply) * 100 : 50;
-  const noPercent = 100 - yesPercent;
+  // Dynamic outcomes logic
+  const outcomes = market.outcomeNames || ['YES', 'NO'];
+  const supplies = market.outcomeSupplies || [market.yesSupply, market.noSupply];
+  const totalSupply = supplies.reduce((sum, s) => sum + (s || 0), 0);
+  const percentages = supplies.map(s =>
+    totalSupply > 0 ? ((s || 0) / totalSupply) * 100 : 100 / supplies.length
+  );
 
   async function handleTrade(dollarAmount: number, isYes: boolean) {
     if (!connected || !publicKey || !program) {
@@ -233,16 +245,20 @@ export default function TradePage() {
 
             <p className="text-gray-400 mt-4 mb-6">{market.description}</p>
 
-            {/* Current Odds */}
+            {/* Current Odds - Dynamic (first 2 outcomes) */}
             <div className="grid grid-cols-2 gap-4">
-              <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
-                <div className="text-sm text-blue-400 mb-1">YES</div>
-                <div className="text-3xl font-bold text-blue-400">{yesPercent.toFixed(1)}%</div>
-              </div>
-              <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
-                <div className="text-sm text-red-400 mb-1">NO</div>
-                <div className="text-3xl font-bold text-red-400">{noPercent.toFixed(1)}%</div>
-              </div>
+              {outcomes.slice(0, 2).map((outcome, index) => (
+                <div key={index} className={`${
+                  index === 0 ? 'bg-blue-500/10 border border-blue-500/30' : 'bg-red-500/10 border border-red-500/30'
+                } rounded-lg p-4`}>
+                  <div className={`text-sm ${index === 0 ? 'text-blue-400' : 'text-red-400'} mb-1 uppercase`}>
+                    {outcome}
+                  </div>
+                  <div className={`text-3xl font-bold ${index === 0 ? 'text-blue-400' : 'text-red-400'}`}>
+                    {percentages[index]?.toFixed(1)}%
+                  </div>
+                </div>
+              ))}
             </div>
 
             {/* Stats */}
@@ -253,14 +269,14 @@ export default function TradePage() {
                   {lamportsToSol(market.totalVolume).toFixed(2)} SOL
                 </div>
               </div>
-              <div>
-                <div className="text-xs text-gray-500 mb-1">YES Supply</div>
-                <div className="text-lg font-semibold text-blue-400">{market.yesSupply}</div>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 mb-1">NO Supply</div>
-                <div className="text-lg font-semibold text-red-400">{market.noSupply}</div>
-              </div>
+              {outcomes.slice(0, 2).map((outcome, index) => (
+                <div key={index}>
+                  <div className="text-xs text-gray-500 mb-1">{outcome} Supply</div>
+                  <div className={`text-lg font-semibold ${index === 0 ? 'text-blue-400' : 'text-red-400'}`}>
+                    {supplies[index] || 0}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
 

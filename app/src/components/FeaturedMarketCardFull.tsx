@@ -25,6 +25,10 @@ interface FeaturedMarket {
   };
   yesSupply: number;
   noSupply: number;
+  // Multi-choice fields
+  marketType?: number;
+  outcomeNames?: string[];
+  outcomeSupplies?: number[];
 }
 
 interface FeaturedMarketCardFullProps {
@@ -33,6 +37,14 @@ interface FeaturedMarketCardFullProps {
 
 export default function FeaturedMarketCardFull({ market }: FeaturedMarketCardFullProps) {
   const [imageError, setImageError] = useState(false);
+
+  // Dynamic outcomes logic
+  const outcomes = market.outcomeNames || ['YES', 'NO'];
+  const supplies = market.outcomeSupplies || [market.yesSupply, market.noSupply];
+  const totalSupply = supplies.reduce((sum, s) => sum + (s || 0), 0);
+  const percentages = supplies.map(s =>
+    totalSupply > 0 ? ((s || 0) / totalSupply) * 100 : 100 / supplies.length
+  );
 
   return (
     <motion.div
@@ -138,18 +150,21 @@ export default function FeaturedMarketCardFull({ market }: FeaturedMarketCardFul
                     </div>
                   </div>
 
-                  {/* YES/NO - Large horizontal */}
+                  {/* Outcomes - Large horizontal (first 2) */}
                   <div className="flex gap-4 mt-auto">
-                    <div className="flex-1 bg-blue-500/10 border border-blue-500/30 rounded-xl p-4 hover:bg-blue-500/20 transition">
-                      <div className="text-xs text-blue-400 mb-2 font-semibold">YES</div>
-                      <div className="text-4xl font-bold text-blue-400">{market.yesPercent}%</div>
-                      <div className="text-xs text-gray-500 mt-1">{market.yesSupply.toLocaleString()} shares</div>
-                    </div>
-                    <div className="flex-1 bg-red-500/10 border border-red-500/30 rounded-xl p-4 hover:bg-red-500/20 transition">
-                      <div className="text-xs text-red-400 mb-2 font-semibold">NO</div>
-                      <div className="text-4xl font-bold text-red-400">{market.noPercent}%</div>
-                      <div className="text-xs text-gray-500 mt-1">{market.noSupply.toLocaleString()} shares</div>
-                    </div>
+                    {outcomes.slice(0, 2).map((outcome, index) => (
+                      <div key={index} className={`flex-1 ${
+                        index === 0 ? 'bg-blue-500/10 border border-blue-500/30' : 'bg-red-500/10 border border-red-500/30'
+                      } rounded-xl p-4 hover:${index === 0 ? 'bg-blue-500/20' : 'bg-red-500/20'} transition`}>
+                        <div className={`text-xs ${index === 0 ? 'text-blue-400' : 'text-red-400'} mb-2 font-semibold uppercase`}>
+                          {outcome.length > 12 ? outcome.slice(0, 12) + '...' : outcome}
+                        </div>
+                        <div className={`text-4xl font-bold ${index === 0 ? 'text-blue-400' : 'text-red-400'}`}>
+                          {percentages[index]?.toFixed(0)}%
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">{(supplies[index] || 0).toLocaleString()} shares</div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               </div>
@@ -212,16 +227,20 @@ export default function FeaturedMarketCardFull({ market }: FeaturedMarketCardFul
                 </div>
               </div>
 
-              {/* YES/NO */}
+              {/* Outcomes (first 2) */}
               <div className="flex gap-3 mb-4">
-                <div className="flex-1 bg-blue-500/10 border border-blue-500/30 rounded-lg p-3">
-                  <div className="text-xs text-blue-400 mb-1">YES</div>
-                  <div className="text-2xl font-bold text-blue-400">{market.yesPercent}%</div>
-                </div>
-                <div className="flex-1 bg-red-500/10 border border-red-500/30 rounded-lg p-3">
-                  <div className="text-xs text-red-400 mb-1">NO</div>
-                  <div className="text-2xl font-bold text-red-400">{market.noPercent}%</div>
-                </div>
+                {outcomes.slice(0, 2).map((outcome, index) => (
+                  <div key={index} className={`flex-1 ${
+                    index === 0 ? 'bg-blue-500/10 border border-blue-500/30' : 'bg-red-500/10 border border-red-500/30'
+                  } rounded-lg p-3`}>
+                    <div className={`text-xs ${index === 0 ? 'text-blue-400' : 'text-red-400'} mb-1 uppercase`}>
+                      {outcome.length > 8 ? outcome.slice(0, 8) + '...' : outcome}
+                    </div>
+                    <div className={`text-2xl font-bold ${index === 0 ? 'text-blue-400' : 'text-red-400'}`}>
+                      {percentages[index]?.toFixed(0)}%
+                    </div>
+                  </div>
+                ))}
               </div>
 
               {/* Chart Mobile */}
