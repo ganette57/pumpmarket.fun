@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import Image from 'next/image';
-import { lamportsToSol } from '@/utils/solana';
+import { lamportsToSol } from "@/utils/format";
 import CategoryImagePlaceholder from './CategoryImagePlaceholder';
 import { useState } from 'react';
 
@@ -17,7 +17,6 @@ interface MarketCardProps {
     totalVolume: number;
     resolutionTime: number;
     resolved: boolean;
-    // Multi-choice fields
     marketType?: number;
     outcomeNames?: string[];
     outcomeSupplies?: number[];
@@ -27,12 +26,9 @@ interface MarketCardProps {
 export default function MarketCard({ market }: MarketCardProps) {
   const [imageError, setImageError] = useState(false);
   
-  // Determine if binary or multi-choice
-  const isBinary = !market.marketType || market.marketType === 0;
   const outcomes = market.outcomeNames || ['YES', 'NO'];
   const supplies = market.outcomeSupplies || [market.yesSupply, market.noSupply];
   
-  // Calculate percentages
   const totalSupply = supplies.reduce((sum, s) => sum + (s || 0), 0);
   const percentages = supplies.map(s => 
     totalSupply > 0 ? ((s || 0) / totalSupply) * 100 : 100 / supplies.length
@@ -43,7 +39,6 @@ export default function MarketCard({ market }: MarketCardProps) {
   const daysLeft = Math.max(0, Math.floor(timeLeft / 86400));
   const hoursLeft = Math.max(0, Math.floor((timeLeft % 86400) / 3600));
 
-  // Format volume
   const volumeInSol = lamportsToSol(market.totalVolume);
   const volumeDisplay = volumeInSol >= 1000
     ? `${(volumeInSol / 1000).toFixed(1)}k`
@@ -89,19 +84,19 @@ export default function MarketCard({ market }: MarketCardProps) {
             {market.description}
           </p>
 
-          {/* Spacer to push outcomes and stats to bottom */}
+          {/* Spacer */}
           <div className="flex-1"></div>
 
-          {/* Outcomes Display - Dynamic */}
-          <div className="flex gap-3 mb-3 flex-wrap">
+          {/* Outcomes Display - Vertical Polymarket style */}
+          <div className="space-y-2 mb-3">
             {outcomes.slice(0, 2).map((outcome, index) => (
-              <div key={index} className="flex items-center gap-1">
-                <span className={`text-xs font-medium uppercase ${
+              <div key={index} className="flex items-center justify-between">
+                <span className={`text-sm font-medium uppercase ${
                   index === 0 ? 'text-blue-400' : 'text-red-400'
                 }`}>
-                  {outcome.length > 8 ? outcome.slice(0, 8) + '...' : outcome}
+                  {outcome.length > 12 ? outcome.slice(0, 12) + '...' : outcome}
                 </span>
-                <span className={`text-sm font-bold ${
+                <span className={`text-lg font-bold ${
                   index === 0 ? 'text-blue-400' : 'text-red-400'
                 }`}>
                   {percentages[index]?.toFixed(0)}%
@@ -109,10 +104,8 @@ export default function MarketCard({ market }: MarketCardProps) {
               </div>
             ))}
             {outcomes.length > 2 && (
-              <div className="flex items-center gap-1">
-                <span className="text-xs font-medium text-gray-400">
-                  +{outcomes.length - 2} more
-                </span>
+              <div className="text-xs text-gray-400">
+                +{outcomes.length - 2} more
               </div>
             )}
           </div>

@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation';
 import { useWallet } from '@solana/wallet-adapter-react';
 import Image from 'next/image';
 import BondingCurveChart from '@/components/BondingCurveChart';
-import { lamportsToSol, calculateBuyCost, getUserPositionPDA, PLATFORM_WALLET } from '@/utils/solana';
+import { lamportsToSol, calculateBuyCost, getUserPositionPDA, PLATFORM_WALLET } from "@/utils/format";
 import { useProgram } from '@/hooks/useProgram';
 import { PublicKey, SystemProgram } from '@solana/web3.js';
 import { BN } from '@coral-xyz/anchor';

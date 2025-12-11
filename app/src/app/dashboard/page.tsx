@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import Link from 'next/link';
-import { lamportsToSol } from '@/utils/solana';
+import { lamportsToSol } from "@/utils/format";
 import { Heart, ExternalLink } from 'lucide-react';
 import { getMarketsByCreator } from '@/lib/markets';
 

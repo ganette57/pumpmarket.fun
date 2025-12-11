@@ -2,7 +2,7 @@ import { Connection, PublicKey, clusterApiUrl } from '@solana/web3.js';
 import { Program, AnchorProvider, Idl, setProvider } from '@coral-xyz/anchor';
 import { AnchorWallet } from '@solana/wallet-adapter-react';
 
-export const PROGRAM_ID = new PublicKey('3y1PZrQ8RpCyXTGpNsUwV74uBr9Nqf3BeBNCTb1hDx7D');  // ← CHANGE CETTE LIGNE
+export const PROGRAM_ID = new PublicKey('3y1PZrQ8RpCyXTGpNsUwV74uBr9Nqf3BeBNCTb1hDx7D');
 export const NETWORK = clusterApiUrl('devnet');
 export const PLATFORM_WALLET = new PublicKey('7DVR8gnBbLYN1aAAhbEJpNLxdzPzuqwAPaLRCRt4v93Z');
 

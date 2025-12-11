@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { calculateBuyCost, lamportsToSol } from '@/utils/solana';
+import { calculateBuyCost, lamportsToSol } from "@/utils/format";
 
 interface TradingPanelProps {
   market: {
