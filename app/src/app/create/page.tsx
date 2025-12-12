@@ -17,11 +17,13 @@ import { SystemProgram } from '@solana/web3.js';
 import { BN } from '@coral-xyz/anchor';
 import { supabase } from '@/utils/supabase';
 import { indexMarket } from '@/lib/markets';
+import { usePhantomWallet } from '@/hooks/usePhantomWallet';
 
 type MarketType = 'binary' | 'multi';
 
 export default function CreateMarket() {
-  const { publicKey, connected } = useWallet();
+  // ✅ Use custom hook that ensures we get the correct Phantom wallet
+  const { publicKey, connected } = usePhantomWallet();
   const router = useRouter();
   const program = useProgram();
   const [loading, setLoading] = useState(false);
@@ -157,6 +159,8 @@ export default function CreateMarket() {
 
     setLoading(true);
     try {
+      console.log('Creating market with wallet:', publicKey?.toBase58());
+
       // TODO: Upload image to IPFS/storage service and get URL
       let imageUrl: string | undefined = undefined;
       if (imageFile) {
@@ -166,7 +170,7 @@ export default function CreateMarket() {
       }
 
       // Prepare outcomes array
-      const finalOutcomes = marketType === 'binary' 
+      const finalOutcomes = marketType === 'binary'
         ? ['YES', 'NO']
         : outcomes.filter(o => o.trim().length > 0);
 
