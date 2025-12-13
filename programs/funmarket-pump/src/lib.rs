@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 
-declare_id!("3y1PZrQ8RpCyXTGpNsUwV74uBr9Nqf3BeBNCTb1hDx7D");
+declare_id!("FomHPbnvgSp7qLqAJFkDwut3MygPG9cmyK5TwebSNLTg");
 
 #[program]
 pub mod funmarket_pump {
@@ -26,11 +26,11 @@ pub mod funmarket_pump {
     ) -> Result<()> {
         // Validate market type
         require!(market_type <= 1, ErrorCode::InvalidMarketType);
-        
+
         // Validate outcome count
         let outcome_count = outcome_names.len() as u8;
         require!(outcome_count >= 2 && outcome_count <= 10, ErrorCode::InvalidOutcomeCount);
-        
+
         // Binary markets must have exactly 2 outcomes
         if market_type == 0 {
             require!(outcome_count == 2, ErrorCode::BinaryMustHaveTwoOutcomes);
@@ -113,7 +113,6 @@ pub mod funmarket_pump {
         let clock = Clock::get()?;
         require!(clock.unix_timestamp < market.resolution_time, ErrorCode::MarketExpired);
 
-        // Bonding curve: price = 10 * sqrt(supply)
         let current_supply = market.outcome_supplies[outcome_index as usize];
         let cost = calculate_bonding_curve_cost(current_supply, amount);
 
@@ -159,12 +158,10 @@ pub mod funmarket_pump {
             platform_fee,
         )?;
 
-        // Update supply
         market.outcome_supplies[outcome_index as usize] += amount;
         market.total_volume += total_cost;
         market.fees_collected += total_fees;
 
-        // Initialize or update user position
         let position = &mut ctx.accounts.user_position;
         if position.market == Pubkey::default() {
             position.market = market.key();
@@ -193,37 +190,29 @@ pub mod funmarket_pump {
         require!(!market.resolved, ErrorCode::MarketResolved);
         require!(outcome_index < market.outcome_count, ErrorCode::InvalidOutcomeIndex);
 
-        // Check user has enough shares
         let user_shares = position.shares[outcome_index as usize];
         require!(user_shares >= amount, ErrorCode::InsufficientShares);
 
-        // Calculate refund using bonding curve
         let current_supply = market.outcome_supplies[outcome_index as usize];
         let refund = calculate_bonding_curve_cost(current_supply - amount, amount);
 
-        // 1% fee to creator + 1% fee to platform = 2% total on sell
         let creator_fee = refund / 100;
         let platform_fee = refund / 100;
         let total_fees = creator_fee + platform_fee;
         let net_refund = refund - total_fees;
 
-        // Transfer refund to seller
         **market_info.try_borrow_mut_lamports()? -= net_refund;
         **ctx.accounts.seller.to_account_info().try_borrow_mut_lamports()? += net_refund;
 
-        // Transfer 1% fee to creator
         **market_info.try_borrow_mut_lamports()? -= creator_fee;
         **ctx.accounts.creator.to_account_info().try_borrow_mut_lamports()? += creator_fee;
 
-        // Transfer 1% fee to platform
         **market_info.try_borrow_mut_lamports()? -= platform_fee;
         **ctx.accounts.platform_wallet.to_account_info().try_borrow_mut_lamports()? += platform_fee;
 
-        // Update supply
         market.outcome_supplies[outcome_index as usize] -= amount;
         market.fees_collected += total_fees;
 
-        // Update position
         position.shares[outcome_index as usize] -= amount;
 
         msg!("Sold {} shares for outcome {} - refund: {} lamports",
@@ -247,7 +236,6 @@ pub mod funmarket_pump {
         market.resolved = true;
         market.winning_outcome = Some(winning_outcome_index);
 
-        // Decrement creator's active market count
         let user_counter = &mut ctx.accounts.user_counter;
         user_counter.active_markets = user_counter.active_markets.saturating_sub(1);
 
@@ -268,22 +256,18 @@ pub mod funmarket_pump {
 
         require!(winning_shares > 0, ErrorCode::NoWinningShares);
 
-        // Calculate payout proportional to winning shares
         let total_winning_supply = market.outcome_supplies[winning_index];
         let market_balance = ctx.accounts.market.to_account_info().lamports();
-        
-        // Payout = (user_shares / total_winning_shares) * market_balance
+
         let payout = (winning_shares as u128)
             .checked_mul(market_balance as u128)
             .unwrap()
             .checked_div(total_winning_supply as u128)
             .unwrap() as u64;
 
-        // Transfer payout
         **ctx.accounts.market.to_account_info().try_borrow_mut_lamports()? -= payout;
         **ctx.accounts.user.to_account_info().try_borrow_mut_lamports()? += payout;
 
-        // Mark as claimed
         position.claimed = true;
 
         msg!("Claimed {} lamports for {} winning shares", payout, winning_shares);
@@ -291,13 +275,11 @@ pub mod funmarket_pump {
     }
 }
 
-/// Calculate cost for buying shares on bonding curve
 fn calculate_bonding_curve_cost(current_supply: u64, amount: u64) -> u64 {
     if amount == 0 {
         return 0;
     }
-
-    let base_price = 10_000_000; // 0.01 SOL in lamports
+    let base_price = 10_000_000;
     let price_per_unit = base_price + (current_supply * 1000);
     amount * price_per_unit
 }
@@ -445,18 +427,17 @@ pub struct Market {
     #[max_len(500)]
     pub description: String,
     pub resolution_time: i64,
-    
-    // Multi-choice support
-    pub market_type: u8,              // 0 = Binary, 1 = Multi-choice
-    pub outcome_count: u8,            // 2-10 outcomes
+
+    pub market_type: u8,
+    pub outcome_count: u8,
     #[max_len(10)]
-    pub outcome_names: [String; 10],   // Outcome names (fixed array)
-    pub outcome_supplies: [u64; 10],  // Supply for each outcome
-    
+    pub outcome_names: [String; 10],
+    pub outcome_supplies: [u64; 10],
+
     pub total_volume: u64,
     pub fees_collected: u64,
     pub resolved: bool,
-    pub winning_outcome: Option<u8>,  // Index of winning outcome
+    pub winning_outcome: Option<u8>,
     pub bump: u8,
 }
 
@@ -465,8 +446,8 @@ pub struct Market {
 pub struct UserPosition {
     pub market: Pubkey,
     pub user: Pubkey,
-    pub shares: [u64; 10],  // Shares for each outcome
-    pub claimed: bool,      // Has claimed winnings
+    pub shares: [u64; 10],
+    pub claimed: bool,
 }
 
 #[account]

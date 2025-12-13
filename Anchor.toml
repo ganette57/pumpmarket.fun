@@ -1,14 +1,15 @@
 [toolchain]
+anchor_version = "0.32.1"
 
 [features]
 resolution = true
 skip-lint = false
 
 [programs.devnet]
-funmarket_pump = "3y1PZrQ8RpCyXTGpNsUwV74uBr9Nqf3BeBNCTb1hDx7D"
+funmarket_pump = "FomHPbnvgSp7qLqAJFkDwut3MygPG9cmyK5TwebSNLTg"
 
 [programs.localnet]
-funmarket_pump = "BV6q3zDwjaXdcn3DmqroHbeNuTDxtrpyYXvGNeYec6Wy"
+funmarket_pump = "FomHPbnvgSp7qLqAJFkDwut3MygPG9cmyK5TwebSNLTg"
 
 [registry]
 url = "https://api.apr.dev"

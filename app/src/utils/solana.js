@@ -1,6 +1,6 @@
 import { PublicKey } from '@solana/web3.js';
 
-export const PROGRAM_ID = new PublicKey('BV6q3zDwjaXdcn3DmqroHbeNuTDxtrpyYXvGNeYec6Wy');
+export const PROGRAM_ID = new PublicKey('FomHPbnvgSp7qLqAJFkDwut3MygPG9cmyK5TwebSNLTg');
 
 export function getMarketPDA(creator, question) {
   const truncated = question.slice(0, 32);
