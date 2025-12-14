@@ -1,18 +1,21 @@
-'use client';
-import { useEffect, useState, useRef, useCallback } from 'react';
-import { useConnection } from '@solana/wallet-adapter-react';
-import { motion } from 'framer-motion';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
-import MarketCard from '@/components/MarketCard';
-import FeaturedMarketCardFull from '@/components/FeaturedMarketCardFull';
-import CategoryFilters from '@/components/CategoryFilters';
-import GeoblockModal from '@/components/GeoblockModal';
-import { SkeletonCard, SkeletonFeaturedCard } from '@/components/SkeletonCard';
-import Link from 'next/link';
-import { CategoryId } from '@/utils/categories';
-import { getAllMarkets } from '@/lib/markets';
+// src/app/page.tsx
+"use client";
 
-// Interface for display in components
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
+import { motion } from "framer-motion";
+import { ChevronLeft, ChevronRight } from "lucide-react";
+import Link from "next/link";
+import { useConnection } from "@solana/wallet-adapter-react";
+
+import MarketCard from "@/components/MarketCard";
+import FeaturedMarketCardFull from "@/components/FeaturedMarketCardFull";
+import CategoryFilters from "@/components/CategoryFilters";
+import GeoblockModal from "@/components/GeoblockModal";
+import { SkeletonCard, SkeletonFeaturedCard } from "@/components/SkeletonCard";
+
+import { CategoryId } from "@/utils/categories";
+import { getAllMarkets } from "@/lib/markets";
+
 interface DisplayMarket {
   publicKey: string;
   question: string;
@@ -31,44 +34,54 @@ interface DisplayMarket {
     website?: string;
     discord?: string;
   };
-  // Multi-choice fields
-  marketType: number;
+  marketType: number; // 0=binary, 1=multi
   outcomeNames?: string[];
   outcomeSupplies?: number[];
 }
 
 export default function HomePage() {
-  const { connection } = useConnection();
+  useConnection(); // keep if you need it; harmless
+
   const [markets, setMarkets] = useState<DisplayMarket[]>([]);
-  const [filteredMarkets, setFilteredMarkets] = useState<DisplayMarket[]>([]);
-  const [selectedCategory, setSelectedCategory] = useState<CategoryId | 'all'>('all');
+  const [selectedCategory, setSelectedCategory] = useState<CategoryId | "all">("all");
+
   const [loading, setLoading] = useState(true);
   const [displayedCount, setDisplayedCount] = useState(12);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [showGeoblockModal, setShowGeoblockModal] = useState(false);
+
   const [currentFeaturedIndex, setCurrentFeaturedIndex] = useState(0);
-  const autoScrollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const observerTarget = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    loadMarkets();
-    checkGeoblock();
-  }, []);
+  // ✅ define loadMore BEFORE useEffect that uses it (fix TDZ)
+  const loadMore = useCallback((maxLen: number) => {
+    if (loadingMore) return;
+    setLoadingMore(true);
+    setTimeout(() => {
+      setDisplayedCount((prev) => Math.min(prev + 12, maxLen));
+      setLoadingMore(false);
+    }, 300);
+  }, [loadingMore]);
+
+  const filteredMarkets = useMemo(() => {
+    const base = selectedCategory === "all" ? markets : markets.filter((m) => m.category === selectedCategory);
+    return base;
+  }, [selectedCategory, markets]);
 
   useEffect(() => {
-    if (selectedCategory === 'all') {
-      setFilteredMarkets(markets);
-    } else {
-      setFilteredMarkets(markets.filter(m => m.category === selectedCategory));
-    }
     setDisplayedCount(12);
   }, [selectedCategory, markets]);
 
   useEffect(() => {
+    loadMarkets();
+  }, []);
+
+  useEffect(() => {
+    const maxLen = filteredMarkets.length;
+
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting && !loading && displayedCount < filteredMarkets.length) {
-          loadMore();
+        if (entries[0]?.isIntersecting && !loading && displayedCount < maxLen) {
+          loadMore(maxLen);
         }
       },
       { threshold: 0.5 }
@@ -76,84 +89,87 @@ export default function HomePage() {
 
     if (observerTarget.current) observer.observe(observerTarget.current);
     return () => observer.disconnect();
-  }, [displayedCount, loading, filteredMarkets.length]);
+  }, [displayedCount, loading, filteredMarkets.length, loadMore]);
 
   async function loadMarkets() {
+    setLoading(true);
     try {
-      // Fetch markets from Supabase
       const supabaseMarkets = await getAllMarkets();
-      
-      // Transform Supabase format to component format
-      const transformedMarkets: DisplayMarket[] = supabaseMarkets.map((m) => ({
+
+      const transformed: DisplayMarket[] = supabaseMarkets.map((m) => ({
         publicKey: m.market_address,
-        question: m.question || '',
-        description: m.description || '',
-        category: m.category || 'other',
+        question: m.question || "",
+        description: m.description || "",
+        category: (m.category || "other") as string,
         imageUrl: m.image_url || undefined,
-        yesSupply: m.yes_supply || 0,
-        noSupply: m.no_supply || 0,
-        totalVolume: m.total_volume || 0,
+
+        yesSupply: Number(m.yes_supply) || 0,
+        noSupply: Number(m.no_supply) || 0,
+        totalVolume: Number(m.total_volume) || 0,
         resolutionTime: Math.floor(new Date(m.end_date).getTime() / 1000),
-        resolved: m.resolved || false,
-        creator: m.creator || '',
-        // Multi-choice fields
-        marketType: m.market_type || 0,
-        outcomeNames: m.outcome_names,
-        outcomeSupplies: m.outcome_supplies,
+        resolved: !!m.resolved,
+
+        creator: m.creator || "",
+        socialLinks: (m as any).social_links || undefined,
+
+        marketType: Number(m.market_type) || 0,
+        // ✅ avoid TS "null not assignable"
+        outcomeNames: (m.outcome_names ?? undefined) as any,
+        outcomeSupplies: (m.outcome_supplies ?? undefined) as any,
       }));
-      
-      setMarkets(transformedMarkets);
-    } catch (error) {
-      console.error('Error loading markets:', error);
+
+      setMarkets(transformed);
+    } catch (e) {
+      console.error("Error loading markets:", e);
+      setMarkets([]);
     } finally {
       setLoading(false);
     }
   }
 
-  async function checkGeoblock() {
-    // Implement geoblock check if needed
-  }
+  const featuredMarkets = useMemo(() => {
+    return [...markets]
+      .sort((a, b) => (b.totalVolume || 0) - (a.totalVolume || 0))
+      .slice(0, 3)
+      .map((market) => {
+        const isMulti = market.marketType === 1 && (market.outcomeNames?.length || 0) >= 2;
 
-  const loadMore = useCallback(() => {
-    if (loadingMore) return;
-    setLoadingMore(true);
-    setTimeout(() => {
-      setDisplayedCount((prev) => Math.min(prev + 12, filteredMarkets.length));
-      setLoadingMore(false);
-    }, 500);
-  }, [loadingMore, filteredMarkets.length]);
+        const names = isMulti ? (market.outcomeNames as string[]) : ["YES", "NO"];
+        const supplies = isMulti
+          ? ((market.outcomeSupplies as number[]) ?? Array(names.length).fill(0)).slice(0, names.length)
+          : [market.yesSupply, market.noSupply];
 
-  // Featured markets (top 3 by volume)
-  const featuredMarkets = [...markets]
-    .sort((a, b) => b.totalVolume - a.totalVolume)
-    .slice(0, 3)
-    .map((market) => {
-      const totalSupply = market.yesSupply + market.noSupply;
-      const yesPercent = totalSupply > 0 ? Math.round((market.yesSupply / totalSupply) * 100) : 50;
-      const noPercent = 100 - yesPercent;
-      const now = Date.now() / 1000;
-      const timeLeft = market.resolutionTime - now;
-      const daysLeft = Math.max(0, Math.floor(timeLeft / 86400));
+        const total = supplies.reduce((s, x) => s + (Number(x) || 0), 0);
+        const p0 = total > 0 ? Math.round(((supplies[0] || 0) / total) * 100) : Math.round(100 / names.length);
+        const p1 = total > 0 ? Math.round(((supplies[1] || 0) / total) * 100) : 100 - p0;
 
-      return {
-        id: market.publicKey,
-        question: market.question,
-        category: market.category,
-        imageUrl: market.imageUrl,
-        yesPercent,
-        noPercent,
-        volume: market.totalVolume,
-        daysLeft,
-        creator: market.creator,
-        socialLinks: market.socialLinks,
-        yesSupply: market.yesSupply,
-        noSupply: market.noSupply,
-        // Multi-choice fields - AJOUTE CES 3 LIGNES !
-        marketType: market.marketType,
-        outcomeNames: market.outcomeNames,
-        outcomeSupplies: market.outcomeSupplies,
-      };
-    });
+        const now = Date.now() / 1000;
+        const daysLeft = Math.max(0, Math.floor((market.resolutionTime - now) / 86400));
+
+        return {
+          id: market.publicKey,
+          question: market.question,
+          category: market.category,
+          imageUrl: market.imageUrl,
+
+          yesLabel: names[0],
+          noLabel: names[1],
+          yesPercent: p0,
+          noPercent: p1,
+
+          volume: market.totalVolume,
+          daysLeft,
+          creator: market.creator,
+          socialLinks: market.socialLinks,
+
+          marketType: market.marketType,
+          outcomeNames: market.outcomeNames,
+          outcomeSupplies: market.outcomeSupplies,
+          yesSupply: market.yesSupply,
+          noSupply: market.noSupply,
+        };
+      });
+  }, [markets]);
 
   const handlePrevFeatured = () => {
     setCurrentFeaturedIndex((prev) => (prev === 0 ? featuredMarkets.length - 1 : prev - 1));
@@ -167,17 +183,14 @@ export default function HomePage() {
 
   return (
     <>
-      {/* Geoblock Modal */}
       <GeoblockModal />
 
-      {/* Category Filters - Visual buttons */}
       <div className="border-b border-gray-800 bg-pump-dark/50 sticky top-16 z-30">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <CategoryFilters selectedCategory={selectedCategory} onSelectCategory={setSelectedCategory} />
         </div>
       </div>
 
-      {/* Featured Markets Carousel - Full Kalshi Style */}
       <div className="py-6 bg-gradient-to-b from-pump-dark to-transparent">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between mb-4">
@@ -186,7 +199,6 @@ export default function HomePage() {
               <p className="text-gray-400 text-sm hidden md:block">Trending predictions with high volume</p>
             </div>
 
-            {/* Navigation arrows */}
             <div className="flex gap-2">
               <button
                 onClick={handlePrevFeatured}
@@ -205,7 +217,6 @@ export default function HomePage() {
             </div>
           </div>
 
-          {/* Carousel Container - 1 card at a time */}
           <div className="relative">
             {loading ? (
               <SkeletonFeaturedCard />
@@ -215,21 +226,20 @@ export default function HomePage() {
                   className="flex transition-transform duration-500 ease-out"
                   style={{ transform: `translateX(-${currentFeaturedIndex * 100}%)` }}
                 >
-                  {featuredMarkets.map((market, index) => (
+                  {featuredMarkets.map((market) => (
                     <div key={market.id} className="w-full flex-shrink-0">
                       <FeaturedMarketCardFull market={market} />
                     </div>
                   ))}
                 </div>
 
-                {/* Dots indicator */}
                 <div className="flex justify-center gap-2 mt-4">
                   {featuredMarkets.map((_, index) => (
                     <button
                       key={index}
                       onClick={() => setCurrentFeaturedIndex(index)}
                       className={`h-2 rounded-full transition-all duration-300 ${
-                        index === currentFeaturedIndex ? 'w-8 bg-pump-green' : 'w-2 bg-gray-600'
+                        index === currentFeaturedIndex ? "w-8 bg-pump-green" : "w-2 bg-gray-600"
                       }`}
                       aria-label={`Go to featured market ${index + 1}`}
                     />
@@ -245,7 +255,6 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* Markets Grid with Animations */}
       <div className="py-8">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between mb-6">
@@ -277,7 +286,7 @@ export default function HomePage() {
                     key={market.publicKey}
                     initial={{ opacity: 0, y: 50 }}
                     whileInView={{ opacity: 1, y: 0 }}
-                    viewport={{ once: true, margin: '-50px' }}
+                    viewport={{ once: true, margin: "-50px" }}
                     transition={{ duration: 0.4, delay: index * 0.05 }}
                     className="h-full"
                   >
@@ -288,14 +297,13 @@ export default function HomePage() {
                 ))}
               </div>
 
-              {/* Infinite scroll trigger */}
               {displayedCount < filteredMarkets.length && (
                 <div ref={observerTarget} className="text-center py-12">
                   {loadingMore ? (
-                    <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-pump-green"></div>
+                    <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-pump-green" />
                   ) : (
                     <button
-                      onClick={loadMore}
+                      onClick={() => loadMore(filteredMarkets.length)}
                       className="px-8 py-3 bg-pump-gray hover:bg-pump-dark border border-gray-700 hover:border-pump-green rounded-lg text-white font-semibold transition"
                     >
                       Load More Markets
@@ -304,14 +312,9 @@ export default function HomePage() {
                 </div>
               )}
 
-              {/* End of results */}
               {displayedCount >= filteredMarkets.length && filteredMarkets.length > 12 && (
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  className="text-center py-8 text-gray-500 text-sm"
-                >
-                  You've reached the end 🎉
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-center py-8 text-gray-500 text-sm">
+                  You&apos;ve reached the end 🎉
                 </motion.div>
               )}
             </>

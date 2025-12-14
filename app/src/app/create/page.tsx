@@ -1,142 +1,139 @@
-'use client';
+"use client";
 
-import { useMemo, useState } from 'react';
-import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { validateMarketQuestion, validateMarketDescription } from '@/utils/bannedWords';
-import { useRouter } from 'next/navigation';
-import { CATEGORIES, CategoryId } from '@/utils/categories';
-import SocialLinksForm, { SocialLinks } from '@/components/SocialLinksForm';
-import DatePicker from 'react-datepicker';
-import 'react-datepicker/dist/react-datepicker.css';
-import { Calendar, Upload, X } from 'lucide-react';
-import Image from 'next/image';
-import CategoryImagePlaceholder from '@/components/CategoryImagePlaceholder';
-import { useProgram } from '@/hooks/useProgram';
-import { getUserCounterPDA, getMarketPDA } from '@/utils/solana';
-import { SystemProgram } from '@solana/web3.js';
-import { BN } from '@coral-xyz/anchor';
-import { indexMarket } from '@/lib/markets';
+import { useEffect, useMemo, useState } from "react";
+import { useWallet, useConnection } from "@solana/wallet-adapter-react";
+import { SystemProgram, PublicKey } from "@solana/web3.js";
+import { BN } from "@coral-xyz/anchor";
+import { useRouter } from "next/navigation";
+import DatePicker from "react-datepicker";
+import "react-datepicker/dist/react-datepicker.css";
+import { Calendar, Upload, X } from "lucide-react";
+import Image from "next/image";
+import { Buffer } from "buffer";
 
-// -----------------------------
-// Helpers
-// -----------------------------
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
-}
+import { validateMarketQuestion, validateMarketDescription } from "@/utils/bannedWords";
+import { CATEGORIES, CategoryId } from "@/utils/categories";
+import SocialLinksForm, { SocialLinks } from "@/components/SocialLinksForm";
+import CategoryImagePlaceholder from "@/components/CategoryImagePlaceholder";
 
-function parseOutcomes(text: string): string[] {
+import { useProgram } from "@/hooks/useProgram";
+import { getUserCounterPDA } from "@/utils/solana";
+import { indexMarket } from "@/lib/markets";
+
+// ---------- helpers ----------
+function parseOutcomes(text: string) {
   return text
-    .split('\n')
+    .split("\n")
     .map((s) => s.trim())
     .filter(Boolean)
     .slice(0, 10);
-}
-
-/**
- * Seeds must be <= 32 bytes.
- * We build a "seeded question" used only for PDA derivation (not what you display).
- */
-function makeSeededQuestion(displayQuestion: string, suffix: string) {
-  const clean = displayQuestion.trim().replace(/\s+/g, ' ');
-  const tag = `~${suffix}`; // small suffix to avoid collisions
-  const maxBytes = 32;
-
-  const tagBytes = Buffer.from(tag, 'utf8').length;
-
-  let base = clean;
-  while (Buffer.from(base, 'utf8').length + tagBytes > maxBytes) {
-    base = base.slice(0, -1);
-    if (base.length <= 0) break;
-  }
-  base = base.trim();
-  if (!base) base = 'market';
-
-  return `${base}${tag}`;
 }
 
 function randomBase36(len = 6) {
   return Math.random().toString(36).slice(2, 2 + len);
 }
 
-function prettyError(e: any): string {
-  return (
-    e?.error?.errorMessage ||
-    e?.error?.message ||
-    e?.message ||
-    (typeof e === 'string' ? e : '') ||
-    'Unexpected error'
-  );
+function makeSeededQuestion(displayQuestion: string, suffix: string) {
+  const clean = displayQuestion.trim().replace(/\s+/g, " ");
+  const tag = `~${suffix}`;
+  const maxBytes = 32;
+
+  const tagBytes = Buffer.from(tag, "utf8").length;
+  let base = clean;
+
+  while (Buffer.from(base, "utf8").length + tagBytes > maxBytes) {
+    base = base.slice(0, -1);
+    if (!base.length) break;
+  }
+  base = base.trim();
+  if (!base) base = "market";
+  return `${base}${tag}`;
 }
 
-export default function CreateMarket() {
+function toStringArray(x: any): string[] {
+  if (!x) return [];
+  if (Array.isArray(x)) return x.map(String).map(s => s.trim()).filter(Boolean);
+  return [];
+}
+function toNumberArray(x: any): number[] {
+  if (!x) return [];
+  if (Array.isArray(x)) return x.map((v) => Number(v) || 0);
+  return [];
+}
+
+export default function CreateMarketPage() {
   const { publicKey, connected } = useWallet();
   const { connection } = useConnection();
   const router = useRouter();
   const program = useProgram();
+
   const [loading, setLoading] = useState(false);
 
-  const [question, setQuestion] = useState('');
-  const [description, setDescription] = useState('');
-  const [category, setCategory] = useState<CategoryId>('crypto');
+  const [question, setQuestion] = useState("");
+  const [description, setDescription] = useState("");
+  const [category, setCategory] = useState<CategoryId>("crypto");
+
+  const [marketType, setMarketType] = useState<0 | 1>(0); // 0=binary, 1=multi
+  const [outcomesText, setOutcomesText] = useState("YES\nNO");
 
   const [imageFile, setImageFile] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string>('');
-  const [imageError, setImageError] = useState<string>('');
+  const [imagePreview, setImagePreview] = useState<string>("");
+  const [imageError, setImageError] = useState<string>("");
 
-  // Default: 7 days from now
   const [resolutionDate, setResolutionDate] = useState<Date>(() => {
-    const date = new Date();
-    date.setDate(date.getDate() + 7);
-    return date;
+    const d = new Date();
+    d.setDate(d.getDate() + 7);
+    return d;
   });
 
   const [socialLinks, setSocialLinks] = useState<SocialLinks>({});
-
   const [questionError, setQuestionError] = useState<string | null>(null);
   const [descriptionError, setDescriptionError] = useState<string | null>(null);
 
-  // Outcome UI (binary by défaut)
-  const [marketType, setMarketType] = useState<0 | 1>(0); // 0=binary, 1=multichoice
-  const [outcomesText, setOutcomesText] = useState('YES\nNO');
+  useEffect(() => {
+    if (marketType === 0) setOutcomesText("YES\nNO");
+  }, [marketType]);
+
   const outcomes = useMemo(() => parseOutcomes(outcomesText), [outcomesText]);
 
   const outcomesError = useMemo(() => {
-    if (marketType === 0) {
-      return outcomes.length !== 2 ? 'Binary market must have exactly 2 outcomes.' : null;
-    }
-    return outcomes.length < 2 || outcomes.length > 10 ? 'Multi-choice must have 2 to 10 outcomes.' : null;
+    if (marketType === 0) return outcomes.length === 2 ? null : "Binary must have exactly 2 outcomes.";
+    return outcomes.length >= 2 && outcomes.length <= 10 ? null : "Multi-choice must have 2 to 10 outcomes.";
   }, [marketType, outcomes.length]);
+
+  const canSubmit =
+    connected &&
+    !!publicKey &&
+    !!program &&
+    question.trim().length >= 10 &&
+    !questionError &&
+    !descriptionError &&
+    !outcomesError &&
+    !!category &&
+    !!resolutionDate &&
+    resolutionDate > new Date();
 
   const handleQuestionChange = (value: string) => {
     setQuestion(value);
-    const validation = validateMarketQuestion(value);
-    setQuestionError(validation.valid ? null : validation.error || null);
+    const v = validateMarketQuestion(value);
+    setQuestionError(v.valid ? null : v.error || null);
   };
 
   const handleDescriptionChange = (value: string) => {
     setDescription(value);
-    const validation = validateMarketDescription(value);
-    setDescriptionError(validation.valid ? null : validation.error || null);
+    const v = validateMarketDescription(value);
+    setDescriptionError(v.valid ? null : v.error || null);
   };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Validate file size (5MB max)
     const maxSize = 5 * 1024 * 1024;
-    if (file.size > maxSize) {
-      setImageError('Image must be less than 5MB');
-      return;
-    }
+    if (file.size > maxSize) return setImageError("Image must be less than 5MB");
+    if (!file.type.startsWith("image/")) return setImageError("File must be an image");
 
-    // Validate file type
-    if (!file.type.startsWith('image/')) {
-      setImageError('File must be an image');
-      return;
-    }
-
-    setImageError('');
+    setImageError("");
     setImageFile(file);
 
     const reader = new FileReader();
@@ -146,171 +143,127 @@ export default function CreateMarket() {
 
   const removeImage = () => {
     setImageFile(null);
-    setImagePreview('');
-    setImageError('');
+    setImagePreview("");
+    setImageError("");
   };
 
-  const canSubmit =
-    connected &&
-    question.trim().length >= 10 &&
-    !questionError &&
-    !descriptionError &&
-    !outcomesError &&
-    resolutionDate &&
-    resolutionDate > new Date();
+  async function ensureUserCounter(userCounterPDA: PublicKey) {
+    const info = await connection.getAccountInfo(userCounterPDA);
+    if (info) return;
+
+    const sig = await (program as any).methods
+      .initializeUserCounter()
+      .accounts({
+        userCounter: userCounterPDA,
+        authority: publicKey!,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    await new Promise((r) => setTimeout(r, 1200));
+    console.log("User counter initialized:", sig);
+  }
+
+  async function deriveFreeMarketPda(displayQuestion: string) {
+    for (let i = 0; i < 10; i++) {
+      const suffix = randomBase36(6);
+      const seededQuestion = makeSeededQuestion(displayQuestion, suffix);
+
+      const marketPda = PublicKey.findProgramAddressSync(
+        [Buffer.from("market"), publicKey!.toBuffer(), Buffer.from(seededQuestion, "utf8")],
+        (program as any).programId
+      )[0];
+
+      const info = await connection.getAccountInfo(marketPda);
+      if (!info) return { marketPda, seededQuestion };
+    }
+    throw new Error("Could not find a free market PDA. Try changing the question.");
+  }
 
   async function handleCreateMarket() {
-    if (!canSubmit || !publicKey || !program) {
-      if (!publicKey) alert('Please connect your wallet');
-      if (!program) alert('Program not loaded');
-      return;
-    }
+    if (!canSubmit || !publicKey || !program) return;
 
     setLoading(true);
     try {
-      // TODO: upload image -> real URL
-      let imageUrl: string | undefined = undefined;
-      if (imageFile) {
-        console.log('Image file to upload:', imageFile.name, imageFile.size);
-        // imageUrl = await uploadImage(imageFile);
-      }
-
-      // 1) PDAs
       const [userCounterPDA] = getUserCounterPDA(publicKey);
+      const { marketPda, seededQuestion } = await deriveFreeMarketPda(question);
 
-      // ✅ derive a SAFE market PDA (seeded question <= 32 bytes)
-      const suffix = randomBase36(6);
-      const seededQuestion = makeSeededQuestion(question, suffix);
-      const [marketPDA] = getMarketPDA(publicKey, seededQuestion);
+      await ensureUserCounter(userCounterPDA);
 
-      console.log('PDAs:', {
-        userCounter: userCounterPDA.toBase58(),
-        market: marketPDA.toBase58(),
-        seededQuestion,
-      });
-
-      // 2) Ensure userCounter exists (NO program.account typing)
-      const userCounterInfo = await connection.getAccountInfo(userCounterPDA);
-      if (!userCounterInfo) {
-        console.log('Initializing user counter...');
-
-        // NOTE: IDL shows initialize_user_counter expects:
-        // accounts: user_counter, authority, system_program
-        const initTx = await (program.methods as any)
-          .initializeUserCounter()
-          .accounts({
-            userCounter: userCounterPDA,
-            authority: publicKey,
-            systemProgram: SystemProgram.programId,
-          })
-          .rpc();
-
-        console.log('User counter initialized:', initTx);
-        await sleep(1500);
-      } else {
-        console.log('User counter exists');
-      }
-
-      // 3) Create market (IDL requires market_type + outcome_names)
       const resolutionTimestamp = Math.floor(resolutionDate.getTime() / 1000);
 
-      console.log('Creating market with:', {
-        displayQuestion: question,
+      console.log("Creating market with:", {
         seededQuestion,
-        description,
-        resolutionTimestamp,
+        uiQuestion: question,
         marketType,
         outcomes,
-        category,
-        imageUrl,
-        socialLinks,
+        resolutionTimestamp,
       });
 
-      // accounts naming in TS is camelCase:
-      // market, userCounter, authority/creator, systemProgram
-      // We'll detect if IDL uses "creator" or "authority" and pass accordingly.
-      const idlAny: any = (program as any).idl;
-      const ix = idlAny?.instructions?.find((x: any) => x.name === 'create_market');
-      const ixAccounts: string[] = (ix?.accounts || []).map((a: any) => a.name);
-
-      const wantsCreator = ixAccounts.includes('creator');
-      const wantsAuthority = ixAccounts.includes('authority');
-
-      const accountsForCreate: any = {
-        market: marketPDA,
-        userCounter: userCounterPDA,
-        systemProgram: SystemProgram.programId,
-      };
-
-      if (wantsCreator) accountsForCreate.creator = publicKey;
-      if (wantsAuthority) accountsForCreate.authority = publicKey;
-
-      const tx = await (program.methods as any)
-        .createMarket(
-          seededQuestion,
-          description ?? '',
-          new BN(resolutionTimestamp),
-          marketType,
-          outcomes
-        )
-        .accounts(accountsForCreate)
+      const tx = await (program as any).methods
+        .createMarket(seededQuestion, description ?? "", new BN(resolutionTimestamp), marketType, outcomes)
+        .accounts({
+          market: marketPda,
+          creator: publicKey,
+          userCounter: userCounterPDA,
+          systemProgram: SystemProgram.programId,
+        })
         .rpc();
 
-      console.log('Market created! Transaction:', tx);
+      console.log("Market created! Transaction:", tx);
 
-      alert(
-        `Market created successfully! 🎉\n\nTransaction: ${tx.slice(
-          0,
-          16
-        )}...\n\nView on Solana Explorer: https://explorer.solana.com/tx/${tx}?cluster=devnet`
-      );
+      // ✅ FETCH ON-CHAIN TRUTH, then index
+      const acct: any = await (program as any).account.market.fetch(marketPda);
 
-      // 4) Indexation Supabase (fix typing + fields)
-      try {
-        const indexed = await indexMarket({
-          market_address: marketPDA.toBase58(),
-          question: question.slice(0, 60),
-          description: description ? description : undefined,
-          category, // ✅ CategoryId, pas "Other"
-          image_url: imagePreview ? imagePreview : undefined,
-          end_date: resolutionDate.toISOString(),
-          creator: publicKey.toBase58(),
-          yes_supply: 0,
-          no_supply: 0,
-          total_volume: 0,
-          resolved: false,
-        });
+      const onchainType =
+        typeof acct?.marketType === "number" ? acct.marketType :
+        typeof acct?.market_type === "number" ? acct.market_type :
+        Number(marketType) || 0;
 
-        if (indexed) {
-          console.log('✅ Market indexed in Supabase!');
-        } else {
-          console.error('❌ Failed to index market after retries');
-        }
-      } catch (err) {
-        console.error('❌ Indexation error:', err);
-      }
+      const onchainNames =
+        toStringArray(acct?.outcomeNames).length ? toStringArray(acct?.outcomeNames) :
+        toStringArray(acct?.outcome_names).length ? toStringArray(acct?.outcome_names) :
+        outcomes;
 
-      // 5) Redirect
-      router.push(`/trade/${marketPDA.toBase58()}`);
-    } catch (error: any) {
-      console.error('Create market error:', error);
+      const onchainSupplies =
+        toNumberArray(acct?.outcomeSupplies).length ? toNumberArray(acct?.outcomeSupplies) :
+        toNumberArray(acct?.outcome_supplies).length ? toNumberArray(acct?.outcome_supplies) :
+        new Array(onchainNames.length).fill(0);
 
-      const msg = prettyError(error);
+      console.log("✅ ON-CHAIN MARKET CHECK", {
+        market_address: marketPda.toBase58(),
+        market_type: onchainType,
+        outcome_names: onchainNames,
+        outcome_supplies: onchainSupplies,
+      });
 
-      let errorMsg = 'Failed to create market';
-      if (msg) {
-        if (msg.includes('banned') || msg.includes('Banned')) {
-          errorMsg = 'Market contains banned words. Please use appropriate language.';
-        } else if (msg.includes('rate limit') || msg.includes('RateLimit')) {
-          errorMsg = 'Rate limit exceeded. You can only create 5 markets per account.';
-        } else if (msg.includes('insufficient')) {
-          errorMsg = 'Insufficient SOL balance. Please add funds to your wallet.';
-        } else {
-          errorMsg = msg;
-        }
-      }
+      const isBinary = onchainType === 0 && onchainNames.length === 2;
 
-      alert(`Error: ${errorMsg}`);
+      await indexMarket({
+        market_address: marketPda.toBase58(),
+        question: question.slice(0, 200),
+        description: description || undefined,
+        category: category || "other",
+        image_url: imagePreview || undefined,
+        end_date: resolutionDate.toISOString(),
+        creator: publicKey.toBase58(),
+        social_links: socialLinks,
+
+        market_type: onchainType,
+        outcome_names: onchainNames,
+        outcome_supplies: onchainSupplies,
+
+        yes_supply: isBinary ? (onchainSupplies[0] ?? 0) : null,
+        no_supply: isBinary ? (onchainSupplies[1] ?? 0) : null,
+
+        total_volume: 0,
+        resolved: false,
+      });
+
+      router.push(`/trade/${marketPda.toBase58()}`);
+    } catch (e: any) {
+      console.error("Create market error:", e);
+      alert(e?.message || "Failed to create market");
     } finally {
       setLoading(false);
     }
@@ -320,58 +273,43 @@ export default function CreateMarket() {
     <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
       <div className="mb-8">
         <h1 className="text-4xl font-bold text-white mb-2">Create Market</h1>
-        <p className="text-gray-400">
-          Launch a prediction market. Keep it clean - banned words are blocked.
-        </p>
+        <p className="text-gray-400">Launch a prediction market. Keep it clean - banned words are blocked.</p>
       </div>
 
       <div className="card-pump">
         {/* Question */}
         <div className="mb-6">
           <label className="block text-white font-semibold mb-2">
-            Question *
-            <span className="text-gray-500 font-normal text-sm ml-2">
-              ({question.length}/200)
-            </span>
+            Question * <span className="text-gray-500 font-normal text-sm ml-2">({question.length}/200)</span>
           </label>
           <input
             type="text"
             value={question}
             onChange={(e) => handleQuestionChange(e.target.value)}
-            placeholder="Will SOL reach $500 in 2025?"
             maxLength={200}
-            className={`input-pump w-full ${questionError ? 'input-error' : ''}`}
+            className={`input-pump w-full ${questionError ? "input-error" : ""}`}
+            placeholder={marketType === 0 ? "Will SOL reach $500 in 2025?" : "Which team wins the Super Bowl?"}
           />
-          {questionError && (
-            <p className="text-pump-red text-sm mt-2 font-semibold">❌ {questionError}</p>
-          )}
-          {question.length >= 10 && !questionError && (
-            <p className="text-pump-green text-sm mt-2">✓ Valid question</p>
-          )}
+          {questionError && <p className="text-pump-red text-sm mt-2 font-semibold">❌ {questionError}</p>}
         </div>
 
         {/* Description */}
         <div className="mb-6">
           <label className="block text-white font-semibold mb-2">
-            Description (optional)
-            <span className="text-gray-500 font-normal text-sm ml-2">
-              ({description.length}/500)
-            </span>
+            Description (optional) <span className="text-gray-500 font-normal text-sm ml-2">({description.length}/500)</span>
           </label>
           <textarea
             value={description}
             onChange={(e) => handleDescriptionChange(e.target.value)}
-            placeholder="Describe the resolution conditions..."
             maxLength={500}
             rows={4}
-            className={`input-pump w-full ${descriptionError ? 'input-error' : ''}`}
+            className={`input-pump w-full ${descriptionError ? "input-error" : ""}`}
+            placeholder="Describe the resolution conditions..."
           />
-          {descriptionError && (
-            <p className="text-pump-red text-sm mt-2 font-semibold">❌ {descriptionError}</p>
-          )}
+          {descriptionError && <p className="text-pump-red text-sm mt-2 font-semibold">❌ {descriptionError}</p>}
         </div>
 
-        {/* Market type + Outcomes */}
+        {/* Market type */}
         <div className="mb-6">
           <label className="block text-white font-semibold mb-2">Market type *</label>
           <select
@@ -382,43 +320,37 @@ export default function CreateMarket() {
             <option value={0}>Binary (exactly 2 outcomes)</option>
             <option value={1}>Multi-choice (2 to 10 outcomes)</option>
           </select>
+        </div>
 
-          <div className="mt-4">
-            <label className="block text-white font-semibold mb-2">
-              Outcomes (1 per line) — {marketType === 0 ? 'must be 2' : '2 to 10'}
-            </label>
-            <textarea
-              value={outcomesText}
-              onChange={(e) => setOutcomesText(e.target.value)}
-              rows={4}
-              className={`input-pump w-full ${outcomesError ? 'input-error' : ''}`}
-            />
-            {outcomesError && (
-              <p className="text-pump-red text-sm mt-2 font-semibold">❌ {outcomesError}</p>
-            )}
-          </div>
+        {/* Outcomes */}
+        <div className="mb-6">
+          <label className="block text-white font-semibold mb-2">
+            Outcomes (1 per line) * <span className="text-gray-500 font-normal text-sm ml-2">({marketType === 0 ? "must be 2" : "2 to 10"})</span>
+          </label>
+          <textarea
+            value={outcomesText}
+            onChange={(e) => setOutcomesText(e.target.value)}
+            rows={4}
+            className={`input-pump w-full ${outcomesError ? "input-error" : ""}`}
+            placeholder={marketType === 0 ? "YES\nNO" : "packers\nbroncos"}
+          />
+          <div className="text-xs text-gray-500 mt-2">Parsed: {outcomes.length} {outcomes.length ? `(${outcomes.join(", ")})` : ""}</div>
+          {outcomesError && <p className="text-pump-red text-sm mt-2 font-semibold">❌ {outcomesError}</p>}
         </div>
 
         {/* Category */}
         <div className="mb-6">
           <label className="block text-white font-semibold mb-2">Category *</label>
-          <select
-            value={category}
-            onChange={(e) => setCategory(e.target.value as CategoryId)}
-            className="input-pump w-full"
-          >
+          <select value={category} onChange={(e) => setCategory(e.target.value as CategoryId)} className="input-pump w-full">
             {CATEGORIES.map((cat) => (
               <option key={cat.id} value={cat.id}>
                 {cat.icon} {cat.label}
               </option>
             ))}
           </select>
-          <p className="text-xs text-gray-500 mt-2">
-            Choose the category that best fits your market
-          </p>
         </div>
 
-        {/* Market Image */}
+        {/* Image */}
         <div className="mb-6">
           <label className="block text-white font-semibold mb-2">Market Image (Optional)</label>
 
@@ -435,9 +367,7 @@ export default function CreateMarket() {
                 <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
               </label>
 
-              {imageError && (
-                <p className="text-pump-red text-sm mt-2 font-semibold">❌ {imageError}</p>
-              )}
+              {imageError && <p className="text-pump-red text-sm mt-2 font-semibold">❌ {imageError}</p>}
 
               <div className="mt-4">
                 <p className="text-sm text-gray-400 mb-2">Default placeholder for {category}:</p>
@@ -451,7 +381,7 @@ export default function CreateMarket() {
               <div className="mt-4 relative">
                 <div className="relative w-full h-48 rounded-lg overflow-hidden bg-pump-dark border border-gray-700">
                   <Image src={imagePreview} alt="Uploaded preview" fill className="object-cover" />
-                  <div className="absolute inset-0 bg-gradient-to-t from-pump-dark/80 to-transparent"></div>
+                  <div className="absolute inset-0 bg-gradient-to-t from-pump-dark/80 to-transparent" />
                 </div>
 
                 <button
@@ -474,7 +404,7 @@ export default function CreateMarket() {
           )}
         </div>
 
-        {/* End Date & Time */}
+        {/* End Date */}
         <div className="mb-8">
           <label className="block text-white font-semibold mb-2">End Date & Time *</label>
           <div className="relative">
@@ -491,41 +421,23 @@ export default function CreateMarket() {
             />
             <Calendar className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-500 pointer-events-none" />
           </div>
-          <p className="text-xs text-gray-500 mt-2">
-            Market will close and be ready for resolution at this time (UTC)
-          </p>
         </div>
 
-        {/* Social Links */}
+        {/* Social */}
         <div className="mb-8 pb-8 border-b border-gray-800">
           <SocialLinksForm value={socialLinks} onChange={setSocialLinks} />
         </div>
 
         {/* Submit */}
-        {!connected ? (
-          <div className="text-center p-8 bg-pump-dark rounded-lg">
-            <p className="text-gray-400 mb-4">Connect your wallet to create a market</p>
-          </div>
-        ) : (
-          <button
-            onClick={handleCreateMarket}
-            disabled={!canSubmit || loading}
-            className={`w-full py-4 rounded-lg font-bold text-lg transition ${
-              canSubmit && !loading ? 'btn-pump glow-green' : 'bg-gray-700 text-gray-500 cursor-not-allowed'
-            }`}
-          >
-            {loading ? 'Creating...' : 'Launch Market 🚀'}
-          </button>
-        )}
-
-        {/* Info */}
-        <div className="mt-6 p-4 bg-pump-dark rounded-lg">
-          <p className="text-sm text-gray-400">
-            <strong className="text-white">Banned words filter active:</strong>
-            <br />
-            Markets with inappropriate content (violence, illegal activity, NSFW, etc.) are automatically blocked. Keep it fun and legal!
-          </p>
-        </div>
+        <button
+          onClick={handleCreateMarket}
+          disabled={!canSubmit || loading}
+          className={`w-full py-4 rounded-lg font-bold text-lg transition ${
+            canSubmit && !loading ? "btn-pump glow-green" : "bg-gray-700 text-gray-500 cursor-not-allowed"
+          }`}
+        >
+          {loading ? "Creating..." : "Launch Market 🚀"}
+        </button>
       </div>
     </div>
   );
