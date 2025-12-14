@@ -1,0 +1,201 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 255, 255, 255;
+  --background-start-rgb: 10, 10, 10;
+  --background-end-rgb: 0, 0, 0;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: linear-gradient(
+      to bottom,
+      transparent,
+      rgb(var(--background-end-rgb))
+    )
+    rgb(var(--background-start-rgb));
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+/* PumpFun style animations */
+@keyframes glow {
+  0%, 100% {
+    box-shadow: 0 0 20px rgba(0, 255, 136, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 40px rgba(0, 255, 136, 0.8);
+  }
+}
+
+.btn-pump {
+  @apply bg-pump-green text-black font-bold py-3 px-6 rounded-lg
+         hover:bg-green-400 transition-all duration-200
+         hover:scale-105 active:scale-95;
+}
+
+.btn-pump-red {
+  @apply bg-pump-red text-white font-bold py-3 px-6 rounded-lg
+         hover:bg-red-400 transition-all duration-200
+         hover:scale-105 active:scale-95;
+}
+
+.card-pump {
+  @apply bg-pump-gray border border-gray-800 rounded-xl p-6
+         hover:border-pump-green transition-all duration-200
+         hover:shadow-lg;
+}
+
+.input-pump {
+  @apply bg-pump-dark border border-gray-700 rounded-lg px-4 py-3
+         text-white placeholder-gray-500
+         focus:border-pump-green focus:outline-none
+         transition-all duration-200;
+}
+
+.input-error {
+  @apply border-pump-red border-2;
+}
+
+.glow-green {
+  animation: glow 2s ease-in-out infinite;
+}
+
+/* React DatePicker Custom Styles - Dark Theme */
+.react-datepicker-wrapper {
+  width: 100%;
+}
+
+.react-datepicker {
+  background-color: #1a1a1a !important;
+  border: 1px solid #374151 !important;
+  border-radius: 0.5rem !important;
+  font-family: 'Inter', sans-serif !important;
+}
+
+.react-datepicker__header {
+  background-color: #111111 !important;
+  border-bottom: 1px solid #374151 !important;
+  border-radius: 0.5rem 0.5rem 0 0 !important;
+}
+
+.react-datepicker__current-month,
+.react-datepicker-time__header,
+.react-datepicker-year-header {
+  color: #ffffff !important;
+  font-weight: 600 !important;
+}
+
+.react-datepicker__day-name,
+.react-datepicker__day,
+.react-datepicker__time-name {
+  color: #9ca3af !important;
+}
+
+.react-datepicker__day:hover {
+  background-color: #374151 !important;
+  color: #ffffff !important;
+}
+
+.react-datepicker__day--selected,
+.react-datepicker__day--keyboard-selected {
+  background-color: #00ff9d !important;
+  color: #000000 !important;
+  font-weight: 600 !important;
+}
+
+.react-datepicker__day--disabled {
+  color: #4b5563 !important;
+  cursor: not-allowed !important;
+}
+
+.react-datepicker__time-container {
+  border-left: 1px solid #374151 !important;
+}
+
+.react-datepicker__time {
+  background-color: #1a1a1a !important;
+}
+
+.react-datepicker__time-box {
+  width: 100% !important;
+}
+
+.react-datepicker__time-list-item {
+  color: #9ca3af !important;
+}
+
+.react-datepicker__time-list-item:hover {
+  background-color: #374151 !important;
+  color: #ffffff !important;
+}
+
+.react-datepicker__time-list-item--selected {
+  background-color: #00ff9d !important;
+  color: #000000 !important;
+  font-weight: 600 !important;
+}
+
+.react-datepicker__navigation {
+  top: 10px !important;
+}
+
+.react-datepicker__navigation-icon::before {
+  border-color: #9ca3af !important;
+}
+
+.react-datepicker__navigation:hover *::before {
+  border-color: #00ff9d !important;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.2s ease-out;
+}
+
+.animate-slideDown {
+  animation: slideDown 0.3s ease-out;
+}
+
+.animate-slideUp {
+  animation: slideUp 0.3s ease-out;
+}
