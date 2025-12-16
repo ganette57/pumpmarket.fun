@@ -1,69 +1,72 @@
-'use client';
+// app/src/app/dashboard/page.tsx
+"use client";
 
-import { useState, useEffect } from 'react';
-import { useWallet } from '@solana/wallet-adapter-react';
-import Link from 'next/link';
+import { useEffect, useMemo, useState } from "react";
+import { useWallet } from "@solana/wallet-adapter-react";
+import Link from "next/link";
+import { Heart, ExternalLink } from "lucide-react";
+
 import { lamportsToSol } from "@/utils/format";
-import { Heart, ExternalLink } from 'lucide-react';
-import { getMarketsByCreator } from '@/lib/markets';
+import { getMarketsByCreator, getTransactionsByUser, type DbTransaction } from "@/lib/markets";
 
 interface UserMarket {
   publicKey: string;
   question: string;
-  totalVolume: number;
-  feesCollected: number;
+  totalVolume: number; // lamports
+  feesCollected: number; // lamports (estimate)
   resolved: boolean;
   resolutionTime: number;
 }
 
-interface UserPosition {
-  marketKey: string;
-  question: string;
-  yesShares: number;
-  noShares: number;
-  resolved: boolean;
-  winningOutcome?: boolean;
-}
-
 export default function Dashboard() {
   const { publicKey, connected } = useWallet();
+
   const [myMarkets, setMyMarkets] = useState<UserMarket[]>([]);
-  const [myPositions, setMyPositions] = useState<UserPosition[]>([]);
   const [bookmarkedMarketIds, setBookmarkedMarketIds] = useState<string[]>([]);
+  const [myTxs, setMyTxs] = useState<DbTransaction[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const FEE_RATE = 0.02; // UI estimate only
 
   useEffect(() => {
     if (connected && publicKey) {
-      loadUserData();
+      void loadUserData();
     } else {
       setLoading(false);
     }
     loadBookmarkedMarkets();
-  }, [connected, publicKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected, publicKey?.toBase58()]);
 
   async function loadUserData() {
     try {
       if (!publicKey) return;
-      
-      // Fetch user's created markets from Supabase
+
+      setLoading(true);
+
       const createdMarkets = await getMarketsByCreator(publicKey.toBase58());
-      
-      // Transform to component format
-      const transformedMarkets: UserMarket[] = createdMarkets.map((m) => ({
-        publicKey: m.market_address,
-        question: m.question,
-        totalVolume: m.total_volume,
-        feesCollected: 0, // TODO: Calculate from transactions
-        resolved: m.resolved,
-        resolutionTime: Math.floor(new Date(m.end_date).getTime() / 1000),
-      }));
-      
+
+      const transformedMarkets: UserMarket[] = createdMarkets.map((m: any) => {
+        const totalVol = Number(m.total_volume) || 0;
+        const feesEstLamports = Math.floor(totalVol * FEE_RATE);
+
+        return {
+          publicKey: m.market_address,
+          question: m.question,
+          totalVolume: totalVol,
+          feesCollected: feesEstLamports,
+          resolved: !!m.resolved,
+          resolutionTime: Math.floor(new Date(m.end_date).getTime() / 1000),
+        };
+      });
+
       setMyMarkets(transformedMarkets);
-      
-      // TODO: Fetch user positions from on-chain
-      setMyPositions([]);
+
+      // user tx (RLS must be off or proper policy)
+      const txs = await getTransactionsByUser(publicKey.toBase58());
+      setMyTxs(txs);
     } catch (error) {
-      console.error('Error loading user data:', error);
+      console.error("Error loading user data:", error);
     } finally {
       setLoading(false);
     }
@@ -71,46 +74,27 @@ export default function Dashboard() {
 
   function loadBookmarkedMarkets() {
     try {
-      const savedMarkets = localStorage.getItem('savedMarkets');
-      if (savedMarkets) {
-        setBookmarkedMarketIds(JSON.parse(savedMarkets));
-      }
+      const savedMarkets = localStorage.getItem("savedMarkets");
+      if (savedMarkets) setBookmarkedMarketIds(JSON.parse(savedMarkets));
     } catch (error) {
-      console.error('Error loading bookmarked markets:', error);
+      console.error("Error loading bookmarked markets:", error);
     }
   }
 
   function removeBookmark(marketId: string) {
     try {
-      const updatedMarkets = bookmarkedMarketIds.filter((id) => id !== marketId);
-      localStorage.setItem('savedMarkets', JSON.stringify(updatedMarkets));
-      setBookmarkedMarketIds(updatedMarkets);
+      const updated = bookmarkedMarketIds.filter((id) => id !== marketId);
+      localStorage.setItem("savedMarkets", JSON.stringify(updated));
+      setBookmarkedMarketIds(updated);
     } catch (error) {
-      console.error('Error removing bookmark:', error);
+      console.error("Error removing bookmark:", error);
     }
   }
 
-  async function resolveMarket(marketKey: string, yesWins: boolean) {
-    try {
-      // TODO: Call Solana program to resolve
-      console.log('Resolving market:', marketKey, 'YES wins:', yesWins);
-      alert(`Resolving market (Demo mode)`);
-    } catch (error) {
-      console.error('Error resolving market:', error);
-      alert('Error: ' + (error as Error).message);
-    }
-  }
-
-  async function claimWinnings(marketKey: string) {
-    try {
-      // TODO: Call Solana program to claim
-      console.log('Claiming winnings for market:', marketKey);
-      alert('Claiming winnings (Demo mode)');
-    } catch (error) {
-      console.error('Error claiming winnings:', error);
-      alert('Error: ' + (error as Error).message);
-    }
-  }
+  const feesTotalSol = useMemo(() => {
+    const totalLamports = myMarkets.reduce((sum, m) => sum + (Number(m.feesCollected) || 0), 0);
+    return lamportsToSol(totalLamports);
+  }, [myMarkets]);
 
   if (!connected) {
     return (
@@ -125,7 +109,13 @@ export default function Dashboard() {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-      <h1 className="text-4xl font-bold text-white mb-8">Dashboard</h1>
+      <div className="flex items-end justify-between gap-4 mb-8">
+        <h1 className="text-4xl font-bold text-white">Dashboard</h1>
+        <div className="text-right">
+          <div className="text-xs text-gray-500">Fees earned (UI estimate)</div>
+          <div className="text-lg font-bold text-pump-green">{feesTotalSol.toFixed(4)} SOL</div>
+        </div>
+      </div>
 
       {/* My Markets */}
       <div className="mb-12">
@@ -151,47 +141,27 @@ export default function Dashboard() {
           <div className="space-y-4">
             {myMarkets.map((market) => (
               <div key={market.publicKey} className="card-pump">
-                <div className="flex justify-between items-start mb-4">
+                <div className="flex justify-between items-start mb-2 gap-4">
                   <div className="flex-1">
                     <Link href={`/trade/${market.publicKey}`}>
                       <h3 className="text-xl font-bold text-white mb-2 hover:text-pump-green transition cursor-pointer">
                         {market.question}
                       </h3>
                     </Link>
-                    <div className="flex space-x-6 text-sm">
+
+                    <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
                       <div>
-                        <span className="text-gray-500">Volume:</span>{' '}
-                        <span className="text-white font-semibold">
-                          {lamportsToSol(market.totalVolume).toFixed(2)} SOL
-                        </span>
+                        <span className="text-gray-500">Volume:</span>{" "}
+                        <span className="text-white font-semibold">{lamportsToSol(market.totalVolume).toFixed(2)} SOL</span>
                       </div>
                       <div>
-                        <span className="text-gray-500">Fees Earned:</span>{' '}
-                        <span className="text-pump-green font-semibold">
-                          {lamportsToSol(market.feesCollected).toFixed(4)} SOL
-                        </span>
+                        <span className="text-gray-500">Fees Earned:</span>{" "}
+                        <span className="text-pump-green font-semibold">{lamportsToSol(market.feesCollected).toFixed(4)} SOL</span>
                       </div>
                     </div>
                   </div>
-                  {!market.resolved && Date.now() / 1000 >= market.resolutionTime && (
-                    <div className="flex space-x-2">
-                      <button
-                        onClick={() => resolveMarket(market.publicKey, true)}
-                        className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 font-semibold"
-                      >
-                        Resolve YES
-                      </button>
-                      <button
-                        onClick={() => resolveMarket(market.publicKey, false)}
-                        className="bg-red-500 text-white px-4 py-2 rounded-lg hover:bg-red-600 font-semibold"
-                      >
-                        Resolve NO
-                      </button>
-                    </div>
-                  )}
-                  {market.resolved && (
-                    <span className="text-pump-green font-semibold">RESOLVED</span>
-                  )}
+
+                  {market.resolved && <span className="text-pump-green font-semibold">RESOLVED</span>}
                 </div>
               </div>
             ))}
@@ -199,7 +169,7 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* Bookmarked Markets */}
+      {/* Saved Markets */}
       <div className="mb-12">
         <div className="flex items-center space-x-2 mb-6">
           <Heart className="w-6 h-6 text-pump-green fill-pump-green" />
@@ -224,9 +194,7 @@ export default function Dashboard() {
                 <div className="flex justify-between items-center">
                   <div className="flex-1">
                     <p className="text-white font-semibold mb-1">Market ID: {marketId.slice(0, 20)}...</p>
-                    <p className="text-xs text-gray-500">
-                      Click "View Market" to see full details and trade
-                    </p>
+                    <p className="text-xs text-gray-500">Click "View Market" to see full details and trade</p>
                   </div>
                   <div className="flex items-center space-x-3">
                     <Link href={`/trade/${marketId}`}>
@@ -250,47 +218,38 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* My Positions */}
-      <div>
-        <h2 className="text-2xl font-bold text-white mb-6">My Positions</h2>
+      {/* Transactions */}
+      <div className="mb-12">
+        <h2 className="text-2xl font-bold text-white mb-6">My Transactions</h2>
 
         {loading ? (
           <div className="text-center py-12">
             <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-pump-green"></div>
           </div>
-        ) : myPositions.length === 0 ? (
+        ) : myTxs.length === 0 ? (
           <div className="card-pump text-center py-12">
-            <p className="text-gray-400 mb-4">You don't have any positions yet</p>
+            <p className="text-gray-400 mb-2">No transactions yet</p>
             <Link href="/">
               <button className="btn-pump">Browse Markets</button>
             </Link>
           </div>
         ) : (
-          <div className="space-y-4">
-            {myPositions.map((position) => (
-              <div key={position.marketKey} className="card-pump">
-                <div className="flex justify-between items-start">
-                  <div className="flex-1">
-                    <h3 className="text-lg font-bold text-white mb-3">{position.question}</h3>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3">
-                        <div className="text-xs text-blue-400 mb-1">YES Shares</div>
-                        <div className="text-xl font-bold text-blue-400">{position.yesShares}</div>
-                      </div>
-                      <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
-                        <div className="text-xs text-red-400 mb-1">NO Shares</div>
-                        <div className="text-xl font-bold text-red-400">{position.noShares}</div>
-                      </div>
+          <div className="space-y-3">
+            {myTxs.map((tx) => (
+              <div key={tx.id ?? tx.tx_signature} className="card-pump">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="text-white font-semibold">
+                      {tx.is_buy ? "BUY" : "SELL"} • {tx.is_yes ? "YES" : "NO"} • {Number(tx.amount) || 0} shares
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1 truncate">
+                      {tx.tx_signature}
                     </div>
                   </div>
-                  {position.resolved && (
-                    <button
-                      onClick={() => claimWinnings(position.marketKey)}
-                      className="btn-pump ml-4"
-                    >
-                      Claim Winnings
-                    </button>
-                  )}
+                  <div className="text-right">
+                    <div className="text-pump-green font-bold">{Number(tx.cost || 0).toFixed(4)} SOL</div>
+                    <div className="text-xs text-gray-500">{tx.created_at ? new Date(tx.created_at).toLocaleString() : ""}</div>
+                  </div>
                 </div>
               </div>
             ))}
@@ -298,13 +257,10 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* Chainlink Integration Notice */}
+      {/* Notice */}
       <div className="mt-12 card-pump bg-pump-dark border-pump-green">
         <h3 className="text-xl font-bold text-white mb-2">Coming in V1: Chainlink Oracle</h3>
-        <p className="text-gray-400">
-          Automated market resolution using Chainlink Data Feeds for BTC/USD, ETH/USD, SOL/USD and more.
-          No more manual resolution needed!
-        </p>
+        <p className="text-gray-400">Automated market resolution using Chainlink Data Feeds (BTC/USD, ETH/USD, SOL/USD…).</p>
       </div>
     </div>
   );

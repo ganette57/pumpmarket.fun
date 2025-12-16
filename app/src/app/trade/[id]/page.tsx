@@ -1,4 +1,3 @@
-// src/app/trade/[id]/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -17,22 +16,36 @@ import CommentsSection from "@/components/CommentsSection";
 import TradingPanel from "@/components/TradingPanel";
 import BondingCurveChart from "@/components/BondingCurveChart";
 
-import { getMarketByAddress } from "@/lib/markets";
-import { lamportsToSol, getUserPositionPDA, PLATFORM_WALLET } from "@/utils/solana";
+import {
+  getMarketByAddress,
+  recordTransaction,
+  applyTradeToMarketInSupabase,
+} from "@/lib/markets";
+
+import {
+  lamportsToSol,
+  solToLamports,
+  getUserPositionPDA,
+  PLATFORM_WALLET,
+  calculateBuyCost,
+} from "@/utils/solana";
 
 import type { SocialLinks } from "@/components/SocialLinksForm";
 
 type SupabaseMarket = any;
 
 type UiMarket = {
-  publicKey: string;
+  // ✅ DB id UUID (for transactions.market_id)
+  dbId?: string;
+
+  publicKey: string; // market_address (base58)
   question: string;
   description: string;
   category?: string;
   imageUrl?: string;
   creator: string;
 
-  totalVolume: number;
+  totalVolume: number; // lamports (numeric in DB)
   resolutionTime: number; // unix seconds
   resolved: boolean;
 
@@ -86,6 +99,16 @@ function safeParamId(p: unknown): string | null {
   return null;
 }
 
+type Derived = {
+  marketType: 0 | 1;
+  names: string[];
+  supplies: number[];
+  percentages: number[];
+  totalSupply: number;
+  isBinaryStyle: boolean; // 2 outcomes => YES/NO style UI
+  missingOutcomes: boolean;
+};
+
 export default function TradePage() {
   const params = useParams();
   const id = safeParamId((params as any)?.id);
@@ -95,91 +118,16 @@ export default function TradePage() {
 
   const [market, setMarket] = useState<UiMarket | null>(null);
   const [loading, setLoading] = useState(true);
-  const [buying, setBuying] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   // multi chart selector
   const [chartOutcomeIndex, setChartOutcomeIndex] = useState(0);
-
-  // outcomes loading (on-chain fallback)
-  const [outcomesLoading, setOutcomesLoading] = useState(false);
 
   useEffect(() => {
     if (!id) return;
     void loadMarket(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
-
-  // If Supabase missing outcomes, fetch on-chain (non-blocking but we show "Loading outcomes")
-  useEffect(() => {
-    if (!program || !id || !market) return;
-
-    const needsOutcomes =
-      !market.outcomeNames?.length ||
-      !market.outcomeSupplies?.length ||
-      market.outcomeNames.length !== market.outcomeSupplies.length;
-
-    if (!needsOutcomes) return;
-
-    let cancelled = false;
-
-    (async () => {
-      try {
-        setOutcomesLoading(true);
-
-        const marketPk = new PublicKey(id);
-
-        const fetcher =
-          (program as any)?.account?.market?.fetch ||
-          (program as any)?.account?.Market?.fetch ||
-          null;
-
-        if (typeof fetcher !== "function") return;
-
-        const acct: any = await fetcher(marketPk);
-
-        const onchainNames =
-          toStringArray(acct?.outcomeNames) ||
-          toStringArray(acct?.outcome_names) ||
-          undefined;
-
-        const onchainSupplies =
-          toNumberArray(acct?.outcomeSupplies) ||
-          toNumberArray(acct?.outcome_supplies) ||
-          undefined;
-
-        const onchainTypeRaw =
-          typeof acct?.marketType === "number"
-            ? acct.marketType
-            : typeof acct?.market_type === "number"
-            ? acct.market_type
-            : market.marketType;
-
-        const onchainType = (Number(onchainTypeRaw) === 1 ? 1 : 0) as 0 | 1;
-
-        if (cancelled) return;
-
-        setMarket((prev) => {
-          if (!prev) return prev;
-
-          return {
-            ...prev,
-            marketType: onchainType,
-            outcomeNames: onchainNames?.slice(0, 10) || prev.outcomeNames,
-            outcomeSupplies: onchainSupplies?.slice(0, 10) || prev.outcomeSupplies,
-          };
-        });
-      } catch {
-        // silent (we'll fall back in derived)
-      } finally {
-        if (!cancelled) setOutcomesLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [program, id, market?.publicKey]);
 
   async function loadMarket(marketAddress: string) {
     setLoading(true);
@@ -191,12 +139,15 @@ export default function TradePage() {
         return;
       }
 
-      const mt = (typeof supabaseMarket.market_type === "number" ? supabaseMarket.market_type : 0) as 0 | 1;
+      const mt = (typeof supabaseMarket.market_type === "number"
+        ? supabaseMarket.market_type
+        : 0) as 0 | 1;
 
       const names = toStringArray(supabaseMarket.outcome_names);
       const supplies = toNumberArray(supabaseMarket.outcome_supplies);
 
       const transformed: UiMarket = {
+        dbId: supabaseMarket.id, // ✅ important for transactions.market_id
         publicKey: supabaseMarket.market_address,
         question: supabaseMarket.question || "",
         description: supabaseMarket.description || "",
@@ -228,53 +179,34 @@ export default function TradePage() {
     }
   }
 
-  const derived = useMemo(() => {
+  const derived: Derived | null = useMemo(() => {
     if (!market) return null;
 
-    const marketType = market.marketType ?? 0;
+    const marketType = (market.marketType ?? 0) as 0 | 1;
 
-    // names
-    let names: string[] | undefined = market.outcomeNames?.filter(Boolean);
+    let names = (market.outcomeNames || []).map(String).filter(Boolean);
 
-    // ✅ IMPORTANT: never fake YES/NO for multi
-    if (marketType === 1) {
-      if (!names?.length || names.length < 2) {
-        return {
-          waitingOutcomes: true,
-          marketType,
-          names: [] as string[],
-          supplies: [] as number[],
-          percentages: [] as number[],
-          totalSupply: 0,
-          isBinary: false,
-        };
-      }
-    } else {
-      // binary fallback
-      if (!names?.length) names = ["YES", "NO"];
+    // ✅ Do not fake YES/NO for multi-choice
+    const missingOutcomes = marketType === 1 && names.length < 2;
+
+    // Binary fallback
+    if (marketType === 0) {
       if (names.length !== 2) names = ["YES", "NO"];
     }
 
-    const safeNames = names.slice(0, 10);
+    // If multi missing outcomes => keep UI alive with placeholders
+    const safeNames =
+      missingOutcomes ? ["Loading…", "Loading…"] : names.slice(0, 10);
 
-    // supplies
-    let supplies = market.outcomeSupplies && market.outcomeSupplies.length ? market.outcomeSupplies : undefined;
+    let supplies = Array.isArray(market.outcomeSupplies) ? market.outcomeSupplies.map((x) => Number(x || 0)) : [];
 
-    if (!supplies || supplies.length !== safeNames.length) {
-      if (marketType === 0 && safeNames.length === 2) {
-        supplies = [market.yesSupply || 0, market.noSupply || 0];
-      } else if (marketType === 1) {
-        // multi but missing supplies -> show waiting
-        return {
-          waitingOutcomes: true,
-          marketType,
-          names: safeNames,
-          supplies: Array(safeNames.length).fill(0),
-          percentages: Array(safeNames.length).fill(0),
-          totalSupply: 0,
-          isBinary: false,
-        };
+    // If supplies mismatched:
+    if (supplies.length !== safeNames.length) {
+      // binary fallback from yes/no columns
+      if (safeNames.length === 2) {
+        supplies = [Number(market.yesSupply || 0), Number(market.noSupply || 0)];
       } else {
+        // multi >2 but no supplies => pad with 0
         supplies = Array(safeNames.length).fill(0);
       }
     }
@@ -288,95 +220,151 @@ export default function TradePage() {
     );
 
     return {
-      waitingOutcomes: outcomesLoading && marketType === 1 && (!market.outcomeNames?.length || !market.outcomeSupplies?.length),
       marketType,
       names: safeNames,
       supplies: safeSupplies,
       percentages,
       totalSupply,
-      isBinary: marketType === 0 && safeNames.length === 2,
+      isBinaryStyle: safeNames.length === 2,
+      missingOutcomes,
     };
-  }, [market, outcomesLoading]);
+  }, [market]);
 
-  async function handleTrade(shares: number, outcomeIndex: number) {
+  function estimateCostSol(currentSupply: number, shares: number, side: "buy" | "sell") {
+    const s = Math.max(0, Math.floor(currentSupply || 0));
+    const q = Math.max(1, Math.floor(shares || 0));
+
+    // buy = integral from s..s+q
+    if (side === "buy") return calculateBuyCost(s, q);
+
+    // sell ≈ integral from (s-q)..s (reverse)
+    const start = Math.max(0, s - q);
+    return calculateBuyCost(start, q);
+  }
+
+  async function handleTrade(shares: number, outcomeIndex: number, side: "buy" | "sell") {
     if (!connected || !publicKey || !program) {
       if (!publicKey) alert("Please connect your wallet");
       if (!program) alert("Program not loaded");
       return;
     }
-    if (!market || !id) return;
+    if (!market || !id || !derived) return;
 
-    setBuying(true);
+    const safeShares = Math.max(1, Math.floor(shares));
+    const safeOutcome = Math.max(0, Math.min(outcomeIndex, derived.names.length - 1));
+
+    setSubmitting(true);
+
+    // ✅ optimistic UI update (immediate)
+    setMarket((prev) => {
+      if (!prev) return prev;
+
+      const nextSupplies = Array.isArray(prev.outcomeSupplies)
+        ? prev.outcomeSupplies.slice()
+        : Array(derived.names.length).fill(0);
+
+      while (nextSupplies.length < derived.names.length) nextSupplies.push(0);
+
+      const delta = side === "buy" ? safeShares : -safeShares;
+      nextSupplies[safeOutcome] = Math.max(0, Number(nextSupplies[safeOutcome] || 0) + delta);
+
+      // update yes/no if 2 outcomes
+      const yesSupply = derived.names.length === 2 ? nextSupplies[0] : prev.yesSupply || 0;
+      const noSupply = derived.names.length === 2 ? nextSupplies[1] : prev.noSupply || 0;
+
+      const estSol = estimateCostSol(nextSupplies[safeOutcome], safeShares, side);
+      const volLamports = solToLamports(Math.abs(estSol));
+
+      return {
+        ...prev,
+        outcomeSupplies: nextSupplies.slice(0, 10),
+        yesSupply,
+        noSupply,
+        totalVolume: Number(prev.totalVolume || 0) + Number(volLamports || 0),
+      };
+    });
+
     try {
       const marketPubkey = new PublicKey(id);
       const [positionPDA] = getUserPositionPDA(marketPubkey, publicKey);
       const creatorPubkey = new PublicKey(market.creator);
 
-      const amountBN = new BN(Math.max(1, Math.floor(shares)));
+      const amountBN = new BN(safeShares);
 
-      const tx = await (program as any).methods
-        .buyShares(amountBN, outcomeIndex) // u8 outcomeIndex
-        .accounts({
-          market: marketPubkey,
-          userPosition: positionPDA,
-          buyer: publicKey,
-          creator: creatorPubkey,
-          platformWallet: PLATFORM_WALLET,
-          systemProgram: SystemProgram.programId,
-        })
-        .rpc();
+      let txSig: string;
+
+      if (side === "buy") {
+        txSig = await (program as any).methods
+          .buyShares(amountBN, safeOutcome)
+          .accounts({
+            market: marketPubkey,
+            userPosition: positionPDA,
+            buyer: publicKey,
+            creator: creatorPubkey,
+            platformWallet: PLATFORM_WALLET,
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc();
+      } else {
+        // ⚠️ assumes your IDL has sellShares(amount, outcomeIndex) and same accounts
+        txSig = await (program as any).methods
+          .sellShares(amountBN, safeOutcome)
+          .accounts({
+            market: marketPubkey,
+            userPosition: positionPDA,
+            buyer: publicKey, // many IDLs reuse "buyer" for signer
+            creator: creatorPubkey,
+            platformWallet: PLATFORM_WALLET,
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc();
+      }
+
+      const name = derived.names[safeOutcome] ?? `#${safeOutcome}`;
+      const estSol = estimateCostSol(derived.supplies[safeOutcome] || 0, safeShares, side);
+      const estLamports = solToLamports(Math.abs(estSol));
 
       alert(
-        `Success! 🎉\n\nBought ${amountBN.toString()} shares of "${derived?.names[outcomeIndex] ?? outcomeIndex
-        }"\n\nTx: ${tx.slice(0, 16)}...\n\nhttps://explorer.solana.com/tx/${tx}?cluster=devnet`
+        `Success! 🎉\n\n${side === "buy" ? "Bought" : "Sold"} ${safeShares} shares of "${name}"\n\nTx: ${txSig.slice(
+          0,
+          16
+        )}...\n\nhttps://explorer.solana.com/tx/${txSig}?cluster=devnet`
       );
 
-      // refresh on-chain supplies fast
-      try {
-        const fetcher =
-          (program as any)?.account?.market?.fetch ||
-          (program as any)?.account?.Market?.fetch ||
-          null;
-
-        if (typeof fetcher === "function") {
-          const acct: any = await fetcher(marketPubkey);
-
-          const onchainSupplies =
-            toNumberArray(acct?.outcomeSupplies) || toNumberArray(acct?.outcome_supplies);
-
-          const onchainNames =
-            toStringArray(acct?.outcomeNames) || toStringArray(acct?.outcome_names);
-
-          const onchainTypeRaw =
-            typeof acct?.marketType === "number"
-              ? acct.marketType
-              : typeof acct?.market_type === "number"
-              ? acct.market_type
-              : market.marketType;
-
-          const onchainType = (Number(onchainTypeRaw) === 1 ? 1 : 0) as 0 | 1;
-
-          setMarket((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  marketType: onchainType,
-                  outcomeNames: onchainNames?.slice(0, 10) || prev.outcomeNames,
-                  outcomeSupplies: onchainSupplies?.slice(0, 10) || prev.outcomeSupplies,
-                }
-              : prev
-          );
-        } else {
-          await loadMarket(id);
-        }
-      } catch {
-        await loadMarket(id);
+      // ✅ record transaction (Supabase)
+      if (market.dbId) {
+        await recordTransaction({
+          market_id: market.dbId,
+          user_address: publicKey.toBase58(),
+          tx_signature: txSig,
+          is_buy: side === "buy",
+          // for 2-outcome markets: outcomeIndex 0 = yes, 1 = no
+          is_yes: safeOutcome === 0,
+          amount: safeShares,
+          cost: Number(estSol || 0),
+        });
       }
+
+      // ✅ update markets row: yes_supply/no_supply/total_volume (+ outcome_supplies)
+      await applyTradeToMarketInSupabase({
+        market_address: market.publicKey,
+        market_type: market.marketType,
+        outcome_index: safeOutcome,
+        delta_shares: side === "buy" ? safeShares : -safeShares,
+        delta_volume_lamports: Number(estLamports || 0), // add trade volume always
+      });
+
+      // ✅ refresh from supabase (source of truth)
+      await loadMarket(id);
     } catch (error: any) {
-      console.error("Buy shares error:", error);
-      alert(`Error: ${error?.message || "Failed to buy shares"}`);
+      console.error(`${side.toUpperCase()} shares error:`, error);
+
+      // rollback by reloading market (simple + safe)
+      await loadMarket(id);
+
+      alert(`Error: ${error?.message || `Failed to ${side}`}`);
     } finally {
-      setBuying(false);
+      setSubmitting(false);
     }
   }
 
@@ -393,7 +381,7 @@ export default function TradePage() {
     );
   }
 
-  if (!market) {
+  if (!market || !derived) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <p className="text-gray-400 text-xl">Market not found</p>
@@ -401,24 +389,7 @@ export default function TradePage() {
     );
   }
 
-  // ✅ prevents: Cannot read properties of null (reading 'waitingOutcomes')
-  if (!derived) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <p className="text-gray-400">Loading...</p>
-      </div>
-    );
-  }
-
-  if (derived.waitingOutcomes) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <p className="text-gray-400">Loading outcomes (on-chain)…</p>
-      </div>
-    );
-  }
-
-  const { marketType, names, supplies, percentages, isBinary } = derived;
+  const { marketType, names, supplies, percentages, isBinaryStyle, missingOutcomes } = derived;
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
@@ -476,12 +447,19 @@ export default function TradePage() {
               </div>
             </div>
 
-            <p className="text-gray-400 mt-4 mb-6">{market.description}</p>
+            <p className="text-gray-400 mt-4 mb-4">{market.description}</p>
+
+            {/* ✅ never blank-screen: show banner if outcomes missing */}
+            {missingOutcomes && (
+              <div className="mb-4 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-yellow-200">
+                Outcomes are still indexing… (Supabase/outcomes not ready yet)
+              </div>
+            )}
 
             {/* Outcomes */}
-            {names.length <= 2 ? (
+            {isBinaryStyle ? (
               <div className="grid grid-cols-2 gap-4">
-                {names.map((outcome, index) => (
+                {names.slice(0, 2).map((outcome, index) => (
                   <div
                     key={index}
                     className={`rounded-lg p-4 border ${
@@ -502,7 +480,7 @@ export default function TradePage() {
                         index === 0 ? "text-blue-400" : "text-red-400"
                       }`}
                     >
-                      {percentages[index]?.toFixed(1)}%
+                      {(percentages[index] ?? 0).toFixed(1)}%
                     </div>
                     <div className="text-xs text-gray-500 mt-2">
                       Supply: {supplies[index] || 0}
@@ -513,12 +491,19 @@ export default function TradePage() {
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {names.map((outcome, index) => (
-                  <div key={index} className="rounded-lg p-4 border border-gray-700 bg-pump-dark/40">
+                  <div
+                    key={index}
+                    className="rounded-lg p-4 border border-gray-700 bg-pump-dark/40"
+                  >
                     <div className="flex items-center justify-between gap-3">
                       <div className="text-white font-semibold truncate">{outcome}</div>
-                      <div className="text-pump-green font-bold">{percentages[index]?.toFixed(1)}%</div>
+                      <div className="text-pump-green font-bold">
+                        {(percentages[index] ?? 0).toFixed(1)}%
+                      </div>
                     </div>
-                    <div className="text-xs text-gray-500 mt-2">Supply: {supplies[index] || 0}</div>
+                    <div className="text-xs text-gray-500 mt-2">
+                      Supply: {supplies[index] || 0}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -549,7 +534,7 @@ export default function TradePage() {
                 </p>
               </div>
 
-              {!isBinary && (
+              {!isBinaryStyle && (
                 <div className="min-w-[180px]">
                   <label className="block text-xs text-gray-500 mb-1">Chart outcome</label>
                   <select
@@ -579,18 +564,19 @@ export default function TradePage() {
           <TradingPanel
             market={{
               resolved: market.resolved,
-              yesSupply: supplies[0] || 0,
-              noSupply: supplies[1] || 0,
               marketType: market.marketType,
               outcomeNames: names,
               outcomeSupplies: supplies,
+              yesSupply: supplies[0] || 0,
+              noSupply: supplies[1] || 0,
             }}
             connected={connected}
-            onTrade={(shares, outcomeIndex) => void handleTrade(shares, outcomeIndex)}
+            submitting={submitting}
+            onTrade={(shares, outcomeIndex, side) => void handleTrade(shares, outcomeIndex, side)}
           />
 
           <div className="mt-4 text-xs text-gray-500">
-            {buying ? "Submitting transaction..." : connected ? "Wallet connected" : "Wallet not connected"}
+            {submitting ? "Submitting transaction..." : connected ? "Wallet connected" : "Wallet not connected"}
           </div>
         </div>
       </div>
