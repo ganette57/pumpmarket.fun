@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import Image from "next/image";
 
 import { PublicKey, SystemProgram } from "@solana/web3.js";
@@ -27,7 +27,6 @@ import {
   solToLamports,
   getUserPositionPDA,
   PLATFORM_WALLET,
-  calculateBuyCost,
 } from "@/utils/solana";
 
 import type { SocialLinks } from "@/components/SocialLinksForm";
@@ -35,9 +34,7 @@ import type { SocialLinks } from "@/components/SocialLinksForm";
 type SupabaseMarket = any;
 
 type UiMarket = {
-  // ✅ DB id UUID (for transactions.market_id)
-  dbId?: string;
-
+  dbId?: string; // UUID
   publicKey: string; // market_address (base58)
   question: string;
   description: string;
@@ -45,18 +42,16 @@ type UiMarket = {
   imageUrl?: string;
   creator: string;
 
-  totalVolume: number; // lamports (numeric in DB)
+  totalVolume: number; // lamports
   resolutionTime: number; // unix seconds
   resolved: boolean;
 
   socialLinks?: SocialLinks;
 
-  // multi-choice support
   marketType: 0 | 1;
   outcomeNames?: string[];
   outcomeSupplies?: number[];
 
-  // legacy binary (fallback)
   yesSupply?: number;
   noSupply?: number;
 };
@@ -105,7 +100,7 @@ type Derived = {
   supplies: number[];
   percentages: number[];
   totalSupply: number;
-  isBinaryStyle: boolean; // 2 outcomes => YES/NO style UI
+  isBinaryStyle: boolean;
   missingOutcomes: boolean;
 };
 
@@ -114,14 +109,18 @@ export default function TradePage() {
   const id = safeParamId((params as any)?.id);
 
   const { publicKey, connected } = useWallet();
+  const { connection } = useConnection();
   const program = useProgram();
 
   const [market, setMarket] = useState<UiMarket | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
-  // multi chart selector
   const [chartOutcomeIndex, setChartOutcomeIndex] = useState(0);
+
+  // on-chain helpers
+  const [marketBalanceLamports, setMarketBalanceLamports] = useState<number | null>(null);
+  const [positionShares, setPositionShares] = useState<number[] | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -147,13 +146,13 @@ export default function TradePage() {
       const supplies = toNumberArray(supabaseMarket.outcome_supplies);
 
       const transformed: UiMarket = {
-        dbId: supabaseMarket.id, // ✅ important for transactions.market_id
+        dbId: supabaseMarket.id,
         publicKey: supabaseMarket.market_address,
         question: supabaseMarket.question || "",
         description: supabaseMarket.description || "",
         category: supabaseMarket.category || "other",
         imageUrl: supabaseMarket.image_url || undefined,
-        creator: supabaseMarket.creator || "",
+        creator: String(supabaseMarket.creator || ""),
 
         totalVolume: Number(supabaseMarket.total_volume) || 0,
         resolutionTime: Math.floor(new Date(supabaseMarket.end_date).getTime() / 1000),
@@ -183,36 +182,29 @@ export default function TradePage() {
     if (!market) return null;
 
     const marketType = (market.marketType ?? 0) as 0 | 1;
-
     let names = (market.outcomeNames || []).map(String).filter(Boolean);
 
-    // ✅ Do not fake YES/NO for multi-choice
     const missingOutcomes = marketType === 1 && names.length < 2;
 
-    // Binary fallback
     if (marketType === 0) {
       if (names.length !== 2) names = ["YES", "NO"];
     }
 
-    // If multi missing outcomes => keep UI alive with placeholders
-    const safeNames =
-      missingOutcomes ? ["Loading…", "Loading…"] : names.slice(0, 10);
+    const safeNames = missingOutcomes ? ["Loading…", "Loading…"] : names.slice(0, 10);
 
-    let supplies = Array.isArray(market.outcomeSupplies) ? market.outcomeSupplies.map((x) => Number(x || 0)) : [];
+    let supplies = Array.isArray(market.outcomeSupplies)
+      ? market.outcomeSupplies.map((x) => Number(x || 0))
+      : [];
 
-    // If supplies mismatched:
     if (supplies.length !== safeNames.length) {
-      // binary fallback from yes/no columns
       if (safeNames.length === 2) {
         supplies = [Number(market.yesSupply || 0), Number(market.noSupply || 0)];
       } else {
-        // multi >2 but no supplies => pad with 0
         supplies = Array(safeNames.length).fill(0);
       }
     }
 
     const safeSupplies = supplies.slice(0, safeNames.length);
-
     const totalSupply = safeSupplies.reduce((sum, s) => sum + (Number(s) || 0), 0);
 
     const percentages = safeSupplies.map((s) =>
@@ -230,17 +222,54 @@ export default function TradePage() {
     };
   }, [market]);
 
-  function estimateCostSol(currentSupply: number, shares: number, side: "buy" | "sell") {
-    const s = Math.max(0, Math.floor(currentSupply || 0));
-    const q = Math.max(1, Math.floor(shares || 0));
+  // --- on-chain: market pool balance ---
+  useEffect(() => {
+    if (!id) return;
 
-    // buy = integral from s..s+q
-    if (side === "buy") return calculateBuyCost(s, q);
+    (async () => {
+      try {
+        const marketPk = new PublicKey(id);
+        const bal = await connection.getBalance(marketPk);
+        setMarketBalanceLamports(bal);
+      } catch (e) {
+        setMarketBalanceLamports(null);
+      }
+    })();
+  }, [id, connection]);
 
-    // sell ≈ integral from (s-q)..s (reverse)
-    const start = Math.max(0, s - q);
-    return calculateBuyCost(start, q);
-  }
+  // --- on-chain: userPosition shares ---
+  useEffect(() => {
+    if (!id || !publicKey || !connected || !program) {
+      setPositionShares(null);
+      return;
+    }
+
+    (async () => {
+      try {
+        const marketPk = new PublicKey(id);
+        const [pda] = getUserPositionPDA(marketPk, publicKey);
+
+        const acc = await (program as any).account.userPosition.fetch(pda);
+
+        // Anchor arrays can be BN-like -> Number() ok for small u64 in tests
+        const sharesArr = Array.isArray(acc?.shares)
+          ? acc.shares.map((x: any) => Number(x) || 0)
+          : [];
+
+        setPositionShares(sharesArr);
+      } catch {
+        setPositionShares(null);
+      }
+    })();
+  }, [id, publicKey, connected, program]);
+
+  // keep hooks safe (no conditional hooks)
+  const userHoldingsForUi = useMemo(() => {
+    const len = derived?.names?.length ?? 0;
+    const out = Array(len).fill(0);
+    for (let i = 0; i < len; i++) out[i] = Math.floor(Number(positionShares?.[i] || 0));
+    return out;
+  }, [positionShares, derived?.names?.length]);
 
   async function handleTrade(shares: number, outcomeIndex: number, side: "buy" | "sell") {
     if (!connected || !publicKey || !program) {
@@ -255,40 +284,10 @@ export default function TradePage() {
 
     setSubmitting(true);
 
-    // ✅ optimistic UI update (immediate)
-    setMarket((prev) => {
-      if (!prev) return prev;
-
-      const nextSupplies = Array.isArray(prev.outcomeSupplies)
-        ? prev.outcomeSupplies.slice()
-        : Array(derived.names.length).fill(0);
-
-      while (nextSupplies.length < derived.names.length) nextSupplies.push(0);
-
-      const delta = side === "buy" ? safeShares : -safeShares;
-      nextSupplies[safeOutcome] = Math.max(0, Number(nextSupplies[safeOutcome] || 0) + delta);
-
-      // update yes/no if 2 outcomes
-      const yesSupply = derived.names.length === 2 ? nextSupplies[0] : prev.yesSupply || 0;
-      const noSupply = derived.names.length === 2 ? nextSupplies[1] : prev.noSupply || 0;
-
-      const estSol = estimateCostSol(nextSupplies[safeOutcome], safeShares, side);
-      const volLamports = solToLamports(Math.abs(estSol));
-
-      return {
-        ...prev,
-        outcomeSupplies: nextSupplies.slice(0, 10),
-        yesSupply,
-        noSupply,
-        totalVolume: Number(prev.totalVolume || 0) + Number(volLamports || 0),
-      };
-    });
-
     try {
       const marketPubkey = new PublicKey(id);
       const [positionPDA] = getUserPositionPDA(marketPubkey, publicKey);
       const creatorPubkey = new PublicKey(market.creator);
-
       const amountBN = new BN(safeShares);
 
       let txSig: string;
@@ -306,13 +305,12 @@ export default function TradePage() {
           })
           .rpc();
       } else {
-        // ⚠️ assumes your IDL has sellShares(amount, outcomeIndex) and same accounts
         txSig = await (program as any).methods
           .sellShares(amountBN, safeOutcome)
           .accounts({
             market: marketPubkey,
             userPosition: positionPDA,
-            buyer: publicKey, // many IDLs reuse "buyer" for signer
+            seller: publicKey,
             creator: creatorPubkey,
             platformWallet: PLATFORM_WALLET,
             systemProgram: SystemProgram.programId,
@@ -320,56 +318,51 @@ export default function TradePage() {
           .rpc();
       }
 
-      const name = derived.names[safeOutcome] ?? `#${safeOutcome}`;
-      const estSol = estimateCostSol(derived.supplies[safeOutcome] || 0, safeShares, side);
-      const estLamports = solToLamports(Math.abs(estSol));
-
       alert(
-        `Success! 🎉\n\n${side === "buy" ? "Bought" : "Sold"} ${safeShares} shares of "${name}"\n\nTx: ${txSig.slice(
+        `Success! 🎉\n\n${side === "buy" ? "Bought" : "Sold"} ${safeShares} shares of "${derived.names[safeOutcome] ?? safeOutcome}"\n\nTx: ${txSig.slice(
           0,
           16
         )}...\n\nhttps://explorer.solana.com/tx/${txSig}?cluster=devnet`
       );
 
-      // ✅ record transaction (Supabase)
+      // Supabase record
       if (market.dbId) {
         await recordTransaction({
           market_id: market.dbId,
           user_address: publicKey.toBase58(),
           tx_signature: txSig,
           is_buy: side === "buy",
-          // for 2-outcome markets: outcomeIndex 0 = yes, 1 = no
           is_yes: safeOutcome === 0,
           amount: safeShares,
-          cost: Number(estSol || 0),
+          cost: 0, // optional: you can store SOL spent if you want
         });
       }
 
-      // ✅ update markets row: yes_supply/no_supply/total_volume (+ outcome_supplies)
       await applyTradeToMarketInSupabase({
         market_address: market.publicKey,
         market_type: market.marketType,
         outcome_index: safeOutcome,
         delta_shares: side === "buy" ? safeShares : -safeShares,
-        delta_volume_lamports: Number(estLamports || 0), // add trade volume always
+        delta_volume_lamports: 0, // optional: if you want to track volume here
       });
 
-      // ✅ refresh from supabase (source of truth)
       await loadMarket(id);
+
+      // refresh on-chain balance too
+      try {
+        const bal = await connection.getBalance(new PublicKey(id));
+        setMarketBalanceLamports(bal);
+      } catch {}
     } catch (error: any) {
       console.error(`${side.toUpperCase()} shares error:`, error);
-
-      // rollback by reloading market (simple + safe)
       await loadMarket(id);
-
       alert(`Error: ${error?.message || `Failed to ${side}`}`);
     } finally {
       setSubmitting(false);
     }
   }
 
-  // ---------------- UI guards ----------------
-
+  // UI guards
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -449,7 +442,6 @@ export default function TradePage() {
 
             <p className="text-gray-400 mt-4 mb-4">{market.description}</p>
 
-            {/* ✅ never blank-screen: show banner if outcomes missing */}
             {missingOutcomes && (
               <div className="mb-4 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-yellow-200">
                 Outcomes are still indexing… (Supabase/outcomes not ready yet)
@@ -509,7 +501,6 @@ export default function TradePage() {
               </div>
             )}
 
-            {/* Stats */}
             <div className="grid grid-cols-2 gap-4 pt-4 border-t border-gray-700 mt-6">
               <div>
                 <div className="text-xs text-gray-500 mb-1">Volume</div>
@@ -530,7 +521,7 @@ export default function TradePage() {
               <div>
                 <h2 className="text-xl font-bold text-white">Bonding Curve</h2>
                 <p className="text-sm text-gray-400 mt-1">
-                  Price increases as more shares are bought. Early buyers get better prices!
+                  Price increases as more shares are bought (matches on-chain).
                 </p>
               </div>
 
@@ -572,11 +563,17 @@ export default function TradePage() {
             }}
             connected={connected}
             submitting={submitting}
-            onTrade={(shares, outcomeIndex, side) => void handleTrade(shares, outcomeIndex, side)}
+            onTrade={(s, oi, side) => void handleTrade(s, oi, side)}
+            marketBalanceLamports={marketBalanceLamports}
+            userHoldings={userHoldingsForUi}
           />
 
           <div className="mt-4 text-xs text-gray-500">
-            {submitting ? "Submitting transaction..." : connected ? "Wallet connected" : "Wallet not connected"}
+            {submitting
+              ? "Submitting transaction..."
+              : connected
+              ? `Wallet connected${marketBalanceLamports != null ? ` • pool ${lamportsToSol(marketBalanceLamports).toFixed(4)} SOL` : ""}`
+              : "Wallet not connected"}
           </div>
         </div>
       </div>
