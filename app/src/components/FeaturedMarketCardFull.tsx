@@ -5,11 +5,16 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { TrendingUp, Clock } from 'lucide-react';
 import CategoryImagePlaceholder from './CategoryImagePlaceholder';
-import BondingCurveChart from './BondingCurveChart';
 import { lamportsToSol } from '@/utils/solana';
+import OddsHistoryFromTrades from "@/components/OddsHistoryFromTrades";
 
 interface FeaturedMarket {
+  // ✅ on garde id = market_address (pour /trade/:id)
   id: string;
+
+  // ✅ NEW: supabase UUID (pour fetch trades/odds)
+  dbId?: string;
+
   question: string;
   category: string;
   imageUrl?: string;
@@ -118,15 +123,21 @@ export default function FeaturedMarketCardFull({ market }: FeaturedMarketCardFul
                   <div className="space-y-3 mt-auto">
                     {outcomes.slice(0, 2).map((outcome, index) => (
                       <div key={index} className="flex items-center gap-4">
-                        <span className={`text-sm font-semibold uppercase w-36 text-left ${
-                          index === 0 ? 'text-blue-400' : 'text-red-400'
-                        }`}>
+                        <span
+                          className={`text-sm font-semibold uppercase w-36 text-left ${
+                            index === 0 ? 'text-blue-400' : 'text-red-400'
+                          }`}
+                        >
                           {outcome.length > 10 ? outcome.slice(0, 10) + '...' : outcome}
                         </span>
 
-                        <div className={`flex-1 flex items-center justify-between p-3 rounded-lg ${
-                          index === 0 ? 'bg-blue-500/10 border border-blue-500/30' : 'bg-red-500/10 border border-red-500/30'
-                        }`}>
+                        <div
+                          className={`flex-1 flex items-center justify-between p-3 rounded-lg ${
+                            index === 0
+                              ? 'bg-blue-500/10 border border-blue-500/30'
+                              : 'bg-red-500/10 border border-red-500/30'
+                          }`}
+                        >
                           <span className={`text-3xl font-bold ${index === 0 ? 'text-blue-400' : 'text-red-400'}`}>
                             {percentages[index]?.toFixed(0)}%
                           </span>
@@ -137,20 +148,28 @@ export default function FeaturedMarketCardFull({ market }: FeaturedMarketCardFul
                       </div>
                     ))}
                     {outcomes.length > 2 && (
-                      <div className="text-sm text-gray-400 text-center">
-                        +{outcomes.length - 2} more options
-                      </div>
+                      <div className="text-sm text-gray-400 text-center">+{outcomes.length - 2} more options</div>
                     )}
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* Right */}
+            {/* Right (chart) */}
             <div className="w-1/2 bg-pump-dark/50 p-6 border-l border-gray-800 flex items-center">
               <div className="w-full">
-                <h3 className="text-sm font-semibold text-gray-400 mb-4">Price History</h3>
-                <BondingCurveChart currentSupply={supplies[0] || 0} isYes />
+                <h3 className="text-sm font-semibold text-gray-400 mb-4">Odds history</h3>
+
+                {/* ✅ IMPORTANT: pass dbId (supabase UUID), sinon "not enough trades" */}
+                <OddsHistoryFromTrades
+  marketId={market.dbId}
+  marketAddress={market.id}
+  outcomeNames={outcomes}
+  outcomesCount={outcomes.length}
+  outcomeSupplies={supplies}   // ✅ AJOUT
+  hours={24}
+  height={170}
+/>
               </div>
             </div>
           </div>
@@ -181,31 +200,51 @@ export default function FeaturedMarketCardFull({ market }: FeaturedMarketCardFul
                     {market.category}
                   </div>
                   <h2 className="text-lg font-bold text-white line-clamp-2 leading-tight">{market.question}</h2>
-                  <div className="mt-2 text-xs text-gray-400">{volLabel} SOL Vol • {market.daysLeft}d left</div>
+                  <div className="mt-2 text-xs text-gray-400">
+                    {volLabel} SOL Vol • {market.daysLeft}d left
+                  </div>
                 </div>
               </div>
 
               <div className="space-y-2 mb-4">
                 {outcomes.slice(0, 2).map((outcome, index) => (
                   <div key={index} className="flex items-center gap-3">
-                    <span className={`text-xs font-semibold uppercase w-20 text-left ${
-                      index === 0 ? 'text-blue-400' : 'text-red-400'
-                    }`}>
+                    <span
+                      className={`text-xs font-semibold uppercase w-20 text-left ${
+                        index === 0 ? 'text-blue-400' : 'text-red-400'
+                      }`}
+                    >
                       {outcome.length > 8 ? outcome.slice(0, 8) + '...' : outcome}
                     </span>
-                    <div className={`flex-1 flex items-center justify-between p-3 rounded-lg ${
-                      index === 0 ? 'bg-blue-500/10 border border-blue-500/30' : 'bg-red-500/10 border border-red-500/30'
-                    }`}>
+                    <div
+                      className={`flex-1 flex items-center justify-between p-3 rounded-lg ${
+                        index === 0
+                          ? 'bg-blue-500/10 border border-blue-500/30'
+                          : 'bg-red-500/10 border border-red-500/30'
+                      }`}
+                    >
                       <span className={`text-2xl font-bold ${index === 0 ? 'text-blue-400' : 'text-red-400'}`}>
                         {percentages[index]?.toFixed(0)}%
                       </span>
                     </div>
                   </div>
                 ))}
-                {outcomes.length > 2 && (
-                  <div className="text-xs text-gray-400">+{outcomes.length - 2} more</div>
-                )}
+                {outcomes.length > 2 && <div className="text-xs text-gray-400">+{outcomes.length - 2} more</div>}
               </div>
+
+              {/* ✅ Mobile odds chart */}
+              <div className="bg-pump-dark/40 border border-gray-800 rounded-xl p-4">
+  <div className="text-xs font-semibold text-gray-400 mb-3">Odds history</div>
+  <OddsHistoryFromTrades
+  marketId={market.dbId}
+  marketAddress={market.id}
+  outcomeNames={outcomes}
+  outcomeSupplies={supplies}   // ✅ AJOUTE ÇA
+  outcomesCount={outcomes.length}
+  hours={24}
+  height={170}
+/>
+</div>
             </div>
           </div>
         </div>

@@ -1,20 +1,26 @@
+// app/src/app/trade/[id]/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import Image from "next/image";
 
+import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { BN } from "@coral-xyz/anchor";
 
 import { useProgram } from "@/hooks/useProgram";
+
 import CategoryImagePlaceholder from "@/components/CategoryImagePlaceholder";
 import MarketActions from "@/components/MarketActions";
 import CreatorSocialLinks from "@/components/CreatorSocialLinks";
 import CommentsSection from "@/components/CommentsSection";
 import TradingPanel from "@/components/TradingPanel";
 import BondingCurveChart from "@/components/BondingCurveChart";
+import OddsHistoryChart from "@/components/OddsHistoryChart";
+
+import { supabase } from "@/lib/supabaseClient";
+import { buildOddsSeries, downsample } from "@/lib/marketHistory";
 
 import {
   getMarketByAddress,
@@ -27,6 +33,7 @@ import {
   solToLamports,
   getUserPositionPDA,
   PLATFORM_WALLET,
+  calculateBuyCost,
 } from "@/utils/solana";
 
 import type { SocialLinks } from "@/components/SocialLinksForm";
@@ -34,15 +41,15 @@ import type { SocialLinks } from "@/components/SocialLinksForm";
 type SupabaseMarket = any;
 
 type UiMarket = {
-  dbId?: string; // UUID
-  publicKey: string; // market_address (base58)
+  dbId?: string; // uuid markets.id (for transactions.market_id)
+  publicKey: string; // market_address base58
   question: string;
   description: string;
   category?: string;
   imageUrl?: string;
   creator: string;
 
-  totalVolume: number; // lamports
+  totalVolume: number; // lamports (DB)
   resolutionTime: number; // unix seconds
   resolved: boolean;
 
@@ -52,9 +59,29 @@ type UiMarket = {
   outcomeNames?: string[];
   outcomeSupplies?: number[];
 
+  // legacy binary fallback (if still in DB)
   yesSupply?: number;
   noSupply?: number;
 };
+
+type Derived = {
+  marketType: 0 | 1;
+  names: string[];
+  supplies: number[];
+  percentages: number[];
+  totalSupply: number;
+  isBinaryStyle: boolean;
+  missingOutcomes: boolean;
+};
+
+type OddsRange = "24h" | "7d" | "30d" | "all";
+
+function safeParamId(p: unknown): string | null {
+  if (!p) return null;
+  if (typeof p === "string") return p;
+  if (Array.isArray(p) && typeof p[0] === "string") return p[0];
+  return null;
+}
 
 function toNumberArray(x: any): number[] | undefined {
   if (!x) return undefined;
@@ -87,22 +114,10 @@ function formatVol(volLamports: number) {
   return sol.toFixed(2);
 }
 
-function safeParamId(p: unknown): string | null {
-  if (!p) return null;
-  if (typeof p === "string") return p;
-  if (Array.isArray(p) && typeof p[0] === "string") return p[0];
-  return null;
+function clampInt(n: number, min: number, max: number) {
+  const v = Math.floor(Number(n) || 0);
+  return Math.max(min, Math.min(max, v));
 }
-
-type Derived = {
-  marketType: 0 | 1;
-  names: string[];
-  supplies: number[];
-  percentages: number[];
-  totalSupply: number;
-  isBinaryStyle: boolean;
-  missingOutcomes: boolean;
-};
 
 export default function TradePage() {
   const params = useParams();
@@ -116,11 +131,16 @@ export default function TradePage() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
-  const [chartOutcomeIndex, setChartOutcomeIndex] = useState(0);
+  // chart helpers
+  const [bondingOutcomeIndex, setBondingOutcomeIndex] = useState(0);
 
   // on-chain helpers
-  const [marketBalanceLamports, setMarketBalanceLamports] = useState<number | null>(null);
   const [positionShares, setPositionShares] = useState<number[] | null>(null);
+  const [marketBalanceLamports, setMarketBalanceLamports] = useState<number | null>(null);
+
+  // odds history
+  const [oddsRange, setOddsRange] = useState<OddsRange>("24h");
+  const [oddsPoints, setOddsPoints] = useState<{ t: number; pct: number[] }[]>([]);
 
   useEffect(() => {
     if (!id) return;
@@ -169,7 +189,7 @@ export default function TradePage() {
       };
 
       setMarket(transformed);
-      setChartOutcomeIndex(0);
+      setBondingOutcomeIndex(0);
     } catch (err) {
       console.error("Error loading market:", err);
       setMarket(null);
@@ -182,10 +202,12 @@ export default function TradePage() {
     if (!market) return null;
 
     const marketType = (market.marketType ?? 0) as 0 | 1;
+
     let names = (market.outcomeNames || []).map(String).filter(Boolean);
 
     const missingOutcomes = marketType === 1 && names.length < 2;
 
+    // binary fallback
     if (marketType === 0) {
       if (names.length !== 2) names = ["YES", "NO"];
     }
@@ -222,7 +244,33 @@ export default function TradePage() {
     };
   }, [market]);
 
-  // --- on-chain: market pool balance ---
+  // ✅ hooks declared before any conditional return
+  const userSharesForUi = useMemo(() => {
+    const len = derived?.names?.length ?? 0;
+    const out = Array(len).fill(0);
+    for (let i = 0; i < len; i++) out[i] = Math.floor(Number(positionShares?.[i] || 0));
+    return out;
+  }, [positionShares, derived?.names?.length]);
+
+  const filteredOddsPoints = useMemo(() => {
+    if (!oddsPoints.length) return [];
+    if (oddsRange === "all") return oddsPoints;
+
+    const now = Date.now();
+    const cutoff =
+      oddsRange === "24h"
+        ? now - 24 * 60 * 60 * 1000
+        : oddsRange === "7d"
+        ? now - 7 * 24 * 60 * 60 * 1000
+        : now - 30 * 24 * 60 * 60 * 1000;
+
+    const arr = oddsPoints.filter((p) => p.t >= cutoff);
+    // si le filtre vide tout, garde au moins le dernier point
+    if (!arr.length) return [oddsPoints[oddsPoints.length - 1]];
+    return arr;
+  }, [oddsPoints, oddsRange]);
+
+  // on-chain: market balance
   useEffect(() => {
     if (!id) return;
 
@@ -231,13 +279,13 @@ export default function TradePage() {
         const marketPk = new PublicKey(id);
         const bal = await connection.getBalance(marketPk);
         setMarketBalanceLamports(bal);
-      } catch (e) {
+      } catch {
         setMarketBalanceLamports(null);
       }
     })();
   }, [id, connection]);
 
-  // --- on-chain: userPosition shares ---
+  // on-chain: user position
   useEffect(() => {
     if (!id || !publicKey || !connected || !program) {
       setPositionShares(null);
@@ -250,8 +298,6 @@ export default function TradePage() {
         const [pda] = getUserPositionPDA(marketPk, publicKey);
 
         const acc = await (program as any).account.userPosition.fetch(pda);
-
-        // Anchor arrays can be BN-like -> Number() ok for small u64 in tests
         const sharesArr = Array.isArray(acc?.shares)
           ? acc.shares.map((x: any) => Number(x) || 0)
           : [];
@@ -263,13 +309,51 @@ export default function TradePage() {
     })();
   }, [id, publicKey, connected, program]);
 
-  // keep hooks safe (no conditional hooks)
-  const userHoldingsForUi = useMemo(() => {
-    const len = derived?.names?.length ?? 0;
-    const out = Array(len).fill(0);
-    for (let i = 0; i < len; i++) out[i] = Math.floor(Number(positionShares?.[i] || 0));
-    return out;
-  }, [positionShares, derived?.names?.length]);
+  // odds history (Supabase transactions -> % series)
+  useEffect(() => {
+    if (!market?.dbId) {
+      setOddsPoints([]);
+      return;
+    }
+    const outcomesCount = derived?.names?.length ?? 0;
+    if (!outcomesCount) {
+      setOddsPoints([]);
+      return;
+    }
+
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from("transactions")
+          .select("created_at,is_buy,amount,outcome_index,is_yes")
+          .eq("market_id", market.dbId)
+          .order("created_at", { ascending: true });
+
+        if (error) {
+          console.error("transactions fetch error:", error);
+          setOddsPoints([]);
+          return;
+        }
+
+        const pts = buildOddsSeries((data as any[]) || [], outcomesCount);
+        const lite = downsample(pts, 220).map((p) => ({ t: p.t, pct: p.pct }));
+        setOddsPoints(lite);
+      } catch (e) {
+        console.error("odds history error:", e);
+        setOddsPoints([]);
+      }
+    })();
+  }, [market?.dbId, derived?.names?.length]);
+
+  function estimateCostSol(currentSupply: number, shares: number, side: "buy" | "sell") {
+    const s = Math.max(0, Math.floor(currentSupply || 0));
+    const q = Math.max(1, Math.floor(shares || 0));
+
+    if (side === "buy") return calculateBuyCost(s, q);
+
+    const start = Math.max(0, s - q);
+    return calculateBuyCost(start, q);
+  }
 
   async function handleTrade(shares: number, outcomeIndex: number, side: "buy" | "sell") {
     if (!connected || !publicKey || !program) {
@@ -280,14 +364,43 @@ export default function TradePage() {
     if (!market || !id || !derived) return;
 
     const safeShares = Math.max(1, Math.floor(shares));
-    const safeOutcome = Math.max(0, Math.min(outcomeIndex, derived.names.length - 1));
+    const safeOutcome = clampInt(outcomeIndex, 0, derived.names.length - 1);
 
     setSubmitting(true);
+
+    // optimistic UI
+    setMarket((prev) => {
+      if (!prev) return prev;
+
+      const nextSupplies = Array.isArray(prev.outcomeSupplies)
+        ? prev.outcomeSupplies.slice()
+        : Array(derived.names.length).fill(0);
+
+      while (nextSupplies.length < derived.names.length) nextSupplies.push(0);
+
+      const delta = side === "buy" ? safeShares : -safeShares;
+      nextSupplies[safeOutcome] = Math.max(0, Number(nextSupplies[safeOutcome] || 0) + delta);
+
+      const yesSupply = derived.names.length === 2 ? nextSupplies[0] : prev.yesSupply || 0;
+      const noSupply = derived.names.length === 2 ? nextSupplies[1] : prev.noSupply || 0;
+
+      const estSol = estimateCostSol(nextSupplies[safeOutcome], safeShares, side);
+      const volLamports = solToLamports(Math.abs(estSol));
+
+      return {
+        ...prev,
+        outcomeSupplies: nextSupplies.slice(0, 10),
+        yesSupply,
+        noSupply,
+        totalVolume: Number(prev.totalVolume || 0) + Number(volLamports || 0),
+      };
+    });
 
     try {
       const marketPubkey = new PublicKey(id);
       const [positionPDA] = getUserPositionPDA(marketPubkey, publicKey);
       const creatorPubkey = new PublicKey(market.creator);
+
       const amountBN = new BN(safeShares);
 
       let txSig: string;
@@ -318,8 +431,12 @@ export default function TradePage() {
           .rpc();
       }
 
+      const name = derived.names[safeOutcome] ?? `#${safeOutcome}`;
+      const estSol = estimateCostSol(derived.supplies[safeOutcome] || 0, safeShares, side);
+      const estLamports = solToLamports(Math.abs(estSol));
+
       alert(
-        `Success! 🎉\n\n${side === "buy" ? "Bought" : "Sold"} ${safeShares} shares of "${derived.names[safeOutcome] ?? safeOutcome}"\n\nTx: ${txSig.slice(
+        `Success! 🎉\n\n${side === "buy" ? "Bought" : "Sold"} ${safeShares} shares of "${name}"\n\nTx: ${txSig.slice(
           0,
           16
         )}...\n\nhttps://explorer.solana.com/tx/${txSig}?cluster=devnet`
@@ -332,27 +449,25 @@ export default function TradePage() {
           user_address: publicKey.toBase58(),
           tx_signature: txSig,
           is_buy: side === "buy",
+          // legacy binary convenience
           is_yes: safeOutcome === 0,
           amount: safeShares,
-          cost: 0, // optional: you can store SOL spent if you want
-        });
+          cost: Number(estSol || 0),
+          // IMPORTANT: if your DB/type supports it, keep outcome_index to power odds history for multi
+          // outcome_index: safeOutcome,
+        } as any);
       }
 
+      // update market row (Supabase)
       await applyTradeToMarketInSupabase({
         market_address: market.publicKey,
         market_type: market.marketType,
         outcome_index: safeOutcome,
         delta_shares: side === "buy" ? safeShares : -safeShares,
-        delta_volume_lamports: 0, // optional: if you want to track volume here
+        delta_volume_lamports: Number(estLamports || 0),
       });
 
       await loadMarket(id);
-
-      // refresh on-chain balance too
-      try {
-        const bal = await connection.getBalance(new PublicKey(id));
-        setMarketBalanceLamports(bal);
-      } catch {}
     } catch (error: any) {
       console.error(`${side.toUpperCase()} shares error:`, error);
       await loadMarket(id);
@@ -362,7 +477,8 @@ export default function TradePage() {
     }
   }
 
-  // UI guards
+  // ---------------- UI guards ----------------
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -387,9 +503,10 @@ export default function TradePage() {
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Left */}
-        <div className="lg:col-span-2">
-          <div className="card-pump mb-6">
+        {/* LEFT */}
+        <div className="lg:col-span-2 space-y-6">
+          {/* Market card */}
+          <div className="card-pump">
             <div className="flex items-start gap-4">
               <div className="flex-shrink-0 w-20 h-20 rounded-xl overflow-hidden bg-pump-dark">
                 {market.imageUrl ? (
@@ -474,33 +591,27 @@ export default function TradePage() {
                     >
                       {(percentages[index] ?? 0).toFixed(1)}%
                     </div>
-                    <div className="text-xs text-gray-500 mt-2">
-                      Supply: {supplies[index] || 0}
-                    </div>
+                    <div className="text-xs text-gray-500 mt-2">Supply: {supplies[index] || 0}</div>
                   </div>
                 ))}
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {names.map((outcome, index) => (
-                  <div
-                    key={index}
-                    className="rounded-lg p-4 border border-gray-700 bg-pump-dark/40"
-                  >
+                  <div key={index} className="rounded-lg p-4 border border-gray-700 bg-pump-dark/40">
                     <div className="flex items-center justify-between gap-3">
                       <div className="text-white font-semibold truncate">{outcome}</div>
                       <div className="text-pump-green font-bold">
                         {(percentages[index] ?? 0).toFixed(1)}%
                       </div>
                     </div>
-                    <div className="text-xs text-gray-500 mt-2">
-                      Supply: {supplies[index] || 0}
-                    </div>
+                    <div className="text-xs text-gray-500 mt-2">Supply: {supplies[index] || 0}</div>
                   </div>
                 ))}
               </div>
             )}
 
+            {/* Stats */}
             <div className="grid grid-cols-2 gap-4 pt-4 border-t border-gray-700 mt-6">
               <div>
                 <div className="text-xs text-gray-500 mb-1">Volume</div>
@@ -515,42 +626,86 @@ export default function TradePage() {
             </div>
           </div>
 
-          {/* Bonding curve */}
+          {/* Odds history (main chart) */}
           <div className="card-pump">
             <div className="flex items-center justify-between gap-4 mb-4">
               <div>
-                <h2 className="text-xl font-bold text-white">Bonding Curve</h2>
+                <h2 className="text-xl font-bold text-white">Odds history</h2>
                 <p className="text-sm text-gray-400 mt-1">
-                  Price increases as more shares are bought (matches on-chain).
+
                 </p>
               </div>
 
-              {!isBinaryStyle && (
-                <div className="min-w-[180px]">
-                  <label className="block text-xs text-gray-500 mb-1">Chart outcome</label>
-                  <select
-                    value={chartOutcomeIndex}
-                    onChange={(e) => setChartOutcomeIndex(Number(e.target.value))}
-                    className="input-pump w-full"
+              <div className="flex items-center gap-2">
+                {(["24h", "7d", "30d", "all"] as OddsRange[]).map((r) => (
+                  <button
+                    key={r}
+                    onClick={() => setOddsRange(r)}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition ${
+                      oddsRange === r
+                        ? "bg-pump-green text-black"
+                        : "bg-pump-dark/60 text-gray-300 hover:bg-pump-dark"
+                    }`}
                   >
-                    {names.map((n, i) => (
-                      <option key={i} value={i}>
-                        {n}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
+                    {r.toUpperCase()}
+                  </button>
+                ))}
+              </div>
             </div>
 
-            <BondingCurveChart
-              currentSupply={supplies[Math.min(chartOutcomeIndex, supplies.length - 1)] || 0}
-              isYes={true}
-            />
+            {filteredOddsPoints.length ? (
+              <OddsHistoryChart points={filteredOddsPoints} outcomeNames={names} />
+            ) : (
+              <div className="text-sm text-gray-400 bg-pump-dark/40 border border-gray-800 rounded-xl p-4">
+                No history yet (need transactions for this market).
+              </div>
+            )}
+          </div>
+
+          {/* Advanced: Bonding curve (optional) */}
+          <div className="card-pump">
+            <details>
+              <summary className="cursor-pointer select-none text-white font-semibold">
+                Advanced: Bonding curve (pricing)
+              </summary>
+
+              <div className="mt-4">
+                <div className="flex items-center justify-between gap-4 mb-4">
+                  <div>
+                    <h3 className="text-lg font-bold text-white">Bonding Curve</h3>
+                    <p className="text-sm text-gray-400 mt-1">
+                      Price increases as more shares are bought (matches on-chain).
+                    </p>
+                  </div>
+
+                  {!isBinaryStyle && (
+                    <div className="min-w-[180px]">
+                      <label className="block text-xs text-gray-500 mb-1">Outcome</label>
+                      <select
+                        value={bondingOutcomeIndex}
+                        onChange={(e) => setBondingOutcomeIndex(Number(e.target.value))}
+                        className="input-pump w-full"
+                      >
+                        {names.map((n, i) => (
+                          <option key={i} value={i}>
+                            {n}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+
+                <BondingCurveChart
+                  currentSupply={supplies[Math.min(bondingOutcomeIndex, supplies.length - 1)] || 0}
+                  isYes={true}
+                />
+              </div>
+            </details>
           </div>
         </div>
 
-        {/* Right */}
+        {/* RIGHT */}
         <div className="lg:col-span-1">
           <TradingPanel
             market={{
@@ -563,18 +718,29 @@ export default function TradePage() {
             }}
             connected={connected}
             submitting={submitting}
-            onTrade={(s, oi, side) => void handleTrade(s, oi, side)}
+            onTrade={(s, outcomeIndex, side) => void handleTrade(s, outcomeIndex, side)}
+            marketAddress={market.publicKey}
             marketBalanceLamports={marketBalanceLamports}
-            userHoldings={userHoldingsForUi}
+            userHoldings={userSharesForUi}
           />
 
           <div className="mt-4 text-xs text-gray-500">
             {submitting
               ? "Submitting transaction..."
               : connected
-              ? `Wallet connected${marketBalanceLamports != null ? ` • pool ${lamportsToSol(marketBalanceLamports).toFixed(4)} SOL` : ""}`
+              ? `Wallet connected${
+                  marketBalanceLamports != null
+                    ? ` • pool ${lamportsToSol(marketBalanceLamports).toFixed(4)} SOL`
+                    : ""
+                }`
               : "Wallet not connected"}
           </div>
+
+          {connected && (
+            <div className="mt-2 text-[11px] text-white/30">
+              holdings (on-chain): {userSharesForUi.map((x) => x).join(" / ") || "0"}
+            </div>
+          )}
         </div>
       </div>
 
