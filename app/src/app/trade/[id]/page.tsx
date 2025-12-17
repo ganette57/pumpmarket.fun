@@ -19,6 +19,9 @@ import TradingPanel from "@/components/TradingPanel";
 import BondingCurveChart from "@/components/BondingCurveChart";
 import OddsHistoryChart from "@/components/OddsHistoryChart";
 
+// ✅ Activity tab component
+import MarketActivityTab from "@/components/MarketActivity";
+
 import { supabase } from "@/lib/supabaseClient";
 import { buildOddsSeries, downsample } from "@/lib/marketHistory";
 
@@ -75,6 +78,7 @@ type Derived = {
 };
 
 type OddsRange = "24h" | "7d" | "30d" | "all";
+type BottomTab = "discussion" | "activity";
 
 function safeParamId(p: unknown): string | null {
   if (!p) return null;
@@ -131,16 +135,15 @@ export default function TradePage() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
-  // chart helpers
   const [bondingOutcomeIndex, setBondingOutcomeIndex] = useState(0);
 
-  // on-chain helpers
   const [positionShares, setPositionShares] = useState<number[] | null>(null);
   const [marketBalanceLamports, setMarketBalanceLamports] = useState<number | null>(null);
 
-  // odds history
   const [oddsRange, setOddsRange] = useState<OddsRange>("24h");
   const [oddsPoints, setOddsPoints] = useState<{ t: number; pct: number[] }[]>([]);
+
+  const [bottomTab, setBottomTab] = useState<BottomTab>("discussion");
 
   useEffect(() => {
     if (!id) return;
@@ -204,10 +207,8 @@ export default function TradePage() {
     const marketType = (market.marketType ?? 0) as 0 | 1;
 
     let names = (market.outcomeNames || []).map(String).filter(Boolean);
-
     const missingOutcomes = marketType === 1 && names.length < 2;
 
-    // binary fallback
     if (marketType === 0) {
       if (names.length !== 2) names = ["YES", "NO"];
     }
@@ -244,7 +245,6 @@ export default function TradePage() {
     };
   }, [market]);
 
-  // ✅ hooks declared before any conditional return
   const userSharesForUi = useMemo(() => {
     const len = derived?.names?.length ?? 0;
     const out = Array(len).fill(0);
@@ -265,12 +265,10 @@ export default function TradePage() {
         : now - 30 * 24 * 60 * 60 * 1000;
 
     const arr = oddsPoints.filter((p) => p.t >= cutoff);
-    // si le filtre vide tout, garde au moins le dernier point
     if (!arr.length) return [oddsPoints[oddsPoints.length - 1]];
     return arr;
   }, [oddsPoints, oddsRange]);
 
-  // on-chain: market balance
   useEffect(() => {
     if (!id) return;
 
@@ -285,7 +283,6 @@ export default function TradePage() {
     })();
   }, [id, connection]);
 
-  // on-chain: user position
   useEffect(() => {
     if (!id || !publicKey || !connected || !program) {
       setPositionShares(null);
@@ -309,7 +306,6 @@ export default function TradePage() {
     })();
   }, [id, publicKey, connected, program]);
 
-  // odds history (Supabase transactions -> % series)
   useEffect(() => {
     if (!market?.dbId) {
       setOddsPoints([]);
@@ -368,7 +364,6 @@ export default function TradePage() {
 
     setSubmitting(true);
 
-    // optimistic UI
     setMarket((prev) => {
       if (!prev) return prev;
 
@@ -442,23 +437,19 @@ export default function TradePage() {
         )}...\n\nhttps://explorer.solana.com/tx/${txSig}?cluster=devnet`
       );
 
-      // Supabase record
       if (market.dbId) {
         await recordTransaction({
           market_id: market.dbId,
           user_address: publicKey.toBase58(),
           tx_signature: txSig,
           is_buy: side === "buy",
-          // legacy binary convenience
           is_yes: safeOutcome === 0,
           amount: safeShares,
           cost: Number(estSol || 0),
-          // IMPORTANT: if your DB/type supports it, keep outcome_index to power odds history for multi
           // outcome_index: safeOutcome,
         } as any);
       }
 
-      // update market row (Supabase)
       await applyTradeToMarketInSupabase({
         market_address: market.publicKey,
         market_type: market.marketType,
@@ -476,8 +467,6 @@ export default function TradePage() {
       setSubmitting(false);
     }
   }
-
-  // ---------------- UI guards ----------------
 
   if (loading) {
     return (
@@ -591,7 +580,9 @@ export default function TradePage() {
                     >
                       {(percentages[index] ?? 0).toFixed(1)}%
                     </div>
-                    <div className="text-xs text-gray-500 mt-2">Supply: {supplies[index] || 0}</div>
+                    <div className="text-xs text-gray-500 mt-2">
+                      Supply: {supplies[index] || 0}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -605,7 +596,9 @@ export default function TradePage() {
                         {(percentages[index] ?? 0).toFixed(1)}%
                       </div>
                     </div>
-                    <div className="text-xs text-gray-500 mt-2">Supply: {supplies[index] || 0}</div>
+                    <div className="text-xs text-gray-500 mt-2">
+                      Supply: {supplies[index] || 0}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -631,9 +624,7 @@ export default function TradePage() {
             <div className="flex items-center justify-between gap-4 mb-4">
               <div>
                 <h2 className="text-xl font-bold text-white">Odds history</h2>
-                <p className="text-sm text-gray-400 mt-1">
-
-                </p>
+                <p className="text-sm text-gray-400 mt-1"></p>
               </div>
 
               <div className="flex items-center gap-2">
@@ -744,8 +735,41 @@ export default function TradePage() {
         </div>
       </div>
 
+      {/* Discussion / Activity tabs (bottom section) */}
       <div className="mt-8">
-        <CommentsSection marketId={market.publicKey} />
+        <div className="flex items-center gap-2 mb-4">
+          <button
+            onClick={() => setBottomTab("discussion")}
+            className={`px-4 py-2 rounded-lg border text-sm font-semibold transition ${
+              bottomTab === "discussion"
+                ? "bg-pump-green/15 border-pump-green text-pump-green"
+                : "bg-pump-dark/40 border-gray-800 text-gray-300 hover:border-gray-600"
+            }`}
+          >
+            Discussion
+          </button>
+
+          <button
+            onClick={() => setBottomTab("activity")}
+            className={`px-4 py-2 rounded-lg border text-sm font-semibold transition ${
+              bottomTab === "activity"
+                ? "bg-pump-green/15 border-pump-green text-pump-green"
+                : "bg-pump-dark/40 border-gray-800 text-gray-300 hover:border-gray-600"
+            }`}
+          >
+            Activity
+          </button>
+        </div>
+
+        {bottomTab === "discussion" ? (
+          <CommentsSection marketId={market.publicKey} />
+        ) : (
+          <MarketActivityTab
+            marketDbId={market.dbId}
+            marketAddress={market.publicKey}
+            outcomeNames={names} // ✅ allow Activity to display real outcome names
+          />
+        )}
       </div>
     </div>
   );
