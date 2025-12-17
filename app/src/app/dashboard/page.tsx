@@ -90,6 +90,17 @@ export default function Dashboard() {
     }
   }
 
+  async function requestOracleResolution(marketKey: string) {
+    try {
+      // TODO: Call Solana program to request oracle resolution
+      console.log('Requesting oracle resolution for market:', marketKey);
+      alert(`Oracle resolution requested (Demo mode)`);
+    } catch (error) {
+      console.error('Error requesting oracle resolution:', error);
+      alert('Error: ' + (error as Error).message);
+    }
+  }
+
   async function resolveMarket(marketKey: string, yesWins: boolean) {
     try {
       // TODO: Call Solana program to resolve
@@ -174,19 +185,27 @@ export default function Dashboard() {
                     </div>
                   </div>
                   {!market.resolved && Date.now() / 1000 >= market.resolutionTime && (
-                    <div className="flex space-x-2">
+                    <div className="flex flex-col space-y-2">
                       <button
-                        onClick={() => resolveMarket(market.publicKey, true)}
-                        className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 font-semibold"
+                        onClick={() => requestOracleResolution(market.publicKey)}
+                        className="bg-pump-green text-black px-4 py-2 rounded-lg hover:bg-green-400 font-semibold transition"
                       >
-                        Resolve YES
+                        Resolve with Oracle
                       </button>
-                      <button
-                        onClick={() => resolveMarket(market.publicKey, false)}
-                        className="bg-red-500 text-white px-4 py-2 rounded-lg hover:bg-red-600 font-semibold"
-                      >
-                        Resolve NO
-                      </button>
+                      <div className="flex space-x-2">
+                        <button
+                          onClick={() => resolveMarket(market.publicKey, true)}
+                          className="bg-blue-500 text-white px-3 py-1.5 rounded-lg hover:bg-blue-600 font-semibold text-sm"
+                        >
+                          Manual: YES
+                        </button>
+                        <button
+                          onClick={() => resolveMarket(market.publicKey, false)}
+                          className="bg-red-500 text-white px-3 py-1.5 rounded-lg hover:bg-red-600 font-semibold text-sm"
+                        >
+                          Manual: NO
+                        </button>
+                      </div>
                     </div>
                   )}
                   {market.resolved && (

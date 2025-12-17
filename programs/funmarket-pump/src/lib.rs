@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
+use switchboard_v2::{AggregatorAccountData, SwitchboardDecimal, SWITCHBOARD_PROGRAM_ID};
 
 declare_id!("FomHPbnvgSp7qLqAJFkDwut3MygPG9cmyK5TwebSNLTg");
 
@@ -90,6 +91,8 @@ pub mod funmarket_pump {
         market.fees_collected = 0;
         market.resolved = false;
         market.winning_outcome = None;
+        market.resolution_requested = false;
+        market.resolution_timestamp = 0;
         market.bump = ctx.bumps.market;
 
         // Increment user's active market count
@@ -220,7 +223,65 @@ pub mod funmarket_pump {
         Ok(())
     }
 
-    /// Resolve market with winning outcome index
+    /// Request resolution via Switchboard Oracle
+    pub fn request_resolution(
+        ctx: Context<RequestResolution>,
+    ) -> Result<()> {
+        let market = &mut ctx.accounts.market;
+
+        require!(!market.resolved, ErrorCode::AlreadyResolved);
+        require!(!market.resolution_requested, ErrorCode::ResolutionAlreadyRequested);
+
+        let clock = Clock::get()?;
+        require!(clock.unix_timestamp >= market.resolution_time, ErrorCode::TooEarlyToResolve);
+
+        // Mark resolution as requested
+        market.resolution_requested = true;
+        market.resolution_timestamp = clock.unix_timestamp;
+
+        msg!("Resolution requested for market: {}", market.question);
+        Ok(())
+    }
+
+    /// Receive oracle result and resolve market (called by Switchboard)
+    pub fn receive_oracle_result(
+        ctx: Context<ReceiveOracleResult>,
+        winning_outcome_index: u8,
+    ) -> Result<()> {
+        let market = &mut ctx.accounts.market;
+        let feed = &ctx.accounts.aggregator_feed.load()?;
+
+        require!(!market.resolved, ErrorCode::AlreadyResolved);
+        require!(market.resolution_requested, ErrorCode::ResolutionNotRequested);
+        require!(winning_outcome_index < market.outcome_count, ErrorCode::InvalidOutcomeIndex);
+
+        // Validate oracle feed is recent (within 300 seconds / 5 minutes)
+        let clock = Clock::get()?;
+        let staleness_threshold = 300i64;
+        require!(
+            clock.unix_timestamp - feed.latest_confirmed_round.round_open_timestamp
+                <= staleness_threshold,
+            ErrorCode::StaleFeed
+        );
+
+        // Get oracle result
+        let decimal: SwitchboardDecimal = feed.get_result()?;
+        let oracle_value = decimal.try_into()?;
+
+        msg!("Oracle returned value: {}", oracle_value);
+
+        // Resolve market with oracle result
+        market.resolved = true;
+        market.winning_outcome = Some(winning_outcome_index);
+
+        let user_counter = &mut ctx.accounts.user_counter;
+        user_counter.active_markets = user_counter.active_markets.saturating_sub(1);
+
+        msg!("Market resolved via oracle: {} wins", market.outcome_names[winning_outcome_index as usize]);
+        Ok(())
+    }
+
+    /// Resolve market with winning outcome index (manual fallback)
     pub fn resolve_market(
         ctx: Context<ResolveMarket>,
         winning_outcome_index: u8,
@@ -383,6 +444,36 @@ pub struct SellShares<'info> {
 }
 
 #[derive(Accounts)]
+pub struct RequestResolution<'info> {
+    #[account(
+        mut,
+        has_one = creator
+    )]
+    pub market: Account<'info, Market>,
+
+    pub creator: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct ReceiveOracleResult<'info> {
+    #[account(mut)]
+    pub market: Account<'info, Market>,
+
+    #[account(
+        mut,
+        seeds = [b"user_counter", market.creator.as_ref()],
+        bump
+    )]
+    pub user_counter: Account<'info, UserCounter>,
+
+    /// CHECK: Switchboard V2 aggregator feed account
+    pub aggregator_feed: AccountLoader<'info, AggregatorAccountData>,
+
+    /// CHECK: Authority that can call this (oracle callback)
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
 pub struct ResolveMarket<'info> {
     #[account(
         mut,
@@ -438,6 +529,11 @@ pub struct Market {
     pub fees_collected: u64,
     pub resolved: bool,
     pub winning_outcome: Option<u8>,
+
+    // Switchboard Oracle fields
+    pub resolution_requested: bool,
+    pub resolution_timestamp: i64,
+
     pub bump: u8,
 }
 
@@ -497,4 +593,10 @@ pub enum ErrorCode {
     InvalidOutcomeIndex,
     #[msg("Already claimed winnings")]
     AlreadyClaimed,
+    #[msg("Resolution already requested via oracle")]
+    ResolutionAlreadyRequested,
+    #[msg("Resolution not requested yet")]
+    ResolutionNotRequested,
+    #[msg("Oracle feed is stale")]
+    StaleFeed,
 }

@@ -208,4 +208,81 @@ describe("funmarket-pump", () => {
 
   // Note: Full resolution and claim test would require time manipulation
   // or creating a market with very short resolution time
+
+  it("Tests oracle resolution request", async () => {
+    // Create a market with a short resolution time for testing
+    const oracleQuestion = "Will BTC reach $100k in 2025?";
+    const shortResolutionTime = Math.floor(Date.now() / 1000) + 5; // 5 seconds from now
+
+    const [oracleMarketPDA] = await PublicKey.findProgramAddress(
+      [
+        Buffer.from("market"),
+        creator.publicKey.toBuffer(),
+        Buffer.from(oracleQuestion),
+      ],
+      program.programId
+    );
+
+    // Create market with multi-choice support
+    await program.methods
+      .createMarket(
+        oracleQuestion,
+        "Oracle resolution test market",
+        new anchor.BN(shortResolutionTime),
+        0, // Binary market
+        ["YES", "NO"]
+      )
+      .accounts({
+        market: oracleMarketPDA,
+        userCounter: userCounterPDA,
+        creator: creator.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    // Wait for resolution time to pass
+    await new Promise((resolve) => setTimeout(resolve, 6000));
+
+    // Request oracle resolution
+    await program.methods
+      .requestResolution()
+      .accounts({
+        market: oracleMarketPDA,
+        creator: creator.publicKey,
+      })
+      .rpc();
+
+    const market = await program.account.market.fetch(oracleMarketPDA);
+    assert.equal(market.resolutionRequested, true);
+    assert.isTrue(market.resolutionTimestamp.toNumber() > 0);
+    assert.equal(market.resolved, false); // Not yet resolved, waiting for oracle callback
+
+    console.log("Oracle resolution requested successfully");
+  });
+
+  it("Cannot request oracle resolution twice", async () => {
+    const oracleQuestion = "Will BTC reach $100k in 2025?";
+    const [oracleMarketPDA] = await PublicKey.findProgramAddress(
+      [
+        Buffer.from("market"),
+        creator.publicKey.toBuffer(),
+        Buffer.from(oracleQuestion),
+      ],
+      program.programId
+    );
+
+    try {
+      await program.methods
+        .requestResolution()
+        .accounts({
+          market: oracleMarketPDA,
+          creator: creator.publicKey,
+        })
+        .rpc();
+
+      assert.fail("Should have failed - resolution already requested");
+    } catch (error) {
+      assert.include(error.toString(), "ResolutionAlreadyRequested");
+    }
+  });
 });
