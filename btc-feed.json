@@ -1,0 +1,19 @@
+{
+  "name": "BTC/USD Price Feed",
+  "jobs": [
+    {
+      "tasks": [
+        {
+          "httpTask": {
+            "url": "https://api.coinbase.com/v2/prices/BTC-USD/spot"
+          }
+        },
+        {
+          "jsonParseTask": {
+            "path": "$.data.amount"
+          }
+        }
+      ]
+    }
+  ]
+}

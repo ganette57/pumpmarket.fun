@@ -5,7 +5,8 @@
     "test:program": "ts-node scripts/test-program.ts"
   },
   "dependencies": {
-    "@coral-xyz/anchor": "^0.32.1"
+    "@coral-xyz/anchor": "^0.32.1",
+    "@switchboard-xyz/on-demand": "^3.7.3"
   },
   "devDependencies": {
     "@types/bn.js": "^5.1.0",
