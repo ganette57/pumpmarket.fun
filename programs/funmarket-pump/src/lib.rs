@@ -1,7 +1,22 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 
+mod math;
+use math::{lmsr_buy_cost, lmsr_sell_refund};
+
 declare_id!("FomHPbnvgSp7qLqAJFkDwut3MygPG9cmyK5TwebSNLTg");
+
+/// Platform fee: 1% (100 basis points)
+const PLATFORM_FEE_BPS: u64 = 100;
+
+/// Creator fee: 2% (200 basis points)
+const CREATOR_FEE_BPS: u64 = 200;
+
+/// Total fees: 3%
+const TOTAL_FEE_BPS: u64 = PLATFORM_FEE_BPS + CREATOR_FEE_BPS;
+
+/// Default liquidity parameter (b) for LMSR: 50 SOL
+const DEFAULT_LIQUIDITY_PARAM: u64 = 50_000_000_000;
 
 #[program]
 pub mod funmarket_pump {
@@ -15,7 +30,7 @@ pub mod funmarket_pump {
         Ok(())
     }
 
-    /// Create a new prediction market with multi-choice support
+    /// Create a new prediction market with LMSR pricing
     pub fn create_market(
         ctx: Context<CreateMarket>,
         question: String,
@@ -70,7 +85,7 @@ pub mod funmarket_pump {
         let user_counter = &mut ctx.accounts.user_counter;
         require!(user_counter.active_markets < 5, ErrorCode::TooManyActiveMarkets);
 
-        // Initialize market
+        // Initialize market with LMSR parameters
         let market = &mut ctx.accounts.market;
         market.creator = ctx.accounts.creator.key();
         market.question = question;
@@ -78,6 +93,8 @@ pub mod funmarket_pump {
         market.resolution_time = resolution_time;
         market.market_type = market_type;
         market.outcome_count = outcome_count;
+
+        // Set outcome names
         let mut names_array: [String; 10] = Default::default();
         for (i, name) in outcome_names.iter().enumerate() {
             if i < 10 {
@@ -85,7 +102,11 @@ pub mod funmarket_pump {
             }
         }
         market.outcome_names = names_array;
-        market.outcome_supplies = [0; 10];
+
+        // Initialize LMSR parameters
+        market.q = [0; 10]; // Quantity shares for each outcome
+        market.b = DEFAULT_LIQUIDITY_PARAM; // Liquidity parameter (50 SOL)
+
         market.total_volume = 0;
         market.fees_collected = 0;
         market.resolved = false;
@@ -95,11 +116,12 @@ pub mod funmarket_pump {
         // Increment user's active market count
         user_counter.active_markets += 1;
 
-        msg!("Market created: {} (type: {}, outcomes: {})", market.question, market_type, outcome_count);
+        msg!("Market created: {} (type: {}, outcomes: {}, b: {} lamports)",
+             market.question, market_type, outcome_count, market.b);
         Ok(())
     }
 
-    /// Buy shares for a specific outcome with bonding curve pricing
+    /// Buy shares for a specific outcome with LMSR pricing
     pub fn buy_shares(
         ctx: Context<BuyShares>,
         amount: u64,
@@ -107,46 +129,55 @@ pub mod funmarket_pump {
     ) -> Result<()> {
         let market = &mut ctx.accounts.market;
 
+        // Validations
         require!(!market.resolved, ErrorCode::MarketResolved);
         require!(outcome_index < market.outcome_count, ErrorCode::InvalidOutcomeIndex);
 
         let clock = Clock::get()?;
         require!(clock.unix_timestamp < market.resolution_time, ErrorCode::MarketExpired);
+        require!(amount > 0, ErrorCode::InvalidAmount);
 
-        let current_supply = market.outcome_supplies[outcome_index as usize];
-        let cost = calculate_bonding_curve_cost(current_supply, amount);
+        // Calculate cost using LMSR: C(q + Δ) - C(q)
+        let cost = lmsr_buy_cost(
+            &market.q,
+            market.b,
+            outcome_index,
+            amount,
+            market.outcome_count,
+        )?;
 
-        // 1% fee to creator + 1% fee to platform = 2% total
-        let creator_fee = cost / 100;
-        let platform_fee = cost / 100;
-        let total_fees = creator_fee + platform_fee;
-        let total_cost = cost + total_fees;
+        // Calculate fees (3% total: 1% platform + 2% creator)
+        let platform_fee = cost
+            .checked_mul(PLATFORM_FEE_BPS)
+            .ok_or(ErrorCode::MathOverflow)?
+            .checked_div(10_000)
+            .ok_or(ErrorCode::MathOverflow)?;
 
-        // Transfer SOL from buyer to market
+        let creator_fee = cost
+            .checked_mul(CREATOR_FEE_BPS)
+            .ok_or(ErrorCode::MathOverflow)?
+            .checked_div(10_000)
+            .ok_or(ErrorCode::MathOverflow)?;
+
+        let total_fees = platform_fee.checked_add(creator_fee)
+            .ok_or(ErrorCode::MathOverflow)?;
+
+        let total_cost = cost.checked_add(total_fees)
+            .ok_or(ErrorCode::MathOverflow)?;
+
+        // Transfer cost (without fees) from buyer to market pool
         system_program::transfer(
             CpiContext::new(
                 ctx.accounts.system_program.to_account_info(),
                 system_program::Transfer {
                     from: ctx.accounts.buyer.to_account_info(),
-                    to: market.to_account_info().clone(),
+                    to: market.to_account_info(),
                 },
             ),
             cost,
         )?;
 
-        // Transfer 1% fee to creator
-        system_program::transfer(
-            CpiContext::new(
-                ctx.accounts.system_program.to_account_info(),
-                system_program::Transfer {
-                    from: ctx.accounts.buyer.to_account_info(),
-                    to: ctx.accounts.creator.to_account_info(),
-                },
-            ),
-            creator_fee,
-        )?;
-
-        // Transfer 1% fee to platform
+        // Transfer platform fee (1%)
         system_program::transfer(
             CpiContext::new(
                 ctx.accounts.system_program.to_account_info(),
@@ -158,10 +189,32 @@ pub mod funmarket_pump {
             platform_fee,
         )?;
 
-        market.outcome_supplies[outcome_index as usize] += amount;
-        market.total_volume += total_cost;
-        market.fees_collected += total_fees;
+        // Transfer creator fee (2%)
+        system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.buyer.to_account_info(),
+                    to: ctx.accounts.creator.to_account_info(),
+                },
+            ),
+            creator_fee,
+        )?;
 
+        // Update market state
+        market.q[outcome_index as usize] = market.q[outcome_index as usize]
+            .checked_add(amount)
+            .ok_or(ErrorCode::MathOverflow)?;
+
+        market.total_volume = market.total_volume
+            .checked_add(total_cost)
+            .ok_or(ErrorCode::MathOverflow)?;
+
+        market.fees_collected = market.fees_collected
+            .checked_add(total_fees)
+            .ok_or(ErrorCode::MathOverflow)?;
+
+        // Update user position
         let position = &mut ctx.accounts.user_position;
         if position.market == Pubkey::default() {
             position.market = market.key();
@@ -170,14 +223,16 @@ pub mod funmarket_pump {
             position.claimed = false;
         }
 
-        position.shares[outcome_index as usize] += amount;
+        position.shares[outcome_index as usize] = position.shares[outcome_index as usize]
+            .checked_add(amount)
+            .ok_or(ErrorCode::MathOverflow)?;
 
-        msg!("Bought {} shares for outcome {} ({}) - cost: {} lamports",
-             amount, outcome_index, market.outcome_names[outcome_index as usize], total_cost);
+        msg!("Bought {} shares for outcome {} ({}) - cost: {} lamports (+ {} fees)",
+             amount, outcome_index, market.outcome_names[outcome_index as usize], cost, total_fees);
         Ok(())
     }
 
-    /// Sell shares back to the bonding curve
+    /// Sell shares back with LMSR pricing
     pub fn sell_shares(
         ctx: Context<SellShares>,
         amount: u64,
@@ -187,36 +242,78 @@ pub mod funmarket_pump {
         let market = &mut ctx.accounts.market;
         let position = &mut ctx.accounts.user_position;
 
+        // Validations
         require!(!market.resolved, ErrorCode::MarketResolved);
         require!(outcome_index < market.outcome_count, ErrorCode::InvalidOutcomeIndex);
 
+        let clock = Clock::get()?;
+        require!(clock.unix_timestamp < market.resolution_time, ErrorCode::MarketExpired);
+
         let user_shares = position.shares[outcome_index as usize];
         require!(user_shares >= amount, ErrorCode::InsufficientShares);
+        require!(amount > 0, ErrorCode::InvalidAmount);
 
-        let current_supply = market.outcome_supplies[outcome_index as usize];
-        let refund = calculate_bonding_curve_cost(current_supply - amount, amount);
+        // Calculate refund using LMSR: C(q) - C(q - Δ)
+        let refund = lmsr_sell_refund(
+            &market.q,
+            market.b,
+            outcome_index,
+            amount,
+            market.outcome_count,
+        )?;
 
-        let creator_fee = refund / 100;
-        let platform_fee = refund / 100;
-        let total_fees = creator_fee + platform_fee;
-        let net_refund = refund - total_fees;
+        // Calculate fees on refund (3% total: 1% platform + 2% creator)
+        let platform_fee = refund
+            .checked_mul(PLATFORM_FEE_BPS)
+            .ok_or(ErrorCode::MathOverflow)?
+            .checked_div(10_000)
+            .ok_or(ErrorCode::MathOverflow)?;
 
+        let creator_fee = refund
+            .checked_mul(CREATOR_FEE_BPS)
+            .ok_or(ErrorCode::MathOverflow)?
+            .checked_div(10_000)
+            .ok_or(ErrorCode::MathOverflow)?;
+
+        let total_fees = platform_fee.checked_add(creator_fee)
+            .ok_or(ErrorCode::MathOverflow)?;
+
+        let net_refund = refund.checked_sub(total_fees)
+            .ok_or(ErrorCode::MathOverflow)?;
+
+        // Ensure market has enough lamports
+        let market_balance = market_info.lamports();
+        let total_needed = refund; // We take fees from the refund
+        require!(market_balance >= total_needed, ErrorCode::InsufficientMarketBalance);
+
+        // Transfer net refund to seller (market pool pays out)
         **market_info.try_borrow_mut_lamports()? -= net_refund;
         **ctx.accounts.seller.to_account_info().try_borrow_mut_lamports()? += net_refund;
 
-        **market_info.try_borrow_mut_lamports()? -= creator_fee;
-        **ctx.accounts.creator.to_account_info().try_borrow_mut_lamports()? += creator_fee;
-
+        // Transfer platform fee (market pool pays out)
         **market_info.try_borrow_mut_lamports()? -= platform_fee;
         **ctx.accounts.platform_wallet.to_account_info().try_borrow_mut_lamports()? += platform_fee;
 
-        market.outcome_supplies[outcome_index as usize] -= amount;
-        market.fees_collected += total_fees;
+        // Transfer creator fee (market pool pays out)
+        **market_info.try_borrow_mut_lamports()? -= creator_fee;
+        **ctx.accounts.creator.to_account_info().try_borrow_mut_lamports()? += creator_fee;
 
-        position.shares[outcome_index as usize] -= amount;
+        // Update market state
+        market.q[outcome_index as usize] = market.q[outcome_index as usize]
+            .checked_sub(amount)
+            .ok_or(ErrorCode::InsufficientShares)?;
 
-        msg!("Sold {} shares for outcome {} - refund: {} lamports",
-             amount, outcome_index, net_refund);
+        market.fees_collected = market.fees_collected
+            .checked_add(total_fees)
+            .ok_or(ErrorCode::MathOverflow)?;
+
+        // Update user position
+        position.shares[outcome_index as usize] = position.shares[outcome_index as usize]
+            .checked_sub(amount)
+            .ok_or(ErrorCode::InsufficientShares)?;
+
+        msg!("Sold {} shares for outcome {} - refund: {} lamports (- {} fees)",
+             amount, outcome_index, net_refund, total_fees);
         Ok(())
     }
 
@@ -243,7 +340,7 @@ pub mod funmarket_pump {
         Ok(())
     }
 
-    /// Claim winnings after market resolution
+    /// Claim winnings after market resolution (pro-rata payout)
     pub fn claim_winnings(ctx: Context<ClaimWinnings>) -> Result<()> {
         let market = &ctx.accounts.market;
         let position = &mut ctx.accounts.user_position;
@@ -251,20 +348,28 @@ pub mod funmarket_pump {
         require!(market.resolved, ErrorCode::MarketNotResolved);
         require!(!position.claimed, ErrorCode::AlreadyClaimed);
 
-        let winning_index = market.winning_outcome.ok_or(ErrorCode::MarketNotResolved)? as usize;
+        let winning_index = market.winning_outcome
+            .ok_or(ErrorCode::MarketNotResolved)? as usize;
         let winning_shares = position.shares[winning_index];
 
         require!(winning_shares > 0, ErrorCode::NoWinningShares);
 
-        let total_winning_supply = market.outcome_supplies[winning_index];
+        // Pro-rata payout: userWinningShares / totalWinningShares * marketPoolLamports
+        let total_winning_shares = market.q[winning_index];
+        require!(total_winning_shares > 0, ErrorCode::NoWinningShares);
+
         let market_balance = ctx.accounts.market.to_account_info().lamports();
 
+        // Calculate payout with checked math to prevent overflow
         let payout = (winning_shares as u128)
             .checked_mul(market_balance as u128)
-            .unwrap()
-            .checked_div(total_winning_supply as u128)
-            .unwrap() as u64;
+            .ok_or(ErrorCode::MathOverflow)?
+            .checked_div(total_winning_shares as u128)
+            .ok_or(ErrorCode::MathOverflow)?;
 
+        let payout = payout as u64;
+
+        // Transfer payout
         **ctx.accounts.market.to_account_info().try_borrow_mut_lamports()? -= payout;
         **ctx.accounts.user.to_account_info().try_borrow_mut_lamports()? += payout;
 
@@ -273,15 +378,6 @@ pub mod funmarket_pump {
         msg!("Claimed {} lamports for {} winning shares", payout, winning_shares);
         Ok(())
     }
-}
-
-fn calculate_bonding_curve_cost(current_supply: u64, amount: u64) -> u64 {
-    if amount == 0 {
-        return 0;
-    }
-    let base_price = 10_000_000;
-    let price_per_unit = base_price + (current_supply * 1000);
-    amount * price_per_unit
 }
 
 // ACCOUNTS
@@ -345,7 +441,7 @@ pub struct BuyShares<'info> {
     #[account(mut)]
     pub buyer: Signer<'info>,
 
-    /// CHECK: Creator receives 1% fee
+    /// CHECK: Creator receives 2% fee
     #[account(mut, address = market.creator)]
     pub creator: AccountInfo<'info>,
 
@@ -371,7 +467,7 @@ pub struct SellShares<'info> {
     #[account(mut)]
     pub seller: Signer<'info>,
 
-    /// CHECK: Creator receives 1% fee
+    /// CHECK: Creator receives 2% fee
     #[account(mut, address = market.creator)]
     pub creator: AccountInfo<'info>,
 
@@ -422,17 +518,24 @@ pub struct ClaimWinnings<'info> {
 #[derive(InitSpace)]
 pub struct Market {
     pub creator: Pubkey,
+
     #[max_len(200)]
     pub question: String,
+
     #[max_len(500)]
     pub description: String,
+
     pub resolution_time: i64,
 
-    pub market_type: u8,
-    pub outcome_count: u8,
+    pub market_type: u8,      // 0 = Binary, 1 = Multi-choice
+    pub outcome_count: u8,    // 2 to 10 outcomes
+
     #[max_len(10)]
     pub outcome_names: [String; 10],
-    pub outcome_supplies: [u64; 10],
+
+    // LMSR parameters
+    pub q: [u64; 10],         // Quantity shares for each outcome (LMSR state)
+    pub b: u64,               // Liquidity parameter
 
     pub total_volume: u64,
     pub fees_collected: u64,
@@ -497,4 +600,12 @@ pub enum ErrorCode {
     InvalidOutcomeIndex,
     #[msg("Already claimed winnings")]
     AlreadyClaimed,
+    #[msg("Math overflow occurred")]
+    MathOverflow,
+    #[msg("Invalid amount (must be > 0)")]
+    InvalidAmount,
+    #[msg("Insufficient market balance")]
+    InsufficientMarketBalance,
+    #[msg("Invalid liquidity parameter")]
+    InvalidLiquidityParameter,
 }
