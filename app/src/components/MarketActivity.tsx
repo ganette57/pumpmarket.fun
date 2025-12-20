@@ -3,6 +3,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import { outcomeLabelFromMarket } from "@/utils/outcomes";
 
 type TxRow = {
   id: string;
@@ -16,6 +17,7 @@ type TxRow = {
   amount: number | null; // legacy
   shares: number | null; // preferred
   cost: number | null; // optional
+
   outcome_index: number | null;
   outcome_name: string | null;
 };
@@ -51,12 +53,17 @@ export default function MarketActivityTab({
 }: {
   marketDbId?: string;
   marketAddress?: string;
-  outcomeNames?: string[]; // ✅ from TradePage derived.names
+  outcomeNames?: string[]; // ✅ from TradePage
   limit?: number;
 }) {
   const [loading, setLoading] = useState(false);
   const [txs, setTxs] = useState<TxRow[]>([]);
   const [filter, setFilter] = useState<"all" | "buy" | "sell">("all");
+
+  const marketLike = useMemo(
+    () => ({ outcome_names: outcomeNames ?? null }),
+    [outcomeNames]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -84,7 +91,7 @@ export default function MarketActivityTab({
         if (error) throw error;
 
         if (!cancelled) setTxs((data as TxRow[]) || []);
-      } catch (e) {
+      } catch {
         if (!cancelled) setTxs([]);
       } finally {
         if (!cancelled) setLoading(false);
@@ -103,35 +110,14 @@ export default function MarketActivityTab({
     return txs.filter((t) => !t.is_buy);
   }, [txs, filter]);
 
-  const outcomeLabel = (t: TxRow) => {
-    // 1) if DB already provides outcome_name, use it
-    if (t.outcome_name && String(t.outcome_name).trim()) return String(t.outcome_name).trim();
-
-    // 2) if we have outcomeNames from the market, map outcome_index
-    if (
-      outcomeNames &&
-      Array.isArray(outcomeNames) &&
-      t.outcome_index != null &&
-      t.outcome_index >= 0 &&
-      t.outcome_index < outcomeNames.length
-    ) {
-      return outcomeNames[t.outcome_index] || `Outcome #${t.outcome_index}`;
-    }
-
-    // 3) fallback legacy binary yes/no
-    if (t.is_yes != null) return t.is_yes ? "YES" : "NO";
-
-    // 4) last resort
-    if (t.outcome_index != null) return `Outcome #${t.outcome_index}`;
-    return "—";
-  };
-
   return (
     <div className="bg-pump-gray border border-gray-800 rounded-2xl p-6">
       <div className="flex items-center justify-between mb-4">
         <div>
           <div className="text-lg font-bold text-white">Activity</div>
-          <div className="text-sm text-gray-400">All transactions for this market</div>
+          <div className="text-sm text-gray-400">
+            All transactions for this market
+          </div>
         </div>
 
         <div className="flex gap-2">
@@ -160,13 +146,22 @@ export default function MarketActivityTab({
           <div className="divide-y divide-gray-800">
             {rows.map((t) => {
               const isBuy = !!t.is_buy;
-              const outcome = outcomeLabel(t);
+
+              const outcome = outcomeLabelFromMarket(marketLike, {
+                outcomeIndex:
+                  t.outcome_index === null ? undefined : t.outcome_index,
+                isYes: t.is_yes,
+                txOutcomeName: t.outcome_name,
+              });
 
               const shares = toNum(t.shares ?? t.amount, 0);
               const cost = toNum(t.cost, 0);
 
               return (
-                <div key={t.id} className="p-4 flex items-center justify-between gap-4">
+                <div
+                  key={t.id}
+                  className="p-4 flex items-center justify-between gap-4"
+                >
                   <div className="flex items-center gap-3 min-w-0">
                     <span
                       className={`px-2 py-1 rounded-md text-xs font-semibold border ${
@@ -178,9 +173,26 @@ export default function MarketActivityTab({
                       {isBuy ? "BUY" : "SELL"}
                     </span>
 
-                    <span className="text-sm text-gray-200 truncate">
-                      <span className="text-gray-400">Outcome:</span> {outcome}
-                    </span>
+                    <div className="flex flex-col text-sm text-gray-200 truncate">
+                      <span>
+                        <span className="text-gray-400">Outcome:</span>{" "}
+                        {outcome}
+                      </span>
+                      {t.tx_signature && (
+                        <a
+                          className="text-xs text-pump-green hover:underline"
+                          href={`https://explorer.solana.com/tx/${t.tx_signature}?cluster=devnet`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          View tx:{" "}
+                          {`${t.tx_signature.slice(
+                            0,
+                            6
+                          )}…${t.tx_signature.slice(-4)}`}
+                        </a>
+                      )}
+                    </div>
                   </div>
 
                   <div className="flex items-center gap-6 shrink-0">
@@ -194,8 +206,12 @@ export default function MarketActivityTab({
                     </div>
 
                     <div className="text-right">
-                      <div className="text-sm text-gray-200">{shortAddr(t.user_address)}</div>
-                      <div className="text-xs text-gray-500">{relTime(t.created_at)}</div>
+                      <div className="text-sm text-gray-200">
+                        {shortAddr(t.user_address)}
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        {relTime(t.created_at)}
+                      </div>
                     </div>
                   </div>
                 </div>

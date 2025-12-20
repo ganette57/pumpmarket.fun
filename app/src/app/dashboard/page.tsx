@@ -1,3 +1,4 @@
+// app/src/app/dashboard/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -8,6 +9,7 @@ import { PublicKey } from "@solana/web3.js";
 import { supabase } from "@/lib/supabaseClient";
 import { useProgram } from "@/hooks/useProgram";
 import { lamportsToSol, getUserPositionPDA } from "@/utils/solana";
+import { outcomeLabelFromMarket } from "@/utils/outcomes";
 
 // ---------------- helpers ----------------
 function shortSig(sig?: string) {
@@ -15,20 +17,24 @@ function shortSig(sig?: string) {
   if (sig.length <= 12) return sig;
   return `${sig.slice(0, 6)}…${sig.slice(-4)}`;
 }
+
 function shortAddr(a?: string) {
   if (!a) return "";
   if (a.length <= 10) return a;
   return `${a.slice(0, 4)}…${a.slice(-4)}`;
 }
+
 function toNum(x: any) {
   const n = Number(x);
   return Number.isFinite(n) ? n : 0;
 }
+
 function isMarketEnded(endDate?: string): boolean {
   if (!endDate) return false;
   const end = new Date(endDate);
   return end.getTime() <= Date.now();
 }
+
 function formatTimeStatus(endDate?: string): string {
   if (!endDate) return "No end date";
   const end = new Date(endDate);
@@ -45,6 +51,7 @@ function formatTimeStatus(endDate?: string): string {
   return "< 1h left";
 }
 
+// ---------------- types ----------------
 type DbMarket = {
   id?: string;
   market_address?: string;
@@ -75,6 +82,7 @@ type DbTx = {
   // newer schema (optional)
   outcome_index?: number | null;
   shares?: number | null;
+  outcome_name?: string | null;
 };
 
 type Claimable = {
@@ -84,11 +92,15 @@ type Claimable = {
   winningIndex?: number;
 };
 
-async function safeFetchUserTransactions(walletAddress: string, limit = 50): Promise<DbTx[]> {
-  // On tente d’abord avec outcome_index/shares (si colonnes existent),
+// ---------------- data helpers ----------------
+async function safeFetchUserTransactions(
+  walletAddress: string,
+  limit = 50
+): Promise<DbTx[]> {
+  // On tente d’abord avec outcome_index/shares/outcome_name,
   // sinon fallback sur le schéma legacy.
   const trySelects = [
-    "id,created_at,market_id,market_address,user_address,is_buy,is_yes,amount,cost,tx_signature,outcome_index,shares",
+    "id,created_at,market_id,market_address,user_address,is_buy,is_yes,amount,cost,tx_signature,outcome_index,shares,outcome_name",
     "id,created_at,market_id,market_address,user_address,is_buy,is_yes,amount,cost,tx_signature",
   ];
 
@@ -102,7 +114,6 @@ async function safeFetchUserTransactions(walletAddress: string, limit = 50): Pro
 
     if (!error) return (data as any[]) || [];
 
-    // si erreur “col does not exist”, on retente avec une sélection plus simple
     const msg = String((error as any)?.message || "");
     if (!msg.includes("does not exist")) {
       console.error("safeFetchUserTransactions error:", error);
@@ -113,6 +124,7 @@ async function safeFetchUserTransactions(walletAddress: string, limit = 50): Pro
   return [];
 }
 
+// ---------------- component ----------------
 export default function DashboardPage() {
   const { publicKey, connected } = useWallet();
   const walletBase58 = publicKey?.toBase58() || "";
@@ -141,7 +153,9 @@ export default function DashboardPage() {
   // ---------------- derived maps ----------------
   const marketsById = useMemo(() => {
     const m = new Map<string, DbMarket>();
-    for (const mk of [...myCreatedMarkets, ...refMarkets]) if (mk.id) m.set(mk.id, mk);
+    for (const mk of [...myCreatedMarkets, ...refMarkets]) {
+      if (mk.id) m.set(mk.id, mk);
+    }
     return m;
   }, [myCreatedMarkets, refMarkets]);
 
@@ -175,12 +189,15 @@ export default function DashboardPage() {
       try {
         const { data, error } = await supabase
           .from("markets")
-          .select("id,market_address,creator,question,total_volume,end_date,resolved,outcome_names")
+          .select(
+            "id,market_address,creator,question,total_volume,end_date,resolved,outcome_names"
+          )
           .eq("creator", walletBase58)
           .order("created_at", { ascending: false });
 
         if (error) throw error;
-        if (!cancelled) setMyCreatedMarkets(((data as any[]) || []) as DbMarket[]);
+        if (!cancelled)
+          setMyCreatedMarkets(((data as any[]) || []) as DbMarket[]);
       } catch (e: any) {
         if (!cancelled) setErrorMsg(e?.message || "Failed to load markets");
         if (!cancelled) setMyCreatedMarkets([]);
@@ -194,7 +211,8 @@ export default function DashboardPage() {
         const txs = await safeFetchUserTransactions(walletBase58, 50);
         if (!cancelled) setMyTxs(txs || []);
       } catch (e: any) {
-        if (!cancelled) setErrorMsg(e?.message || "Failed to load transactions");
+        if (!cancelled)
+          setErrorMsg(e?.message || "Failed to load transactions");
         if (!cancelled) setMyTxs([]);
       } finally {
         if (!cancelled) setLoadingTxs(false);
@@ -218,9 +236,13 @@ export default function DashboardPage() {
 
     (async () => {
       try {
-        const ids = Array.from(new Set(myTxs.map((t) => t.market_id).filter(Boolean).map(String)));
+        const ids = Array.from(
+          new Set(myTxs.map((t) => t.market_id).filter(Boolean).map(String))
+        );
         const addrs = Array.from(
-          new Set(myTxs.map((t) => t.market_address).filter(Boolean).map(String))
+          new Set(
+            myTxs.map((t) => t.market_address).filter(Boolean).map(String)
+          )
         );
 
         const out: DbMarket[] = [];
@@ -228,7 +250,9 @@ export default function DashboardPage() {
         if (ids.length) {
           const { data, error } = await supabase
             .from("markets")
-            .select("id,market_address,creator,question,total_volume,end_date,resolved,outcome_names")
+            .select(
+              "id,market_address,creator,question,total_volume,end_date,resolved,outcome_names"
+            )
             .in("id", ids.slice(0, 100));
           if (error) throw error;
           out.push(...(((data as any[]) || []) as DbMarket[]));
@@ -237,7 +261,9 @@ export default function DashboardPage() {
         if (addrs.length) {
           const { data, error } = await supabase
             .from("markets")
-            .select("id,market_address,creator,question,total_volume,end_date,resolved,outcome_names")
+            .select(
+              "id,market_address,creator,question,total_volume,end_date,resolved,outcome_names"
+            )
             .in("market_address", addrs.slice(0, 100));
           if (error) throw error;
           out.push(...(((data as any[]) || []) as DbMarket[]));
@@ -252,7 +278,6 @@ export default function DashboardPage() {
 
         if (!cancelled) setRefMarkets(Array.from(byAddr.values()));
       } catch (e: any) {
-        // pas bloquant: transactions s'affichent quand même
         console.warn("refMarkets fetch failed:", e?.message || e);
         if (!cancelled) setRefMarkets([]);
       }
@@ -266,11 +291,12 @@ export default function DashboardPage() {
   // ---------------- stats ----------------
   const stats = useMemo(() => {
     const created = myCreatedMarkets.length;
-    const volLamports = myCreatedMarkets.reduce((sum, m) => sum + toNum(m.total_volume), 0);
+    const volLamports = myCreatedMarkets.reduce(
+      (sum, m) => sum + toNum(m.total_volume),
+      0
+    );
     const volSol = lamportsToSol(volLamports);
-
-    // Estimation: 1% creator (si fees réelles pas stockées en DB)
-    const creatorFeesSol = volSol * 0.01;
+    const creatorFeesSol = volSol * 0.01; // ~1%
 
     return { created, volSol, creatorFeesSol };
   }, [myCreatedMarkets]);
@@ -287,19 +313,22 @@ export default function DashboardPage() {
     (async () => {
       setLoadingClaimables(true);
       try {
-        // 🔑 IMPORTANT: pour les bettors, on reconstruit les market addresses via market_id -> markets table
         const marketAddresses: string[] = [];
 
+        // bettors: txs
         for (const t of myTxs) {
           if (t.market_address) marketAddresses.push(String(t.market_address));
           else if (t.market_id) {
             const mk = marketsById.get(String(t.market_id));
-            if (mk?.market_address) marketAddresses.push(String(mk.market_address));
+            if (mk?.market_address)
+              marketAddresses.push(String(mk.market_address));
           }
         }
 
+        // creators: their own markets
         for (const m of myCreatedMarkets) {
-          if (m.market_address) marketAddresses.push(String(m.market_address));
+          if (m.market_address)
+            marketAddresses.push(String(m.market_address));
         }
 
         const unique = Array.from(new Set(marketAddresses)).slice(0, 50);
@@ -334,7 +363,8 @@ export default function DashboardPage() {
               ? winningOpt.toNumber()
               : Number(winningOpt);
 
-          if (!resolved || winningIndex == null || !Number.isFinite(winningIndex)) continue;
+          if (!resolved || winningIndex == null || !Number.isFinite(winningIndex))
+            continue;
 
           const [posPda] = getUserPositionPDA(marketPk, publicKey);
 
@@ -349,18 +379,25 @@ export default function DashboardPage() {
 
           const sharesArr = Array.isArray(posAcc?.shares)
             ? posAcc.shares.map((x: any) =>
-                typeof x === "number" ? x : typeof x?.toNumber === "function" ? x.toNumber() : Number(x || 0)
+                typeof x === "number"
+                  ? x
+                  : typeof x?.toNumber === "function"
+                  ? x.toNumber()
+                  : Number(x || 0)
               )
             : [];
 
-          const winningShares = Math.floor(Number(sharesArr[winningIndex] || 0));
+          const winningShares = Math.floor(
+            Number(sharesArr[winningIndex] || 0)
+          );
           if (winningShares <= 0) continue;
 
           const totalWinningSupply = Array.isArray(marketAcc?.outcomeSupplies)
             ? Number(
                 typeof marketAcc.outcomeSupplies[winningIndex] === "number"
                   ? marketAcc.outcomeSupplies[winningIndex]
-                  : typeof marketAcc.outcomeSupplies[winningIndex]?.toNumber === "function"
+                  : typeof marketAcc.outcomeSupplies[winningIndex]?.toNumber ===
+                    "function"
                   ? marketAcc.outcomeSupplies[winningIndex].toNumber()
                   : marketAcc.outcomeSupplies[winningIndex] || 0
               )
@@ -369,7 +406,9 @@ export default function DashboardPage() {
           let estPayoutLamports: number | undefined = undefined;
           if (totalWinningSupply > 0) {
             const bal = await connection.getBalance(marketPk);
-            const payout = (BigInt(winningShares) * BigInt(bal)) / BigInt(Math.floor(totalWinningSupply));
+            const payout =
+              (BigInt(winningShares) * BigInt(bal)) /
+              BigInt(Math.floor(totalWinningSupply));
             estPayoutLamports = Number(payout);
           }
 
@@ -393,7 +432,16 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [connected, publicKey, program, connection, myTxs, myCreatedMarkets, marketsById, marketsByAddress]);
+  }, [
+    connected,
+    publicKey,
+    program,
+    connection,
+    myTxs,
+    myCreatedMarkets,
+    marketsById,
+    marketsByAddress,
+  ]);
 
   // ---------------- handlers ----------------
   async function handleClaim(marketAddress: string) {
@@ -415,10 +463,15 @@ export default function DashboardPage() {
         .rpc();
 
       alert(
-        `Claim success 🎉\n\nTx: ${sig.slice(0, 16)}...\n\nhttps://explorer.solana.com/tx/${sig}?cluster=devnet`
+        `Claim success 🎉\n\nTx: ${sig.slice(
+          0,
+          16
+        )}...\n\nhttps://explorer.solana.com/tx/${sig}?cluster=devnet`
       );
 
-      setClaimables((prev) => prev.filter((c) => c.marketAddress !== marketAddress));
+      setClaimables((prev) =>
+        prev.filter((c) => c.marketAddress !== marketAddress)
+      );
     } catch (e: any) {
       alert(`Claim failed: ${e?.message || "Unknown error"}`);
     } finally {
@@ -427,7 +480,14 @@ export default function DashboardPage() {
   }
 
   async function handleResolve() {
-    if (!connected || !publicKey || !program || !resolvingMarket || selectedOutcome === null) return;
+    if (
+      !connected ||
+      !publicKey ||
+      !program ||
+      !resolvingMarket ||
+      selectedOutcome === null
+    )
+      return;
 
     const marketAddress = resolvingMarket.market_address;
     if (!marketAddress) return;
@@ -447,24 +507,30 @@ export default function DashboardPage() {
 
       const labels = resolvingMarket.outcome_names || ["YES", "NO"];
       alert(
-        `Market resolved! 🎉\n\nWinning outcome: ${labels[selectedOutcome] || `Option ${selectedOutcome + 1}`}\n\nTx: ${sig.slice(
+        `Market resolved! 🎉\n\nWinning outcome: ${
+          labels[selectedOutcome] || `Option ${selectedOutcome + 1}`
+        }\n\nTx: ${sig.slice(
           0,
           16
         )}...\n\nhttps://explorer.solana.com/tx/${sig}?cluster=devnet`
       );
 
-      // Update local created markets state
+      // update local state
       setMyCreatedMarkets((prev) =>
-        prev.map((m) => (m.market_address === marketAddress ? { ...m, resolved: true } : m))
+        prev.map((m) =>
+          m.market_address === marketAddress ? { ...m, resolved: true } : m
+        )
       );
 
-      // Update Supabase (si colonnes existent)
+      // update Supabase (best-effort)
       try {
         await supabase
           .from("markets")
           .update({ resolved: true, winning_outcome: selectedOutcome } as any)
           .eq("market_address", marketAddress);
-      } catch {}
+      } catch {
+        /* ignore */
+      }
 
       setResolvingMarket(null);
       setSelectedOutcome(null);
@@ -475,7 +541,7 @@ export default function DashboardPage() {
     }
   }
 
-  // ---------------- UI rows ----------------
+  // ---------------- UI derived ----------------
   const walletLabel = useMemo(() => shortAddr(walletBase58), [walletBase58]);
 
   const txRows = useMemo(() => {
@@ -495,8 +561,8 @@ export default function DashboardPage() {
           ? Math.floor(toNum(t.shares))
           : Math.floor(toNum(t.amount)); // legacy
 
-      // Outcome label
       const names = (mk?.outcome_names || null) as string[] | null;
+
       const outcomeIndex =
         t.outcome_index != null
           ? Number(t.outcome_index)
@@ -506,14 +572,13 @@ export default function DashboardPage() {
           ? 0
           : 1;
 
-      let outcomeLabel = "Outcome";
-      if (outcomeIndex != null && Array.isArray(names) && names[outcomeIndex]) {
-        outcomeLabel = names[outcomeIndex];
-      } else if (t.is_yes != null) {
-        outcomeLabel = t.is_yes ? "YES" : "NO";
-      } else if (t.outcome_index != null) {
-        outcomeLabel = `Option ${Number(t.outcome_index) + 1}`;
-      }
+      const pseudoMarket = { outcome_names: names };
+
+      const outcomeLabel = outcomeLabelFromMarket(pseudoMarket, {
+        outcomeIndex,
+        isYes: t.is_yes,
+        txOutcomeName: t.outcome_name ?? null,
+      });
 
       const title = `${side} • ${outcomeLabel} • ${shares} shares`;
       const costSol = toNum(t.cost);
@@ -531,6 +596,7 @@ export default function DashboardPage() {
     });
   }, [myTxs, marketsById, marketsByAddress]);
 
+  // ---------------- render ----------------
   if (!connected) {
     return (
       <div className="max-w-6xl mx-auto px-4 py-12">
@@ -559,7 +625,9 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div className="card-pump">
           <div className="text-xs text-gray-500 mb-2">Markets created</div>
-          <div className="text-3xl font-bold text-white">{loadingMarkets ? "…" : stats.created}</div>
+          <div className="text-3xl font-bold text-white">
+            {loadingMarkets ? "…" : stats.created}
+          </div>
         </div>
 
         <div className="card-pump">
@@ -574,7 +642,9 @@ export default function DashboardPage() {
           <div className="text-3xl font-bold text-white">
             {loadingMarkets ? "…" : `${stats.creatorFeesSol.toFixed(4)} SOL`}
           </div>
-          <div className="text-xs text-gray-500 mt-1">~1% of volume (creator) unless total fees are stored</div>
+          <div className="text-xs text-gray-500 mt-1">
+            ~1% of volume (creator) unless total fees are stored
+          </div>
         </div>
       </div>
 
@@ -594,7 +664,9 @@ export default function DashboardPage() {
                 className="rounded-xl border border-pump-green/30 bg-pump-green/5 p-4 flex items-center justify-between gap-4"
               >
                 <div className="min-w-0">
-                  <div className="text-white font-semibold truncate">{c.marketQuestion}</div>
+                  <div className="text-white font-semibold truncate">
+                    {c.marketQuestion}
+                  </div>
                   <div className="text-xs text-gray-500 mt-1 truncate">
                     {shortAddr(c.marketAddress)}
                     {typeof c.estPayoutLamports === "number" && (
@@ -647,7 +719,19 @@ export default function DashboardPage() {
                   </div>
                   <div className="text-xs text-gray-500 mt-1">
                     {r.createdAt ? r.createdAt.toLocaleString("fr-FR") : ""}
-                    {r.sig ? ` • tx: ${shortSig(r.sig)}` : ""}
+                    {r.sig && (
+                      <>
+                        {" • "}
+                        <a
+                          href={`https://explorer.solana.com/tx/${r.sig}?cluster=devnet`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-pump-green hover:underline"
+                        >
+                          tx: {shortSig(r.sig)}
+                        </a>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -711,14 +795,22 @@ export default function DashboardPage() {
                       {m.resolved ? (
                         <span className="text-green-400">✓ Resolved</span>
                       ) : (
-                        <span className={ended ? "text-yellow-400" : "text-gray-400"}>{timeStatus}</span>
+                        <span
+                          className={
+                            ended ? "text-yellow-400" : "text-gray-400"
+                          }
+                        >
+                          {timeStatus}
+                        </span>
                       )}
                     </div>
                   </div>
 
                   <div className="flex items-center gap-4 flex-shrink-0">
                     <div className="text-right">
-                      <div className="text-white font-semibold">{volSol.toFixed(2)} SOL</div>
+                      <div className="text-white font-semibold">
+                        {volSol.toFixed(2)} SOL
+                      </div>
                     </div>
 
                     {canResolve && (
@@ -754,25 +846,33 @@ export default function DashboardPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
           <div className="bg-pump-dark border border-white/20 rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl">
             <h3 className="text-xl font-bold text-white mb-2">Resolve Market</h3>
-            <p className="text-gray-400 text-sm mb-4 truncate">{resolvingMarket.question}</p>
+            <p className="text-gray-400 text-sm mb-4 truncate">
+              {resolvingMarket.question}
+            </p>
 
             <div className="mb-4">
-              <label className="text-sm text-gray-400 mb-2 block">Select winning outcome:</label>
+              <label className="text-sm text-gray-400 mb-2 block">
+                Select winning outcome:
+              </label>
               <div className="space-y-2">
-                {(resolvingMarket.outcome_names || ["YES", "NO"]).map((label, idx) => (
-                  <button
-                    key={idx}
-                    onClick={() => setSelectedOutcome(idx)}
-                    className={`w-full p-3 rounded-lg border text-left transition ${
-                      selectedOutcome === idx
-                        ? "border-pump-green bg-pump-green/20 text-white"
-                        : "border-white/20 bg-white/5 text-gray-300 hover:border-white/40"
-                    }`}
-                  >
-                    <span className="font-semibold">{label}</span>
-                    {selectedOutcome === idx && <span className="float-right text-pump-green">✓</span>}
-                  </button>
-                ))}
+                {(resolvingMarket.outcome_names || ["YES", "NO"]).map(
+                  (label, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => setSelectedOutcome(idx)}
+                      className={`w-full p-3 rounded-lg border text-left transition ${
+                        selectedOutcome === idx
+                          ? "border-pump-green bg-pump-green/20 text-white"
+                          : "border-white/20 bg-white/5 text-gray-300 hover:border-white/40"
+                      }`}
+                    >
+                      <span className="font-semibold">{label}</span>
+                      {selectedOutcome === idx && (
+                        <span className="float-right text-pump-green">✓</span>
+                      )}
+                    </button>
+                  )
+                )}
               </div>
             </div>
 
@@ -801,7 +901,8 @@ export default function DashboardPage() {
             </div>
 
             <p className="text-xs text-red-400 mt-4 text-center">
-              ⚠️ This action is irreversible. Make sure you select the correct outcome.
+              ⚠️ This action is irreversible. Make sure you select the correct
+              outcome.
             </p>
           </div>
         </div>

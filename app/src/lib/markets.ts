@@ -1,365 +1,300 @@
-import { supabase } from "@/utils/supabase";
-import type { Market } from "@/types/market";
+// app/src/lib/markets.ts
+import { supabase } from "./supabaseClient";
 
-function asStringArray(v: any): string[] | null {
-  if (v == null) return null;
-  if (Array.isArray(v)) return v.map(String).map((s) => s.trim()).filter(Boolean);
+/* -------------------------------------------------------------------------- */
+/*  Types DB                                                                  */
+/* -------------------------------------------------------------------------- */
 
-  if (typeof v === "string") {
-    try {
-      const parsed = JSON.parse(v);
-      if (Array.isArray(parsed)) return parsed.map(String).map((s) => s.trim()).filter(Boolean);
-    } catch {
-      // ignore
-    }
-    return null;
-  }
-  return null;
-}
+export type DbMarketRow = {
+  id: string;
+  market_address: string;
+  question: string | null;
+  description: string | null;
+  category: string | null;
+  image_url: string | null;
+  end_date: string; // timestamp
+  creator: string;
+  social_links: any | null;
+  yes_supply: number | null;
+  no_supply: number | null;
+  total_volume: number; // lamports (numeric)
+  resolved: boolean;
+  created_at: string;
+  market_type: number | null;
+  outcome_names: string[] | null;   // jsonb -> array de strings
+  outcome_supplies: number[] | null; // jsonb -> array de numbers
+  outcome_count: number | null;
+  program_id: string | null;
+  cluster: string | null;
+};
 
-function asNumberArray(v: any): number[] | null {
-  if (v == null) return null;
-  if (Array.isArray(v)) return v.map((x) => Number(x) || 0);
-
-  if (typeof v === "string") {
-    try {
-      const parsed = JSON.parse(v);
-      if (Array.isArray(parsed)) return parsed.map((x) => Number(x) || 0);
-    } catch {
-      // ignore
-    }
-    return null;
-  }
-  return null;
-}
-
-function clampOutcomeArrays(names: string[], supplies: number[] | null): { names: string[]; supplies: number[] } {
-  const safeNames = names.slice(0, 10);
-  const s = (supplies ?? []).map((x) => Number(x) || 0);
-
-  const trimmed = s.slice(0, safeNames.length);
-  while (trimmed.length < safeNames.length) trimmed.push(0);
-
-  return { names: safeNames, supplies: trimmed };
-}
-
-// allow-list DB columns ONLY
-const MARKET_COLUMNS = new Set([
-  "id",
-  "market_address",
-  "creator",
-  "question",
-  "description",
-  "category",
-  "end_date",
-  "image_url",
-  "market_type",
-  "outcome_names",
-  "outcome_supplies",
-  "yes_supply",
-  "no_supply",
-  "total_volume",
-  "resolved",
-  "social_links",
-]);
-
-function pickMarketColumns(input: Record<string, any>) {
-  const out: Record<string, any> = {};
-  for (const [k, v] of Object.entries(input)) {
-    if (!MARKET_COLUMNS.has(k)) continue;
-    if (v === undefined) continue;
-    out[k] = v;
-  }
-  return out;
-}
-
-/**
- * ✅ Index market in Supabase (unchanged logic)
- */
-export async function indexMarket(
-  marketData: Omit<Market, "id" | "created_at" | "updated_at"> | any
-): Promise<boolean> {
-  for (let i = 0; i < 3; i++) {
-    try {
-      const mtRaw = marketData.market_type ?? marketData.marketType ?? 0;
-      const market_type = (Number(mtRaw) || 0) as 0 | 1;
-
-      const rawNames = marketData.outcome_names ?? marketData.outcomeNames;
-      const rawSupplies = marketData.outcome_supplies ?? marketData.outcomeSupplies;
-
-      const parsedNames = asStringArray(rawNames);
-      const parsedSupplies = asNumberArray(rawSupplies);
-
-      if (market_type === 1 && (!parsedNames || parsedNames.length < 2)) {
-        console.error("❌ indexMarket: multi market but missing outcome_names", { rawNames, marketData });
-        throw new Error("Missing outcome_names for multi market");
-      }
-
-      const fallbackNames = market_type === 0 ? ["YES", "NO"] : null;
-      const finalNamesRaw = parsedNames ?? fallbackNames;
-      if (!finalNamesRaw) throw new Error("Missing outcome_names");
-
-      const { names: finalNames, supplies: finalSupplies } = clampOutcomeArrays(finalNamesRaw, parsedSupplies);
-
-      const isBinaryStyle = finalNames.length === 2;
-
-      const yes_supply = isBinaryStyle ? (finalSupplies[0] ?? 0) : 0;
-      const no_supply = isBinaryStyle ? (finalSupplies[1] ?? 0) : 0;
-
-      const payloadCandidate: any = {
-        ...marketData,
-        market_type,
-        outcome_names: finalNames,
-        outcome_supplies: finalSupplies,
-        yes_supply,
-        no_supply,
-      };
-
-      const payload = pickMarketColumns(payloadCandidate);
-
-      const { data: existing, error: findErr } = await supabase
-        .from("markets")
-        .select("market_address")
-        .eq("market_address", payload.market_address)
-        .maybeSingle();
-
-      if (findErr) throw findErr;
-
-      const { error } = existing
-        ? await supabase.from("markets").update(payload).eq("market_address", payload.market_address)
-        : await supabase.from("markets").insert(payload);
-
-      if (!error) return true;
-
-      console.warn(`⚠️ indexMarket retry ${i + 1}/3:`, error.message);
-      await new Promise((r) => setTimeout(r, 800));
-    } catch (err) {
-      console.error(`❌ indexMarket exception retry ${i + 1}/3:`, err);
-      await new Promise((r) => setTimeout(r, 800));
-    }
-  }
-
-  console.error("❌ FAILED to index market in Supabase after retries");
-  return false;
-}
-
-/**
- * ✅ Transactions
- * IMPORTANT: your transactions.market_id is UUID => we store markets.id here.
- */
-type TxInsert = {
-  market_id: string; // UUID (markets.id)
+export type DbTransactionRow = {
+  id: string;
+  market_id: string;
   user_address: string;
   tx_signature: string;
   is_buy: boolean;
-  is_yes: boolean; // for 2-outcome markets: outcomeIndex 0 => true, 1 => false
+  is_yes: boolean;
   amount: number;
-  cost: number; // SOL numeric (estimate)
+  cost: number;
+  created_at: string;
+  market_address: string | null;
+  outcome_index: number | null;
+  outcome_name: string | null;
+  shares: number | null;
 };
 
-export async function recordTransaction(tx: TxInsert): Promise<boolean> {
-  try {
-    const payload = {
-      market_id: tx.market_id,
-      user_address: tx.user_address,
-      tx_signature: tx.tx_signature,
-      is_buy: !!tx.is_buy,
-      is_yes: !!tx.is_yes,
-      amount: Number(tx.amount || 0),
-      cost: Number(tx.cost || 0),
-    };
+/* -------------------------------------------------------------------------- */
+/*  Helpers                                                                   */
+/* -------------------------------------------------------------------------- */
 
-    const { error } = await supabase.from("transactions").insert(payload);
-
-    if (error) {
-      console.warn("⚠️ recordTransaction insert error:", error.message);
-      return false;
-    }
-
-    return true;
-  } catch (e) {
-    console.error("❌ recordTransaction exception:", e);
-    return false;
-  }
+function toNumber(value: any, fallback = 0): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
 }
 
-export async function getTransactionsByUser(userAddress: string) {
+function cloneNumberArray(x: any): number[] {
+  if (!x) return [];
+  if (Array.isArray(x)) return x.map((v) => toNumber(v, 0));
+  return [];
+}
+
+function cloneStringArray(x: any): string[] {
+  if (!x) return [];
+  if (Array.isArray(x)) return x.map((v) => String(v));
+  return [];
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Market loading                                                            */
+/* -------------------------------------------------------------------------- */
+
+export async function getMarketByAddress(
+  marketAddress: string
+): Promise<DbMarketRow | null> {
   const { data, error } = await supabase
-    .from("transactions")
-    .select("*")
-    .eq("user_address", userAddress)
-    .order("created_at", { ascending: false });
+    .from("markets")
+    .select(
+      [
+        "id",
+        "market_address",
+        "question",
+        "description",
+        "category",
+        "image_url",
+        "end_date",
+        "creator",
+        "social_links",
+        "yes_supply",
+        "no_supply",
+        "total_volume",
+        "resolved",
+        "created_at",
+        "market_type",
+        "outcome_names",
+        "outcome_supplies",
+        "outcome_count",
+        "program_id",
+        "cluster",
+      ].join(",")
+    )
+    .eq("market_address", marketAddress)
+    .limit(1)
+    .maybeSingle();
 
   if (error) {
-    console.error("❌ getTransactionsByUser error:", error.message);
-    return [];
-  }
-  return data || [];
-}
-
-/**
- * ✅ Apply trade to markets table:
- * - updates outcome_supplies if present
- * - updates yes_supply/no_supply if 2 outcomes
- * - updates total_volume (lamports)
- */
-export async function applyTradeToMarketInSupabase(args: {
-  market_address: string;
-  market_type: 0 | 1;
-  outcome_index: number;
-  delta_shares: number; // +buy, -sell
-  delta_volume_lamports: number; // always +abs(volume)
-}): Promise<boolean> {
-  try {
-    const { data: m, error: e1 } = await supabase
-      .from("markets")
-      .select("market_address, market_type, outcome_names, outcome_supplies, yes_supply, no_supply, total_volume")
-      .eq("market_address", args.market_address)
-      .maybeSingle();
-
-    if (e1) {
-      console.error("❌ applyTradeToMarketInSupabase select error:", e1.message);
-      return false;
-    }
-    if (!m) return false;
-
-    const names = asStringArray(m.outcome_names) || [];
-    const supplies = asNumberArray(m.outcome_supplies) || [];
-
-    const safeNames = names.slice(0, 10);
-
-    // make array length match names if possible
-    const nextSupplies = supplies.slice(0, Math.max(2, safeNames.length));
-    while (nextSupplies.length < Math.max(2, safeNames.length)) nextSupplies.push(0);
-
-    const i = Math.max(0, Math.min(args.outcome_index, nextSupplies.length - 1));
-    nextSupplies[i] = Math.max(0, Number(nextSupplies[i] || 0) + Number(args.delta_shares || 0));
-
-    // If market is effectively 2 outcomes => keep legacy columns updated
-    const isBinaryStyle = safeNames.length === 2 || nextSupplies.length === 2;
-
-    const nextYes = isBinaryStyle ? Number(nextSupplies[0] || 0) : Number(m.yes_supply || 0);
-    const nextNo = isBinaryStyle ? Number(nextSupplies[1] || 0) : Number(m.no_supply || 0);
-
-    const nextTotalVol = Number(m.total_volume || 0) + Number(args.delta_volume_lamports || 0);
-
-    const updatePayload: any = pickMarketColumns({
-      market_address: args.market_address,
-      outcome_supplies: nextSupplies.slice(0, 10),
-      yes_supply: nextYes,
-      no_supply: nextNo,
-      total_volume: nextTotalVol,
-    });
-
-    const { error: e2 } = await supabase
-      .from("markets")
-      .update(updatePayload)
-      .eq("market_address", args.market_address);
-
-    if (e2) {
-      console.error("❌ applyTradeToMarketInSupabase update error:", e2.message);
-      return false;
-    }
-
-    return true;
-  } catch (e) {
-    console.error("❌ applyTradeToMarketInSupabase exception:", e);
-    return false;
-  }
-}
-
-export async function getAllMarkets(): Promise<Market[]> {
-  try {
-    const { data, error } = await supabase.from("markets").select("*").order("created_at", { ascending: false });
-
-    if (error) {
-      console.error("❌ Supabase getAllMarkets error:", error.message);
-      return [];
-    }
-
-    const markets = (data || []).map((m: any) => ({
-      ...m,
-      outcome_names: asStringArray(m.outcome_names),
-      outcome_supplies: asNumberArray(m.outcome_supplies),
-    }));
-
-    return markets as Market[];
-  } catch (err) {
-    console.error("❌ Exception in getAllMarkets:", err);
-    return [];
-  }
-}
-
-export async function getMarketByAddress(marketAddress: string): Promise<Market | null> {
-  try {
-    const { data, error } = await supabase
-      .from("markets")
-      .select("*")
-      .eq("market_address", marketAddress)
-      .maybeSingle();
-
-    if (error) {
-      console.error("❌ Supabase getMarketByAddress error:", error.message);
-      return null;
-    }
-    if (!data) return null;
-
-    const market: any = {
-      ...data,
-      outcome_names: asStringArray(data.outcome_names),
-      outcome_supplies: asNumberArray(data.outcome_supplies),
-    };
-
-    return market as Market;
-  } catch (err) {
-    console.error("❌ Exception in getMarketByAddress:", err);
+    console.error("getMarketByAddress error:", error);
     return null;
   }
+
+  if (!data) return null;
+
+  const m = data as any;
+
+  return {
+    id: String(m.id),
+    market_address: String(m.market_address),
+    question: m.question ?? null,
+    description: m.description ?? null,
+    category: m.category ?? null,
+    image_url: m.image_url ?? null,
+    end_date: m.end_date,
+    creator: String(m.creator),
+    social_links: m.social_links ?? null,
+    yes_supply: toNumber(m.yes_supply, 0),
+    no_supply: toNumber(m.no_supply, 0),
+    total_volume: toNumber(m.total_volume, 0),
+    resolved: !!m.resolved,
+    created_at: m.created_at,
+    market_type: typeof m.market_type === "number" ? m.market_type : 0,
+    outcome_names: cloneStringArray(m.outcome_names),
+    outcome_supplies: cloneNumberArray(m.outcome_supplies),
+    outcome_count:
+      typeof m.outcome_count === "number" ? m.outcome_count : null,
+    program_id: m.program_id ?? null,
+    cluster: m.cluster ?? null,
+  };
 }
 
-export async function getMarketsByCreator(creatorAddress: string): Promise<Market[]> {
-  try {
-    const { data, error } = await supabase
-      .from("markets")
-      .select("*")
-      .eq("creator", creatorAddress)
-      .order("created_at", { ascending: false });
+/* -------------------------------------------------------------------------- */
+/*  Transactions                                                              */
+/* -------------------------------------------------------------------------- */
 
-    if (error) {
-      console.error("❌ Supabase getMarketsByCreator error:", error.message);
-      return [];
-    }
+export type RecordTxInput = {
+  market_id?: string | null;
+  market_address?: string | null;
 
-    const markets = (data || []).map((m: any) => ({
-      ...m,
-      outcome_names: asStringArray(m.outcome_names),
-      outcome_supplies: asNumberArray(m.outcome_supplies),
-    }));
+  user_address: string;
+  tx_signature: string;
+  is_buy: boolean;
 
-    return markets as Market[];
-  } catch (err) {
-    console.error("❌ Exception in getMarketsByCreator:", err);
-    return [];
+  // pour binary seulement; pour multi-choice, on mettra null
+  is_yes: boolean | null;
+
+  amount: number;
+  cost: number;
+
+  outcome_index?: number | null;
+  outcome_name?: string | null;
+  shares?: number | null;
+};
+
+export async function recordTransaction(input: RecordTxInput): Promise<void> {
+  const row = {
+    market_id: input.market_id ?? null,
+    market_address: input.market_address ?? null,
+    user_address: input.user_address,
+    tx_signature: input.tx_signature,
+    is_buy: input.is_buy,
+    is_yes: input.is_yes ?? false, // la colonne est NOT NULL, donc false si multi-choice
+    amount: input.amount,
+    cost: input.cost,
+    outcome_index:
+      input.outcome_index !== undefined ? input.outcome_index : null,
+    outcome_name: input.outcome_name ?? null,
+    shares:
+      input.shares !== undefined && input.shares !== null
+        ? input.shares
+        : input.amount,
+  };
+
+  const { error } = await supabase.from("transactions").insert(row);
+
+  if (error) {
+    console.error("recordTransaction error:", error);
+    throw error;
   }
 }
 
-export async function getMarketsByIds(ids: string[]): Promise<Market[]> {
-  if (!ids.length) return [];
-  try {
-    const { data, error } = await supabase.from("markets").select("*").in("id", ids);
+/* -------------------------------------------------------------------------- */
+/*  Mise à jour des markets après un trade                                    */
+/* -------------------------------------------------------------------------- */
 
-    if (error) {
-      console.error("❌ getMarketsByIds error:", error.message);
-      return [];
-    }
+export type ApplyTradeArgs = {
+  market_address: string;
+  market_type: number; // 0 = binary, 1 = multi-choice
 
-    return (data || []).map((m: any) => ({
-      ...m,
-      outcome_names: asStringArray(m.outcome_names),
-      outcome_supplies: asNumberArray(m.outcome_supplies),
-    })) as Market[];
-  } catch (e) {
-    console.error("❌ getMarketsByIds exception:", e);
-    return [];
+  outcome_index: number;
+  delta_shares: number; // +shares si buy, -shares si sell (en unités de shares)
+  delta_volume_lamports: number; // volume ajouté (en lamports, toujours positif)
+};
+
+/**
+ * Met à jour les champs agrégés dans la table `markets` :
+ * - outcome_supplies (pour multi-choice)
+ * - yes_supply / no_supply (pour binary, ou fallback)
+ * - total_volume
+ */
+export async function applyTradeToMarketInSupabase(
+  args: ApplyTradeArgs
+): Promise<void> {
+  const { market_address, market_type, outcome_index } = args;
+  const deltaShares = toNumber(args.delta_shares, 0);
+  const deltaVolumeLamports = toNumber(args.delta_volume_lamports, 0);
+
+  if (!market_address) return;
+
+  // 1) récupérer le market actuel
+  const market = await getMarketByAddress(market_address);
+  if (!market) {
+    console.warn(
+      "applyTradeToMarketInSupabase: market not found for",
+      market_address
+    );
+    return;
+  }
+
+  const mt = typeof market_type === "number" ? market_type : 0;
+
+  let outcomeSupplies = cloneNumberArray(market.outcome_supplies);
+  const outcomeNames = cloneStringArray(market.outcome_names);
+  const outcomeCount =
+    typeof market.outcome_count === "number"
+      ? market.outcome_count
+      : outcomeNames.length || outcomeSupplies.length || 0;
+
+  const idx = Math.max(0, Math.min(outcome_index, Math.max(0, outcomeCount - 1)));
+
+  // garantir la taille du tableau outcomeSupplies
+  const finalLen = Math.max(
+    outcomeSupplies.length,
+    outcomeNames.length,
+    outcomeCount,
+    idx + 1
+  );
+  if (!outcomeSupplies.length && finalLen > 0) {
+    outcomeSupplies = Array(finalLen).fill(0);
+  } else if (outcomeSupplies.length < finalLen) {
+    outcomeSupplies = [
+      ...outcomeSupplies,
+      ...Array(finalLen - outcomeSupplies.length).fill(0),
+    ];
+  }
+
+  // 2) appliquer le delta sur le bon outcome
+  if (finalLen > 0) {
+    const current = toNumber(outcomeSupplies[idx], 0);
+    const next = Math.max(0, current + deltaShares);
+    outcomeSupplies[idx] = next;
+  }
+
+  // 3) mettre à jour yes/no pour les marchés binaires (ou fallback quand seulement 2 outcomes)
+  let yesSupply = toNumber(market.yes_supply, 0);
+  let noSupply = toNumber(market.no_supply, 0);
+
+  const isBinary =
+    mt === 0 ||
+    (outcomeNames.length === 2 && outcomeSupplies.length === 2);
+
+  if (isBinary && outcomeSupplies.length >= 2) {
+    yesSupply = toNumber(outcomeSupplies[0], 0);
+    noSupply = toNumber(outcomeSupplies[1], 0);
+  }
+
+  // 4) volume total
+  const totalVolume =
+    toNumber(market.total_volume, 0) + Math.max(0, deltaVolumeLamports);
+
+  // 5) update Supabase
+  const updatePayload: Partial<DbMarketRow> = {
+    outcome_supplies: outcomeSupplies,
+    yes_supply: yesSupply,
+    no_supply: noSupply,
+    total_volume: totalVolume,
+  };
+
+  // garder outcome_count cohérent si besoin
+  if (!market.outcome_count && finalLen > 0) {
+    (updatePayload as any).outcome_count = finalLen;
+  }
+
+  const { error } = await supabase
+    .from("markets")
+    .update(updatePayload as any)
+    .eq("market_address", market_address);
+
+  if (error) {
+    console.error("applyTradeToMarketInSupabase error:", error);
+    throw error;
   }
 }

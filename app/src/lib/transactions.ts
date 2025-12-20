@@ -1,90 +1,62 @@
-// src/lib/transactions.ts
-import { supabase } from "@/lib/supabaseClient";
+// app/src/lib/transactions.ts
+import { supabase } from "./supabaseClient";
 
-export type TxWithMarket = {
-  id: string;
-  created_at: string;
+export type LogTxParams = {
+  // pour lier à la table markets
+  marketId?: string | null;
+  marketAddress?: string | null;
 
-  // selon ta table
-  market_id?: string | null;
-  market_address?: string | null;
+  userAddress: string;
 
-  user_address?: string | null;
-  wallet?: string | null;
-  trader?: string | null;
+  isBuy: boolean;
+  // legacy binaire (YES/NO)
+  isYes?: boolean | null;
 
-  side: "buy" | "sell";
-  outcome_index: number;
-  shares: number;
+  shares: number;      // nb de shares achetés/vendus
+  cost: number;        // en SOL (ou lamports si tu veux, mais soit cohérent)
+  txSignature: string;
 
-  // optionnel
-  cost?: number | null;
-  tx_signature?: string | null;
-
-  // join markets
-  market_question?: string | null;
-  market_link_address?: string | null;
+  // ⚠️ NOUVEAU : multi-choice propre
+  outcomeIndex?: number | null;   // 0,1,2...
+  outcomeName?: string | null;    // "GPT", "Grok", "BYD", etc.
 };
 
-export async function fetchUserTransactions(walletAddress: string, limit = 50): Promise<TxWithMarket[]> {
-  if (!walletAddress) return [];
+export async function logTransaction(params: LogTxParams) {
+  const {
+    marketId = null,
+    marketAddress = null,
+    userAddress,
+    isBuy,
+    isYes = null,
+    shares,
+    cost,
+    txSignature,
+    outcomeIndex = null,
+    outcomeName = null,
+  } = params;
 
-  // ⚠️ OR supabase: "col.eq.val,col.eq.val"
-  const orFilter = [
-    `user_address.eq.${walletAddress}`,
-    `wallet.eq.${walletAddress}`,
-    `trader.eq.${walletAddress}`,
-  ].join(",");
+  const payload: any = {
+    market_id: marketId,
+    market_address: marketAddress,
+    user_address: userAddress,
 
-  const { data, error } = await supabase
-    .from("transactions")
-    .select(
-      `
-      id,
-      created_at,
-      market_id,
-      market_address,
-      user_address,
-      wallet,
-      trader,
-      side,
-      outcome_index,
-      shares,
-      cost,
-      tx_signature,
-      market:markets (
-        question,
-        market_address
-      )
-    `
-    )
-    .or(orFilter)
-    .order("created_at", { ascending: false })
-    .limit(limit);
+    is_buy: isBuy,
+    is_yes: isYes,
 
+    // legacy
+    amount: shares,
+    // nouveau
+    shares,
+    cost,
+    tx_signature: txSignature,
+
+    // multi-choice
+    outcome_index: outcomeIndex,
+    outcome_name: outcomeName,
+  };
+
+  const { error } = await supabase.from("transactions").insert(payload);
   if (error) {
-    console.error("fetchUserTransactions error:", error);
-    return [];
+    console.error("logTransaction error:", error);
   }
-
-  return (data || []).map((row: any) => ({
-    id: String(row.id),
-    created_at: String(row.created_at),
-
-    market_id: row.market_id ?? null,
-    market_address: row.market_address ?? null,
-
-    user_address: row.user_address ?? null,
-    wallet: row.wallet ?? null,
-    trader: row.trader ?? null,
-
-    side: row.side,
-    outcome_index: Number(row.outcome_index ?? 0),
-    shares: Number(row.shares ?? row.amount ?? 0), // fallback si ta colonne s'appelle amount
-    cost: row.cost ?? null,
-    tx_signature: row.tx_signature ?? null,
-
-    market_question: row.market?.question ?? null,
-    market_link_address: row.market?.market_address ?? row.market_address ?? null,
-  }));
 }

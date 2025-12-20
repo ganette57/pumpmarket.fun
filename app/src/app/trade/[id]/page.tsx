@@ -18,8 +18,6 @@ import CommentsSection from "@/components/CommentsSection";
 import TradingPanel from "@/components/TradingPanel";
 import BondingCurveChart from "@/components/BondingCurveChart";
 import OddsHistoryChart from "@/components/OddsHistoryChart";
-
-// ✅ Activity tab component
 import MarketActivityTab from "@/components/MarketActivity";
 
 import { supabase } from "@/lib/supabaseClient";
@@ -44,16 +42,16 @@ import type { SocialLinks } from "@/components/SocialLinksForm";
 type SupabaseMarket = any;
 
 type UiMarket = {
-  dbId?: string; // uuid markets.id (for transactions.market_id)
-  publicKey: string; // market_address base58
+  dbId?: string;
+  publicKey: string;
   question: string;
   description: string;
   category?: string;
   imageUrl?: string;
   creator: string;
 
-  totalVolume: number; // lamports (DB)
-  resolutionTime: number; // unix seconds
+  totalVolume: number;
+  resolutionTime: number;
   resolved: boolean;
 
   socialLinks?: SocialLinks;
@@ -62,7 +60,6 @@ type UiMarket = {
   outcomeNames?: string[];
   outcomeSupplies?: number[];
 
-  // legacy binary fallback (if still in DB)
   yesSupply?: number;
   noSupply?: number;
 };
@@ -364,6 +361,7 @@ export default function TradePage() {
 
     setSubmitting(true);
 
+    // Optimistic update pour l'UI
     setMarket((prev) => {
       if (!prev) return prev;
 
@@ -379,8 +377,8 @@ export default function TradePage() {
       const yesSupply = derived.names.length === 2 ? nextSupplies[0] : prev.yesSupply || 0;
       const noSupply = derived.names.length === 2 ? nextSupplies[1] : prev.noSupply || 0;
 
-      const estSol = estimateCostSol(nextSupplies[safeOutcome], safeShares, side);
-      const volLamports = solToLamports(Math.abs(estSol));
+      const estSolTmp = estimateCostSol(nextSupplies[safeOutcome], safeShares, side);
+      const volLamports = solToLamports(Math.abs(estSolTmp));
 
       return {
         ...prev,
@@ -426,29 +424,50 @@ export default function TradePage() {
           .rpc();
       }
 
-      const name = derived.names[safeOutcome] ?? `#${safeOutcome}`;
+      const name = derived.names[safeOutcome] ?? `Outcome #${safeOutcome + 1}`;
       const estSol = estimateCostSol(derived.supplies[safeOutcome] || 0, safeShares, side);
       const estLamports = solToLamports(Math.abs(estSol));
 
       alert(
-        `Success! 🎉\n\n${side === "buy" ? "Bought" : "Sold"} ${safeShares} shares of "${name}"\n\nTx: ${txSig.slice(
+        `Success! 🎉\n\n${
+          side === "buy" ? "Bought" : "Sold"
+        } ${safeShares} shares of "${name}"\n\nTx: ${txSig.slice(
           0,
           16
         )}...\n\nhttps://explorer.solana.com/tx/${txSig}?cluster=devnet`
       );
 
       if (market.dbId) {
+        const outcomeName = derived.names[safeOutcome] ?? `Outcome #${safeOutcome}`;
+      
         await recordTransaction({
           market_id: market.dbId,
+          market_address: market.publicKey,      // pratique pour le dashboard
           user_address: publicKey.toBase58(),
           tx_signature: txSig,
           is_buy: side === "buy",
-          is_yes: safeOutcome === 0,
+      
+          // 🟢 pour multi-choice, on laisse is_yes null
+          is_yes: derived.names.length === 2 ? safeOutcome === 0 : null,
+      
           amount: safeShares,
+          shares: safeShares,                    // nouveau
           cost: Number(estSol || 0),
-          // outcome_index: safeOutcome,
+      
+          outcome_index: safeOutcome,           // 🟢 clé pour bien mapper
+          outcome_name: outcomeName,            // 🟢 évite tout fallback
         } as any);
       }
+
+      await applyTradeToMarketInSupabase({
+        market_address: market.publicKey,
+        market_type: market.marketType,
+        outcome_index: safeOutcome,
+        delta_shares: side === "buy" ? safeShares : -safeShares,
+        delta_volume_lamports: Number(estLamports || 0),
+      });
+
+      await loadMarket(id);
 
       await applyTradeToMarketInSupabase({
         market_address: market.publicKey,
@@ -653,47 +672,6 @@ export default function TradePage() {
             )}
           </div>
 
-          {/* Advanced: Bonding curve (optional) */}
-          <div className="card-pump">
-            <details>
-              <summary className="cursor-pointer select-none text-white font-semibold">
-                Advanced: Bonding curve (pricing)
-              </summary>
-
-              <div className="mt-4">
-                <div className="flex items-center justify-between gap-4 mb-4">
-                  <div>
-                    <h3 className="text-lg font-bold text-white">Bonding Curve</h3>
-                    <p className="text-sm text-gray-400 mt-1">
-                      Price increases as more shares are bought (matches on-chain).
-                    </p>
-                  </div>
-
-                  {!isBinaryStyle && (
-                    <div className="min-w-[180px]">
-                      <label className="block text-xs text-gray-500 mb-1">Outcome</label>
-                      <select
-                        value={bondingOutcomeIndex}
-                        onChange={(e) => setBondingOutcomeIndex(Number(e.target.value))}
-                        className="input-pump w-full"
-                      >
-                        {names.map((n, i) => (
-                          <option key={i} value={i}>
-                            {n}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-                </div>
-
-                <BondingCurveChart
-                  currentSupply={supplies[Math.min(bondingOutcomeIndex, supplies.length - 1)] || 0}
-                  isYes={true}
-                />
-              </div>
-            </details>
-          </div>
         </div>
 
         {/* RIGHT */}
@@ -767,7 +745,7 @@ export default function TradePage() {
           <MarketActivityTab
             marketDbId={market.dbId}
             marketAddress={market.publicKey}
-            outcomeNames={names} // ✅ allow Activity to display real outcome names
+            outcomeNames={names}
           />
         )}
       </div>
