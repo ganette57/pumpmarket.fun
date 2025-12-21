@@ -15,25 +15,29 @@ const STEPS: Step[] = [
   {
     icon: '🎯',
     title: 'Pick a Market',
-    description: 'Browse trending predictions or create your own. Buy "Yes" or "No" shares on any outcome.',
+    description:
+      'Browse trending predictions or create your own. Buy "Yes" or "No" shares on any outcome.',
     color: 'from-blue-500 to-purple-500',
   },
   {
     icon: '📈',
     title: 'Trade Live',
-    description: 'Prices move with supply and demand. Early buyers get better prices thanks to bonding curves.',
+    description:
+      'Prices update instantly when traders buy or sell shares. Odds change based on demand — if people pile into an outcome, its price rises. Simple, dynamic, transparent.',
     color: 'from-green-500 to-teal-500',
   },
   {
     icon: '🏆',
     title: 'Resolve & Win',
-    description: 'When the market resolves, winners claim the pool. Simple, transparent, on-chain.',
+    description:
+      'When the market resolves, winners claim the pool. Simple, transparent, on-chain.',
     color: 'from-orange-500 to-red-500',
   },
   {
     icon: '💰',
     title: 'Earn Fees',
-    description: 'Market creators earn 1% on every trade. Platform earns 1%. Everyone wins.',
+    description:
+      'Market creators earn 1% on every trade. Platform earns 1%. Everyone wins.',
     color: 'from-pump-green to-green-400',
   },
 ];
@@ -43,7 +47,10 @@ interface HowItWorksModalProps {
   onClose: () => void;
 }
 
-export default function HowItWorksModal({ isOpen, onClose }: HowItWorksModalProps) {
+export default function HowItWorksModal({
+  isOpen,
+  onClose,
+}: HowItWorksModalProps) {
   const [currentStep, setCurrentStep] = useState(0);
 
   if (!isOpen) return null;
@@ -83,7 +90,7 @@ export default function HowItWorksModal({ isOpen, onClose }: HowItWorksModalProp
 
         {/* Content */}
         <div className="p-8">
-          {/* Step Indicator */}
+          {/* Steps indicator */}
           <div className="flex justify-center mb-8">
             {STEPS.map((_, index) => (
               <div
@@ -99,28 +106,24 @@ export default function HowItWorksModal({ isOpen, onClose }: HowItWorksModalProp
             ))}
           </div>
 
-          {/* Step Content */}
+          {/* Step content */}
           <div className="min-h-[280px] flex flex-col items-center text-center">
-            {/* Icon */}
             <div
               className={`w-24 h-24 rounded-full bg-gradient-to-br ${step.color} flex items-center justify-center mb-6 shadow-lg animate-bounce-slow`}
             >
               <span className="text-5xl">{step.icon}</span>
             </div>
 
-            {/* Title */}
             <h3 className="text-2xl font-bold text-white mb-4">{step.title}</h3>
 
-            {/* Description */}
             <p className="text-lg text-gray-300 max-w-xl leading-relaxed">
               {step.description}
             </p>
 
-            {/* Additional Info */}
             {currentStep === 3 && (
               <div className="mt-6 grid grid-cols-2 gap-4 w-full max-w-md">
                 <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
-                  <div className="text-2xl font-bold text-blue-400">1%</div>
+                  <div className="text-2xl font-bold text-blue-400">2%</div>
                   <div className="text-sm text-gray-400">Creator Fee</div>
                 </div>
                 <div className="bg-pump-green/10 border border-pump-green/30 rounded-lg p-4">

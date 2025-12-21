@@ -2,6 +2,9 @@
 @tailwind components;
 @tailwind utilities;
 
+/* =========================
+   Thème & fond global
+   ========================= */
 :root {
   --foreground-rgb: 255, 255, 255;
   --background-start-rgb: 10, 10, 10;
@@ -19,56 +22,113 @@ body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
+/* =========================
+   UTILITIES
+   ========================= */
 @layer utilities {
   .text-balance {
     text-wrap: balance;
   }
-}
 
-/* PumpFun style animations */
-@keyframes glow {
-  0%, 100% {
-    box-shadow: 0 0 20px rgba(0, 255, 136, 0.5);
+  /* Animations */
+  @keyframes glow {
+    0%,
+    100% {
+      box-shadow: 0 0 20px rgba(0, 255, 136, 0.5);
+    }
+    50% {
+      box-shadow: 0 0 40px rgba(0, 255, 136, 0.8);
+    }
   }
-  50% {
-    box-shadow: 0 0 40px rgba(0, 255, 136, 0.8);
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(-10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes slideDown {
+    from {
+      opacity: 0;
+      transform: translateY(-20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes slideUp {
+    from {
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .animate-fadeIn {
+    animation: fadeIn 0.2s ease-out;
+  }
+
+  .animate-slideDown {
+    animation: slideDown 0.3s ease-out;
+  }
+
+  .animate-slideUp {
+    animation: slideUp 0.3s ease-out;
+  }
+
+  .glow-green {
+    animation: glow 2s ease-in-out infinite;
   }
 }
 
-.btn-pump {
-  @apply bg-pump-green text-black font-bold py-3 px-6 rounded-lg
-         hover:bg-green-400 transition-all duration-200
-         hover:scale-105 active:scale-95;
+/* =========================
+   COMPONENTS (classes @apply)
+   ========================= */
+@layer components {
+  .btn-pump {
+    @apply bg-pump-green text-black font-bold py-3 px-6 rounded-lg
+           hover:bg-green-400 transition-all duration-200
+           hover:scale-105 active:scale-95;
+  }
+
+  .btn-pump-red {
+    @apply bg-pump-red text-white font-bold py-3 px-6 rounded-lg
+           hover:bg-red-400 transition-all duration-200
+           hover:scale-105 active:scale-95;
+  }
+
+  .card-pump {
+    @apply bg-pump-gray border border-gray-800 rounded-xl p-6
+           hover:border-pump-green transition-all duration-200
+           hover:shadow-lg;
+  }
+
+  .input-pump {
+    @apply bg-pump-dark border border-gray-700 rounded-lg px-4 py-3
+           text-white placeholder-gray-500
+           focus:border-pump-green focus:outline-none
+           transition-all duration-200;
+  }
+
+  .input-error {
+    @apply border-pump-red border-2;
+  }
 }
 
-.btn-pump-red {
-  @apply bg-pump-red text-white font-bold py-3 px-6 rounded-lg
-         hover:bg-red-400 transition-all duration-200
-         hover:scale-105 active:scale-95;
-}
+/* =========================
+   React DatePicker – Dark theme
+   ========================= */
 
-.card-pump {
-  @apply bg-pump-gray border border-gray-800 rounded-xl p-6
-         hover:border-pump-green transition-all duration-200
-         hover:shadow-lg;
-}
-
-.input-pump {
-  @apply bg-pump-dark border border-gray-700 rounded-lg px-4 py-3
-         text-white placeholder-gray-500
-         focus:border-pump-green focus:outline-none
-         transition-all duration-200;
-}
-
-.input-error {
-  @apply border-pump-red border-2;
-}
-
-.glow-green {
-  animation: glow 2s ease-in-out infinite;
-}
-
-/* React DatePicker Custom Styles - Dark Theme */
 .react-datepicker-wrapper {
   width: 100%;
 }
@@ -153,49 +213,4 @@ body {
 
 .react-datepicker__navigation:hover *::before {
   border-color: #00ff9d !important;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(-10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes slideDown {
-  from {
-    opacity: 0;
-    transform: translateY(-20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes slideUp {
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.animate-fadeIn {
-  animation: fadeIn 0.2s ease-out;
-}
-
-.animate-slideDown {
-  animation: slideDown 0.3s ease-out;
-}
-
-.animate-slideUp {
-  animation: slideUp 0.3s ease-out;
 }

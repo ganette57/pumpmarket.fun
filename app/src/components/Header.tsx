@@ -1,132 +1,156 @@
-"use client";
+'use client';
 
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useState, useMemo } from "react";
-import { useWallet } from "@solana/wallet-adapter-react";
-import { useWalletModal } from "@solana/wallet-adapter-react-ui";
+import { useState, useRef, useEffect } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
+import { useWallet } from '@solana/wallet-adapter-react';
+import HowItWorksModal from '@/components/HowItWorksModal';
 
-// ⚠️ suppose que tu as déjà ce composant qui ouvre TA pop-up
-// (celui que tu utilisais avant dans le header)
-import HowItWorksButton from "@/components/HowItWorksModal";
+// --- Hook pour fermer le menu avatar quand on clique en dehors ---
+function useClickOutside(ref: React.RefObject<HTMLDivElement>, onClose: () => void) {
+  useEffect(() => {
+    function handleClick(event: MouseEvent) {
+      if (!ref.current) return;
+      if (!ref.current.contains(event.target as Node)) {
+        onClose();
+      }
+    }
+
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [ref, onClose]);
+}
 
 export default function Header() {
   const router = useRouter();
-  const { publicKey } = useWallet();
-  const { setVisible } = useWalletModal();
+  const { connected, publicKey, disconnect } = useWallet();
 
-  const [query, setQuery] = useState("");
+  const [search, setSearch] = useState('');
+  const [isHowItWorksOpen, setIsHowItWorksOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
-  function handleSearch(e: React.FormEvent) {
-    e.preventDefault();
-    if (!query.trim()) return;
+  const menuRef = useRef<HTMLDivElement>(null);
+  useClickOutside(menuRef, () => setMenuOpen(false));
 
-    // adapte l’URL si ton ancienne recherche était ailleurs
-    router.push(`/search?q=${encodeURIComponent(query.trim())}`);
-  }
+  const avatarLabel = publicKey
+    ? publicKey.toBase58().slice(0, 2).toUpperCase()
+    : '??';
 
-  const accountCircle = useMemo(() => {
-    if (!publicKey) return "FM";
-    return publicKey.toBase58().slice(0, 2).toUpperCase();
-  }, [publicKey]);
+  const handleSearchSubmit = () => {
+    const q = search.trim();
+    if (!q) return;
+    router.push(`/search?q=${encodeURIComponent(q)}`);
+  };
 
   return (
-    <header className="sticky top-0 z-50 bg-[#050607]/95 border-b border-[#151515] backdrop-blur">
-      <div className="max-w-7xl mx-auto flex items-center gap-4 px-5 py-3">
-        {/* LOGO + NAME */}
-        <div className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-md border border-[#2a2a2a] bg-black/40 text-xs font-bold text-white">
-            F
-          </div>
-
-          <Link
-            href="/"
-            className="text-lg font-semibold tracking-tight text-white"
-          >
-            Funmarket.pump
+    <>
+      <header className="sticky top-0 z-40 border-b border-pump-border bg-pump-dark/95 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl items-center gap-4 px-4 py-3 sm:px-6 lg:px-8">
+          {/* Logo + name -> home */}
+          <Link href="/" className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-pump-border bg-black text-sm font-semibold text-white">
+              F
+            </div>
+            <span className="text-lg font-semibold text-white">
+              Funmarket
+            </span>
           </Link>
-        </div>
 
-        {/* SEARCH BAR */}
-        <form
-          onSubmit={handleSearch}
-          className="flex flex-1 justify-center"
-        >
-          <div className="w-full max-w-xl flex items-center gap-2 rounded-full bg-[#101214] border border-[#1f2933] px-4 py-2 text-sm">
-            <span className="text-gray-500 text-xs">⌕</span>
-            <input
-              className="flex-1 bg-transparent text-sm text-gray-200 focus:outline-none placeholder:text-gray-500"
-              placeholder="Search markets, creators, categories..."
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
+          {/* Search bar */}
+          <div className="flex-1">
+            <div className="flex items-center rounded-full border border-pump-border bg-black px-4 py-2 text-sm text-gray-300">
+              <button
+                type="button"
+                onClick={handleSearchSubmit}
+                className="mr-3 text-gray-500 hover:text-gray-300"
+              >
+                ⌕
+              </button>
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleSearchSubmit();
+                }}
+                placeholder="Search markets, creators, categories..."
+                className="w-full bg-transparent text-sm text-gray-100 placeholder:text-gray-500 focus:outline-none"
+              />
+            </div>
           </div>
-        </form>
 
-        {/* RIGHT SIDE ACTIONS */}
-        <div className="flex items-center gap-3">
-          {/* HOW IT WORKS → ta pop-up existante */}
-          <HowItWorksButton />
-
-          {/* CREATE MARKET – vert pump.fun */}
-          <Link href="/create">
+          {/* Right side */}
+          <div className="flex items-center gap-3">
+            {/* How it works */}
             <button
-              className="
-                h-10
-                rounded-full
-                bg-[#00ff88]
-                px-5
-                text-sm
-                font-semibold
-                text-black
-                hover:bg-[#00e67b]
-                transition
-              "
+              type="button"
+              onClick={() => setIsHowItWorksOpen(true)}
+              className="hidden text-sm text-gray-300 hover:text-white md:inline-block"
+            >
+              How it works
+            </button>
+
+            {/* Create */}
+            <Link
+              href="/create"
+              className="inline-flex h-11 items-center justify-center rounded-full bg-pump-green px-6 text-sm font-semibold text-black hover:bg-pump-green/90 transition"
             >
               Create
-            </button>
-          </Link>
-
-          {/* WALLET – rouge pump.fun, ouvre la même modale que WalletMultiButton */}
-          <button
-            onClick={() => setVisible(true)}
-            className="
-              h-10
-              rounded-full
-              bg-[#00ff88]
-              px-5
-              text-sm
-              font-semibold
-              text-black
-              hover:bg-[#ff2626]
-              transition
-            "
-          >
-            {publicKey ? "Wallet" : "Select Wallet"}
-          </button>
-
-          {/* DASHBOARD – petit rond à droite, comme Polymarket */}
-          {publicKey && (
-            <Link
-              href="/dashboard"
-              className="
-                flex
-                h-10
-                w-10
-                items-center
-                justify-center
-                rounded-full
-                bg-[#101214]
-                border border-[#222]
-                text-white text-xs font-bold
-                hover:border-[#00ff88]
-              "
-            >
-              {accountCircle}
             </Link>
-          )}
+
+            {/* Wallet button (violet par défaut, style lib) */}
+            <div className="flex items-center">
+              <WalletMultiButton />
+            </div>
+
+            {/* Avatar + menu quand wallet connecté */}
+            {connected && (
+              <div className="relative" ref={menuRef}>
+                <button
+                  type="button"
+                  onClick={() => setMenuOpen((v) => !v)}
+                  className="flex h-9 w-9 items-center justify-center rounded-full border border-pump-border bg-black text-xs font-semibold text-white hover:border-pump-green transition"
+                >
+                  {avatarLabel}
+                </button>
+
+                {menuOpen && (
+                  <div className="absolute right-0 mt-2 w-40 rounded-xl border border-pump-border bg-pump-gray shadow-lg py-1 text-sm text-gray-100">
+                    <Link
+                      href="/dashboard"
+                      className="block px-4 py-2 hover:bg-pump-dark"
+                      onClick={() => setMenuOpen(false)}
+                    >
+                      Dashboard
+                    </Link>
+                    <button
+                      type="button"
+                      className="block w-full px-4 py-2 text-left text-red-400 hover:bg-pump-dark hover:text-red-300"
+                      onClick={async () => {
+                        setMenuOpen(false);
+                        try {
+                          await disconnect();
+                        } catch {
+                          // ignore errors
+                        }
+                      }}
+                    >
+                      Disconnect
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
-    </header>
+      </header>
+
+      {/* How it works modal */}
+      <HowItWorksModal
+        isOpen={isHowItWorksOpen}
+        onClose={() => setIsHowItWorksOpen(false)}
+      />
+    </>
   );
 }
