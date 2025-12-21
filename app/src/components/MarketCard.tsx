@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import Image from 'next/image';
-import { useState, useMemo } from 'react';
+import { Clock, TrendingUp } from 'lucide-react';
 import { lamportsToSol } from '@/utils/solana';
 import CategoryImagePlaceholder from './CategoryImagePlaceholder';
 
@@ -11,114 +11,124 @@ interface MarketCardProps {
     publicKey: string;
     question: string;
     description?: string;
-    category?: string;
+    category: string;
     imageUrl?: string;
     yesSupply: number;
     noSupply: number;
-    totalVolume: number;
-    resolutionTime: number;
-    resolved: boolean;
-    marketType?: number;
     outcomeNames?: string[];
     outcomeSupplies?: number[];
+    resolutionTime: number;
+    totalVolume: number;
+    resolved: boolean;
   };
 }
 
 export default function MarketCard({ market }: MarketCardProps) {
-  const [imageError, setImageError] = useState(false);
+  const now = Date.now() / 1000;
+  const daysLeft = Math.max(0, Math.floor((market.resolutionTime - now) / 86400));
 
-  const outcomes = useMemo(() => {
-    const names = (market.outcomeNames || []).filter(Boolean);
-    return names.length >= 2 ? names : ['YES', 'NO'];
-  }, [market.outcomeNames]);
+  // outcomes ----------------------------
+  let outcomes =
+    market.outcomeNames && market.outcomeNames.length >= 2
+      ? market.outcomeNames
+      : ['YES', 'NO'];
 
-  const supplies = useMemo(() => {
-    const s = Array.isArray(market.outcomeSupplies) ? market.outcomeSupplies : [];
-    if (s.length >= outcomes.length) return s.slice(0, outcomes.length).map((x) => Number(x || 0));
-    return [Number(market.yesSupply || 0), Number(market.noSupply || 0)];
-  }, [market.outcomeSupplies, market.yesSupply, market.noSupply, outcomes]);
+  let supplies =
+    market.outcomeSupplies && market.outcomeSupplies.length >= 2
+      ? market.outcomeSupplies.map(Number)
+      : [market.yesSupply || 0, market.noSupply || 0];
 
-  const totalSupply = supplies.reduce((sum, s) => sum + (s || 0), 0);
-  const percentages = supplies.map((s) =>
-    totalSupply > 0 ? ((s || 0) / totalSupply) * 100 : 100 / supplies.length
+  const totalSupply = supplies.reduce((a, b) => a + b, 0);
+  const percents = supplies.map((s) =>
+    totalSupply > 0 ? ((s / totalSupply) * 100).toFixed(0) : '50'
   );
 
-  const now = Date.now() / 1000;
-  const timeLeft = market.resolutionTime - now;
-  const daysLeft = Math.max(0, Math.floor(timeLeft / 86400));
-  const hoursLeft = Math.max(0, Math.floor((timeLeft % 86400) / 3600));
-
-  const volumeInSol = lamportsToSol(market.totalVolume);
-  const volumeDisplay =
-    volumeInSol >= 1000 ? `${(volumeInSol / 1000).toFixed(1)}k` : volumeInSol.toFixed(2);
+  const volSol = lamportsToSol(market.totalVolume);
 
   return (
-    <Link href={`/trade/${market.publicKey}`}>
-      <div className="card-pump h-full flex flex-col transition-all duration-300 hover:scale-[1.02] hover:border-pump-green/50 cursor-pointer group">
-        {/* Image */}
-        <div className="relative w-full h-40 mb-4 rounded-lg overflow-hidden bg-pump-dark">
-          {market.imageUrl && !imageError ? (
+    <Link href={`/trade/${market.publicKey}`} className="block group h-full">
+      <article className="relative rounded-xl overflow-hidden border border-gray-800 bg-[#05070b] hover:border-pump-green hover:shadow-xl transition-all h-full">
+        {/* IMAGE + CATEGORY BADGE */}
+        <div className="relative w-full h-40 overflow-hidden bg-black">
+          {market.imageUrl ? (
             <Image
               src={market.imageUrl}
               alt={market.question}
-              fill
-              className="object-cover group-hover:scale-105 transition-transform duration-300"
-              onError={() => setImageError(true)}
+              width={300}
+              height={200}
+              className="object-cover w-full h-full opacity-75 group-hover:opacity-90 transition"
             />
           ) : (
-            <CategoryImagePlaceholder category={market.category || 'other'} className="w-full h-full" />
-          )}
-          <div className="absolute inset-0 bg-gradient-to-t from-pump-dark/80 to-transparent" />
-
-          {market.category && (
-            <div className="absolute top-2 left-2">
-              <span className="px-2 py-1 text-xs font-semibold bg-pump-dark/80 backdrop-blur-sm rounded-full border border-gray-700 text-gray-300 capitalize">
-                {market.category}
-              </span>
+            <div className="flex justify-center items-center w-full h-full opacity-60 scale-[0.6]">
+              <CategoryImagePlaceholder category={market.category.toLowerCase()} />
             </div>
           )}
+
+          {/* dark fade bottom */}
+          <div className="absolute inset-0 bg-gradient-to-t from-[#05070b] via-transparent" />
+
+          {/* CATEGORY PILL (top-left, fond noir) */}
+          <div className="absolute top-3 left-3">
+            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wide bg-black/80 border border-gray-700 text-gray-200 shadow-sm">
+              {market.category}
+            </span>
+          </div>
         </div>
 
-        <div className="flex-1 flex flex-col">
-          <h3 className="text-base font-bold text-white mb-2 line-clamp-2 group-hover:text-pump-green transition-colors">
+        {/* CONTENT */}
+        <div className="p-4 flex flex-col justify-between h-[170px]">
+          {/* TITLE REMONTÉ */}
+          <h3 className="font-semibold text-white text-[15px] leading-tight line-clamp-2 group-hover:text-pump-green transition mb-1">
             {market.question}
           </h3>
 
-          <p className="text-sm text-gray-400 mb-3 line-clamp-2 leading-snug">
-            {market.description || ''}
-          </p>
+          {market.description && (
+            <p className="text-[11px] text-gray-500 line-clamp-1 mb-2">
+              {market.description}
+            </p>
+          )}
 
-          <div className="flex-1" />
+          {/* OUTCOMES GREEN / RED */}
+          <div className="flex mt-1 gap-2">
+            {/* OUTCOME 1 (GREEN) */}
+            <div className="flex-1 bg-green-500/15 border border-green-500/30 rounded-lg p-2 flex flex-col justify-center items-center text-center">
+              <span className="text-[11px] uppercase text-green-400 font-semibold tracking-wide">
+                {outcomes[0].length > 10 ? outcomes[0].slice(0, 8) + '…' : outcomes[0]}
+              </span>
+              <span className="text-[18px] md:text-[20px] font-semibold text-green-400">
+                {percents[0]}%
+              </span>
+            </div>
 
-          {/* Outcomes */}
-          <div className="space-y-2 mb-3">
-            {outcomes.slice(0, 2).map((outcome, index) => (
-              <div key={index} className="flex items-center justify-between">
-                <span className={`text-sm font-medium uppercase ${index === 0 ? 'text-blue-400' : 'text-red-400'}`}>
-                  {outcome.length > 12 ? outcome.slice(0, 12) + '...' : outcome}
-                </span>
-                <span className={`text-lg font-bold ${index === 0 ? 'text-blue-400' : 'text-red-400'}`}>
-                  {percentages[index]?.toFixed(0)}%
-                </span>
-              </div>
-            ))}
-            {outcomes.length > 2 && (
-              <div className="text-xs text-gray-400">+{outcomes.length - 2} more</div>
-            )}
+            {/* OUTCOME 2 (RED) */}
+            <div className="flex-1 bg-red-500/15 border border-red-500/30 rounded-lg p-2 flex flex-col justify-center items-center text-center">
+              <span className="text-[11px] uppercase text-red-400 font-semibold tracking-wide">
+                {outcomes[1].length > 10 ? outcomes[1].slice(0, 8) + '…' : outcomes[1]}
+              </span>
+              <span className="text-[18px] md:text-[20px] font-semibold text-red-400">
+                {percents[1]}%
+              </span>
+            </div>
           </div>
 
-          {/* Bottom stats */}
-          <div className="flex items-center justify-between text-xs text-gray-500 pt-3 border-t border-gray-800">
-            <div className="flex items-center space-x-1">
-              <span className="text-pump-green font-semibold">{volumeDisplay}</span>
-              <span>SOL Vol</span>
+          {/* FOOTER */}
+          <div className="flex items-center justify-between text-[11px] text-gray-400 mt-3">
+            {/* volume */}
+            <div className="flex items-center gap-1">
+              <TrendingUp className="w-3 h-3 text-pump-green" />
+              <span className="font-semibold text-white">
+                {volSol.toFixed(2)} SOL
+              </span>
             </div>
-            <div className="flex items-center space-x-1">
-              <span className="text-gray-400">{daysLeft > 0 ? `${daysLeft}d left` : `${hoursLeft}h left`}</span>
+
+            {/* time left */}
+            <div className="flex items-center gap-1">
+              <Clock className="w-3 h-3" />
+              <span>{daysLeft}d left</span>
             </div>
           </div>
         </div>
-      </div>
+      </article>
     </Link>
   );
 }

@@ -34,6 +34,16 @@ function clamp(x: number, a: number, b: number) {
   return Math.max(a, Math.min(b, x));
 }
 
+interface Props {
+  marketId?: string;
+  marketAddress?: string;
+  outcomeNames: string[];
+  outcomesCount?: number;
+  outcomeSupplies?: number[];
+  hours?: number;
+  height?: number;
+}
+
 export default function OddsHistoryFromTrades({
   marketId,
   marketAddress,
@@ -42,15 +52,7 @@ export default function OddsHistoryFromTrades({
   outcomeSupplies, // baseline fallback (SUPER useful on homepage)
   hours = 24,
   height = 170,
-}: {
-  marketId?: string;
-  marketAddress?: string;
-  outcomeNames: string[];
-  outcomesCount?: number;
-  outcomeSupplies?: number[];
-  hours?: number;
-  height?: number;
-}) {
+}: Props) {
   const [txs, setTxs] = useState<TxRow[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -58,7 +60,7 @@ export default function OddsHistoryFromTrades({
     let cancelled = false;
 
     async function load() {
-      // If we have neither id nor address => nothing
+      // Pas d’ID → pas de chart
       if (!marketId && !marketAddress) {
         setTxs([]);
         return;
@@ -77,7 +79,7 @@ export default function OddsHistoryFromTrades({
           .order("created_at", { ascending: true })
           .limit(400);
 
-        // Match by uuid OR address (depending on what you stored)
+        // Match par uuid OU par address selon ce qu’on a en base
         if (marketId && marketAddress) {
           q = q.or(`market_id.eq.${marketId},market_address.eq.${marketAddress}`);
         } else if (marketId) {
@@ -90,7 +92,8 @@ export default function OddsHistoryFromTrades({
         if (error) throw error;
 
         if (!cancelled) setTxs((data as TxRow[]) || []);
-      } catch {
+      } catch (err) {
+        console.error("odds history load error:", err);
         if (!cancelled) setTxs([]);
       } finally {
         if (!cancelled) setLoading(false);
@@ -107,14 +110,16 @@ export default function OddsHistoryFromTrades({
     const names = (outcomeNames || []).filter(Boolean);
     const n = Math.max(2, Math.min(10, Math.floor(outcomesCount || names.length || 2)));
 
-    // Ensure we have n labels
+    // Labels sûrs
     const finalNames =
-      names.length >= n ? names.slice(0, n) : [...names, ...Array(n - names.length).fill("Option")].slice(0, n);
+      names.length >= n
+        ? names.slice(0, n)
+        : [...names, ...Array(n - names.length).fill("Option")].slice(0, n);
 
-    // Baseline supplies from props (homepage)
+    // Baseline (important pour homepage)
     const baseSupplies = Array.from({ length: n }, (_, i) => toNum(outcomeSupplies?.[i], 0));
 
-    // Start cumulative supplies from baseline (important if you already store current supplies)
+    // Cumul à partir de la baseline
     const supplies = [...baseSupplies];
 
     const out: OddsPoint[] = [];
@@ -122,11 +127,11 @@ export default function OddsHistoryFromTrades({
     for (const row of txs) {
       const isBuy = !!row.is_buy;
 
-      // ✅ prefer shares (because amount might be SOL/cost)
+      // ✅ on privilégie shares (amount peut être un coût en SOL)
       const raw = row.shares ?? row.amount ?? 0;
       const delta = Math.max(0, toNum(raw, 0));
 
-      // Determine outcome index
+      // Outcome index
       let idx: number | null = null;
 
       if (Number.isFinite(toNum(row.outcome_index, NaN))) {
@@ -146,16 +151,22 @@ export default function OddsHistoryFromTrades({
       supplies[idx] = Math.max(0, supplies[idx] + (isBuy ? delta : -delta));
 
       const total = supplies.reduce((s, x) => s + (x || 0), 0);
-      const pct = total > 0 ? supplies.map((s) => (s / total) * 100) : supplies.map(() => 100 / n);
+      const pct =
+        total > 0
+          ? supplies.map((s) => (s / total) * 100)
+          : supplies.map(() => 100 / n);
 
       const t = new Date(row.created_at).getTime();
       out.push({ t, pct });
     }
 
-    // If we still don't have enough points, create a 2-point baseline so the chart renders
+    // Pas assez de points → baseline 2 points pour avoir un chart lisible
     if (out.length < 2) {
       const total = baseSupplies.reduce((s, x) => s + (x || 0), 0);
-      const pct = total > 0 ? baseSupplies.map((s) => (s / total) * 100) : baseSupplies.map(() => 100 / n);
+      const pct =
+        total > 0
+          ? baseSupplies.map((s) => (s / total) * 100)
+          : baseSupplies.map(() => 100 / n);
       const now = Date.now();
       return [
         { t: now - 60 * 1000, pct },
@@ -166,7 +177,10 @@ export default function OddsHistoryFromTrades({
     return out;
   }, [txs, outcomeNames, outcomesCount, outcomeSupplies]);
 
-  const safeNames = useMemo(() => (outcomeNames || []).filter(Boolean).slice(0, 10), [outcomeNames]);
+  const safeNames = useMemo(
+    () => (outcomeNames || []).filter(Boolean).slice(0, 10),
+    [outcomeNames]
+  );
 
   return (
     <div className="w-full">
@@ -175,7 +189,11 @@ export default function OddsHistoryFromTrades({
           Loading…
         </div>
       ) : (
-        <OddsHistoryChart points={points} outcomeNames={safeNames.length ? safeNames : ["YES", "NO"]} height={height} />
+        <OddsHistoryChart
+          points={points}
+          outcomeNames={safeNames.length ? safeNames : ["YES", "NO"]}
+          height={height}
+        />
       )}
     </div>
   );

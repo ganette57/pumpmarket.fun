@@ -1,56 +1,51 @@
-'use client';
-
-import { motion } from 'framer-motion';
-import { CATEGORIES, CategoryId } from '@/utils/categories';
+"use client";
 
 interface CategoryFiltersProps {
-  selectedCategory: CategoryId | 'all';
-  onSelectCategory: (category: CategoryId | 'all') => void;
+  selectedCategory: string; // "all" | category id
+  onSelectCategory: (id: string) => void;
 }
 
-export default function CategoryFilters({ selectedCategory, onSelectCategory }: CategoryFiltersProps) {
-  const allCategories = [{ id: 'all' as const, label: 'All', icon: '🌟' }, ...CATEGORIES];
+const CATEGORIES: { id: string; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "trending", label: "Trending" },
+  { id: "breaking", label: "Breaking news" },
+  { id: "politics", label: "Politics" },
+  { id: "sports", label: "Sports" },
+  { id: "finance", label: "Finance" },
+  { id: "crypto", label: "Crypto" },
+  { id: "culture", label: "Culture" },
+  { id: "tech", label: "Tech" },
+  { id: "science", label: "Science" },
+  { id: "entertainment", label: "Entertainment" },
+  { id: "other", label: "Other" },
+];
 
+export default function CategoryFilters({
+  selectedCategory,
+  onSelectCategory,
+}: CategoryFiltersProps) {
   return (
     <div className="py-4">
-      <div className="flex items-center gap-3 overflow-x-auto scrollbar-hide pb-2">
-        {allCategories.map((category, index) => {
-          const isSelected = selectedCategory === category.id;
-
+      <div className="flex gap-2 overflow-x-auto no-scrollbar">
+        {CATEGORIES.map((cat) => {
+          const active = selectedCategory === cat.id;
           return (
-            <motion.button
-              key={category.id}
-              onClick={() => onSelectCategory(category.id)}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: index * 0.05, duration: 0.3 }}
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              className={`
-                flex items-center gap-2 px-4 py-2 rounded-full font-semibold text-sm whitespace-nowrap transition-all duration-200
-                ${
-                  isSelected
-                    ? 'bg-pump-green text-black shadow-lg shadow-pump-green/20'
-                    : 'bg-pump-gray text-gray-300 border border-gray-700 hover:border-pump-green hover:text-pump-green'
-                }
-              `}
+            <button
+              key={cat.id}
+              onClick={() => onSelectCategory(cat.id)}
+              className={[
+                "whitespace-nowrap rounded-full px-4 py-1.5 text-sm font-medium transition-all",
+                "border",
+                active
+                  ? "bg-pump-green text-black border-pump-green shadow-[0_0_24px_rgba(34,197,94,0.35)]"
+                  : "bg-[#111111] text-gray-200 border-gray-800 hover:border-gray-600 hover:bg-[#151515]",
+              ].join(" ")}
             >
-              <span className="text-lg">{category.icon}</span>
-              <span>{category.label}</span>
-            </motion.button>
+              {cat.label}
+            </button>
           );
         })}
       </div>
-
-      <style jsx global>{`
-        .scrollbar-hide::-webkit-scrollbar {
-          display: none;
-        }
-        .scrollbar-hide {
-          -ms-overflow-style: none;
-          scrollbar-width: none;
-        }
-      `}</style>
     </div>
   );
 }

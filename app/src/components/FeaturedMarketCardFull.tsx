@@ -1,3 +1,4 @@
+// app/src/components/FeaturedMarketCardFull.tsx
 'use client';
 
 import { useState, useMemo } from 'react';
@@ -6,13 +7,13 @@ import Image from 'next/image';
 import { TrendingUp, Clock } from 'lucide-react';
 import CategoryImagePlaceholder from './CategoryImagePlaceholder';
 import { lamportsToSol } from '@/utils/solana';
-import OddsHistoryFromTrades from "@/components/OddsHistoryFromTrades";
+import OddsHistoryFromTrades from '@/components/OddsHistoryFromTrades';
 
 interface FeaturedMarket {
-  // ✅ on garde id = market_address (pour /trade/:id)
+  // market_address (pour /trade/:id)
   id: string;
 
-  // ✅ NEW: supabase UUID (pour fetch trades/odds)
+  // Supabase UUID (pour fetch trades/odds)
   dbId?: string;
 
   question: string;
@@ -68,13 +69,14 @@ export default function FeaturedMarketCardFull({ market }: FeaturedMarketCardFul
   return (
     <div className="w-full">
       <Link href={`/trade/${market.id}`}>
-        <div className="bg-pump-gray border border-gray-700 hover:border-pump-green rounded-xl transition-all duration-300 hover:shadow-2xl cursor-pointer overflow-hidden">
-          {/* Desktop */}
+        <div className="bg-pump-gray border border-gray-800 hover:border-pump-green/80 rounded-2xl transition-all duration-300 hover:shadow-[0_0_40px_rgba(16,185,129,0.25)] cursor-pointer overflow-hidden">
+          {/* DESKTOP */}
           <div className="hidden md:flex h-[500px]">
-            {/* Left */}
+            {/* LEFT */}
             <div className="w-1/2 p-8 flex flex-col">
               <div className="flex gap-6 flex-1">
-                <div className="flex-shrink-0 w-32 h-32 rounded-xl overflow-hidden bg-pump-dark">
+                {/* Image */}
+                <div className="flex-shrink-0 w-32 h-32 rounded-xl overflow-hidden bg-black">
                   {market.imageUrl && !imageError ? (
                     <Image
                       src={market.imageUrl}
@@ -86,29 +88,41 @@ export default function FeaturedMarketCardFull({ market }: FeaturedMarketCardFul
                     />
                   ) : (
                     <div className="w-full h-full scale-[0.5]">
-                      <CategoryImagePlaceholder category={market.category.toLowerCase()} className="w-full h-full" />
+                      <CategoryImagePlaceholder
+                        category={market.category.toLowerCase()}
+                        className="w-full h-full"
+                      />
                     </div>
                   )}
                 </div>
 
+                {/* Content */}
                 <div className="flex-1 flex flex-col">
-                  <div className="inline-block px-3 py-1 bg-blue-500/20 border border-blue-500/30 rounded-full text-blue-400 text-xs font-semibold mb-3 w-fit">
+                  {/* Category pill en haut à gauche sur fond noir */}
+                  <div className="inline-flex items-center px-3 py-1 rounded-full bg-black/70 border border-gray-700 text-[11px] uppercase tracking-wide text-gray-200 mb-3 w-fit">
                     {market.category}
                   </div>
 
-                  <h2 className="text-3xl font-bold text-white mb-4 line-clamp-3 leading-tight hover:text-pump-green transition">
+                  {/* Titre remonté, très visible */}
+                  <h2 className="text-3xl font-bold text-white mb-3 leading-tight hover:text-pump-green transition">
                     {market.question}
                   </h2>
 
                   {market.creator && (
                     <div className="mb-4">
                       <p className="text-sm text-gray-400">
-                        Created by <span className="text-white font-semibold">{market.creator.slice(0, 8)}...</span>
+                        Created by{' '}
+                        <span className="text-white font-semibold">
+                          {market.creator.length > 12
+                            ? `${market.creator.slice(0, 10)}…`
+                            : market.creator}
+                        </span>
                       </p>
                     </div>
                   )}
 
-                  <div className="flex items-center gap-6 text-sm text-gray-400 mb-6">
+                  {/* Volume + time left */}
+                  <div className="flex items-center gap-6 text-sm text-gray-400 mb-5">
                     <div className="flex items-center gap-2">
                       <TrendingUp className="w-4 h-4 text-pump-green" />
                       <span className="font-semibold text-white">{volLabel} SOL Vol</span>
@@ -119,66 +133,80 @@ export default function FeaturedMarketCardFull({ market }: FeaturedMarketCardFul
                     </div>
                   </div>
 
-                  {/* Outcomes */}
-                  <div className="space-y-3 mt-auto">
-                    {outcomes.slice(0, 2).map((outcome, index) => (
-                      <div key={index} className="flex items-center gap-4">
-                        <span
-                          className={`text-sm font-semibold uppercase w-36 text-left ${
-                            index === 0 ? 'text-blue-400' : 'text-red-400'
-                          }`}
-                        >
-                          {outcome.length > 10 ? outcome.slice(0, 10) + '...' : outcome}
-                        </span>
+                  {/* Outcomes YES / NO (vert / rouge) */}
+                  <div className="space-y-3 mt-auto pb-2">
+                    {outcomes.slice(0, 2).map((outcome, index) => {
+                      const isYes = index === 0;
+                      const label =
+                        outcome.length > 16 ? outcome.slice(0, 16) + '…' : outcome;
 
-                        <div
-                          className={`flex-1 flex items-center justify-between p-3 rounded-lg ${
-                            index === 0
-                              ? 'bg-blue-500/10 border border-blue-500/30'
-                              : 'bg-red-500/10 border border-red-500/30'
-                          }`}
-                        >
-                          <span className={`text-3xl font-bold ${index === 0 ? 'text-blue-400' : 'text-red-400'}`}>
-                            {percentages[index]?.toFixed(0)}%
+                      return (
+                        <div key={index} className="flex items-center gap-4">
+                          <span
+                            className={`text-xs font-semibold uppercase w-32 text-left ${
+                              isYes ? 'text-pump-green' : 'text-red-400'
+                            }`}
+                          >
+                            {label}
                           </span>
-                          <span className="text-xs text-gray-500">
-                            {(supplies[index] || 0).toLocaleString()} shares
-                          </span>
+
+                          <div
+                            className={`flex-1 flex items-center justify-between p-3 rounded-lg border ${
+                              isYes
+                                ? 'bg-pump-green/5 border-pump-green/40'
+                                : 'bg-red-500/5 border-red-500/40'
+                            }`}
+                          >
+                            <span
+                              className={`text-3xl font-extrabold ${
+                                isYes ? 'text-pump-green' : 'text-red-400'
+                              }`}
+                            >
+                              {percentages[index]?.toFixed(0)}%
+                            </span>
+                            <span className="text-xs text-gray-500">
+                              {(supplies[index] || 0).toLocaleString()} shares
+                            </span>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
+
                     {outcomes.length > 2 && (
-                      <div className="text-sm text-gray-400 text-center">+{outcomes.length - 2} more options</div>
+                      <div className="text-xs text-gray-500 text-left">
+                        +{outcomes.length - 2} more outcomes
+                      </div>
                     )}
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* Right (chart) */}
-            <div className="w-1/2 bg-pump-dark/50 p-6 border-l border-gray-800 flex items-center">
+            {/* RIGHT – chart, sans bordures */}
+            <div className="w-1/2 bg-[#050608] p-6 flex items-center">
               <div className="w-full">
-                <h3 className="text-sm font-semibold text-gray-400 mb-4">Odds history</h3>
-
-                {/* ✅ IMPORTANT: pass dbId (supabase UUID), sinon "not enough trades" */}
-                <OddsHistoryFromTrades
-  marketId={market.dbId}
-  marketAddress={market.id}
-  outcomeNames={outcomes}
-  outcomesCount={outcomes.length}
-  outcomeSupplies={supplies}   // ✅ AJOUT
-  hours={24}
-  height={170}
-/>
+                {/* Plus de label “Odds history” ici, juste le chart clean */}
+                <div className="rounded-xl bg-black/40 px-4 py-3 shadow-inner">
+                  <OddsHistoryFromTrades
+                    marketId={market.dbId}
+                    marketAddress={market.id}
+                    outcomeNames={outcomes}
+                    outcomeSupplies={supplies}
+                    outcomesCount={outcomes.length}
+                    hours={24}
+                    height={200}
+                  />
+                </div>
               </div>
             </div>
           </div>
 
-          {/* Mobile */}
+          {/* MOBILE */}
           <div className="md:hidden">
-            <div className="p-5">
-              <div className="flex gap-4 mb-4">
-                <div className="flex-shrink-0 w-24 h-24 rounded-xl overflow-hidden bg-pump-dark">
+            <div className="p-5 space-y-4">
+              {/* Header */}
+              <div className="flex gap-4">
+                <div className="flex-shrink-0 w-24 h-24 rounded-xl overflow-hidden bg-black">
                   {market.imageUrl && !imageError ? (
                     <Image
                       src={market.imageUrl}
@@ -190,61 +218,84 @@ export default function FeaturedMarketCardFull({ market }: FeaturedMarketCardFul
                     />
                   ) : (
                     <div className="w-full h-full scale-[0.4]">
-                      <CategoryImagePlaceholder category={market.category.toLowerCase()} className="w-full h-full" />
+                      <CategoryImagePlaceholder
+                        category={market.category.toLowerCase()}
+                        className="w-full h-full"
+                      />
                     </div>
                   )}
                 </div>
 
                 <div className="flex-1">
-                  <div className="inline-block px-2 py-1 bg-blue-500/20 border border-blue-500/30 rounded-full text-blue-400 text-xs font-semibold mb-2">
+                  <div className="inline-flex items-center px-2.5 py-1 rounded-full bg-black/70 border border-gray-700 text-[10px] uppercase tracking-wide text-gray-200 mb-2">
                     {market.category}
                   </div>
-                  <h2 className="text-lg font-bold text-white line-clamp-2 leading-tight">{market.question}</h2>
-                  <div className="mt-2 text-xs text-gray-400">
-                    {volLabel} SOL Vol • {market.daysLeft}d left
+
+                  <h2 className="text-lg font-bold text-white leading-tight line-clamp-2">
+                    {market.question}
+                  </h2>
+
+                  <div className="mt-2 text-xs text-gray-400 flex items-center gap-3">
+                    <span>{volLabel} SOL Vol</span>
+                    <span>•</span>
+                    <span>{market.daysLeft}d left</span>
                   </div>
                 </div>
               </div>
 
-              <div className="space-y-2 mb-4">
-                {outcomes.slice(0, 2).map((outcome, index) => (
-                  <div key={index} className="flex items-center gap-3">
-                    <span
-                      className={`text-xs font-semibold uppercase w-20 text-left ${
-                        index === 0 ? 'text-blue-400' : 'text-red-400'
-                      }`}
-                    >
-                      {outcome.length > 8 ? outcome.slice(0, 8) + '...' : outcome}
-                    </span>
-                    <div
-                      className={`flex-1 flex items-center justify-between p-3 rounded-lg ${
-                        index === 0
-                          ? 'bg-blue-500/10 border border-blue-500/30'
-                          : 'bg-red-500/10 border border-red-500/30'
-                      }`}
-                    >
-                      <span className={`text-2xl font-bold ${index === 0 ? 'text-blue-400' : 'text-red-400'}`}>
-                        {percentages[index]?.toFixed(0)}%
+              {/* Outcomes */}
+              <div className="space-y-2">
+                {outcomes.slice(0, 2).map((outcome, index) => {
+                  const isYes = index === 0;
+                  const label =
+                    outcome.length > 12 ? outcome.slice(0, 12) + '…' : outcome;
+
+                  return (
+                    <div key={index} className="flex items-center gap-3">
+                      <span
+                        className={`text-[11px] font-semibold uppercase w-20 text-left ${
+                          isYes ? 'text-pump-green' : 'text-red-400'
+                        }`}
+                      >
+                        {label}
                       </span>
+                      <div
+                        className={`flex-1 flex items-center justify-between px-3 py-2 rounded-lg border ${
+                          isYes
+                            ? 'bg-pump-green/5 border-pump-green/40'
+                            : 'bg-red-500/5 border-red-500/40'
+                        }`}
+                      >
+                        <span
+                          className={`text-2xl font-bold ${
+                            isYes ? 'text-pump-green' : 'text-red-400'
+                          }`}
+                        >
+                          {percentages[index]?.toFixed(0)}%
+                        </span>
+                      </div>
                     </div>
+                  );
+                })}
+                {outcomes.length > 2 && (
+                  <div className="text-[11px] text-gray-500">
+                    +{outcomes.length - 2} more outcomes
                   </div>
-                ))}
-                {outcomes.length > 2 && <div className="text-xs text-gray-400">+{outcomes.length - 2} more</div>}
+                )}
               </div>
 
-              {/* ✅ Mobile odds chart */}
-              <div className="bg-pump-dark/40 border border-gray-800 rounded-xl p-4">
-  <div className="text-xs font-semibold text-gray-400 mb-3">Odds history</div>
-  <OddsHistoryFromTrades
-  marketId={market.dbId}
-  marketAddress={market.id}
-  outcomeNames={outcomes}
-  outcomeSupplies={supplies}   // ✅ AJOUTE ÇA
-  outcomesCount={outcomes.length}
-  hours={24}
-  height={170}
-/>
-</div>
+              {/* Mobile chart, sans bordures */}
+              <div className="rounded-xl bg-black/40 px-3 py-3 shadow-inner">
+                <OddsHistoryFromTrades
+                  marketId={market.dbId}
+                  marketAddress={market.id}
+                  outcomeNames={outcomes}
+                  outcomeSupplies={supplies}
+                  outcomesCount={outcomes.length}
+                  hours={24}
+                  height={180}
+                />
+              </div>
             </div>
           </div>
         </div>

@@ -6,7 +6,8 @@
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
-    "@switchboard-xyz/on-demand": "^3.7.3"
+    "@switchboard-xyz/on-demand": "^3.7.3",
+    "recharts": "^3.6.0"
   },
   "devDependencies": {
     "@types/bn.js": "^5.1.0",
