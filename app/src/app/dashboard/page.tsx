@@ -44,7 +44,9 @@ function formatTimeStatus(endDate?: string): string {
 
   const diff = end.getTime() - now;
   const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-  const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+  const hours = Math.floor(
+    (diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)
+  );
 
   if (days > 0) return `${days}d ${hours}h left`;
   if (hours > 0) return `${hours}h left`;
@@ -300,6 +302,25 @@ export default function DashboardPage() {
 
     return { created, volSol, creatorFeesSol };
   }, [myCreatedMarkets]);
+
+  // “Portfolio style” stats based on user txs (purement visuel)
+  const portfolioStats = useMemo(() => {
+    const markets = new Set<string>();
+    let tradedVolumeSol = 0;
+
+    for (const t of myTxs) {
+      if (t.market_address) markets.add(String(t.market_address));
+      else if (t.market_id) markets.add(String(t.market_id));
+      const c = toNum(t.cost);
+      if (c) tradedVolumeSol += Math.abs(c);
+    }
+
+    return {
+      positions: markets.size,
+      trades: myTxs.length,
+      tradedVolumeSol,
+    };
+  }, [myTxs]);
 
   // ---------------- claimables (on-chain) ----------------
   useEffect(() => {
@@ -602,17 +623,25 @@ export default function DashboardPage() {
       <div className="max-w-6xl mx-auto px-4 py-12">
         <h1 className="text-4xl font-bold text-white mb-6">Dashboard</h1>
         <div className="card-pump">
-          <p className="text-gray-400">Connect wallet to view your dashboard.</p>
+          <p className="text-gray-400">
+            Connect wallet to view your dashboard.
+          </p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-12">
-      <div className="flex items-center justify-between gap-6 mb-8">
-        <h1 className="text-4xl font-bold text-white">Dashboard</h1>
-        <div className="text-sm text-gray-400">Wallet: {walletLabel}</div>
+    <div className="max-w-6xl mx-auto px-4 py-10">
+      {/* Header + profile row */}
+      <div className="flex items-center justify-between gap-6 mb-6">
+        <h1 className="text-3xl md:text-4xl font-bold text-white">
+          Portfolio
+        </h1>
+        <div className="text-xs md:text-sm text-gray-400">
+          Wallet:{" "}
+          <span className="font-mono text-white/80">{walletLabel}</span>
+        </div>
       </div>
 
       {errorMsg && (
@@ -621,47 +650,124 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Top Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        <div className="card-pump">
-          <div className="text-xs text-gray-500 mb-2">Markets created</div>
-          <div className="text-3xl font-bold text-white">
-            {loadingMarkets ? "…" : stats.created}
+      {/* Top row – profile + PnL style card */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-8">
+        {/* Profile / stats */}
+        <div className="card-pump lg:col-span-2 flex items-center justify-between gap-6">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-full bg-gradient-to-br from-pump-green to-purple-500 flex items-center justify-center text-black font-bold text-lg">
+              FM
+            </div>
+            <div>
+              <div className="text-xs text-gray-500 mb-1">
+                Connected wallet
+              </div>
+              <div className="text-sm md:text-base font-semibold text-white">
+                {walletLabel}
+              </div>
+              <div className="text-[11px] text-gray-500 mt-1">
+                Degens become fortune tellers here ⚡
+              </div>
+            </div>
+          </div>
+
+          {/* small stats inline */}
+          <div className="grid grid-cols-3 gap-4 text-right">
+            <div>
+              <div className="text-[11px] uppercase tracking-wide text-gray-500">
+                Positions
+              </div>
+              <div className="text-xl font-semibold text-white">
+                {portfolioStats.positions}
+              </div>
+              <div className="text-[11px] text-gray-500">Markets traded</div>
+            </div>
+
+            <div>
+              <div className="text-[11px] uppercase tracking-wide text-gray-500">
+                Volume traded
+              </div>
+              <div className="text-xl font-semibold text-white">
+                {portfolioStats.tradedVolumeSol.toFixed(2)} SOL
+              </div>
+              <div className="text-[11px] text-gray-500">
+                Based on your fills
+              </div>
+            </div>
+
+            <div>
+              <div className="text-[11px] uppercase tracking-wide text-gray-500">
+                Markets created
+              </div>
+              <div className="text-xl font-semibold text-white">
+                {stats.created}
+              </div>
+              <div className="text-[11px] text-gray-500">
+                Creator fees ~{stats.creatorFeesSol.toFixed(3)} SOL
+              </div>
+            </div>
           </div>
         </div>
 
-        <div className="card-pump">
-          <div className="text-xs text-gray-500 mb-2">Volume (your markets)</div>
-          <div className="text-3xl font-bold text-white">
-            {loadingMarkets ? "…" : `${stats.volSol.toFixed(2)} SOL`}
+        {/* PnL card (visuel, PnL tracking à venir) */}
+        <div className="card-pump flex flex-col justify-between">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs text-gray-500 uppercase tracking-wide">
+              Profit / Loss
+            </span>
+            <div className="flex items-center gap-1 text-[10px] bg-pump-dark/60 rounded-full px-2 py-1 text-gray-400">
+              <span className="h-2 w-2 rounded-full bg-yellow-400" />
+              <span>Beta</span>
+            </div>
           </div>
-        </div>
+          <div className="text-3xl font-bold text-white mb-1">
+            0.00 <span className="text-base text-gray-400">SOL</span>
+          </div>
+          <div className="text-[11px] text-gray-500 mb-3">
+            P&amp;L tracking & charts coming in the next update.
+          </div>
 
-        <div className="card-pump">
-          <div className="text-xs text-gray-500 mb-2">Fees earned (est.)</div>
-          <div className="text-3xl font-bold text-white">
-            {loadingMarkets ? "…" : `${stats.creatorFeesSol.toFixed(4)} SOL`}
-          </div>
-          <div className="text-xs text-gray-500 mt-1">
-            ~1% of volume (creator) unless total fees are stored
+          <div className="flex gap-1 justify-end">
+            {["1D", "1W", "1M", "ALL"].map((label, i) => (
+              <button
+                key={label}
+                className={`px-2 py-1 rounded-md text-[11px] ${
+                  label === "1M"
+                    ? "bg-pump-green text-black font-semibold"
+                    : "bg-pump-dark/70 text-gray-300"
+                }`}
+                type="button"
+              >
+                {label}
+              </button>
+            ))}
           </div>
         </div>
       </div>
 
       {/* Claimable Winnings */}
-      <div className="card-pump mb-6">
-        <h2 className="text-xl font-bold text-white mb-2">🏆 Claimable Winnings</h2>
+      <div className="card-pump mb-8">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg md:text-xl font-bold text-white">
+            🏆 Claimable winnings
+          </h2>
+          <span className="text-xs text-gray-500">
+            Resolved markets where you hold winning shares
+          </span>
+        </div>
 
         {loadingClaimables ? (
-          <p className="text-gray-400">Checking claimables…</p>
+          <p className="text-gray-400 text-sm">Checking claimables…</p>
         ) : claimables.length === 0 ? (
-          <p className="text-gray-400">No claimable winnings found yet.</p>
+          <p className="text-gray-500 text-sm">
+            No claimable winnings yet. Degens who never bet, never win.
+          </p>
         ) : (
           <div className="space-y-3">
             {claimables.map((c) => (
               <div
                 key={c.marketAddress}
-                className="rounded-xl border border-pump-green/30 bg-pump-green/5 p-4 flex items-center justify-between gap-4"
+                className="rounded-xl border border-pump-green/40 bg-pump-green/5 p-4 flex items-center justify-between gap-4"
               >
                 <div className="min-w-0">
                   <div className="text-white font-semibold truncate">
@@ -697,155 +803,194 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* My Transactions */}
-      <div className="card-pump mb-6">
-        <h2 className="text-xl font-bold text-white mb-3">My Transactions</h2>
-
-        {loadingTxs ? (
-          <p className="text-gray-400">Loading transactions…</p>
-        ) : txRows.length === 0 ? (
-          <p className="text-gray-400">No transactions yet.</p>
-        ) : (
-          <div className="space-y-4">
-            {txRows.map((r) => (
-              <div
-                key={r.id}
-                className="rounded-xl border border-white/10 bg-pump-dark/30 p-4 flex items-center justify-between gap-6"
-              >
-                <div className="min-w-0">
-                  <div className="text-white font-semibold">{r.title}</div>
-                  <div className="text-sm text-gray-400 mt-1 truncate">
-                    Market: {r.marketQuestion || shortAddr(r.marketAddress)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    {r.createdAt ? r.createdAt.toLocaleString("fr-FR") : ""}
-                    {r.sig && (
-                      <>
-                        {" • "}
-                        <a
-                          href={`https://explorer.solana.com/tx/${r.sig}?cluster=devnet`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-pump-green hover:underline"
-                        >
-                          tx: {shortSig(r.sig)}
-                        </a>
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-3 flex-shrink-0">
-                  <div className="text-right">
-                    <div className="text-pump-green font-bold">
-                      {r.costSol > 0 ? `${r.costSol.toFixed(4)} SOL` : "0.0000 SOL"}
-                    </div>
-                  </div>
-
-                  {r.marketAddress && (
-                    <Link
-                      href={`/trade/${r.marketAddress}`}
-                      className="px-4 py-2 rounded-lg bg-pump-green text-black font-semibold hover:opacity-90 transition"
-                    >
-                      View
-                    </Link>
-                  )}
-                </div>
-              </div>
-            ))}
+      {/* Positions + My markets – 2 colonnes */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        {/* Positions / activity */}
+        <div className="card-pump">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg md:text-xl font-bold text-white">
+              Positions & activity
+            </h2>
+            {loadingTxs ? (
+              <span className="text-xs text-gray-500">Loading…</span>
+            ) : (
+              <span className="text-xs text-gray-500">
+                {txRows.length} transactions
+              </span>
+            )}
           </div>
-        )}
-      </div>
 
-      {/* My Markets (creator only) */}
-      <div className="card-pump">
-        <h2 className="text-xl font-bold text-white mb-3">My Markets</h2>
-
-        {loadingMarkets ? (
-          <p className="text-gray-400">Loading markets…</p>
-        ) : myCreatedMarkets.length === 0 ? (
-          <p className="text-gray-400">No markets created yet.</p>
-        ) : (
-          <div className="space-y-4">
-            {myCreatedMarkets.map((m, idx) => {
-              const addr = String(m.market_address || "");
-              const q = String(m.question || "Market");
-              const volSol = lamportsToSol(toNum(m.total_volume));
-
-              const ended = isMarketEnded(m.end_date);
-              const canResolve = !m.resolved && ended;
-              const timeStatus = formatTimeStatus(m.end_date);
-
-              return (
+          {loadingTxs ? (
+            <p className="text-gray-400 text-sm">Loading transactions…</p>
+          ) : txRows.length === 0 ? (
+            <p className="text-gray-500 text-sm">
+              You haven&apos;t entered any markets yet.
+            </p>
+          ) : (
+            <div className="space-y-4">
+              {txRows.map((r) => (
                 <div
-                  key={String(m.id || addr || idx)}
-                  className={`rounded-xl border p-4 flex items-center justify-between gap-6 ${
-                    m.resolved
-                      ? "border-gray-600 bg-gray-800/30"
-                      : canResolve
-                      ? "border-yellow-500/50 bg-yellow-500/5"
-                      : "border-white/10 bg-pump-dark/30"
-                  }`}
+                  key={r.id}
+                  className="rounded-xl border border-white/10 bg-pump-dark/40 p-4 flex items-center justify-between gap-6"
                 >
                   <div className="min-w-0">
-                    <div className="text-white font-semibold truncate">{q}</div>
-                    <div className="text-xs text-gray-500 mt-1 flex items-center gap-2">
-                      <span>{addr ? shortAddr(addr) : ""}</span>
-                      <span>•</span>
-                      {m.resolved ? (
-                        <span className="text-green-400">✓ Resolved</span>
-                      ) : (
-                        <span
-                          className={
-                            ended ? "text-yellow-400" : "text-gray-400"
-                          }
-                        >
-                          {timeStatus}
-                        </span>
+                    <div className="text-white font-medium text-sm md:text-base">
+                      {r.title}
+                    </div>
+                    <div className="text-xs text-gray-400 mt-1 truncate">
+                      {r.marketQuestion || shortAddr(r.marketAddress)}
+                    </div>
+                    <div className="text-[11px] text-gray-500 mt-1">
+                      {r.createdAt
+                        ? r.createdAt.toLocaleString("fr-FR")
+                        : ""}
+                      {r.sig && (
+                        <>
+                          {" • "}
+                          <a
+                            href={`https://explorer.solana.com/tx/${r.sig}?cluster=devnet`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-pump-green hover:underline"
+                          >
+                            tx: {shortSig(r.sig)}
+                          </a>
+                        </>
                       )}
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-4 flex-shrink-0">
+                  <div className="flex items-center gap-3 flex-shrink-0">
                     <div className="text-right">
-                      <div className="text-white font-semibold">
-                        {volSol.toFixed(2)} SOL
+                      <div className="text-pump-green font-bold text-sm md:text-base">
+                        {r.costSol > 0
+                          ? `${r.costSol.toFixed(4)} SOL`
+                          : "0.0000 SOL"}
                       </div>
                     </div>
 
-                    {canResolve && (
-                      <button
-                        onClick={() => {
-                          setResolvingMarket(m);
-                          setSelectedOutcome(null);
-                        }}
-                        className="px-4 py-2 rounded-lg bg-yellow-500 text-black font-semibold hover:bg-yellow-400 transition"
-                      >
-                        ⚖️ Resolve
-                      </button>
-                    )}
-
-                    {addr && (
+                    {r.marketAddress && (
                       <Link
-                        href={`/trade/${addr}`}
-                        className="px-4 py-2 rounded-lg bg-pump-green text-black font-semibold hover:opacity-90 transition"
+                        href={`/trade/${r.marketAddress}`}
+                        className="hidden sm:inline-flex px-4 py-2 rounded-lg bg-pump-green text-black text-sm font-semibold hover:opacity-90 transition"
                       >
                         View
                       </Link>
                     )}
                   </div>
                 </div>
-              );
-            })}
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* My markets (creator) */}
+        <div className="card-pump">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg md:text-xl font-bold text-white">
+              Markets you created
+            </h2>
+            {loadingMarkets ? (
+              <span className="text-xs text-gray-500">Loading…</span>
+            ) : (
+              <span className="text-xs text-gray-500">
+                {myCreatedMarkets.length} markets
+              </span>
+            )}
           </div>
-        )}
+
+          {loadingMarkets ? (
+            <p className="text-gray-400 text-sm">Loading markets…</p>
+          ) : myCreatedMarkets.length === 0 ? (
+            <p className="text-gray-500 text-sm">
+              You haven&apos;t created any markets yet.
+            </p>
+          ) : (
+            <div className="space-y-4">
+              {myCreatedMarkets.map((m, idx) => {
+                const addr = String(m.market_address || "");
+                const q = String(m.question || "Market");
+                const volSol = lamportsToSol(toNum(m.total_volume));
+
+                const ended = isMarketEnded(m.end_date);
+                const canResolve = !m.resolved && ended;
+                const timeStatus = formatTimeStatus(m.end_date);
+
+                return (
+                  <div
+                    key={String(m.id || addr || idx)}
+                    className={`rounded-xl border p-4 flex items-center justify-between gap-6 ${
+                      m.resolved
+                        ? "border-gray-600 bg-gray-800/30"
+                        : canResolve
+                        ? "border-yellow-500/60 bg-yellow-500/5"
+                        : "border-white/10 bg-pump-dark/40"
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="text-white font-semibold truncate text-sm md:text-base">
+                        {q}
+                      </div>
+                      <div className="text-[11px] text-gray-500 mt-1 flex items-center gap-2">
+                        <span>{addr ? shortAddr(addr) : ""}</span>
+                        <span>•</span>
+                        {m.resolved ? (
+                          <span className="text-green-400">✓ Resolved</span>
+                        ) : (
+                          <span
+                            className={
+                              ended ? "text-yellow-400" : "text-gray-400"
+                            }
+                          >
+                            {timeStatus}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3 flex-shrink-0">
+                      <div className="text-right">
+                        <div className="text-white font-semibold text-sm md:text-base">
+                          {volSol.toFixed(2)} SOL
+                        </div>
+                      </div>
+
+                      {canResolve && (
+                        <button
+                          onClick={() => {
+                            setResolvingMarket(m);
+                            setSelectedOutcome(null);
+                          }}
+                          className="px-3 py-1.5 md:px-4 md:py-2 rounded-lg bg-yellow-500 text-black text-xs md:text-sm font-semibold hover:bg-yellow-400 transition"
+                        >
+                          ⚖️ Resolve
+                        </button>
+                      )}
+
+                      {addr && (
+                        <Link
+                          href={`/trade/${addr}`}
+                          className="px-3 py-1.5 md:px-4 md:py-2 rounded-lg bg-pump-green text-black text-xs md:text-sm font-semibold hover:opacity-90 transition"
+                        >
+                          View
+                        </Link>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Resolve Modal */}
       {resolvingMarket && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
           <div className="bg-pump-dark border border-white/20 rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl">
-            <h3 className="text-xl font-bold text-white mb-2">Resolve Market</h3>
+            <h3 className="text-xl font-bold text-white mb-2">
+              Resolve market
+            </h3>
             <p className="text-gray-400 text-sm mb-4 truncate">
               {resolvingMarket.question}
             </p>
@@ -896,7 +1041,7 @@ export default function DashboardPage() {
                     : "bg-yellow-500 text-black hover:bg-yellow-400"
                 }`}
               >
-                {resolveLoading ? "Resolving…" : "Confirm Resolution"}
+                {resolveLoading ? "Resolving…" : "Confirm resolution"}
               </button>
             </div>
 

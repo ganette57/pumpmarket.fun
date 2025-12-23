@@ -202,7 +202,7 @@ export type ApplyTradeArgs = {
 /**
  * Met à jour les champs agrégés dans la table `markets` :
  * - outcome_supplies (pour multi-choice)
- * - yes_supply / no_supply (pour binary, ou fallback)
+ * - yes_supply / no_supply (pour binary, ou fallback quand seulement 2 outcomes)
  * - total_volume
  */
 export async function applyTradeToMarketInSupabase(
@@ -295,6 +295,97 @@ export async function applyTradeToMarketInSupabase(
 
   if (error) {
     console.error("applyTradeToMarketInSupabase error:", error);
+    throw error;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Indexation / insertion lors de la création                                */
+/* -------------------------------------------------------------------------- */
+
+export type IndexMarketInput = Partial<DbMarketRow> & {
+  // on accepte aussi des noms alternatifs envoyés par /create
+  marketAddress?: string;
+  imageUrl?: string;
+  endDate?: string;
+  creatorAddress?: string;
+  outcomes?: string[];
+};
+
+/**
+ * indexMarket
+ *
+ * Appelée après la création d'un market.
+ * Ici on s'assure qu'une row existe dans la table `markets`.
+ */
+export async function indexMarket(
+  market: IndexMarketInput | null | undefined
+): Promise<void> {
+  if (!market) return;
+
+  // on récupère l'address quelle que soit la clé utilisée
+  const addr =
+    market.market_address ||
+    market.marketAddress ||
+    (market as any).address;
+
+  if (!addr) {
+    console.warn("indexMarket: missing market_address", market);
+    return;
+  }
+
+  const nowIso = new Date().toISOString();
+
+  const creator =
+    market.creator ||
+    market.creatorAddress ||
+    (market as any).wallet ||
+    "";
+
+  const outcomeNames =
+    market.outcome_names ||
+    market.outcomes ||
+    (Array.isArray((market as any).outcomes)
+      ? (market as any).outcomes.map(String)
+      : null);
+
+  const payload = {
+    market_address: addr,
+    question: market.question ?? null,
+    description: market.description ?? null,
+    category: market.category ?? null,
+    image_url: market.image_url ?? market.imageUrl ?? null,
+    end_date: market.end_date ?? market.endDate ?? nowIso,
+    creator,
+    social_links: market.social_links ?? (market as any).socialLinks ?? null,
+    yes_supply: toNumber((market as any).yes_supply ?? 0, 0),
+    no_supply: toNumber((market as any).no_supply ?? 0, 0),
+    total_volume: toNumber((market as any).total_volume ?? 0, 0),
+    resolved: !!(market as any).resolved,
+    created_at: (market as any).created_at ?? nowIso,
+    market_type:
+      typeof market.market_type === "number"
+        ? market.market_type
+        : outcomeNames && outcomeNames.length > 2
+        ? 1
+        : 0,
+    outcome_names: outcomeNames,
+    outcome_supplies:
+      market.outcome_supplies ??
+      (Array.isArray((market as any).outcome_supplies)
+        ? (market as any).outcome_supplies.map((v: any) => toNumber(v, 0))
+        : null),
+    outcome_count:
+      market.outcome_count ??
+      (outcomeNames ? outcomeNames.length : null),
+    program_id: market.program_id ?? (market as any).programId ?? null,
+    cluster: market.cluster ?? (market as any).cluster ?? null,
+  };
+
+  const { error } = await supabase.from("markets").insert(payload as any);
+
+  if (error) {
+    console.error("indexMarket insert error:", error);
     throw error;
   }
 }
