@@ -2,24 +2,33 @@
 import { supabase } from "./supabaseClient";
 
 export type LogTxParams = {
-  // pour lier à la table markets
   marketId?: string | null;
   marketAddress?: string | null;
 
   userAddress: string;
 
   isBuy: boolean;
-  // legacy binaire (YES/NO)
   isYes?: boolean | null;
 
-  shares: number;      // nb de shares achetés/vendus
-  cost: number;        // en SOL (ou lamports si tu veux, mais soit cohérent)
+  shares: number; // nb de shares achetés/vendus
+  cost: number;   // en SOL (ou lamports), mais jamais null
   txSignature: string;
 
-  // ⚠️ NOUVEAU : multi-choice propre
-  outcomeIndex?: number | null;   // 0,1,2...
-  outcomeName?: string | null;    // "GPT", "Grok", "BYD", etc.
+  outcomeIndex?: number | null;
+  outcomeName?: string | null;
 };
+
+function toNumberOrNull(v: unknown): number | null {
+  if (v === null || v === undefined) return null;
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n)) return null;
+  return n;
+}
+
+function toNumberOrZero(v: unknown): number {
+  const n = toNumberOrNull(v);
+  return n === null ? 0 : n;
+}
 
 export async function logTransaction(params: LogTxParams) {
   const {
@@ -35,28 +44,51 @@ export async function logTransaction(params: LogTxParams) {
     outcomeName = null,
   } = params;
 
-  const payload: any = {
+  // Hard guards (évite d'insérer des lignes cassées)
+  if (!txSignature || txSignature.trim().length < 10) {
+    console.warn("logTransaction: skip, invalid txSignature", txSignature);
+    return;
+  }
+  if (!userAddress) {
+    console.warn("logTransaction: skip, missing userAddress");
+    return;
+  }
+
+  const sharesNum = toNumberOrZero(shares);
+  const costNum = toNumberOrZero(cost);
+
+  // si 0 shares => pas une tx utile, on évite DB noise
+  if (sharesNum <= 0) {
+    console.warn("logTransaction: skip, shares <= 0", { shares, sharesNum });
+    return;
+  }
+
+  const idx = toNumberOrNull(outcomeIndex);
+  const outcomeIndexSafe =
+    idx !== null && Number.isInteger(idx) && idx >= 0 ? idx : null;
+
+  const payload = {
     market_id: marketId,
     market_address: marketAddress,
     user_address: userAddress,
 
-    is_buy: isBuy,
+    is_buy: !!isBuy,
     is_yes: isYes,
 
-    // legacy
-    amount: shares,
+    // legacy: tu utilisais amount=shares
+    amount: sharesNum,
+
     // nouveau
-    shares,
-    cost,
+    shares: sharesNum,
+    cost: costNum, // ✅ jamais null
     tx_signature: txSignature,
 
-    // multi-choice
-    outcome_index: outcomeIndex,
-    outcome_name: outcomeName,
+    outcome_index: outcomeIndexSafe,
+    outcome_name: outcomeName ?? null,
   };
 
   const { error } = await supabase.from("transactions").insert(payload);
   if (error) {
-    console.error("logTransaction error:", error);
+    console.error("logTransaction error:", error, payload);
   }
 }

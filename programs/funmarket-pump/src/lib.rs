@@ -1,422 +1,404 @@
 use anchor_lang::prelude::*;
-use anchor_lang::system_program;
-
-mod math;
-use math::{lmsr_buy_cost, lmsr_sell_refund};
+use anchor_lang::solana_program::{program::invoke, system_instruction};
 
 declare_id!("FomHPbnvgSp7qLqAJFkDwut3MygPG9cmyK5TwebSNLTg");
 
-/// Platform fee: 1% (100 basis points)
-const PLATFORM_FEE_BPS: u64 = 100;
+pub mod math;
 
-/// Creator fee: 2% (200 basis points)
-const CREATOR_FEE_BPS: u64 = 200;
+/* ------------------------------ constants ------------------------------ */
 
-/// Total fees: 3%
-const TOTAL_FEE_BPS: u64 = PLATFORM_FEE_BPS + CREATOR_FEE_BPS;
+pub const MAX_OUTCOMES: usize = 10;
+pub const MAX_NAME_LEN: usize = 40; // keep this <= what you budget in Market::SPACE
 
-/// Default liquidity parameter (b) for LMSR: 50 SOL
-const DEFAULT_LIQUIDITY_PARAM: u64 = 50_000_000_000;
+// Fees (bps)
+pub const PLATFORM_FEE_BPS: u64 = 100; // 1%
+pub const CREATOR_FEE_BPS: u64 = 200;  // 2%
+pub const TOTAL_FEE_BPS: u64 = 300;    // 3% (informational)
+
+/* ------------------------------ program ------------------------------ */
 
 #[program]
 pub mod funmarket_pump {
     use super::*;
 
-    /// Initialize user counter (rate limiting)
-    pub fn initialize_user_counter(ctx: Context<InitializeUserCounter>) -> Result<()> {
-        let counter = &mut ctx.accounts.user_counter;
-        counter.authority = ctx.accounts.authority.key();
-        counter.active_markets = 0;
+    pub fn create_market(
+        ctx: Context<CreateMarket>,
+        resolution_time: i64,
+        outcome_names: Vec<String>,
+        market_type: u8, // 0=binary, 1=multi
+        b_lamports: u64,
+        // anti-manip config
+        max_position_bps: u16, // 500..9000 (5%..90%), 10_000 disables
+        max_trade_shares: u64, // 1..5_000_000
+        cooldown_seconds: i64, // 0..120
+    ) -> Result<()> {
+        // outcomes
+        require!(
+            outcome_names.len() >= 2 && outcome_names.len() <= MAX_OUTCOMES,
+            ErrorCode::InvalidOutcomes
+        );
+
+        // binary must have exactly 2
+        if market_type == 0 {
+            require!(outcome_names.len() == 2, ErrorCode::InvalidOutcomes);
+        }
+        require!(market_type == 0 || market_type == 1, ErrorCode::InvalidOutcomes);
+
+        // validate names length (important: account space is fixed)
+        for n in outcome_names.iter() {
+            let s = n.trim();
+            require!(!s.is_empty(), ErrorCode::InvalidOutcomes);
+            require!(s.as_bytes().len() <= MAX_NAME_LEN, ErrorCode::InvalidOutcomes);
+        }
+
+        // time
+        let now = Clock::get()?.unix_timestamp;
+        require!(resolution_time > now, ErrorCode::InvalidResolutionTime);
+
+        // b
+        require!(b_lamports > 0, ErrorCode::InvalidB);
+
+        // anti-manip guard rails
+        // allow 10_000 as "disabled"
+        require!(
+            (max_position_bps >= 500 && max_position_bps <= 9000) || max_position_bps == 10_000,
+            ErrorCode::InvalidAntiManip
+        );
+        require!(
+            max_trade_shares >= 1 && max_trade_shares <= 5_000_000,
+            ErrorCode::InvalidAntiManip
+        );
+        require!(
+            cooldown_seconds >= 0 && cooldown_seconds <= 120,
+            ErrorCode::InvalidAntiManip
+        );
+
+        let market = &mut ctx.accounts.market;
+        market.creator = ctx.accounts.creator.key();
+        market.resolution_time = resolution_time;
+        market.resolved = false;
+        market.winning_outcome = None;
+
+        market.market_type = market_type;
+        market.outcome_count = outcome_names.len() as u8;
+
+        market.b_lamports = b_lamports;
+        market.q = [0u64; MAX_OUTCOMES];
+
+        market.max_position_bps = max_position_bps;
+        market.max_trade_shares = max_trade_shares;
+        market.cooldown_seconds = cooldown_seconds;
+
+        market.outcome_names = outcome_names;
+
         Ok(())
     }
 
-    /// Create a new prediction market with LMSR pricing
-    pub fn create_market(
-        ctx: Context<CreateMarket>,
-        question: String,
-        description: String,
-        resolution_time: i64,
-        market_type: u8,              // 0 = Binary, 1 = Multi-choice
-        outcome_names: Vec<String>,   // ["YES", "NO"] or ["ZEC", "XMR", "DASH"]
-    ) -> Result<()> {
-        // Validate market type
-        require!(market_type <= 1, ErrorCode::InvalidMarketType);
+    pub fn buy_shares(ctx: Context<Trade>, shares: u64, outcome_index: u8) -> Result<()> {
+        // immutable first
+        let trader_key = ctx.accounts.trader.key();
+        let market_key = ctx.accounts.market.key();
 
-        // Validate outcome count
-        let outcome_count = outcome_names.len() as u8;
-        require!(outcome_count >= 2 && outcome_count <= 10, ErrorCode::InvalidOutcomeCount);
+        let trader_ai = ctx.accounts.trader.to_account_info();
+        let market_ai = ctx.accounts.market.to_account_info();
+        let system_ai = ctx.accounts.system_program.to_account_info();
+        let platform_ai = ctx.accounts.platform_wallet.to_account_info();
+        let creator_ai = ctx.accounts.creator.to_account_info();
 
-        // Binary markets must have exactly 2 outcomes
-        if market_type == 0 {
-            require!(outcome_count == 2, ErrorCode::BinaryMustHaveTwoOutcomes);
+        // mut borrows
+        let market = &mut ctx.accounts.market;
+        let pos = &mut ctx.accounts.user_position;
+
+        require!(!market.resolved, ErrorCode::MarketResolved);
+        let now = Clock::get()?.unix_timestamp;
+        require!(now < market.resolution_time, ErrorCode::MarketClosed);
+
+        require!(shares > 0, ErrorCode::InvalidShares);
+        require!(shares <= market.max_trade_shares, ErrorCode::TradeTooLarge);
+
+        // init_if_needed
+        if pos.market == Pubkey::default() {
+            pos.market = market_key;
+            pos.user = trader_key;
+            pos.shares = [0u64; MAX_OUTCOMES];
+            pos.claimed = false;
+            pos.last_trade_ts = 0;
+        } else {
+            require!(pos.market == market_key, ErrorCode::InvalidUserPosition);
+            require!(pos.user == trader_key, ErrorCode::InvalidUserPosition);
         }
 
-        // Validate outcome names
-        for name in outcome_names.iter() {
-            require!(name.len() > 0 && name.len() <= 50, ErrorCode::InvalidOutcomeName);
-        }
-
-        // Banned words filter - STRICT
-        const BANNED_WORDS: [&str; 20] = [
-            "pedo", "child", "rape", "suicide", "kill", "porn", "dick", "cock",
-            "pussy", "fuck", "nigger", "hitler", "terror", "bomb", "isis",
-            "murder", "death", "underage", "minor", "assault"
-        ];
-
-        let question_lower = question.to_ascii_lowercase();
-        let description_lower = description.to_ascii_lowercase();
-
-        for word in BANNED_WORDS.iter() {
+        if market.cooldown_seconds > 0 && pos.last_trade_ts > 0 {
             require!(
-                !question_lower.contains(word) && !description_lower.contains(word),
-                ErrorCode::BannedContent
+                now - pos.last_trade_ts >= market.cooldown_seconds,
+                ErrorCode::CooldownActive
             );
         }
 
-        // Length limits
-        require!(question.len() > 10 && question.len() <= 200, ErrorCode::InvalidQuestionLength);
-        require!(description.len() <= 500, ErrorCode::DescriptionTooLong);
+        let idx = outcome_index as usize;
+        require!(idx < market.outcome_count as usize, ErrorCode::InvalidOutcomeIndex);
 
-        // Resolution time must be in the future
-        let clock = Clock::get()?;
-        require!(resolution_time > clock.unix_timestamp, ErrorCode::InvalidResolutionTime);
-
-        // Check user doesn't have too many active markets
-        let user_counter = &mut ctx.accounts.user_counter;
-        require!(user_counter.active_markets < 5, ErrorCode::TooManyActiveMarkets);
-
-        // Initialize market with LMSR parameters
-        let market = &mut ctx.accounts.market;
-        market.creator = ctx.accounts.creator.key();
-        market.question = question;
-        market.description = description;
-        market.resolution_time = resolution_time;
-        market.market_type = market_type;
-        market.outcome_count = outcome_count;
-
-        // Set outcome names
-        let mut names_array: [String; 10] = Default::default();
-        for (i, name) in outcome_names.iter().enumerate() {
-            if i < 10 {
-                names_array[i] = name.clone();
-            }
-        }
-        market.outcome_names = names_array;
-
-        // Initialize LMSR parameters
-        market.q = [0; 10]; // Quantity shares for each outcome
-        market.b = DEFAULT_LIQUIDITY_PARAM; // Liquidity parameter (50 SOL)
-
-        market.total_volume = 0;
-        market.fees_collected = 0;
-        market.resolved = false;
-        market.winning_outcome = None;
-        market.bump = ctx.bumps.market;
-
-        // Increment user's active market count
-        user_counter.active_markets += 1;
-
-        msg!("Market created: {} (type: {}, outcomes: {}, b: {} lamports)",
-             market.question, market_type, outcome_count, market.b);
-        Ok(())
-    }
-
-    /// Buy shares for a specific outcome with LMSR pricing
-    pub fn buy_shares(
-        ctx: Context<BuyShares>,
-        amount: u64,
-        outcome_index: u8,
-    ) -> Result<()> {
-        let market = &mut ctx.accounts.market;
-
-        // Validations
-        require!(!market.resolved, ErrorCode::MarketResolved);
-        require!(outcome_index < market.outcome_count, ErrorCode::InvalidOutcomeIndex);
-
-        let clock = Clock::get()?;
-        require!(clock.unix_timestamp < market.resolution_time, ErrorCode::MarketExpired);
-        require!(amount > 0, ErrorCode::InvalidAmount);
-
-        // Calculate cost using LMSR: C(q + Δ) - C(q)
-        let cost = lmsr_buy_cost(
+        // LMSR cost excluding fees
+        let cost = lmsr_buy_cost_lamports(
             &market.q,
-            market.b,
-            outcome_index,
-            amount,
+            idx,
+            shares,
+            market.b_lamports,
             market.outcome_count,
         )?;
+        require!(cost > 0, ErrorCode::InvalidCost);
 
-        // Calculate fees (3% total: 1% platform + 2% creator)
-        let platform_fee = cost
-            .checked_mul(PLATFORM_FEE_BPS)
-            .ok_or(ErrorCode::MathOverflow)?
-            .checked_div(10_000)
-            .ok_or(ErrorCode::MathOverflow)?;
+        let platform_fee = cost.saturating_mul(PLATFORM_FEE_BPS) / 10_000;
+        let creator_fee = cost.saturating_mul(CREATOR_FEE_BPS) / 10_000;
 
-        let creator_fee = cost
-            .checked_mul(CREATOR_FEE_BPS)
-            .ok_or(ErrorCode::MathOverflow)?
-            .checked_div(10_000)
-            .ok_or(ErrorCode::MathOverflow)?;
+        let total_pay = cost
+            .checked_add(platform_fee)
+            .ok_or(ErrorCode::Overflow)?
+            .checked_add(creator_fee)
+            .ok_or(ErrorCode::Overflow)?;
 
-        let total_fees = platform_fee.checked_add(creator_fee)
-            .ok_or(ErrorCode::MathOverflow)?;
-
-        let total_cost = cost.checked_add(total_fees)
-            .ok_or(ErrorCode::MathOverflow)?;
-
-        // Transfer cost (without fees) from buyer to market pool
-        system_program::transfer(
-            CpiContext::new(
-                ctx.accounts.system_program.to_account_info(),
-                system_program::Transfer {
-                    from: ctx.accounts.buyer.to_account_info(),
-                    to: market.to_account_info(),
-                },
-            ),
-            cost,
+        // transfer trader -> market (gross)
+        invoke(
+            &system_instruction::transfer(&trader_key, &market_key, total_pay),
+            &[trader_ai.clone(), market_ai.clone(), system_ai],
         )?;
 
-        // Transfer platform fee (1%)
-        system_program::transfer(
-            CpiContext::new(
-                ctx.accounts.system_program.to_account_info(),
-                system_program::Transfer {
-                    from: ctx.accounts.buyer.to_account_info(),
-                    to: ctx.accounts.platform_wallet.to_account_info(),
-                },
-            ),
-            platform_fee,
-        )?;
-
-        // Transfer creator fee (2%)
-        system_program::transfer(
-            CpiContext::new(
-                ctx.accounts.system_program.to_account_info(),
-                system_program::Transfer {
-                    from: ctx.accounts.buyer.to_account_info(),
-                    to: ctx.accounts.creator.to_account_info(),
-                },
-            ),
-            creator_fee,
-        )?;
-
-        // Update market state
-        market.q[outcome_index as usize] = market.q[outcome_index as usize]
-            .checked_add(amount)
-            .ok_or(ErrorCode::MathOverflow)?;
-
-        market.total_volume = market.total_volume
-            .checked_add(total_cost)
-            .ok_or(ErrorCode::MathOverflow)?;
-
-        market.fees_collected = market.fees_collected
-            .checked_add(total_fees)
-            .ok_or(ErrorCode::MathOverflow)?;
-
-        // Update user position
-        let position = &mut ctx.accounts.user_position;
-        if position.market == Pubkey::default() {
-            position.market = market.key();
-            position.user = ctx.accounts.buyer.key();
-            position.shares = [0; 10];
-            position.claimed = false;
+        // distribute fees from market -> recipients
+        if platform_fee > 0 {
+            **market_ai.try_borrow_mut_lamports()? = market_ai.lamports().saturating_sub(platform_fee);
+            **platform_ai.try_borrow_mut_lamports()? = platform_ai.lamports().saturating_add(platform_fee);
+        }
+        if creator_fee > 0 {
+            **market_ai.try_borrow_mut_lamports()? = market_ai.lamports().saturating_sub(creator_fee);
+            **creator_ai.try_borrow_mut_lamports()? = creator_ai.lamports().saturating_add(creator_fee);
         }
 
-        position.shares[outcome_index as usize] = position.shares[outcome_index as usize]
-            .checked_add(amount)
-            .ok_or(ErrorCode::MathOverflow)?;
+        // update state
+        market.q[idx] = market.q[idx].checked_add(shares).ok_or(ErrorCode::Overflow)?;
+        pos.shares[idx] = pos.shares[idx].checked_add(shares).ok_or(ErrorCode::Overflow)?;
+        pos.last_trade_ts = now;
 
-        msg!("Bought {} shares for outcome {} ({}) - cost: {} lamports (+ {} fees)",
-             amount, outcome_index, market.outcome_names[outcome_index as usize], cost, total_fees);
+        // anti-manip cap (total market supply based)
+        enforce_position_cap(market, pos, idx)?;
+
         Ok(())
     }
 
-    /// Sell shares back with LMSR pricing
-    pub fn sell_shares(
-        ctx: Context<SellShares>,
-        amount: u64,
-        outcome_index: u8,
-    ) -> Result<()> {
-        let market_info = ctx.accounts.market.to_account_info();
+    pub fn sell_shares(ctx: Context<Trade>, shares: u64, outcome_index: u8) -> Result<()> {
+        // immutable first
+        let trader_key = ctx.accounts.trader.key();
+        let market_key = ctx.accounts.market.key();
+
+        let trader_ai = ctx.accounts.trader.to_account_info();
+        let market_ai = ctx.accounts.market.to_account_info();
+        let platform_ai = ctx.accounts.platform_wallet.to_account_info();
+        let creator_ai = ctx.accounts.creator.to_account_info();
+
+        // mut borrows
         let market = &mut ctx.accounts.market;
-        let position = &mut ctx.accounts.user_position;
+        let pos = &mut ctx.accounts.user_position;
 
-        // Validations
         require!(!market.resolved, ErrorCode::MarketResolved);
-        require!(outcome_index < market.outcome_count, ErrorCode::InvalidOutcomeIndex);
+        let now = Clock::get()?.unix_timestamp;
+        require!(now < market.resolution_time, ErrorCode::MarketClosed);
 
-        let clock = Clock::get()?;
-        require!(clock.unix_timestamp < market.resolution_time, ErrorCode::MarketExpired);
+        require!(shares > 0, ErrorCode::InvalidShares);
+        require!(shares <= market.max_trade_shares, ErrorCode::TradeTooLarge);
 
-        let user_shares = position.shares[outcome_index as usize];
-        require!(user_shares >= amount, ErrorCode::InsufficientShares);
-        require!(amount > 0, ErrorCode::InvalidAmount);
+        // init_if_needed
+        if pos.market == Pubkey::default() {
+            pos.market = market_key;
+            pos.user = trader_key;
+            pos.shares = [0u64; MAX_OUTCOMES];
+            pos.claimed = false;
+            pos.last_trade_ts = 0;
+        } else {
+            require!(pos.market == market_key, ErrorCode::InvalidUserPosition);
+            require!(pos.user == trader_key, ErrorCode::InvalidUserPosition);
+        }
 
-        // Calculate refund using LMSR: C(q) - C(q - Δ)
-        let refund = lmsr_sell_refund(
+        if market.cooldown_seconds > 0 && pos.last_trade_ts > 0 {
+            require!(
+                now - pos.last_trade_ts >= market.cooldown_seconds,
+                ErrorCode::CooldownActive
+            );
+        }
+
+        let idx = outcome_index as usize;
+        require!(idx < market.outcome_count as usize, ErrorCode::InvalidOutcomeIndex);
+        require!(pos.shares[idx] >= shares, ErrorCode::NotEnoughShares);
+
+        // LMSR refund excluding fees
+        let refund = lmsr_sell_refund_lamports(
             &market.q,
-            market.b,
-            outcome_index,
-            amount,
+            idx,
+            shares,
+            market.b_lamports,
             market.outcome_count,
         )?;
+        require!(refund > 0, ErrorCode::InvalidCost);
 
-        // Calculate fees on refund (3% total: 1% platform + 2% creator)
-        let platform_fee = refund
-            .checked_mul(PLATFORM_FEE_BPS)
-            .ok_or(ErrorCode::MathOverflow)?
-            .checked_div(10_000)
-            .ok_or(ErrorCode::MathOverflow)?;
+        let platform_fee = refund.saturating_mul(PLATFORM_FEE_BPS) / 10_000;
+        let creator_fee = refund.saturating_mul(CREATOR_FEE_BPS) / 10_000;
 
-        let creator_fee = refund
-            .checked_mul(CREATOR_FEE_BPS)
-            .ok_or(ErrorCode::MathOverflow)?
-            .checked_div(10_000)
-            .ok_or(ErrorCode::MathOverflow)?;
+        let net_receive = refund
+            .checked_sub(platform_fee)
+            .ok_or(ErrorCode::Overflow)?
+            .checked_sub(creator_fee)
+            .ok_or(ErrorCode::Overflow)?;
 
-        let total_fees = platform_fee.checked_add(creator_fee)
-            .ok_or(ErrorCode::MathOverflow)?;
+        // market must have enough to cover gross refund
+        require!(market_ai.lamports() >= refund, ErrorCode::InsufficientMarketBalance);
 
-        let net_refund = refund.checked_sub(total_fees)
-            .ok_or(ErrorCode::MathOverflow)?;
+        // pay trader net
+        **market_ai.try_borrow_mut_lamports()? = market_ai.lamports().saturating_sub(net_receive);
+        **trader_ai.try_borrow_mut_lamports()? = trader_ai.lamports().saturating_add(net_receive);
 
-        // Ensure market has enough lamports
-        let market_balance = market_info.lamports();
-        let total_needed = refund; // We take fees from the refund
-        require!(market_balance >= total_needed, ErrorCode::InsufficientMarketBalance);
+        // distribute fees
+        if platform_fee > 0 {
+            **market_ai.try_borrow_mut_lamports()? = market_ai.lamports().saturating_sub(platform_fee);
+            **platform_ai.try_borrow_mut_lamports()? = platform_ai.lamports().saturating_add(platform_fee);
+        }
+        if creator_fee > 0 {
+            **market_ai.try_borrow_mut_lamports()? = market_ai.lamports().saturating_sub(creator_fee);
+            **creator_ai.try_borrow_mut_lamports()? = creator_ai.lamports().saturating_add(creator_fee);
+        }
 
-        // Transfer net refund to seller (market pool pays out)
-        **market_info.try_borrow_mut_lamports()? -= net_refund;
-        **ctx.accounts.seller.to_account_info().try_borrow_mut_lamports()? += net_refund;
+        // update state
+        market.q[idx] = market.q[idx].checked_sub(shares).ok_or(ErrorCode::Overflow)?;
+        pos.shares[idx] = pos.shares[idx].checked_sub(shares).ok_or(ErrorCode::Overflow)?;
+        pos.last_trade_ts = now;
 
-        // Transfer platform fee (market pool pays out)
-        **market_info.try_borrow_mut_lamports()? -= platform_fee;
-        **ctx.accounts.platform_wallet.to_account_info().try_borrow_mut_lamports()? += platform_fee;
-
-        // Transfer creator fee (market pool pays out)
-        **market_info.try_borrow_mut_lamports()? -= creator_fee;
-        **ctx.accounts.creator.to_account_info().try_borrow_mut_lamports()? += creator_fee;
-
-        // Update market state
-        market.q[outcome_index as usize] = market.q[outcome_index as usize]
-            .checked_sub(amount)
-            .ok_or(ErrorCode::InsufficientShares)?;
-
-        market.fees_collected = market.fees_collected
-            .checked_add(total_fees)
-            .ok_or(ErrorCode::MathOverflow)?;
-
-        // Update user position
-        position.shares[outcome_index as usize] = position.shares[outcome_index as usize]
-            .checked_sub(amount)
-            .ok_or(ErrorCode::InsufficientShares)?;
-
-        msg!("Sold {} shares for outcome {} - refund: {} lamports (- {} fees)",
-             amount, outcome_index, net_refund, total_fees);
         Ok(())
     }
 
-    /// Resolve market with winning outcome index
-    pub fn resolve_market(
-        ctx: Context<ResolveMarket>,
-        winning_outcome_index: u8,
-    ) -> Result<()> {
+    pub fn resolve_market(ctx: Context<ResolveMarket>, winning_outcome: u8) -> Result<()> {
         let market = &mut ctx.accounts.market;
 
-        require!(!market.resolved, ErrorCode::AlreadyResolved);
-        require!(winning_outcome_index < market.outcome_count, ErrorCode::InvalidOutcomeIndex);
+        require!(!market.resolved, ErrorCode::MarketResolved);
+        let now = Clock::get()?.unix_timestamp;
+        require!(now >= market.resolution_time, ErrorCode::MarketNotEnded);
 
-        let clock = Clock::get()?;
-        require!(clock.unix_timestamp >= market.resolution_time, ErrorCode::TooEarlyToResolve);
+        let idx = winning_outcome as usize;
+        require!(idx < market.outcome_count as usize, ErrorCode::InvalidOutcomeIndex);
 
         market.resolved = true;
-        market.winning_outcome = Some(winning_outcome_index);
-
-        let user_counter = &mut ctx.accounts.user_counter;
-        user_counter.active_markets = user_counter.active_markets.saturating_sub(1);
-
-        msg!("Market resolved: {} wins", market.outcome_names[winning_outcome_index as usize]);
+        market.winning_outcome = Some(winning_outcome);
         Ok(())
     }
 
-    /// Claim winnings after market resolution (pro-rata payout)
     pub fn claim_winnings(ctx: Context<ClaimWinnings>) -> Result<()> {
-        let market = &ctx.accounts.market;
-        let position = &mut ctx.accounts.user_position;
+        let market_ai = ctx.accounts.market.to_account_info();
+        let user_ai = ctx.accounts.user.to_account_info();
+
+        let market = &mut ctx.accounts.market;
+        let pos = &mut ctx.accounts.user_position;
 
         require!(market.resolved, ErrorCode::MarketNotResolved);
-        require!(!position.claimed, ErrorCode::AlreadyClaimed);
+        require!(!pos.claimed, ErrorCode::AlreadyClaimed);
 
-        let winning_index = market.winning_outcome
-            .ok_or(ErrorCode::MarketNotResolved)? as usize;
-        let winning_shares = position.shares[winning_index];
+        let winning = market.winning_outcome.ok_or(ErrorCode::MarketNotResolved)? as usize;
 
-        require!(winning_shares > 0, ErrorCode::NoWinningShares);
+        let user_shares = pos.shares[winning];
+        require!(user_shares > 0, ErrorCode::NoWinningShares);
 
-        // Pro-rata payout: userWinningShares / totalWinningShares * marketPoolLamports
-        let total_winning_shares = market.q[winning_index];
-        require!(total_winning_shares > 0, ErrorCode::NoWinningShares);
+        let total_winning_supply = market.q[winning];
+        require!(total_winning_supply > 0, ErrorCode::InvalidSupply);
 
-        let market_balance = ctx.accounts.market.to_account_info().lamports();
+        let pool = market_ai.lamports();
 
-        // Calculate payout with checked math to prevent overflow
-        let payout = (winning_shares as u128)
-            .checked_mul(market_balance as u128)
-            .ok_or(ErrorCode::MathOverflow)?
-            .checked_div(total_winning_shares as u128)
-            .ok_or(ErrorCode::MathOverflow)?;
+        let payout = (user_shares as u128)
+            .checked_mul(pool as u128)
+            .ok_or(ErrorCode::Overflow)?
+            .checked_div(total_winning_supply as u128)
+            .ok_or(ErrorCode::Overflow)? as u64;
 
-        let payout = payout as u64;
+        require!(payout > 0, ErrorCode::InvalidPayout);
+        require!(pool >= payout, ErrorCode::InsufficientMarketBalance);
 
-        // Transfer payout
-        **ctx.accounts.market.to_account_info().try_borrow_mut_lamports()? -= payout;
-        **ctx.accounts.user.to_account_info().try_borrow_mut_lamports()? += payout;
+        **market_ai.try_borrow_mut_lamports()? = market_ai.lamports().saturating_sub(payout);
+        **user_ai.try_borrow_mut_lamports()? = user_ai.lamports().saturating_add(payout);
 
-        position.claimed = true;
-
-        msg!("Claimed {} lamports for {} winning shares", payout, winning_shares);
+        pos.claimed = true;
         Ok(())
     }
 }
 
-// ACCOUNTS
+/* ------------------------------ anti-manip ------------------------------ */
+/**
+Cap per wallet on an outcome, but computed from TOTAL market supply (sum(q)),
+not from the outcome supply itself (otherwise bootstrap is impossible).
+We also skip enforcement until market has some depth.
+*/
+fn enforce_position_cap(market: &Market, pos: &UserPosition, idx: usize) -> Result<()> {
+    let max_bps = market.max_position_bps as u64;
 
-#[derive(Accounts)]
-pub struct InitializeUserCounter<'info> {
-    #[account(
-        init,
-        payer = authority,
-        space = 8 + UserCounter::INIT_SPACE,
-        seeds = [b"user_counter", authority.key().as_ref()],
-        bump
-    )]
-    pub user_counter: Account<'info, UserCounter>,
+    // disabled
+    if max_bps >= 10_000 {
+        return Ok(());
+    }
 
-    #[account(mut)]
-    pub authority: Signer<'info>,
+    // total market supply across outcomes
+    let mut total: u128 = 0;
+    for i in 0..(market.outcome_count as usize) {
+        total = total
+            .checked_add(market.q[i] as u128)
+            .ok_or(ErrorCode::Overflow)?;
+    }
 
-    pub system_program: Program<'info, System>,
+    // bootstrap: don't enforce until there's at least "one trade worth" of depth
+    if total < market.max_trade_shares as u128 {
+        return Ok(());
+    }
+
+    let user: u128 = pos.shares[idx] as u128;
+
+    let max_allowed: u128 = total
+        .checked_mul(max_bps as u128)
+        .ok_or(ErrorCode::Overflow)?
+        .checked_div(10_000u128)
+        .ok_or(ErrorCode::Overflow)?;
+
+        require!(user <= max_allowed, ErrorCode::PositionCapExceeded);
+    Ok(())
 }
 
+/* ------------------------------ LMSR wrappers ------------------------------ */
+
+fn lmsr_buy_cost_lamports(
+    q: &[u64; MAX_OUTCOMES],
+    outcome_index: usize,
+    amount: u64,
+    b_lamports: u64,
+    outcome_count: u8,
+) -> Result<u64> {
+    require!(outcome_index < outcome_count as usize, ErrorCode::InvalidOutcomeIndex);
+    math::lmsr_buy_cost(q, b_lamports, outcome_index as u8, amount, outcome_count)
+        .map_err(|_| error!(ErrorCode::MathOverflow))
+}
+
+fn lmsr_sell_refund_lamports(
+    q: &[u64; MAX_OUTCOMES],
+    outcome_index: usize,
+    amount: u64,
+    b_lamports: u64,
+    outcome_count: u8,
+) -> Result<u64> {
+    require!(outcome_index < outcome_count as usize, ErrorCode::InvalidOutcomeIndex);
+    math::lmsr_sell_refund(q, b_lamports, outcome_index as u8, amount, outcome_count)
+        .map_err(|_| error!(ErrorCode::MathOverflow))
+}
+
+/* -------------------------------- accounts -------------------------------- */
+
 #[derive(Accounts)]
-#[instruction(question: String)]
 pub struct CreateMarket<'info> {
     #[account(
         init,
         payer = creator,
-        space = 8 + Market::INIT_SPACE,
-        seeds = [b"market", creator.key().as_ref(), question.as_bytes()],
-        bump
+        space = Market::SPACE,
     )]
     pub market: Account<'info, Market>,
-
-    #[account(
-        mut,
-        seeds = [b"user_counter", creator.key().as_ref()],
-        bump
-    )]
-    pub user_counter: Account<'info, UserCounter>,
 
     #[account(mut)]
     pub creator: Signer<'info>,
@@ -425,74 +407,37 @@ pub struct CreateMarket<'info> {
 }
 
 #[derive(Accounts)]
-pub struct BuyShares<'info> {
+pub struct Trade<'info> {
     #[account(mut)]
     pub market: Account<'info, Market>,
 
     #[account(
         init_if_needed,
-        payer = buyer,
-        space = 8 + UserPosition::INIT_SPACE,
-        seeds = [b"position", market.key().as_ref(), buyer.key().as_ref()],
+        payer = trader,
+        space = UserPosition::SPACE,
+        seeds = [b"user_position", market.key().as_ref(), trader.key().as_ref()],
         bump
     )]
     pub user_position: Account<'info, UserPosition>,
 
+    /// CHECK: platform wallet (fee receiver)
     #[account(mut)]
-    pub buyer: Signer<'info>,
+    pub platform_wallet: UncheckedAccount<'info>,
 
-    /// CHECK: Creator receives 2% fee
+    /// CHECK: creator wallet (fee receiver)
     #[account(mut, address = market.creator)]
-    pub creator: AccountInfo<'info>,
-
-    /// CHECK: Platform wallet receives 1% fee
-    #[account(mut)]
-    pub platform_wallet: AccountInfo<'info>,
-
-    pub system_program: Program<'info, System>,
-}
-
-#[derive(Accounts)]
-pub struct SellShares<'info> {
-    #[account(mut)]
-    pub market: Account<'info, Market>,
-
-    #[account(
-        mut,
-        seeds = [b"position", market.key().as_ref(), seller.key().as_ref()],
-        bump
-    )]
-    pub user_position: Account<'info, UserPosition>,
+    pub creator: UncheckedAccount<'info>,
 
     #[account(mut)]
-    pub seller: Signer<'info>,
-
-    /// CHECK: Creator receives 2% fee
-    #[account(mut, address = market.creator)]
-    pub creator: AccountInfo<'info>,
-
-    /// CHECK: Platform wallet receives 1% fee
-    #[account(mut)]
-    pub platform_wallet: AccountInfo<'info>,
+    pub trader: Signer<'info>,
 
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
 pub struct ResolveMarket<'info> {
-    #[account(
-        mut,
-        has_one = creator
-    )]
+    #[account(mut, has_one = creator)]
     pub market: Account<'info, Market>,
-
-    #[account(
-        mut,
-        seeds = [b"user_counter", creator.key().as_ref()],
-        bump
-    )]
-    pub user_counter: Account<'info, UserCounter>,
-
     pub creator: Signer<'info>,
 }
 
@@ -503,7 +448,7 @@ pub struct ClaimWinnings<'info> {
 
     #[account(
         mut,
-        seeds = [b"position", market.key().as_ref(), user.key().as_ref()],
+        seeds = [b"user_position", market.key().as_ref(), user.key().as_ref()],
         bump
     )]
     pub user_position: Account<'info, UserPosition>,
@@ -512,100 +457,126 @@ pub struct ClaimWinnings<'info> {
     pub user: Signer<'info>,
 }
 
-// STATE
+/* --------------------------------- state --------------------------------- */
 
 #[account]
-#[derive(InitSpace)]
 pub struct Market {
     pub creator: Pubkey,
-
-    #[max_len(200)]
-    pub question: String,
-
-    #[max_len(500)]
-    pub description: String,
-
     pub resolution_time: i64,
-
-    pub market_type: u8,      // 0 = Binary, 1 = Multi-choice
-    pub outcome_count: u8,    // 2 to 10 outcomes
-
-    #[max_len(10)]
-    pub outcome_names: [String; 10],
-
-    // LMSR parameters
-    pub q: [u64; 10],         // Quantity shares for each outcome (LMSR state)
-    pub b: u64,               // Liquidity parameter
-
-    pub total_volume: u64,
-    pub fees_collected: u64,
     pub resolved: bool,
     pub winning_outcome: Option<u8>,
-    pub bump: u8,
+
+    pub market_type: u8,    // 0=binary, 1=multi
+    pub outcome_count: u8,  // 2..10
+
+    // LMSR
+    pub b_lamports: u64,
+    pub q: [u64; MAX_OUTCOMES],
+
+    // anti-manip config
+    pub max_position_bps: u16,
+    pub max_trade_shares: u64,
+    pub cooldown_seconds: i64,
+
+    pub outcome_names: Vec<String>,
+}
+
+impl Market {
+    // Allocate enough space for MAX_OUTCOMES names of MAX_NAME_LEN each.
+    pub const SPACE: usize =
+        8 +                    // discriminator
+        32 +                   // creator
+        8 +                    // resolution_time
+        1 +                    // resolved
+        1 + 1 +                // Option<u8>
+        1 +                    // market_type
+        1 +                    // outcome_count
+        8 +                    // b_lamports
+        (8 * MAX_OUTCOMES) +   // q
+        2 +                    // max_position_bps
+        8 +                    // max_trade_shares
+        8 +                    // cooldown_seconds (i64)
+        4 +                    // vec len
+        (MAX_OUTCOMES * (4 + MAX_NAME_LEN)); // each string: 4 + bytes
 }
 
 #[account]
-#[derive(InitSpace)]
 pub struct UserPosition {
     pub market: Pubkey,
     pub user: Pubkey,
-    pub shares: [u64; 10],
+    pub shares: [u64; MAX_OUTCOMES],
     pub claimed: bool,
+    pub last_trade_ts: i64,
 }
 
-#[account]
-#[derive(InitSpace)]
-pub struct UserCounter {
-    pub authority: Pubkey,
-    pub active_markets: u8,
+impl UserPosition {
+    pub const SPACE: usize = 8 + 32 + 32 + (8 * MAX_OUTCOMES) + 1 + 8;
 }
 
-// ERRORS
+/* --------------------------------- errors -------------------------------- */
 
 #[error_code]
 pub enum ErrorCode {
-    #[msg("Content contains banned words - keep it clean!")]
-    BannedContent,
-    #[msg("Question must be 10-200 characters")]
-    InvalidQuestionLength,
-    #[msg("Description too long (max 500 chars)")]
-    DescriptionTooLong,
-    #[msg("Resolution time must be in the future")]
+    #[msg("Invalid outcomes")]
+    InvalidOutcomes,
+    #[msg("Invalid resolution time")]
     InvalidResolutionTime,
+    #[msg("Invalid liquidity parameter b")]
+    InvalidB,
+
+    #[msg("Market is closed (past end time)")]
+    MarketClosed,
     #[msg("Market already resolved")]
     MarketResolved,
-    #[msg("Market has expired")]
-    MarketExpired,
-    #[msg("Insufficient shares to sell")]
-    InsufficientShares,
-    #[msg("Market not resolved yet")]
+    #[msg("Market not ended yet")]
+    MarketNotEnded,
+    #[msg("Market not resolved")]
     MarketNotResolved,
-    #[msg("No winning shares to claim")]
-    NoWinningShares,
-    #[msg("Already resolved")]
-    AlreadyResolved,
-    #[msg("Too early to resolve market")]
-    TooEarlyToResolve,
-    #[msg("You have too many active markets (max 5)")]
-    TooManyActiveMarkets,
-    #[msg("Invalid market type (must be 0 or 1)")]
-    InvalidMarketType,
-    #[msg("Invalid outcome count (must be 2-10)")]
-    InvalidOutcomeCount,
-    #[msg("Binary markets must have exactly 2 outcomes")]
-    BinaryMustHaveTwoOutcomes,
-    #[msg("Invalid outcome name (must be 1-50 characters)")]
-    InvalidOutcomeName,
+
+    #[msg("Invalid shares")]
+    InvalidShares,
     #[msg("Invalid outcome index")]
     InvalidOutcomeIndex,
-    #[msg("Already claimed winnings")]
+
+    #[msg("Trade too large")]
+    TradeTooLarge,
+    #[msg("Cooldown active: wait before trading again")]
+    CooldownActive,
+    #[msg("Position cap exceeded for this outcome")]
+    PositionCapExceeded,
+    #[msg("Invalid anti-manip config")]
+    InvalidAntiManip,
+
+    #[msg("Not enough shares to sell")]
+    NotEnoughShares,
+
+    #[msg("Invalid cost/refund")]
+    InvalidCost,
+    #[msg("Invalid payout")]
+    InvalidPayout,
+    #[msg("No winning shares to claim")]
+    NoWinningShares,
+    #[msg("Invalid supply")]
+    InvalidSupply,
+    #[msg("Already claimed")]
     AlreadyClaimed,
-    #[msg("Math overflow occurred")]
-    MathOverflow,
-    #[msg("Invalid amount (must be > 0)")]
-    InvalidAmount,
+
     #[msg("Insufficient market balance")]
     InsufficientMarketBalance,
+
+    #[msg("Invalid user position account")]
+    InvalidUserPosition,
+
+    #[msg("Overflow")]
+    Overflow,
+
+    // used by math.rs
+    #[msg("Math overflow")]
+    MathOverflow,
     #[msg("Invalid liquidity parameter")]
     InvalidLiquidityParameter,
+    #[msg("Invalid outcome count")]
+    InvalidOutcomeCount,
+    #[msg("Insufficient shares")]
+    InsufficientShares,
 }

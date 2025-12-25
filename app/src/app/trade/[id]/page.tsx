@@ -34,7 +34,6 @@ import {
   solToLamports,
   getUserPositionPDA,
   PLATFORM_WALLET,
-  calculateBuyCost,
 } from "@/utils/solana";
 
 import type { SocialLinks } from "@/components/SocialLinksForm";
@@ -50,20 +49,19 @@ type UiMarket = {
   imageUrl?: string;
   creator: string;
 
-  totalVolume: number;
-  resolutionTime: number;
+  totalVolume: number; // lamports
+  resolutionTime: number; // unix seconds
   resolved: boolean;
 
   socialLinks?: SocialLinks;
 
   marketType: 0 | 1;
   outcomeNames?: string[];
-  outcomeSupplies?: number[];
+  outcomeSupplies?: number[]; // shares (UI == on-chain)
 
-  yesSupply?: number;
-  noSupply?: number;
+  yesSupply?: number; // shares
+  noSupply?: number; // shares
 
-  // nouveaux champs optionnels pour la preuve de résolution
   resolutionProofUrl?: string | null;
   resolutionProofImage?: string | null;
   resolutionProofText?: string | null;
@@ -72,7 +70,7 @@ type UiMarket = {
 type Derived = {
   marketType: 0 | 1;
   names: string[];
-  supplies: number[];
+  supplies: number[]; // shares
   percentages: number[];
   totalSupply: number;
   isBinaryStyle: boolean;
@@ -96,9 +94,7 @@ function toNumberArray(x: any): number[] | undefined {
     try {
       const parsed = JSON.parse(x);
       if (Array.isArray(parsed)) return parsed.map((v) => Number(v) || 0);
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
   return undefined;
 }
@@ -111,9 +107,7 @@ function toStringArray(x: any): string[] | undefined {
       const parsed = JSON.parse(x);
       if (Array.isArray(parsed))
         return parsed.map((v) => String(v)).filter(Boolean);
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
   return undefined;
 }
@@ -174,8 +168,8 @@ export default function TradePage() {
         ? supabaseMarket.market_type
         : 0) as 0 | 1;
 
-      const names = toStringArray(supabaseMarket.outcome_names);
-      const supplies = toNumberArray(supabaseMarket.outcome_supplies);
+      const names = toStringArray(supabaseMarket.outcome_names) ?? [];
+      const supplies = toNumberArray(supabaseMarket.outcome_supplies) ?? [];
 
       const transformed: UiMarket = {
         dbId: supabaseMarket.id,
@@ -195,8 +189,8 @@ export default function TradePage() {
         socialLinks: supabaseMarket.social_links || undefined,
 
         marketType: mt,
-        outcomeNames: names?.slice(0, 10),
-        outcomeSupplies: supplies?.slice(0, 10),
+        outcomeNames: names.slice(0, 10),
+        outcomeSupplies: supplies.slice(0, 10),
 
         yesSupply: Number(supabaseMarket.yes_supply) || 0,
         noSupply: Number(supabaseMarket.no_supply) || 0,
@@ -220,7 +214,6 @@ export default function TradePage() {
 
     const marketType = (market.marketType ?? 0) as 0 | 1;
 
-    // --- noms d’outcomes ---
     let names = (market.outcomeNames || []).map(String).filter(Boolean);
     const missingOutcomes = marketType === 1 && names.length < 2;
 
@@ -232,12 +225,10 @@ export default function TradePage() {
       ? ["Loading…", "Loading…"]
       : names.slice(0, 10);
 
-    // --- supplies ---
     let supplies = Array.isArray(market.outcomeSupplies)
       ? market.outcomeSupplies.map((x) => Number(x || 0))
       : [];
 
-    // fallback binaire si aucun outcomeSupplies stocké
     if (!supplies.length && safeNames.length === 2) {
       supplies = [
         Number(market.yesSupply || 0),
@@ -249,36 +240,30 @@ export default function TradePage() {
 
     if (targetLen > 0) {
       if (supplies.length < targetLen) {
-        // pad avec des zéros
         supplies = [
           ...supplies,
           ...Array(targetLen - supplies.length).fill(0),
         ];
       } else if (supplies.length > targetLen) {
-        // ⚠️ FIX : slice au lieu de tout remettre à 0
         supplies = supplies.slice(0, targetLen);
       }
     }
 
-    const safeSupplies = supplies;
-    const totalSupply = safeSupplies.reduce(
-      (sum, s) => sum + (Number(s) || 0),
-      0
-    );
+    const totalSupply = supplies.reduce((sum, s) => sum + (Number(s) || 0), 0);
 
     const percentages =
-      safeSupplies.length > 0
-        ? safeSupplies.map((s) =>
+      supplies.length > 0
+        ? supplies.map((s) =>
             totalSupply > 0
               ? ((Number(s) || 0) / totalSupply) * 100
-              : 100 / safeSupplies.length
+              : 100 / supplies.length
           )
         : [];
 
     return {
       marketType,
       names: safeNames,
-      supplies: safeSupplies,
+      supplies,
       percentages,
       totalSupply,
       isBinaryStyle: safeNames.length === 2,
@@ -311,7 +296,7 @@ export default function TradePage() {
     return arr;
   }, [oddsPoints, oddsRange]);
 
-  // solde du compte du market
+  // Market balance
   useEffect(() => {
     if (!id) return;
 
@@ -326,7 +311,7 @@ export default function TradePage() {
     })();
   }, [id, connection]);
 
-  // positions utilisateur
+  // User positions (shares as-is)
   useEffect(() => {
     if (!id || !publicKey || !connected || !program) {
       setPositionShares(null);
@@ -339,6 +324,7 @@ export default function TradePage() {
         const [pda] = getUserPositionPDA(marketPk, publicKey);
 
         const acc = await (program as any).account.userPosition.fetch(pda);
+
         const sharesArr = Array.isArray(acc?.shares)
           ? acc.shares.map((x: any) => Number(x) || 0)
           : [];
@@ -350,7 +336,7 @@ export default function TradePage() {
     })();
   }, [id, publicKey, connected, program]);
 
-  // historique des odds
+  // Odds history
   useEffect(() => {
     if (!market?.dbId) {
       setOddsPoints([]);
@@ -366,7 +352,8 @@ export default function TradePage() {
       try {
         const { data, error } = await supabase
           .from("transactions")
-          .select("created_at,is_buy,amount,outcome_index,is_yes")
+          // NOTE: on n'a pas besoin de cost pour le chart, on reconstitue via shares
+          .select("created_at,is_buy,amount,outcome_index,is_yes,shares")
           .eq("market_id", market.dbId)
           .order("created_at", { ascending: true });
 
@@ -389,24 +376,12 @@ export default function TradePage() {
     })();
   }, [market?.dbId, derived?.names?.length]);
 
-  function estimateCostSol(
-    currentSupply: number,
-    shares: number,
-    side: "buy" | "sell"
-  ) {
-    const s = Math.max(0, Math.floor(currentSupply || 0));
-    const q = Math.max(1, Math.floor(shares || 0));
-
-    if (side === "buy") return calculateBuyCost(s, q);
-
-    const start = Math.max(0, s - q);
-    return calculateBuyCost(start, q);
-  }
-
+  // ✅ UPDATED: handleTrade now receives costSol from TradingPanel
   async function handleTrade(
     shares: number,
     outcomeIndex: number,
-    side: "buy" | "sell"
+    side: "buy" | "sell",
+    costSol?: number
   ) {
     if (!connected || !publicKey || !program) {
       if (!publicKey) alert("Please connect your wallet");
@@ -416,24 +391,18 @@ export default function TradePage() {
     if (!market || !id || !derived) return;
 
     const safeShares = Math.max(1, Math.floor(shares));
-    const safeOutcome = clampInt(
-      outcomeIndex,
-      0,
-      derived.names.length - 1
-    );
+    const safeOutcome = clampInt(outcomeIndex, 0, derived.names.length - 1);
 
     setSubmitting(true);
 
-    // Optimistic update pour l'UI
+    // optimistic UI (shares)
     setMarket((prev) => {
       if (!prev) return prev;
-
       const nextSupplies = Array.isArray(prev.outcomeSupplies)
         ? prev.outcomeSupplies.slice()
         : Array(derived.names.length).fill(0);
 
-      while (nextSupplies.length < derived.names.length)
-        nextSupplies.push(0);
+      while (nextSupplies.length < derived.names.length) nextSupplies.push(0);
 
       const delta = side === "buy" ? safeShares : -safeShares;
       nextSupplies[safeOutcome] = Math.max(
@@ -441,29 +410,11 @@ export default function TradePage() {
         Number(nextSupplies[safeOutcome] || 0) + delta
       );
 
-      const yesSupply =
-        derived.names.length === 2
-          ? nextSupplies[0]
-          : prev.yesSupply || 0;
-      const noSupply =
-        derived.names.length === 2
-          ? nextSupplies[1]
-          : prev.noSupply || 0;
-
-      const estSolTmp = estimateCostSol(
-        nextSupplies[safeOutcome],
-        safeShares,
-        side
-      );
-      const volLamports = solToLamports(Math.abs(estSolTmp));
-
       return {
         ...prev,
         outcomeSupplies: nextSupplies.slice(0, 10),
-        yesSupply,
-        noSupply,
-        totalVolume:
-          Number(prev.totalVolume || 0) + Number(volLamports || 0),
+        yesSupply: derived.names.length === 2 ? nextSupplies[0] : prev.yesSupply || 0,
+        noSupply: derived.names.length === 2 ? nextSupplies[1] : prev.noSupply || 0,
       };
     });
 
@@ -472,58 +423,49 @@ export default function TradePage() {
       const [positionPDA] = getUserPositionPDA(marketPubkey, publicKey);
       const creatorPubkey = new PublicKey(market.creator);
 
-      const amountBN = new BN(safeShares);
+      const amountBn = new BN(safeShares); // ✅ NOT scaled
 
       let txSig: string;
-
       if (side === "buy") {
         txSig = await (program as any).methods
-          .buyShares(amountBN, safeOutcome)
+          .buyShares(amountBn, safeOutcome)
           .accounts({
             market: marketPubkey,
             userPosition: positionPDA,
-            buyer: publicKey,
-            creator: creatorPubkey,
             platformWallet: PLATFORM_WALLET,
+            creator: creatorPubkey,
+            trader: publicKey,
             systemProgram: SystemProgram.programId,
           })
           .rpc();
       } else {
         txSig = await (program as any).methods
-          .sellShares(amountBN, safeOutcome)
+          .sellShares(amountBn, safeOutcome)
           .accounts({
             market: marketPubkey,
             userPosition: positionPDA,
-            seller: publicKey,
-            creator: creatorPubkey,
             platformWallet: PLATFORM_WALLET,
+            creator: creatorPubkey,
+            trader: publicKey,
             systemProgram: SystemProgram.programId,
           })
           .rpc();
       }
 
-      const name =
-        derived.names[safeOutcome] || `Outcome #${safeOutcome + 1}`;
-      const estSol = estimateCostSol(
-        derived.supplies[safeOutcome] || 0,
-        safeShares,
-        side
-      );
-      const estLamports = solToLamports(Math.abs(estSol));
+      const name = derived.names[safeOutcome] || `Outcome #${safeOutcome + 1}`;
 
       alert(
-        `Success! 🎉\n\n${
-          side === "buy" ? "Bought" : "Sold"
-        } ${safeShares} shares of "${name}"\n\nTx: ${txSig.slice(
+        `Success! 🎉\n\n${side === "buy" ? "Bought" : "Sold"} ${safeShares} shares of "${name}"\n\nTx: ${txSig.slice(
           0,
           16
         )}...\n\nhttps://explorer.solana.com/tx/${txSig}?cluster=devnet`
       );
 
-      if (market.dbId) {
-        const outcomeName =
-          derived.names[safeOutcome] || `Outcome #${safeOutcome}`;
+      // ✅ use UI estimate cost (sol) as the canonical "cost" stored in transactions table
+      const safeCostSol =
+        typeof costSol === "number" && Number.isFinite(costSol) ? costSol : null;
 
+      if (market.dbId) {
         await recordTransaction({
           market_id: market.dbId,
           market_address: market.publicKey,
@@ -533,18 +475,22 @@ export default function TradePage() {
           is_yes: derived.names.length === 2 ? safeOutcome === 0 : null,
           amount: safeShares,
           shares: safeShares,
-          cost: Number(estSol || 0),
+          cost: safeCostSol, // ✅ NOT null anymore
           outcome_index: safeOutcome,
-          outcome_name: outcomeName,
+          outcome_name: name,
         } as any);
       }
+
+      // ✅ volume = sum of BUY cost (UI estimate). Keep it 0 for sell.
+      const deltaVolLamports =
+        side === "buy" && safeCostSol != null ? solToLamports(safeCostSol) : 0;
 
       await applyTradeToMarketInSupabase({
         market_address: market.publicKey,
         market_type: market.marketType,
         outcome_index: safeOutcome,
         delta_shares: side === "buy" ? safeShares : -safeShares,
-        delta_volume_lamports: Number(estLamports || 0),
+        delta_volume_lamports: deltaVolLamports,
       });
 
       await loadMarket(id);
@@ -576,14 +522,8 @@ export default function TradePage() {
     );
   }
 
-  const {
-    marketType,
-    names,
-    supplies,
-    percentages,
-    isBinaryStyle,
-    missingOutcomes,
-  } = derived;
+  const { marketType, names, supplies, percentages, isBinaryStyle, missingOutcomes } =
+    derived;
 
   const nowSec = Math.floor(Date.now() / 1000);
   const marketClosed = market.resolved || nowSec >= market.resolutionTime;
@@ -598,7 +538,6 @@ export default function TradePage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* LEFT */}
         <div className="lg:col-span-2 space-y-6">
-          {/* Market card */}
           <div className="card-pump">
             <div className="flex items-start gap-4">
               <div className="flex-shrink-0 w-20 h-20 rounded-xl overflow-hidden bg-pump-dark">
@@ -644,13 +583,14 @@ export default function TradePage() {
                 </span>
               </div>
               <div>
-                {new Date(
-                  market.resolutionTime * 1000
-                ).toLocaleDateString("en-US", {
-                  month: "short",
-                  day: "numeric",
-                  year: "numeric",
-                })}
+                {new Date(market.resolutionTime * 1000).toLocaleDateString(
+                  "en-US",
+                  {
+                    month: "short",
+                    day: "numeric",
+                    year: "numeric",
+                  }
+                )}
               </div>
               <div className="ml-auto text-xs text-gray-500">
                 {marketType === 1 ? "Multi-choice" : "Binary"}
@@ -685,23 +625,17 @@ export default function TradePage() {
                       <div className="flex items-center justify-between text-xs text-gray-400 mb-2">
                         <span
                           className={`uppercase tracking-wide font-semibold ${
-                            isYes
-                              ? "text-pump-green"
-                              : "text-[#ff5c73]"
+                            isYes ? "text-pump-green" : "text-[#ff5c73]"
                           }`}
                         >
                           {outcome}
                         </span>
-                        <span className="text-gray-500">
-                          Supply: {supply}
-                        </span>
+                        <span className="text-gray-500">Supply: {supply}</span>
                       </div>
 
                       <div
                         className={`text-3xl md:text-4xl font-bold tabular-nums ${
-                          isYes
-                            ? "text-pump-green"
-                            : "text-[#ff5c73]"
+                          isYes ? "text-pump-green" : "text-[#ff5c73]"
                         }`}
                       >
                         {pct}%
@@ -750,13 +684,11 @@ export default function TradePage() {
             </div>
           </div>
 
-          {/* Odds history (main chart) */}
+          {/* Odds history */}
           <div className="card-pump">
             <div className="flex items-center justify-between gap-4 mb-4">
               <div>
-                <h2 className="text-xl font-bold text-white">
-                  Odds history
-                </h2>
+                <h2 className="text-xl font-bold text-white">Odds history</h2>
               </div>
 
               <div className="flex items-center gap-2">
@@ -804,8 +736,8 @@ export default function TradePage() {
             }}
             connected={connected}
             submitting={submitting}
-            onTrade={(s, outcomeIndex, side) =>
-              void handleTrade(s, outcomeIndex, side)
+            onTrade={(s, outcomeIndex, side, costSol) =>
+              void handleTrade(s, outcomeIndex, side, costSol)
             }
             marketAddress={market.publicKey}
             marketBalanceLamports={marketBalanceLamports}
@@ -813,7 +745,6 @@ export default function TradePage() {
             marketClosed={marketClosed}
           />
 
-          {/* Carte "Resolution proof" sous le panel quand le marché est fermé */}
           {marketClosed && (
             <div className="mt-4 card-pump">
               <h3 className="text-lg font-semibold text-white mb-2">
@@ -866,13 +797,10 @@ export default function TradePage() {
                 </>
               ) : (
                 <p className="text-sm text-gray-300">
-                  The market creator will add a link or image explaining
-                  how this market was resolved. In the meantime you can
-                  manage your positions from your{" "}
-                  <Link
-                    href="/dashboard"
-                    className="text-pump-green underline"
-                  >
+                  The market creator will add a link or image explaining how
+                  this market was resolved. In the meantime you can manage your
+                  positions from your{" "}
+                  <Link href="/dashboard" className="text-pump-green underline">
                     dashboard
                   </Link>
                   .
@@ -883,7 +811,7 @@ export default function TradePage() {
         </div>
       </div>
 
-      {/* Discussion / Activity tabs (bottom section) */}
+      {/* Discussion / Activity tabs */}
       <div className="mt-8">
         <div className="flex items-center gap-2 mb-4">
           <button

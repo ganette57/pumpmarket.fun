@@ -11,6 +11,9 @@ export const PLATFORM_WALLET = new PublicKey(
   "7DVR8gnBbLYN1aAAhbEJpNLxdzPzuqwAPaLRCRt4v93Z"
 );
 
+// 1 UI share => this many "raw shares" on-chain (u64)
+export const SHARE_SCALE = 1_000_000; // 0.001 SOL worth of granularity (in lamports units)
+
 export function getConnection(): Connection {
   return new Connection(NETWORK, "confirmed");
 }
@@ -29,10 +32,6 @@ export function randomBase36(len = 6) {
   return Math.random().toString(36).slice(2, 2 + len);
 }
 
-/**
- * Seeds (for PDA) must be <= 32 bytes.
- * We build a short seed like: "<trimmed>~abc123"
- */
 export function makeSeededQuestion(displayQuestion: string, suffix: string) {
   const clean = displayQuestion.trim().replace(/\s+/g, " ");
   const tag = `~${suffix}`;
@@ -52,9 +51,6 @@ export function makeSeededQuestion(displayQuestion: string, suffix: string) {
   return `${base}${tag}`;
 }
 
-/**
- * Throws if the seed is > 32 bytes (Anchor PDA constraint)
- */
 export function assertSeed32(label: string, seed: string) {
   const bytes = Buffer.byteLength(seed, "utf8");
   if (bytes > 32) {
@@ -64,10 +60,6 @@ export function assertSeed32(label: string, seed: string) {
   }
 }
 
-/**
- * Get market PDA from a *seeded question* (must be <= 32 bytes).
- * IMPORTANT: this question string must match the on-chain createMarket(question, ...) arg.
- */
 export function getMarketPDA(creator: PublicKey, questionSeed: string): [PublicKey, number] {
   assertSeed32("market.question", questionSeed);
 
@@ -77,9 +69,6 @@ export function getMarketPDA(creator: PublicKey, questionSeed: string): [PublicK
   );
 }
 
-/**
- * Helper to find a free PDA (avoid "already in use") by trying random suffixes.
- */
 export async function deriveFreeMarketPda(
   connection: Connection,
   creator: PublicKey,
@@ -107,9 +96,13 @@ export function getUserCounterPDA(authority: PublicKey): [PublicKey, number] {
   );
 }
 
+/**
+ * ✅ MUST MATCH PROGRAM:
+ * seeds = [b"user_position", market.key().as_ref(), trader.key().as_ref()]
+ */
 export function getUserPositionPDA(market: PublicKey, user: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
-    [Buffer.from("position"), market.toBuffer(), user.toBuffer()],
+    [Buffer.from("user_position"), market.toBuffer(), user.toBuffer()],
     PROGRAM_ID
   );
 }

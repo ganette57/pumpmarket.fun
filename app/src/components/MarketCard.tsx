@@ -12,7 +12,7 @@ interface MarketCardProps {
     question: string;
     description?: string;
     category: string;
-    imageUrl?: string;
+    imageUrl?: string | null;
     yesSupply: number;
     noSupply: number;
     outcomeNames?: string[];
@@ -26,6 +26,17 @@ interface MarketCardProps {
 export default function MarketCard({ market }: MarketCardProps) {
   const now = Date.now() / 1000;
   const daysLeft = Math.max(0, Math.floor((market.resolutionTime - now) / 86400));
+
+  // ✅ sanitize category (évite crash quand null/undefined)
+  const safeCategoryRaw = (market.category ?? 'other').toString().trim();
+  const safeCategory = safeCategoryRaw.length ? safeCategoryRaw : 'other';
+  const safeCategoryKey = safeCategory.toLowerCase();
+
+  // ✅ sanitize imageUrl (évite "null" string etc.)
+  const safeImageUrl =
+    market.imageUrl && market.imageUrl !== 'null' && market.imageUrl !== 'undefined' && market.imageUrl.trim() !== ''
+      ? market.imageUrl
+      : undefined;
 
   // outcomes ----------------------------
   let outcomes =
@@ -50,9 +61,9 @@ export default function MarketCard({ market }: MarketCardProps) {
       <article className="relative rounded-xl overflow-hidden border border-gray-800 bg-[#05070b] hover:border-pump-green hover:shadow-xl transition-all h-full">
         {/* IMAGE + CATEGORY BADGE */}
         <div className="relative w-full h-40 overflow-hidden bg-black">
-          {market.imageUrl ? (
+          {safeImageUrl ? (
             <Image
-              src={market.imageUrl}
+              src={safeImageUrl}
               alt={market.question}
               width={300}
               height={200}
@@ -60,9 +71,17 @@ export default function MarketCard({ market }: MarketCardProps) {
             />
           ) : (
             <div className="flex justify-center items-center w-full h-full opacity-60 scale-[0.6]">
-              <CategoryImagePlaceholder category={market.category.toLowerCase()} />
+              <CategoryImagePlaceholder category={safeCategoryKey} />
             </div>
           )}
+          {/* ENDED BADGE */}
+{(market.resolved || now >= market.resolutionTime) && (
+  <div className="absolute top-3 right-3 z-10">
+    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wide bg-black/80 border border-gray-700 text-gray-200">
+      Ended
+    </span>
+  </div>
+)}
 
           {/* dark fade bottom */}
           <div className="absolute inset-0 bg-gradient-to-t from-[#05070b] via-transparent" />
@@ -70,7 +89,7 @@ export default function MarketCard({ market }: MarketCardProps) {
           {/* CATEGORY PILL (top-left, fond noir) */}
           <div className="absolute top-3 left-3">
             <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wide bg-black/80 border border-gray-700 text-gray-200 shadow-sm">
-              {market.category}
+              {safeCategory}
             </span>
           </div>
         </div>

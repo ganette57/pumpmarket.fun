@@ -8,8 +8,7 @@ interface CategoryImagePlaceholderProps {
   className?: string;
 }
 
-export default function CategoryImagePlaceholder({ category, className = '' }: CategoryImagePlaceholderProps) {
-  const getCategoryConfig = (cat?: string) => {
+export default function CategoryImagePlaceholder({ category, className = 'w-full h-full' }: CategoryImagePlaceholderProps) {  const getCategoryConfig = (cat?: string) => {
     switch (cat) {
       case 'crypto':
         return {

@@ -9,9 +9,6 @@
   "instructions": [
     {
       "name": "buy_shares",
-      "docs": [
-        "Buy shares for a specific outcome with bonding curve pricing"
-      ],
       "discriminator": [
         40,
         239,
@@ -35,6 +32,11 @@
               {
                 "kind": "const",
                 "value": [
+                  117,
+                  115,
+                  101,
+                  114,
+                  95,
                   112,
                   111,
                   115,
@@ -51,23 +53,23 @@
               },
               {
                 "kind": "account",
-                "path": "buyer"
+                "path": "trader"
               }
             ]
           }
         },
         {
-          "name": "buyer",
-          "writable": true,
-          "signer": true
+          "name": "platform_wallet",
+          "writable": true
         },
         {
           "name": "creator",
           "writable": true
         },
         {
-          "name": "platform_wallet",
-          "writable": true
+          "name": "trader",
+          "writable": true,
+          "signer": true
         },
         {
           "name": "system_program",
@@ -76,7 +78,7 @@
       ],
       "args": [
         {
-          "name": "amount",
+          "name": "shares",
           "type": "u64"
         },
         {
@@ -87,9 +89,6 @@
     },
     {
       "name": "claim_winnings",
-      "docs": [
-        "Claim winnings after market resolution"
-      ],
       "discriminator": [
         161,
         215,
@@ -113,6 +112,11 @@
               {
                 "kind": "const",
                 "value": [
+                  117,
+                  115,
+                  101,
+                  114,
+                  95,
                   112,
                   111,
                   115,
@@ -144,9 +148,6 @@
     },
     {
       "name": "create_market",
-      "docs": [
-        "Create a new prediction market with multi-choice support"
-      ],
       "discriminator": [
         103,
         226,
@@ -161,58 +162,7 @@
         {
           "name": "market",
           "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  109,
-                  97,
-                  114,
-                  107,
-                  101,
-                  116
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "creator"
-              },
-              {
-                "kind": "arg",
-                "path": "question"
-              }
-            ]
-          }
-        },
-        {
-          "name": "user_counter",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  117,
-                  115,
-                  101,
-                  114,
-                  95,
-                  99,
-                  111,
-                  117,
-                  110,
-                  116,
-                  101,
-                  114
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "creator"
-              }
-            ]
-          }
+          "signer": true
         },
         {
           "name": "creator",
@@ -226,91 +176,39 @@
       ],
       "args": [
         {
-          "name": "question",
-          "type": "string"
-        },
-        {
-          "name": "description",
-          "type": "string"
-        },
-        {
           "name": "resolution_time",
           "type": "i64"
-        },
-        {
-          "name": "market_type",
-          "type": "u8"
         },
         {
           "name": "outcome_names",
           "type": {
             "vec": "string"
           }
+        },
+        {
+          "name": "market_type",
+          "type": "u8"
+        },
+        {
+          "name": "b_lamports",
+          "type": "u64"
+        },
+        {
+          "name": "max_position_bps",
+          "type": "u16"
+        },
+        {
+          "name": "max_trade_shares",
+          "type": "u64"
+        },
+        {
+          "name": "cooldown_seconds",
+          "type": "i64"
         }
       ]
     },
     {
-      "name": "initialize_user_counter",
-      "docs": [
-        "Initialize user counter (rate limiting)"
-      ],
-      "discriminator": [
-        97,
-        23,
-        209,
-        224,
-        1,
-        108,
-        45,
-        191
-      ],
-      "accounts": [
-        {
-          "name": "user_counter",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  117,
-                  115,
-                  101,
-                  114,
-                  95,
-                  99,
-                  111,
-                  117,
-                  110,
-                  116,
-                  101,
-                  114
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "authority"
-              }
-            ]
-          }
-        },
-        {
-          "name": "authority",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": []
-    },
-    {
       "name": "resolve_market",
-      "docs": [
-        "Resolve market with winning outcome index"
-      ],
       "discriminator": [
         155,
         23,
@@ -327,35 +225,6 @@
           "writable": true
         },
         {
-          "name": "user_counter",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  117,
-                  115,
-                  101,
-                  114,
-                  95,
-                  99,
-                  111,
-                  117,
-                  110,
-                  116,
-                  101,
-                  114
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "creator"
-              }
-            ]
-          }
-        },
-        {
           "name": "creator",
           "signer": true,
           "relations": [
@@ -365,16 +234,13 @@
       ],
       "args": [
         {
-          "name": "winning_outcome_index",
+          "name": "winning_outcome",
           "type": "u8"
         }
       ]
     },
     {
       "name": "sell_shares",
-      "docs": [
-        "Sell shares back to the bonding curve"
-      ],
       "discriminator": [
         184,
         164,
@@ -398,6 +264,11 @@
               {
                 "kind": "const",
                 "value": [
+                  117,
+                  115,
+                  101,
+                  114,
+                  95,
                   112,
                   111,
                   115,
@@ -414,23 +285,23 @@
               },
               {
                 "kind": "account",
-                "path": "seller"
+                "path": "trader"
               }
             ]
           }
         },
         {
-          "name": "seller",
-          "writable": true,
-          "signer": true
+          "name": "platform_wallet",
+          "writable": true
         },
         {
           "name": "creator",
           "writable": true
         },
         {
-          "name": "platform_wallet",
-          "writable": true
+          "name": "trader",
+          "writable": true,
+          "signer": true
         },
         {
           "name": "system_program",
@@ -439,7 +310,7 @@
       ],
       "args": [
         {
-          "name": "amount",
+          "name": "shares",
           "type": "u64"
         },
         {
@@ -464,19 +335,6 @@
       ]
     },
     {
-      "name": "UserCounter",
-      "discriminator": [
-        154,
-        114,
-        103,
-        93,
-        77,
-        57,
-        80,
-        227
-      ]
-    },
-    {
       "name": "UserPosition",
       "discriminator": [
         251,
@@ -493,23 +351,23 @@
   "errors": [
     {
       "code": 6000,
-      "name": "BannedContent",
-      "msg": "Content contains banned words - keep it clean!"
+      "name": "InvalidOutcomes",
+      "msg": "Invalid outcomes"
     },
     {
       "code": 6001,
-      "name": "InvalidQuestionLength",
-      "msg": "Question must be 10-200 characters"
+      "name": "InvalidResolutionTime",
+      "msg": "Invalid resolution time"
     },
     {
       "code": 6002,
-      "name": "DescriptionTooLong",
-      "msg": "Description too long (max 500 chars)"
+      "name": "InvalidB",
+      "msg": "Invalid liquidity parameter b"
     },
     {
       "code": 6003,
-      "name": "InvalidResolutionTime",
-      "msg": "Resolution time must be in the future"
+      "name": "MarketClosed",
+      "msg": "Market is closed (past end time)"
     },
     {
       "code": 6004,
@@ -518,68 +376,108 @@
     },
     {
       "code": 6005,
-      "name": "MarketExpired",
-      "msg": "Market has expired"
+      "name": "MarketNotEnded",
+      "msg": "Market not ended yet"
     },
     {
       "code": 6006,
-      "name": "InsufficientShares",
-      "msg": "Insufficient shares to sell"
+      "name": "MarketNotResolved",
+      "msg": "Market not resolved"
     },
     {
       "code": 6007,
-      "name": "MarketNotResolved",
-      "msg": "Market not resolved yet"
+      "name": "InvalidShares",
+      "msg": "Invalid shares"
     },
     {
       "code": 6008,
-      "name": "NoWinningShares",
-      "msg": "No winning shares to claim"
-    },
-    {
-      "code": 6009,
-      "name": "AlreadyResolved",
-      "msg": "Already resolved"
-    },
-    {
-      "code": 6010,
-      "name": "TooEarlyToResolve",
-      "msg": "Too early to resolve market"
-    },
-    {
-      "code": 6011,
-      "name": "TooManyActiveMarkets",
-      "msg": "You have too many active markets (max 5)"
-    },
-    {
-      "code": 6012,
-      "name": "InvalidMarketType",
-      "msg": "Invalid market type (must be 0 or 1)"
-    },
-    {
-      "code": 6013,
-      "name": "InvalidOutcomeCount",
-      "msg": "Invalid outcome count (must be 2-10)"
-    },
-    {
-      "code": 6014,
-      "name": "BinaryMustHaveTwoOutcomes",
-      "msg": "Binary markets must have exactly 2 outcomes"
-    },
-    {
-      "code": 6015,
-      "name": "InvalidOutcomeName",
-      "msg": "Invalid outcome name (must be 1-50 characters)"
-    },
-    {
-      "code": 6016,
       "name": "InvalidOutcomeIndex",
       "msg": "Invalid outcome index"
     },
     {
+      "code": 6009,
+      "name": "TradeTooLarge",
+      "msg": "Trade too large"
+    },
+    {
+      "code": 6010,
+      "name": "CooldownActive",
+      "msg": "Cooldown active: wait before trading again"
+    },
+    {
+      "code": 6011,
+      "name": "PositionCapExceeded",
+      "msg": "Position cap exceeded for this outcome"
+    },
+    {
+      "code": 6012,
+      "name": "InvalidAntiManip",
+      "msg": "Invalid anti-manip config"
+    },
+    {
+      "code": 6013,
+      "name": "NotEnoughShares",
+      "msg": "Not enough shares to sell"
+    },
+    {
+      "code": 6014,
+      "name": "InvalidCost",
+      "msg": "Invalid cost/refund"
+    },
+    {
+      "code": 6015,
+      "name": "InvalidPayout",
+      "msg": "Invalid payout"
+    },
+    {
+      "code": 6016,
+      "name": "NoWinningShares",
+      "msg": "No winning shares to claim"
+    },
+    {
       "code": 6017,
+      "name": "InvalidSupply",
+      "msg": "Invalid supply"
+    },
+    {
+      "code": 6018,
       "name": "AlreadyClaimed",
-      "msg": "Already claimed winnings"
+      "msg": "Already claimed"
+    },
+    {
+      "code": 6019,
+      "name": "InsufficientMarketBalance",
+      "msg": "Insufficient market balance"
+    },
+    {
+      "code": 6020,
+      "name": "InvalidUserPosition",
+      "msg": "Invalid user position account"
+    },
+    {
+      "code": 6021,
+      "name": "Overflow",
+      "msg": "Overflow"
+    },
+    {
+      "code": 6022,
+      "name": "MathOverflow",
+      "msg": "Math overflow"
+    },
+    {
+      "code": 6023,
+      "name": "InvalidLiquidityParameter",
+      "msg": "Invalid liquidity parameter"
+    },
+    {
+      "code": 6024,
+      "name": "InvalidOutcomeCount",
+      "msg": "Invalid outcome count"
+    },
+    {
+      "code": 6025,
+      "name": "InsufficientShares",
+      "msg": "Insufficient shares"
     }
   ],
   "types": [
@@ -593,50 +491,8 @@
             "type": "pubkey"
           },
           {
-            "name": "question",
-            "type": "string"
-          },
-          {
-            "name": "description",
-            "type": "string"
-          },
-          {
             "name": "resolution_time",
             "type": "i64"
-          },
-          {
-            "name": "market_type",
-            "type": "u8"
-          },
-          {
-            "name": "outcome_count",
-            "type": "u8"
-          },
-          {
-            "name": "outcome_names",
-            "type": {
-              "array": [
-                "string",
-                10
-              ]
-            }
-          },
-          {
-            "name": "outcome_supplies",
-            "type": {
-              "array": [
-                "u64",
-                10
-              ]
-            }
-          },
-          {
-            "name": "total_volume",
-            "type": "u64"
-          },
-          {
-            "name": "fees_collected",
-            "type": "u64"
           },
           {
             "name": "resolved",
@@ -649,24 +505,43 @@
             }
           },
           {
-            "name": "bump",
+            "name": "market_type",
             "type": "u8"
-          }
-        ]
-      }
-    },
-    {
-      "name": "UserCounter",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "authority",
-            "type": "pubkey"
           },
           {
-            "name": "active_markets",
+            "name": "outcome_count",
             "type": "u8"
+          },
+          {
+            "name": "b_lamports",
+            "type": "u64"
+          },
+          {
+            "name": "q",
+            "type": {
+              "array": [
+                "u64",
+                10
+              ]
+            }
+          },
+          {
+            "name": "max_position_bps",
+            "type": "u16"
+          },
+          {
+            "name": "max_trade_shares",
+            "type": "u64"
+          },
+          {
+            "name": "cooldown_seconds",
+            "type": "i64"
+          },
+          {
+            "name": "outcome_names",
+            "type": {
+              "vec": "string"
+            }
           }
         ]
       }
@@ -696,6 +571,10 @@
           {
             "name": "claimed",
             "type": "bool"
+          },
+          {
+            "name": "last_trade_ts",
+            "type": "i64"
           }
         ]
       }

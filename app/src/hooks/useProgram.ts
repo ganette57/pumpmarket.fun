@@ -13,18 +13,14 @@ export function useProgram() {
 
     const provider = new AnchorProvider(connection, wallet, {
       commitment: "confirmed",
+      preflightCommitment: "confirmed",
     });
 
-    // ✅ Force l'address dans l'IDL (important si tu changes de programId)
     const idl = {
       ...(idlJson as any),
-      metadata: {
-        ...((idlJson as any).metadata || {}),
-        address: PROGRAM_ID.toBase58(),
-      },
-    } as unknown as Idl;
+      address: PROGRAM_ID.toBase58(),
+    } as Idl;
 
-    // ✅ Signature compatible avec les versions d'Anchor qui crashent avec 3 args
     return new Program(idl, provider);
   }, [connection, wallet]);
 }

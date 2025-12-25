@@ -2,14 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
-import { SystemProgram, PublicKey } from "@solana/web3.js";
+import { SystemProgram, Keypair } from "@solana/web3.js";
 import { BN } from "@coral-xyz/anchor";
 import { useRouter } from "next/navigation";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
 import { Calendar, Upload, X } from "lucide-react";
 import Image from "next/image";
-import { Buffer } from "buffer";
 
 import { validateMarketQuestion, validateMarketDescription } from "@/utils/bannedWords";
 import { CATEGORIES, CategoryId } from "@/utils/categories";
@@ -17,7 +16,6 @@ import SocialLinksForm, { SocialLinks } from "@/components/SocialLinksForm";
 import CategoryImagePlaceholder from "@/components/CategoryImagePlaceholder";
 
 import { useProgram } from "@/hooks/useProgram";
-import { getUserCounterPDA } from "@/utils/solana";
 import { indexMarket } from "@/lib/markets";
 
 // ---------- helpers ----------
@@ -29,35 +27,9 @@ function parseOutcomes(text: string) {
     .slice(0, 10);
 }
 
-function randomBase36(len = 6) {
-  return Math.random().toString(36).slice(2, 2 + len);
-}
-
-function makeSeededQuestion(displayQuestion: string, suffix: string) {
-  const clean = displayQuestion.trim().replace(/\s+/g, " ");
-  const tag = `~${suffix}`;
-  const maxBytes = 32;
-
-  const tagBytes = Buffer.from(tag, "utf8").length;
-  let base = clean;
-
-  while (Buffer.from(base, "utf8").length + tagBytes > maxBytes) {
-    base = base.slice(0, -1);
-    if (!base.length) break;
-  }
-  base = base.trim();
-  if (!base) base = "market";
-  return `${base}${tag}`;
-}
-
 function toStringArray(x: any): string[] {
   if (!x) return [];
-  if (Array.isArray(x)) return x.map(String).map(s => s.trim()).filter(Boolean);
-  return [];
-}
-function toNumberArray(x: any): number[] {
-  if (!x) return [];
-  if (Array.isArray(x)) return x.map((v) => Number(v) || 0);
+  if (Array.isArray(x)) return x.map(String).map((s) => s.trim()).filter(Boolean);
   return [];
 }
 
@@ -89,6 +61,12 @@ export default function CreateMarketPage() {
   const [socialLinks, setSocialLinks] = useState<SocialLinks>({});
   const [questionError, setQuestionError] = useState<string | null>(null);
   const [descriptionError, setDescriptionError] = useState<string | null>(null);
+
+  // ✅ On-chain defaults (hidden from user)
+  const DEFAULT_B_SOL = 10; // must be > 0
+  const DEFAULT_MAX_POSITION_BPS = 10_000; // 10_000 = disabled
+  const DEFAULT_MAX_TRADE_SHARES = 5_000_000; // allowed max
+  const DEFAULT_COOLDOWN_SECONDS = 0; // disabled
 
   useEffect(() => {
     if (marketType === 0) setOutcomesText("YES\nNO");
@@ -147,100 +125,65 @@ export default function CreateMarketPage() {
     setImageError("");
   };
 
-  async function ensureUserCounter(userCounterPDA: PublicKey) {
-    const info = await connection.getAccountInfo(userCounterPDA);
-    if (info) return;
-
-    const sig = await (program as any).methods
-      .initializeUserCounter()
-      .accounts({
-        userCounter: userCounterPDA,
-        authority: publicKey!,
-        systemProgram: SystemProgram.programId,
-      })
-      .rpc();
-
-    await new Promise((r) => setTimeout(r, 1200));
-    console.log("User counter initialized:", sig);
-  }
-
-  async function deriveFreeMarketPda(displayQuestion: string) {
-    for (let i = 0; i < 10; i++) {
-      const suffix = randomBase36(6);
-      const seededQuestion = makeSeededQuestion(displayQuestion, suffix);
-
-      const marketPda = PublicKey.findProgramAddressSync(
-        [Buffer.from("market"), publicKey!.toBuffer(), Buffer.from(seededQuestion, "utf8")],
-        (program as any).programId
-      )[0];
-
-      const info = await connection.getAccountInfo(marketPda);
-      if (!info) return { marketPda, seededQuestion };
-    }
-    throw new Error("Could not find a free market PDA. Try changing the question.");
-  }
-
   async function handleCreateMarket() {
     if (!canSubmit || !publicKey || !program) return;
 
     setLoading(true);
     try {
-      const [userCounterPDA] = getUserCounterPDA(publicKey);
-      const { marketPda, seededQuestion } = await deriveFreeMarketPda(question);
-
-      await ensureUserCounter(userCounterPDA);
-
+      // Market is `init` without seeds => real Keypair
+      const marketKeypair = Keypair.generate();
       const resolutionTimestamp = Math.floor(resolutionDate.getTime() / 1000);
 
-      console.log("Creating market with:", {
-        seededQuestion,
-        uiQuestion: question,
-        marketType,
-        outcomes,
-        resolutionTimestamp,
-      });
+      // defaults -> on-chain args
+      const bLamportsU64 = Math.floor(DEFAULT_B_SOL * 1_000_000_000);
 
       const tx = await (program as any).methods
-        .createMarket(seededQuestion, description ?? "", new BN(resolutionTimestamp), marketType, outcomes)
+        .createMarket(
+          new BN(resolutionTimestamp),         // i64
+          outcomes,                            // Vec<String>
+          marketType,                          // u8
+          new BN(bLamportsU64),                // u64
+          DEFAULT_MAX_POSITION_BPS,            // u16
+          new BN(DEFAULT_MAX_TRADE_SHARES),    // u64
+          new BN(DEFAULT_COOLDOWN_SECONDS)     // i64
+        )
         .accounts({
-          market: marketPda,
+          market: marketKeypair.publicKey,
           creator: publicKey,
-          userCounter: userCounterPDA,
           systemProgram: SystemProgram.programId,
         })
+        .signers([marketKeypair])
         .rpc();
 
-      console.log("Market created! Transaction:", tx);
+      console.log("Market created! tx:", tx);
 
-      // ✅ FETCH ON-CHAIN TRUTH, then index
-      const acct: any = await (program as any).account.market.fetch(marketPda);
+      // Fetch on-chain truth (recommended)
+      let onchainType = Number(marketType) || 0;
+      let onchainNames = outcomes;
+      let onchainSupplies: number[] = new Array(outcomes.length).fill(0);
 
-      const onchainType =
-        typeof acct?.marketType === "number" ? acct.marketType :
-        typeof acct?.market_type === "number" ? acct.market_type :
-        Number(marketType) || 0;
+      try {
+        const acct: any = await (program as any).account.market.fetch(marketKeypair.publicKey);
 
-      const onchainNames =
-        toStringArray(acct?.outcomeNames).length ? toStringArray(acct?.outcomeNames) :
-        toStringArray(acct?.outcome_names).length ? toStringArray(acct?.outcome_names) :
-        outcomes;
+        onchainType = Number(acct?.marketType ?? acct?.market_type ?? onchainType) || 0;
 
-      const onchainSupplies =
-        toNumberArray(acct?.outcomeSupplies).length ? toNumberArray(acct?.outcomeSupplies) :
-        toNumberArray(acct?.outcome_supplies).length ? toNumberArray(acct?.outcome_supplies) :
-        new Array(onchainNames.length).fill(0);
+        const namesA = toStringArray(acct?.outcomeNames);
+        const namesB = toStringArray(acct?.outcome_names);
+        if (namesA.length) onchainNames = namesA;
+        else if (namesB.length) onchainNames = namesB;
 
-      console.log("✅ ON-CHAIN MARKET CHECK", {
-        market_address: marketPda.toBase58(),
-        market_type: onchainType,
-        outcome_names: onchainNames,
-        outcome_supplies: onchainSupplies,
-      });
+        if (Array.isArray(acct?.q)) {
+          const qNums = acct.q.map((v: any) => Number(v) || 0);
+          onchainSupplies = qNums.slice(0, onchainNames.length);
+        }
+      } catch (fetchErr) {
+        console.warn("Could not fetch on-chain market (still ok):", fetchErr);
+      }
 
       const isBinary = onchainType === 0 && onchainNames.length === 2;
 
       await indexMarket({
-        market_address: marketPda.toBase58(),
+        market_address: marketKeypair.publicKey.toBase58(),
         question: question.slice(0, 200),
         description: description || undefined,
         category: category || "other",
@@ -260,7 +203,7 @@ export default function CreateMarketPage() {
         resolved: false,
       });
 
-      router.push(`/trade/${marketPda.toBase58()}`);
+      router.push(`/trade/${marketKeypair.publicKey.toBase58()}`);
     } catch (e: any) {
       console.error("Create market error:", e);
       alert(e?.message || "Failed to create market");
@@ -280,7 +223,8 @@ export default function CreateMarketPage() {
         {/* Question */}
         <div className="mb-6">
           <label className="block text-white font-semibold mb-2">
-            Question * <span className="text-gray-500 font-normal text-sm ml-2">({question.length}/200)</span>
+            Question *{" "}
+            <span className="text-gray-500 font-normal text-sm ml-2">({question.length}/200)</span>
           </label>
           <input
             type="text"
@@ -296,7 +240,8 @@ export default function CreateMarketPage() {
         {/* Description */}
         <div className="mb-6">
           <label className="block text-white font-semibold mb-2">
-            Description (optional) <span className="text-gray-500 font-normal text-sm ml-2">({description.length}/500)</span>
+            Description (optional){" "}
+            <span className="text-gray-500 font-normal text-sm ml-2">({description.length}/500)</span>
           </label>
           <textarea
             value={description}
@@ -325,7 +270,10 @@ export default function CreateMarketPage() {
         {/* Outcomes */}
         <div className="mb-6">
           <label className="block text-white font-semibold mb-2">
-            Outcomes (1 per line) * <span className="text-gray-500 font-normal text-sm ml-2">({marketType === 0 ? "must be 2" : "2 to 10"})</span>
+            Outcomes (1 per line) *{" "}
+            <span className="text-gray-500 font-normal text-sm ml-2">
+              ({marketType === 0 ? "must be 2" : "2 to 10"})
+            </span>
           </label>
           <textarea
             value={outcomesText}
@@ -334,7 +282,9 @@ export default function CreateMarketPage() {
             className={`input-pump w-full ${outcomesError ? "input-error" : ""}`}
             placeholder={marketType === 0 ? "YES\nNO" : "packers\nbroncos"}
           />
-          <div className="text-xs text-gray-500 mt-2">Parsed: {outcomes.length} {outcomes.length ? `(${outcomes.join(", ")})` : ""}</div>
+          <div className="text-xs text-gray-500 mt-2">
+            Parsed: {outcomes.length} {outcomes.length ? `(${outcomes.join(", ")})` : ""}
+          </div>
           {outcomesError && <p className="text-pump-red text-sm mt-2 font-semibold">❌ {outcomesError}</p>}
         </div>
 
