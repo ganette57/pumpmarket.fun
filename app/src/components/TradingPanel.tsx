@@ -237,23 +237,7 @@ export default function TradingPanel({
     onTrade(s, selectedIndex, side, costSol);
   };
 
-  if (marketClosed) {
-    return (
-      <div className="card-pump flex flex-col items-center justify-center text-center min-h-[260px]">
-        <div className="w-14 h-14 rounded-full bg-pump-dark flex items-center justify-center mb-3">
-          <span className="text-2xl">👍</span>
-        </div>
-        <p className="text-sm text-gray-400 mb-1">Market closed</p>
-        <p className="text-lg font-semibold text-white mb-2">
-          Trading is disabled for this market
-        </p>
-        <p className="text-xs text-gray-400 max-w-xs">
-          You can view and claim any winnings from your dashboard once resolution
-          is processed.
-        </p>
-      </div>
-    );
-  }
+  if (marketClosed) return null;
 
   return (
     <div className="card-pump sticky top-20">

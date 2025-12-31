@@ -19,22 +19,13 @@ import CommentsSection from "@/components/CommentsSection";
 import TradingPanel from "@/components/TradingPanel";
 import OddsHistoryChart from "@/components/OddsHistoryChart";
 import MarketActivityTab from "@/components/MarketActivity";
+import ResolutionPanel from "@/components/ResolutionPanel";
 
 import { supabase } from "@/lib/supabaseClient";
 import { buildOddsSeries, downsample } from "@/lib/marketHistory";
+import { getMarketByAddress, recordTransaction, applyTradeToMarketInSupabase } from "@/lib/markets";
 
-import {
-  getMarketByAddress,
-  recordTransaction,
-  applyTradeToMarketInSupabase,
-} from "@/lib/markets";
-
-import {
-  lamportsToSol,
-  solToLamports,
-  getUserPositionPDA,
-  PLATFORM_WALLET,
-} from "@/utils/solana";
+import { lamportsToSol, solToLamports, getUserPositionPDA, PLATFORM_WALLET } from "@/utils/solana";
 
 import type { SocialLinks } from "@/components/SocialLinksForm";
 
@@ -49,28 +40,45 @@ type UiMarket = {
   imageUrl?: string;
   creator: string;
 
-  totalVolume: number; // lamports
-  resolutionTime: number; // unix seconds
+  totalVolume: number;
+  resolutionTime: number; // unix sec from end_date
+  creatorResolveDeadline?: string | null; // end_date + 72h
   resolved: boolean;
+
+  // on-chain resolved fields
+  winningOutcome?: number | null;
+  resolvedAt?: string | null;
+  resolutionProofUrl?: string | null;
+  resolutionProofImage?: string | null;
+  resolutionProofNote?: string | null;
+
+  // off-chain contest flow
+  resolutionStatus?: "open" | "proposed" | "finalized" | "cancelled";
+  proposedOutcome?: number | null;
+  proposedAt?: string | null;
+  contestDeadline?: string | null;
+  contested?: boolean;
+  contestCount?: number;
+
+
+  proposedProofUrl?: string | null;
+  proposedProofImage?: string | null;
+  proposedProofNote?: string | null;
 
   socialLinks?: SocialLinks;
 
   marketType: 0 | 1;
   outcomeNames?: string[];
-  outcomeSupplies?: number[]; // shares (UI == on-chain)
+  outcomeSupplies?: number[];
 
-  yesSupply?: number; // shares
-  noSupply?: number; // shares
-
-  resolutionProofUrl?: string | null;
-  resolutionProofImage?: string | null;
-  resolutionProofText?: string | null;
+  yesSupply?: number;
+  noSupply?: number;
 };
 
 type Derived = {
   marketType: 0 | 1;
   names: string[];
-  supplies: number[]; // shares
+  supplies: number[];
   percentages: number[];
   totalSupply: number;
   isBinaryStyle: boolean;
@@ -105,8 +113,7 @@ function toStringArray(x: any): string[] | undefined {
   if (typeof x === "string") {
     try {
       const parsed = JSON.parse(x);
-      if (Array.isArray(parsed))
-        return parsed.map((v) => String(v)).filter(Boolean);
+      if (Array.isArray(parsed)) return parsed.map((v) => String(v)).filter(Boolean);
     } catch {}
   }
   return undefined;
@@ -124,6 +131,56 @@ function clampInt(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, v));
 }
 
+function toResolutionStatus(x: any): "open" | "proposed" | "finalized" | "cancelled" {
+  const s = String(x || "").toLowerCase().trim();
+  if (s === "proposed" || s === "finalized" || s === "cancelled") return s;
+  return "open";
+}
+
+function formatMsToHhMm(ms: number) {
+  const totalMin = Math.max(0, Math.floor(ms / (60 * 1000)));
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  if (h <= 0) return `${m}m`;
+  return `${h}h ${m}m`;
+}
+function addHoursIso(ms: number, hours: number): string | null {
+  if (!Number.isFinite(ms)) return null;
+  const t = ms + hours * 60 * 60 * 1000;
+  const d = new Date(t);
+  if (!Number.isFinite(d.getTime())) return null;
+  return d.toISOString();
+}
+/**
+ * Parse end_date safely:
+ * - "YYYY-MM-DD" => end of day UTC
+ * - ISO with timezone => parse as-is
+ * - ISO without timezone => parse as local
+ * - Postgres "YYYY-MM-DD HH:mm:ss" => local
+ */
+function parseEndDateMs(raw: any): number {
+  if (!raw) return NaN;
+
+  if (raw instanceof Date) {
+    const t = raw.getTime();
+    return Number.isFinite(t) ? t : NaN;
+  }
+
+  const s = String(raw).trim();
+  if (!s) return NaN;
+
+  const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(s);
+
+  if (isDateOnly) {
+    const t = new Date(`${s}T23:59:59Z`).getTime();
+    return Number.isFinite(t) ? t : NaN;
+  }
+
+  const normalized = /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(:\d{2})?/.test(s) ? s.replace(" ", "T") : s;
+  const t = new Date(normalized).getTime();
+  return Number.isFinite(t) ? t : NaN;
+}
+
 export default function TradePage() {
   const params = useParams();
   const id = safeParamId((params as any)?.id);
@@ -137,14 +194,10 @@ export default function TradePage() {
   const [submitting, setSubmitting] = useState(false);
 
   const [positionShares, setPositionShares] = useState<number[] | null>(null);
-  const [marketBalanceLamports, setMarketBalanceLamports] =
-    useState<number | null>(null);
+  const [marketBalanceLamports, setMarketBalanceLamports] = useState<number | null>(null);
 
   const [oddsRange, setOddsRange] = useState<OddsRange>("24h");
-  const [oddsPoints, setOddsPoints] = useState<{ t: number; pct: number[] }[]>(
-    []
-  );
-
+  const [oddsPoints, setOddsPoints] = useState<{ t: number; pct: number[] }[]>([]);
   const [bottomTab, setBottomTab] = useState<BottomTab>("discussion");
 
   useEffect(() => {
@@ -156,20 +209,23 @@ export default function TradePage() {
   async function loadMarket(marketAddress: string) {
     setLoading(true);
     try {
-      const supabaseMarket: SupabaseMarket =
-        await getMarketByAddress(marketAddress);
-
+      const supabaseMarket: SupabaseMarket = await getMarketByAddress(marketAddress);
       if (!supabaseMarket) {
         setMarket(null);
         return;
       }
 
-      const mt = (typeof supabaseMarket.market_type === "number"
-        ? supabaseMarket.market_type
-        : 0) as 0 | 1;
+      const mt = (typeof supabaseMarket.market_type === "number" ? supabaseMarket.market_type : 0) as 0 | 1;
 
       const names = toStringArray(supabaseMarket.outcome_names) ?? [];
       const supplies = toNumberArray(supabaseMarket.outcome_supplies) ?? [];
+
+      const endMs = parseEndDateMs(supabaseMarket?.end_date);
+      const resolutionTime = Number.isFinite(endMs)
+        ? Math.floor(endMs / 1000)
+        : 0;
+      
+      const creatorResolveDeadline = addHoursIso(endMs, 72); // ✅ UNIQUE
 
       const transformed: UiMarket = {
         dbId: supabaseMarket.id,
@@ -179,12 +235,37 @@ export default function TradePage() {
         category: supabaseMarket.category || "other",
         imageUrl: supabaseMarket.image_url || undefined,
         creator: String(supabaseMarket.creator || ""),
-
+        creatorResolveDeadline,
         totalVolume: Number(supabaseMarket.total_volume) || 0,
-        resolutionTime: Math.floor(
-          new Date(supabaseMarket.end_date).getTime() / 1000
-        ),
+        resolutionTime,
         resolved: !!supabaseMarket.resolved,
+
+        winningOutcome:
+          supabaseMarket.winning_outcome === null || supabaseMarket.winning_outcome === undefined
+            ? null
+            : Number(supabaseMarket.winning_outcome),
+        resolvedAt: supabaseMarket.resolved_at ?? null,
+
+        resolutionProofUrl: supabaseMarket.resolution_proof_url ?? null,
+        resolutionProofImage: supabaseMarket.resolution_proof_image ?? null,
+        resolutionProofNote: supabaseMarket.resolution_proof_note ?? null,
+
+        resolutionStatus: toResolutionStatus(supabaseMarket.resolution_status),
+        proposedOutcome:
+          supabaseMarket.proposed_winning_outcome === null || supabaseMarket.proposed_winning_outcome === undefined
+            ? null
+            : Number(supabaseMarket.proposed_winning_outcome),
+        proposedAt: supabaseMarket.resolution_proposed_at ?? null,
+        contestDeadline: supabaseMarket.contest_deadline ?? null,
+        contested: !!supabaseMarket.contested,
+        contestCount:
+          supabaseMarket.contest_count === null || supabaseMarket.contest_count === undefined
+            ? 0
+            : Number(supabaseMarket.contest_count) || 0,
+
+        proposedProofUrl: supabaseMarket.proposed_proof_url ?? null,
+        proposedProofImage: supabaseMarket.proposed_proof_image ?? null,
+        proposedProofNote: supabaseMarket.proposed_proof_note ?? null,
 
         socialLinks: supabaseMarket.social_links || undefined,
 
@@ -194,10 +275,6 @@ export default function TradePage() {
 
         yesSupply: Number(supabaseMarket.yes_supply) || 0,
         noSupply: Number(supabaseMarket.no_supply) || 0,
-
-        resolutionProofUrl: supabaseMarket.resolution_proof_url || null,
-        resolutionProofImage: supabaseMarket.resolution_proof_image || null,
-        resolutionProofText: supabaseMarket.resolution_proof_text || null,
       };
 
       setMarket(transformed);
@@ -221,43 +298,26 @@ export default function TradePage() {
       if (names.length !== 2) names = ["YES", "NO"];
     }
 
-    const safeNames = missingOutcomes
-      ? ["Loading…", "Loading…"]
-      : names.slice(0, 10);
+    const safeNames = missingOutcomes ? ["Loading…", "Loading…"] : names.slice(0, 10);
 
-    let supplies = Array.isArray(market.outcomeSupplies)
-      ? market.outcomeSupplies.map((x) => Number(x || 0))
-      : [];
+    let supplies = Array.isArray(market.outcomeSupplies) ? market.outcomeSupplies.map((x) => Number(x || 0)) : [];
 
     if (!supplies.length && safeNames.length === 2) {
-      supplies = [
-        Number(market.yesSupply || 0),
-        Number(market.noSupply || 0),
-      ];
+      supplies = [Number(market.yesSupply || 0), Number(market.noSupply || 0)];
     }
 
     const targetLen = safeNames.length || (marketType === 0 ? 2 : 0);
 
     if (targetLen > 0) {
-      if (supplies.length < targetLen) {
-        supplies = [
-          ...supplies,
-          ...Array(targetLen - supplies.length).fill(0),
-        ];
-      } else if (supplies.length > targetLen) {
-        supplies = supplies.slice(0, targetLen);
-      }
+      if (supplies.length < targetLen) supplies = [...supplies, ...Array(targetLen - supplies.length).fill(0)];
+      else if (supplies.length > targetLen) supplies = supplies.slice(0, targetLen);
     }
 
     const totalSupply = supplies.reduce((sum, s) => sum + (Number(s) || 0), 0);
 
     const percentages =
       supplies.length > 0
-        ? supplies.map((s) =>
-            totalSupply > 0
-              ? ((Number(s) || 0) / totalSupply) * 100
-              : 100 / supplies.length
-          )
+        ? supplies.map((s) => (totalSupply > 0 ? ((Number(s) || 0) / totalSupply) * 100 : 100 / supplies.length))
         : [];
 
     return {
@@ -274,8 +334,7 @@ export default function TradePage() {
   const userSharesForUi = useMemo(() => {
     const len = derived?.names?.length ?? 0;
     const out = Array(len).fill(0);
-    for (let i = 0; i < len; i++)
-      out[i] = Math.floor(Number(positionShares?.[i] || 0));
+    for (let i = 0; i < len; i++) out[i] = Math.floor(Number(positionShares?.[i] || 0));
     return out;
   }, [positionShares, derived?.names?.length]);
 
@@ -296,10 +355,20 @@ export default function TradePage() {
     return arr;
   }, [oddsPoints, oddsRange]);
 
+  // Poll ONLY when proposed (so countdown / dispute state updates)
+  useEffect(() => {
+    if (!id) return;
+    if (!market) return;
+    const status = market.resolutionStatus ?? "open";
+    if (status !== "proposed") return;
+
+    const t = setInterval(() => void loadMarket(id), 25000); // 25s
+    return () => clearInterval(t);
+  }, [id, market]);
+
   // Market balance
   useEffect(() => {
     if (!id) return;
-
     (async () => {
       try {
         const marketPk = new PublicKey(id);
@@ -311,7 +380,7 @@ export default function TradePage() {
     })();
   }, [id, connection]);
 
-  // User positions (shares as-is)
+  // User positions
   useEffect(() => {
     if (!id || !publicKey || !connected || !program) {
       setPositionShares(null);
@@ -322,13 +391,8 @@ export default function TradePage() {
       try {
         const marketPk = new PublicKey(id);
         const [pda] = getUserPositionPDA(marketPk, publicKey);
-
         const acc = await (program as any).account.userPosition.fetch(pda);
-
-        const sharesArr = Array.isArray(acc?.shares)
-          ? acc.shares.map((x: any) => Number(x) || 0)
-          : [];
-
+        const sharesArr = Array.isArray(acc?.shares) ? acc.shares.map((x: any) => Number(x) || 0) : [];
         setPositionShares(sharesArr);
       } catch {
         setPositionShares(null);
@@ -352,7 +416,6 @@ export default function TradePage() {
       try {
         const { data, error } = await supabase
           .from("transactions")
-          // NOTE: on n'a pas besoin de cost pour le chart, on reconstitue via shares
           .select("created_at,is_buy,amount,outcome_index,is_yes,shares")
           .eq("market_id", market.dbId)
           .order("created_at", { ascending: true });
@@ -364,10 +427,7 @@ export default function TradePage() {
         }
 
         const pts = buildOddsSeries((data as any[]) || [], outcomesCount);
-        const lite = downsample(pts, 220).map((p) => ({
-          t: p.t,
-          pct: p.pct,
-        }));
+        const lite = downsample(pts, 220).map((p) => ({ t: p.t, pct: p.pct }));
         setOddsPoints(lite);
       } catch (e) {
         console.error("odds history error:", e);
@@ -376,13 +436,7 @@ export default function TradePage() {
     })();
   }, [market?.dbId, derived?.names?.length]);
 
-  // ✅ UPDATED: handleTrade now receives costSol from TradingPanel
-  async function handleTrade(
-    shares: number,
-    outcomeIndex: number,
-    side: "buy" | "sell",
-    costSol?: number
-  ) {
+  async function handleTrade(shares: number, outcomeIndex: number, side: "buy" | "sell", costSol?: number) {
     if (!connected || !publicKey || !program) {
       if (!publicKey) alert("Please connect your wallet");
       if (!program) alert("Program not loaded");
@@ -395,20 +449,16 @@ export default function TradePage() {
 
     setSubmitting(true);
 
-    // optimistic UI (shares)
+    // optimistic UI
     setMarket((prev) => {
       if (!prev) return prev;
       const nextSupplies = Array.isArray(prev.outcomeSupplies)
         ? prev.outcomeSupplies.slice()
         : Array(derived.names.length).fill(0);
-
       while (nextSupplies.length < derived.names.length) nextSupplies.push(0);
 
       const delta = side === "buy" ? safeShares : -safeShares;
-      nextSupplies[safeOutcome] = Math.max(
-        0,
-        Number(nextSupplies[safeOutcome] || 0) + delta
-      );
+      nextSupplies[safeOutcome] = Math.max(0, Number(nextSupplies[safeOutcome] || 0) + delta);
 
       return {
         ...prev,
@@ -423,7 +473,7 @@ export default function TradePage() {
       const [positionPDA] = getUserPositionPDA(marketPubkey, publicKey);
       const creatorPubkey = new PublicKey(market.creator);
 
-      const amountBn = new BN(safeShares); // ✅ NOT scaled
+      const amountBn = new BN(safeShares);
 
       let txSig: string;
       if (side === "buy") {
@@ -453,17 +503,7 @@ export default function TradePage() {
       }
 
       const name = derived.names[safeOutcome] || `Outcome #${safeOutcome + 1}`;
-
-      alert(
-        `Success! 🎉\n\n${side === "buy" ? "Bought" : "Sold"} ${safeShares} shares of "${name}"\n\nTx: ${txSig.slice(
-          0,
-          16
-        )}...\n\nhttps://explorer.solana.com/tx/${txSig}?cluster=devnet`
-      );
-
-      // ✅ use UI estimate cost (sol) as the canonical "cost" stored in transactions table
-      const safeCostSol =
-        typeof costSol === "number" && Number.isFinite(costSol) ? costSol : null;
+      const safeCostSol = typeof costSol === "number" && Number.isFinite(costSol) ? costSol : null;
 
       if (market.dbId) {
         await recordTransaction({
@@ -475,15 +515,13 @@ export default function TradePage() {
           is_yes: derived.names.length === 2 ? safeOutcome === 0 : null,
           amount: safeShares,
           shares: safeShares,
-          cost: safeCostSol, // ✅ NOT null anymore
+          cost: safeCostSol,
           outcome_index: safeOutcome,
           outcome_name: name,
         } as any);
       }
 
-      // ✅ volume = sum of BUY cost (UI estimate). Keep it 0 for sell.
-      const deltaVolLamports =
-        side === "buy" && safeCostSol != null ? solToLamports(safeCostSol) : 0;
+      const deltaVolLamports = side === "buy" && safeCostSol != null ? solToLamports(safeCostSol) : 0;
 
       await applyTradeToMarketInSupabase({
         market_address: market.publicKey,
@@ -494,6 +532,13 @@ export default function TradePage() {
       });
 
       await loadMarket(id);
+
+      alert(
+        `Success! 🎉\n\n${side === "buy" ? "Bought" : "Sold"} ${safeShares} shares of "${name}"\n\nTx: ${txSig.slice(
+          0,
+          16
+        )}...\n\nhttps://explorer.solana.com/tx/${txSig}?cluster=devnet`
+      );
     } catch (error: any) {
       console.error(`${side.toUpperCase()} shares error:`, error);
       await loadMarket(id);
@@ -503,6 +548,7 @@ export default function TradePage() {
     }
   }
 
+  // ---------------------- Loading / Not found ----------------------
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -522,17 +568,59 @@ export default function TradePage() {
     );
   }
 
-  const { marketType, names, supplies, percentages, isBinaryStyle, missingOutcomes } =
-    derived;
+  // ---------------------- Derived UI state ----------------------
+  const { marketType, names, supplies, percentages, isBinaryStyle, missingOutcomes } = derived;
 
   const nowSec = Math.floor(Date.now() / 1000);
-  const marketClosed = market.resolved || nowSec >= market.resolutionTime;
+  const hasValidEnd = Number.isFinite(market.resolutionTime) && market.resolutionTime > 0;
 
-  const hasResolutionProof =
-    !!market.resolutionProofUrl ||
-    !!market.resolutionProofImage ||
-    !!market.resolutionProofText;
+  const ended = hasValidEnd ? nowSec >= market.resolutionTime : false;
 
+  // robust “proposed” detection (DB signals)
+  const status = market.resolutionStatus ?? "open";
+  const isResolvedOnChain = !!market.resolved;
+
+  const isProposed =
+    status === "proposed" ||
+    market.proposedOutcome != null ||
+    !!market.contestDeadline ||
+    !!market.proposedProofUrl ||
+    !!market.proposedProofImage ||
+    !!market.proposedProofNote;
+
+  const showProposedBox = isProposed && !isResolvedOnChain;
+  const showResolvedProofBox = isResolvedOnChain;
+
+  // lock trading when ended OR proposed OR resolved
+  const marketClosed = isResolvedOnChain || isProposed || ended;
+
+  const endLabel = hasValidEnd
+    ? new Date(market.resolutionTime * 1000).toLocaleString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "No end date";
+
+  const winningLabel =
+    market.winningOutcome != null && Number.isFinite(Number(market.winningOutcome))
+      ? names[Math.max(0, Math.min(Number(market.winningOutcome), names.length - 1))] ||
+        `Option ${Number(market.winningOutcome) + 1}`
+      : null;
+
+  const proposedLabel =
+    market.proposedOutcome != null && Number.isFinite(Number(market.proposedOutcome))
+      ? names[Math.max(0, Math.min(Number(market.proposedOutcome), names.length - 1))] ||
+        `Option ${Number(market.proposedOutcome) + 1}`
+      : null;
+
+  const deadlineMs = market.contestDeadline ? new Date(market.contestDeadline).getTime() : NaN;
+  const contestRemainingMs = Number.isFinite(deadlineMs) ? deadlineMs - Date.now() : NaN;
+  const contestOpen = Number.isFinite(contestRemainingMs) ? contestRemainingMs > 0 : false;
+
+  // ---------------------- Render ----------------------
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -550,22 +638,14 @@ export default function TradePage() {
                     className="object-cover w-full h-full"
                   />
                 ) : (
-                  <CategoryImagePlaceholder
-                    category={market.category || "crypto"}
-                    className="w-full h-full scale-[0.4]"
-                  />
+                  <CategoryImagePlaceholder category={market.category || "crypto"} className="w-full h-full scale-[0.4]" />
                 )}
               </div>
 
               <div className="flex-1 min-w-0">
                 <div className="flex items-start justify-between mb-3 gap-3">
-                  <h1 className="text-3xl font-bold text-white flex-1 leading-tight">
-                    {market.question}
-                  </h1>
-                  <MarketActions
-                    marketId={market.publicKey}
-                    question={market.question}
-                  />
+                  <h1 className="text-3xl font-bold text-white flex-1 leading-tight">{market.question}</h1>
+                  <MarketActions marketId={market.publicKey} question={market.question} />
                 </div>
 
                 {market.socialLinks && (
@@ -578,22 +658,24 @@ export default function TradePage() {
 
             <div className="flex gap-4 text-sm text-gray-400 mt-4 pt-4 border-t border-gray-800">
               <div>
-                <span className="text-gray-500">
-                  {formatVol(market.totalVolume)} SOL Vol
-                </span>
+                <span className="text-gray-500">{formatVol(market.totalVolume)} SOL Vol</span>
               </div>
-              <div>
-                {new Date(market.resolutionTime * 1000).toLocaleDateString(
-                  "en-US",
-                  {
-                    month: "short",
-                    day: "numeric",
-                    year: "numeric",
-                  }
+              <div>{endLabel}</div>
+
+              <div className="ml-auto text-xs text-gray-500 flex items-center gap-2">
+                <span>{marketType === 1 ? "Multi-choice" : "Binary"}</span>
+
+                {showProposedBox && (
+                  <span className="px-2 py-1 rounded-full border border-pump-green/40 bg-pump-green/10 text-pump-green">
+                    Proposed
+                  </span>
                 )}
-              </div>
-              <div className="ml-auto text-xs text-gray-500">
-                {marketType === 1 ? "Multi-choice" : "Binary"}
+
+                {showResolvedProofBox && (
+                  <span className="px-2 py-1 rounded-full border border-gray-600 bg-gray-800/40 text-green-400">
+                    Resolved
+                  </span>
+                )}
               </div>
             </div>
 
@@ -602,6 +684,27 @@ export default function TradePage() {
             {missingOutcomes && (
               <div className="mb-4 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-yellow-200">
                 Outcomes are still indexing… (Supabase/outcomes not ready yet)
+              </div>
+            )}
+
+            {/* Banner proposed (small hint in main card) */}
+            {showProposedBox && (
+              <div className="mb-4 rounded-xl border border-pump-green/30 bg-pump-green/10 p-4">
+                <div className="text-sm text-white font-semibold">Resolution proposed — contest window open</div>
+                <div className="text-xs text-gray-300 mt-1">
+                  Trading is locked while the resolution is contestable.
+                  {contestOpen && Number.isFinite(contestRemainingMs) ? (
+                    <>
+                      {" "}
+                      <span className="text-pump-green font-semibold">{formatMsToHhMm(contestRemainingMs)} remaining</span>
+                    </>
+                  ) : (
+                    <>
+                      {" "}
+                      <span className="text-yellow-300 font-semibold">contest window may have ended</span>
+                    </>
+                  )}
+                </div>
               </div>
             )}
 
@@ -617,27 +720,17 @@ export default function TradePage() {
                     <div
                       key={index}
                       className={`rounded-2xl px-5 py-4 md:px-6 md:py-5 border bg-pump-dark/80 ${
-                        isYes
-                          ? "border-pump-green/60"
-                          : "border-[#ff5c73]/60"
+                        isYes ? "border-pump-green/60" : "border-[#ff5c73]/60"
                       }`}
                     >
                       <div className="flex items-center justify-between text-xs text-gray-400 mb-2">
-                        <span
-                          className={`uppercase tracking-wide font-semibold ${
-                            isYes ? "text-pump-green" : "text-[#ff5c73]"
-                          }`}
-                        >
+                        <span className={`uppercase tracking-wide font-semibold ${isYes ? "text-pump-green" : "text-[#ff5c73]"}`}>
                           {outcome}
                         </span>
                         <span className="text-gray-500">Supply: {supply}</span>
                       </div>
 
-                      <div
-                        className={`text-3xl md:text-4xl font-bold tabular-nums ${
-                          isYes ? "text-pump-green" : "text-[#ff5c73]"
-                        }`}
-                      >
+                      <div className={`text-3xl md:text-4xl font-bold tabular-nums ${isYes ? "text-pump-green" : "text-[#ff5c73]"}`}>
                         {pct}%
                       </div>
                     </div>
@@ -647,21 +740,12 @@ export default function TradePage() {
             ) : (
               <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {names.map((outcome, index) => (
-                  <div
-                    key={index}
-                    className="rounded-xl p-4 border border-pump-border bg-pump-dark/60"
-                  >
+                  <div key={index} className="rounded-xl p-4 border border-pump-border bg-pump-dark/60">
                     <div className="flex items-center justify-between gap-3">
-                      <div className="text-sm font-semibold text-white truncate">
-                        {outcome}
-                      </div>
-                      <div className="text-pump-green font-bold">
-                        {(percentages[index] ?? 0).toFixed(1)}%
-                      </div>
+                      <div className="text-sm font-semibold text-white truncate">{outcome}</div>
+                      <div className="text-pump-green font-bold">{(percentages[index] ?? 0).toFixed(1)}%</div>
                     </div>
-                    <div className="mt-2 text-xs text-gray-500">
-                      Supply: {supplies[index] || 0}
-                    </div>
+                    <div className="mt-2 text-xs text-gray-500">Supply: {supplies[index] || 0}</div>
                   </div>
                 ))}
               </div>
@@ -671,15 +755,11 @@ export default function TradePage() {
             <div className="grid grid-cols-2 gap-4 pt-4 border-t border-gray-700 mt-6">
               <div>
                 <div className="text-xs text-gray-500 mb-1">Volume</div>
-                <div className="text-lg font-semibold text-white">
-                  {lamportsToSol(market.totalVolume).toFixed(2)} SOL
-                </div>
+                <div className="text-lg font-semibold text-white">{lamportsToSol(market.totalVolume).toFixed(2)} SOL</div>
               </div>
               <div>
                 <div className="text-xs text-gray-500 mb-1">Outcomes</div>
-                <div className="text-lg font-semibold text-white">
-                  {names.length}
-                </div>
+                <div className="text-lg font-semibold text-white">{names.length}</div>
               </div>
             </div>
           </div>
@@ -687,9 +767,7 @@ export default function TradePage() {
           {/* Odds history */}
           <div className="card-pump">
             <div className="flex items-center justify-between gap-4 mb-4">
-              <div>
-                <h2 className="text-xl font-bold text-white">Odds history</h2>
-              </div>
+              <h2 className="text-xl font-bold text-white">Odds history</h2>
 
               <div className="flex items-center gap-2">
                 {(["24h", "7d", "30d", "all"] as OddsRange[]).map((r) => (
@@ -697,9 +775,7 @@ export default function TradePage() {
                     key={r}
                     onClick={() => setOddsRange(r)}
                     className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition ${
-                      oddsRange === r
-                        ? "bg-pump-green text-black"
-                        : "bg-pump-dark/60 text-gray-300 hover:bg-pump-dark"
+                      oddsRange === r ? "bg-pump-green text-black" : "bg-pump-dark/60 text-gray-300 hover:bg-pump-dark"
                     }`}
                   >
                     {r.toUpperCase()}
@@ -709,10 +785,7 @@ export default function TradePage() {
             </div>
 
             {filteredOddsPoints.length ? (
-              <OddsHistoryChart
-                points={filteredOddsPoints}
-                outcomeNames={names}
-              />
+              <OddsHistoryChart points={filteredOddsPoints} outcomeNames={names} />
             ) : (
               <div className="text-sm text-gray-400 bg-pump-dark/40 border border-gray-800 rounded-xl p-4">
                 No history yet (need transactions for this market).
@@ -722,96 +795,50 @@ export default function TradePage() {
         </div>
 
         {/* RIGHT */}
-        <div className="lg:col-span-1">
+        <div className="lg:col-span-1 space-y-4">
           <TradingPanel
             market={{
               resolved: market.resolved,
               marketType: market.marketType,
               outcomeNames: names,
               outcomeSupplies: supplies,
-              yesSupply:
-                names.length >= 2 ? supplies[0] || 0 : market.yesSupply || 0,
-              noSupply:
-                names.length >= 2 ? supplies[1] || 0 : market.noSupply || 0,
+              yesSupply: names.length >= 2 ? supplies[0] || 0 : market.yesSupply || 0,
+              noSupply: names.length >= 2 ? supplies[1] || 0 : market.noSupply || 0,
             }}
             connected={connected}
             submitting={submitting}
-            onTrade={(s, outcomeIndex, side, costSol) =>
-              void handleTrade(s, outcomeIndex, side, costSol)
-            }
+            onTrade={(s, outcomeIndex, side, costSol) => void handleTrade(s, outcomeIndex, side, costSol)}
             marketAddress={market.publicKey}
             marketBalanceLamports={marketBalanceLamports}
             userHoldings={userSharesForUi}
             marketClosed={marketClosed}
           />
 
-          {marketClosed && (
-            <div className="mt-4 card-pump">
-              <h3 className="text-lg font-semibold text-white mb-2">
-                Resolution proof
-              </h3>
-
-              {hasResolutionProof ? (
-                <>
-                  {market.resolutionProofText && (
-                    <p className="text-sm text-gray-300 mb-2">
-                      {market.resolutionProofText}
-                    </p>
-                  )}
-
-                  {market.resolutionProofUrl && (
-                    <p className="text-sm text-gray-300 mb-2">
-                      External link:{" "}
-                      <a
-                        href={market.resolutionProofUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-pump-green underline"
-                      >
-                        open proof
-                      </a>
-                    </p>
-                  )}
-
-                  {market.resolutionProofImage && (
-                    <div className="mt-3 relative w-full h-40 rounded-lg overflow-hidden bg-pump-dark">
-                      <Image
-                        src={market.resolutionProofImage}
-                        alt="Resolution proof"
-                        fill
-                        className="object-cover"
-                      />
-                    </div>
-                  )}
-
-                  <p className="mt-3 text-xs text-gray-500">
-                    You can view and claim any winnings from your{" "}
-                    <Link
-                      href="/dashboard"
-                      className="text-pump-green underline"
-                    >
-                      dashboard
-                    </Link>
-                    .
-                  </p>
-                </>
-              ) : (
-                <p className="text-sm text-gray-300">
-                  The market creator will add a link or image explaining how
-                  this market was resolved. In the meantime you can manage your
-                  positions from your{" "}
-                  <Link href="/dashboard" className="text-pump-green underline">
-                    dashboard
-                  </Link>
-                  .
-                </p>
-              )}
-            </div>
-          )}
+          {/* Single source of truth for resolution/proposal UI (no duplicates) */}
+          <ResolutionPanel
+            marketAddress={market.publicKey}
+            resolutionStatus={market.resolutionStatus ?? "open"}
+            proposedOutcomeLabel={proposedLabel}
+            proposedAt={market.proposedAt}
+            contestDeadline={market.contestDeadline}
+            contestCount={market.contestCount ?? 0}
+            proposedProofUrl={market.proposedProofUrl}
+            proposedProofImage={market.proposedProofImage}
+            proposedProofNote={market.proposedProofNote}
+            resolved={!!market.resolved}
+            winningOutcomeLabel={winningLabel}
+            resolvedAt={market.resolvedAt}
+            resolutionProofUrl={market.resolutionProofUrl}
+            resolutionProofImage={market.resolutionProofImage}
+            resolutionProofNote={market.resolutionProofNote}
+            ended={ended}
+            creatorResolveDeadline={market.creatorResolveDeadline ?? null}
+            // ✅ ADD THIS
+          />
         </div>
       </div>
 
-      {/* Discussion / Activity tabs */}
+      {/* Discussion / Activity */}
       <div className="mt-8">
         <div className="flex items-center gap-2 mb-4">
           <button
@@ -840,11 +867,7 @@ export default function TradePage() {
         {bottomTab === "discussion" ? (
           <CommentsSection marketId={market.publicKey} />
         ) : (
-          <MarketActivityTab
-            marketDbId={market.dbId}
-            marketAddress={market.publicKey}
-            outcomeNames={names}
-          />
+          <MarketActivityTab marketDbId={market.dbId} marketAddress={market.publicKey} outcomeNames={names} />
         )}
       </div>
     </div>

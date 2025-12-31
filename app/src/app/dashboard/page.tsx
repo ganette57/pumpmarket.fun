@@ -11,6 +11,9 @@ import { useProgram } from "@/hooks/useProgram";
 import { lamportsToSol, getUserPositionPDA } from "@/utils/solana";
 import { outcomeLabelFromMarket } from "@/utils/outcomes";
 
+import { uploadResolutionProofImage } from "@/lib/proofs";
+import { proposeResolution } from "@/lib/markets";
+
 // ---------------- helpers ----------------
 function shortSig(sig?: string) {
   if (!sig) return "";
@@ -30,7 +33,6 @@ function toNum(x: any) {
 }
 
 function isMarketEnded(endDate?: string): boolean {
-  if (!endDate) return false;
   const end = new Date(endDate);
   return end.getTime() <= Date.now();
 }
@@ -44,13 +46,25 @@ function formatTimeStatus(endDate?: string): string {
 
   const diff = end.getTime() - now;
   const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-  const hours = Math.floor(
-    (diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)
-  );
+  const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
 
   if (days > 0) return `${days}d ${hours}h left`;
   if (hours > 0) return `${hours}h left`;
   return "< 1h left";
+}
+
+function formatMsToHhMm(ms: number) {
+  const totalMin = Math.max(0, Math.floor(ms / (60 * 1000)));
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  if (h <= 0) return `${m}m`;
+  return `${h}h ${m}m`;
+}
+
+function toResolutionStatus(x: any): "open" | "proposed" | "finalized" | "cancelled" {
+  const s = String(x || "").toLowerCase().trim();
+  if (s === "proposed" || s === "finalized" || s === "cancelled") return s;
+  return "open";
 }
 
 // ---------------- types ----------------
@@ -62,7 +76,26 @@ type DbMarket = {
   total_volume?: number; // lamports
   end_date?: string;
   resolved?: boolean;
-  outcome_names?: string[] | null; // ["Alice","Bob","Charlie"]
+  outcome_names?: string[] | null;
+
+  // legacy resolved fields (still exist)
+  winning_outcome?: number | null;
+  resolved_at?: string | null;
+  resolution_proof_url?: string | null;
+  resolution_proof_image?: string | null;
+  resolution_proof_note?: string | null;
+
+  // ✅ off-chain contest flow fields (Step 1/2)
+  resolution_status?: "open" | "proposed" | "finalized" | "cancelled" | string | null;
+  proposed_winning_outcome?: number | null;
+  resolution_proposed_at?: string | null;
+  contest_deadline?: string | null;
+  contested?: boolean | null;
+  contest_count?: number | null;
+
+  proposed_proof_url?: string | null;
+  proposed_proof_image?: string | null;
+  proposed_proof_note?: string | null;
 };
 
 type DbTx = {
@@ -81,7 +114,7 @@ type DbTx = {
   cost?: number | null;
   tx_signature?: string | null;
 
-  // newer schema (optional)
+  // newer schema
   outcome_index?: number | null;
   shares?: number | null;
   outcome_name?: string | null;
@@ -95,12 +128,7 @@ type Claimable = {
 };
 
 // ---------------- data helpers ----------------
-async function safeFetchUserTransactions(
-  walletAddress: string,
-  limit = 50
-): Promise<DbTx[]> {
-  // On tente d’abord avec outcome_index/shares/outcome_name,
-  // sinon fallback sur le schéma legacy.
+async function safeFetchUserTransactions(walletAddress: string, limit = 50): Promise<DbTx[]> {
   const trySelects = [
     "id,created_at,market_id,market_address,user_address,is_buy,is_yes,amount,cost,tx_signature,outcome_index,shares,outcome_name",
     "id,created_at,market_id,market_address,user_address,is_buy,is_yes,amount,cost,tx_signature",
@@ -126,6 +154,147 @@ async function safeFetchUserTransactions(
   return [];
 }
 
+async function safeFetchMyCreatedMarkets(walletBase58: string): Promise<DbMarket[]> {
+  const trySelects = [
+    [
+      "id",
+      "market_address",
+      "creator",
+      "question",
+      "total_volume",
+      "end_date",
+      "resolved",
+      "outcome_names",
+
+      // legacy resolved
+      "winning_outcome",
+      "resolved_at",
+      "resolution_proof_url",
+      "resolution_proof_image",
+      "resolution_proof_note",
+
+      // new off-chain flow
+      "resolution_status",
+      "proposed_winning_outcome",
+      "resolution_proposed_at",
+      "contest_deadline",
+      "contested",
+      "contest_count",
+      "proposed_proof_url",
+      "proposed_proof_image",
+      "proposed_proof_note",
+    ].join(","),
+    "id,market_address,creator,question,total_volume,end_date,resolved,outcome_names,winning_outcome,resolved_at,resolution_proof_url,resolution_proof_image,resolution_proof_note",
+    "id,market_address,creator,question,total_volume,end_date,resolved,outcome_names",
+  ];
+
+  for (const sel of trySelects) {
+    const { data, error } = await supabase
+      .from("markets")
+      .select(sel)
+      .eq("creator", walletBase58)
+      .order("created_at", { ascending: false });
+
+    if (!error) return (((data as any[]) || []) as DbMarket[]) || [];
+
+    const msg = String((error as any)?.message || "");
+    if (!msg.includes("does not exist") && !msg.includes("column")) {
+      console.error("safeFetchMyCreatedMarkets error:", error);
+      return [];
+    }
+  }
+
+  return [];
+}
+
+async function safeFetchMarketsByIds(ids: string[]): Promise<DbMarket[]> {
+  if (!ids.length) return [];
+  const trySelects = [
+    [
+      "id",
+      "market_address",
+      "creator",
+      "question",
+      "total_volume",
+      "end_date",
+      "resolved",
+      "outcome_names",
+      "winning_outcome",
+      "resolved_at",
+      "resolution_proof_url",
+      "resolution_proof_image",
+      "resolution_proof_note",
+      "resolution_status",
+      "proposed_winning_outcome",
+      "resolution_proposed_at",
+      "contest_deadline",
+      "contested",
+      "contest_count",
+      "proposed_proof_url",
+      "proposed_proof_image",
+      "proposed_proof_note",
+    ].join(","),
+    "id,market_address,creator,question,total_volume,end_date,resolved,outcome_names,winning_outcome,resolved_at,resolution_proof_url,resolution_proof_image,resolution_proof_note",
+    "id,market_address,creator,question,total_volume,end_date,resolved,outcome_names",
+  ];
+
+  for (const sel of trySelects) {
+    const { data, error } = await supabase.from("markets").select(sel).in("id", ids.slice(0, 100));
+    if (!error) return (((data as any[]) || []) as DbMarket[]) || [];
+
+    const msg = String((error as any)?.message || "");
+    if (!msg.includes("does not exist") && !msg.includes("column")) {
+      console.error("safeFetchMarketsByIds error:", error);
+      return [];
+    }
+  }
+  return [];
+}
+
+async function safeFetchMarketsByAddresses(addrs: string[]): Promise<DbMarket[]> {
+  if (!addrs.length) return [];
+  const trySelects = [
+    [
+      "id",
+      "market_address",
+      "creator",
+      "question",
+      "total_volume",
+      "end_date",
+      "resolved",
+      "outcome_names",
+      "winning_outcome",
+      "resolved_at",
+      "resolution_proof_url",
+      "resolution_proof_image",
+      "resolution_proof_note",
+      "resolution_status",
+      "proposed_winning_outcome",
+      "resolution_proposed_at",
+      "contest_deadline",
+      "contested",
+      "contest_count",
+      "proposed_proof_url",
+      "proposed_proof_image",
+      "proposed_proof_note",
+    ].join(","),
+    "id,market_address,creator,question,total_volume,end_date,resolved,outcome_names,winning_outcome,resolved_at,resolution_proof_url,resolution_proof_image,resolution_proof_note",
+    "id,market_address,creator,question,total_volume,end_date,resolved,outcome_names",
+  ];
+
+  for (const sel of trySelects) {
+    const { data, error } = await supabase.from("markets").select(sel).in("market_address", addrs.slice(0, 100));
+    if (!error) return (((data as any[]) || []) as DbMarket[]) || [];
+
+    const msg = String((error as any)?.message || "");
+    if (!msg.includes("does not exist") && !msg.includes("column")) {
+      console.error("safeFetchMarketsByAddresses error:", error);
+      return [];
+    }
+  }
+  return [];
+}
+
 // ---------------- component ----------------
 export default function DashboardPage() {
   const { publicKey, connected } = useWallet();
@@ -147,10 +316,40 @@ export default function DashboardPage() {
   const [claimables, setClaimables] = useState<Claimable[]>([]);
   const [claimingMarket, setClaimingMarket] = useState<string | null>(null);
 
-  // resolve UI
+  // resolve UI (now = propose off-chain)
   const [resolvingMarket, setResolvingMarket] = useState<DbMarket | null>(null);
   const [selectedOutcome, setSelectedOutcome] = useState<number | null>(null);
   const [resolveLoading, setResolveLoading] = useState(false);
+
+  // ✅ proof: LINK OR UPLOAD
+  type ProofMode = "upload" | "link";
+  const [proofMode, setProofMode] = useState<ProofMode>("upload");
+
+  const [proofUrl, setProofUrl] = useState("");
+  const [proofFile, setProofFile] = useState<File | null>(null);
+  const [proofPreview, setProofPreview] = useState<string>("");
+
+  const [proofNote, setProofNote] = useState("");
+
+  const proofOk = proofMode === "link" ? proofUrl.trim().length > 0 : !!proofFile;
+
+  function setMode(m: ProofMode) {
+    setProofMode(m);
+    setProofUrl("");
+    setProofFile(null);
+    setProofPreview("");
+  }
+
+  function resetResolveModal() {
+    setResolvingMarket(null);
+    setSelectedOutcome(null);
+
+    setProofMode("upload");
+    setProofUrl("");
+    setProofFile(null);
+    setProofPreview("");
+    setProofNote("");
+  }
 
   // ---------------- derived maps ----------------
   const marketsById = useMemo(() => {
@@ -189,17 +388,8 @@ export default function DashboardPage() {
       // 1) created markets
       setLoadingMarkets(true);
       try {
-        const { data, error } = await supabase
-          .from("markets")
-          .select(
-            "id,market_address,creator,question,total_volume,end_date,resolved,outcome_names"
-          )
-          .eq("creator", walletBase58)
-          .order("created_at", { ascending: false });
-
-        if (error) throw error;
-        if (!cancelled)
-          setMyCreatedMarkets(((data as any[]) || []) as DbMarket[]);
+        const markets = await safeFetchMyCreatedMarkets(walletBase58);
+        if (!cancelled) setMyCreatedMarkets(markets);
       } catch (e: any) {
         if (!cancelled) setErrorMsg(e?.message || "Failed to load markets");
         if (!cancelled) setMyCreatedMarkets([]);
@@ -213,8 +403,7 @@ export default function DashboardPage() {
         const txs = await safeFetchUserTransactions(walletBase58, 50);
         if (!cancelled) setMyTxs(txs || []);
       } catch (e: any) {
-        if (!cancelled)
-          setErrorMsg(e?.message || "Failed to load transactions");
+        if (!cancelled) setErrorMsg(e?.message || "Failed to load transactions");
         if (!cancelled) setMyTxs([]);
       } finally {
         if (!cancelled) setLoadingTxs(false);
@@ -238,38 +427,13 @@ export default function DashboardPage() {
 
     (async () => {
       try {
-        const ids = Array.from(
-          new Set(myTxs.map((t) => t.market_id).filter(Boolean).map(String))
-        );
-        const addrs = Array.from(
-          new Set(
-            myTxs.map((t) => t.market_address).filter(Boolean).map(String)
-          )
-        );
+        const ids = Array.from(new Set(myTxs.map((t) => t.market_id).filter(Boolean).map(String)));
+        const addrs = Array.from(new Set(myTxs.map((t) => t.market_address).filter(Boolean).map(String)));
 
         const out: DbMarket[] = [];
 
-        if (ids.length) {
-          const { data, error } = await supabase
-            .from("markets")
-            .select(
-              "id,market_address,creator,question,total_volume,end_date,resolved,outcome_names"
-            )
-            .in("id", ids.slice(0, 100));
-          if (error) throw error;
-          out.push(...(((data as any[]) || []) as DbMarket[]));
-        }
-
-        if (addrs.length) {
-          const { data, error } = await supabase
-            .from("markets")
-            .select(
-              "id,market_address,creator,question,total_volume,end_date,resolved,outcome_names"
-            )
-            .in("market_address", addrs.slice(0, 100));
-          if (error) throw error;
-          out.push(...(((data as any[]) || []) as DbMarket[]));
-        }
+        if (ids.length) out.push(...(await safeFetchMarketsByIds(ids)));
+        if (addrs.length) out.push(...(await safeFetchMarketsByAddresses(addrs)));
 
         // dedupe
         const byAddr = new Map<string, DbMarket>();
@@ -293,17 +457,12 @@ export default function DashboardPage() {
   // ---------------- stats ----------------
   const stats = useMemo(() => {
     const created = myCreatedMarkets.length;
-    const volLamports = myCreatedMarkets.reduce(
-      (sum, m) => sum + toNum(m.total_volume),
-      0
-    );
+    const volLamports = myCreatedMarkets.reduce((sum, m) => sum + toNum(m.total_volume), 0);
     const volSol = lamportsToSol(volLamports);
-    const creatorFeesSol = volSol * 0.01; // ~1%
-
+    const creatorFeesSol = volSol * 0.01;
     return { created, volSol, creatorFeesSol };
   }, [myCreatedMarkets]);
 
-  // “Portfolio style” stats based on user txs (purement visuel)
   const portfolioStats = useMemo(() => {
     const markets = new Set<string>();
     let tradedVolumeSol = 0;
@@ -315,11 +474,7 @@ export default function DashboardPage() {
       if (c) tradedVolumeSol += Math.abs(c);
     }
 
-    return {
-      positions: markets.size,
-      trades: myTxs.length,
-      tradedVolumeSol,
-    };
+    return { positions: markets.size, trades: myTxs.length, tradedVolumeSol };
   }, [myTxs]);
 
   // ---------------- claimables (on-chain) ----------------
@@ -341,15 +496,13 @@ export default function DashboardPage() {
           if (t.market_address) marketAddresses.push(String(t.market_address));
           else if (t.market_id) {
             const mk = marketsById.get(String(t.market_id));
-            if (mk?.market_address)
-              marketAddresses.push(String(mk.market_address));
+            if (mk?.market_address) marketAddresses.push(String(mk.market_address));
           }
         }
 
         // creators: their own markets
         for (const m of myCreatedMarkets) {
-          if (m.market_address)
-            marketAddresses.push(String(m.market_address));
+          if (m.market_address) marketAddresses.push(String(m.market_address));
         }
 
         const unique = Array.from(new Set(marketAddresses)).slice(0, 50);
@@ -384,8 +537,7 @@ export default function DashboardPage() {
               ? winningOpt.toNumber()
               : Number(winningOpt);
 
-          if (!resolved || winningIndex == null || !Number.isFinite(winningIndex))
-            continue;
+          if (!resolved || winningIndex == null || !Number.isFinite(winningIndex)) continue;
 
           const [posPda] = getUserPositionPDA(marketPk, publicKey);
 
@@ -400,25 +552,18 @@ export default function DashboardPage() {
 
           const sharesArr = Array.isArray(posAcc?.shares)
             ? posAcc.shares.map((x: any) =>
-                typeof x === "number"
-                  ? x
-                  : typeof x?.toNumber === "function"
-                  ? x.toNumber()
-                  : Number(x || 0)
+                typeof x === "number" ? x : typeof x?.toNumber === "function" ? x.toNumber() : Number(x || 0)
               )
             : [];
 
-          const winningShares = Math.floor(
-            Number(sharesArr[winningIndex] || 0)
-          );
+          const winningShares = Math.floor(Number(sharesArr[winningIndex] || 0));
           if (winningShares <= 0) continue;
 
           const totalWinningSupply = Array.isArray(marketAcc?.outcomeSupplies)
             ? Number(
                 typeof marketAcc.outcomeSupplies[winningIndex] === "number"
                   ? marketAcc.outcomeSupplies[winningIndex]
-                  : typeof marketAcc.outcomeSupplies[winningIndex]?.toNumber ===
-                    "function"
+                  : typeof marketAcc.outcomeSupplies[winningIndex]?.toNumber === "function"
                   ? marketAcc.outcomeSupplies[winningIndex].toNumber()
                   : marketAcc.outcomeSupplies[winningIndex] || 0
               )
@@ -427,9 +572,7 @@ export default function DashboardPage() {
           let estPayoutLamports: number | undefined = undefined;
           if (totalWinningSupply > 0) {
             const bal = await connection.getBalance(marketPk);
-            const payout =
-              (BigInt(winningShares) * BigInt(bal)) /
-              BigInt(Math.floor(totalWinningSupply));
+            const payout = (BigInt(winningShares) * BigInt(bal)) / BigInt(Math.floor(totalWinningSupply));
             estPayoutLamports = Number(payout);
           }
 
@@ -443,7 +586,7 @@ export default function DashboardPage() {
         }
 
         if (!cancelled) setClaimables(out);
-      } catch (e) {
+      } catch {
         if (!cancelled) setClaimables([]);
       } finally {
         if (!cancelled) setLoadingClaimables(false);
@@ -453,16 +596,21 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [
-    connected,
-    publicKey,
-    program,
-    connection,
-    myTxs,
-    myCreatedMarkets,
-    marketsById,
-    marketsByAddress,
-  ]);
+  }, [connected, publicKey, program, connection, myTxs, myCreatedMarkets, marketsById, marketsByAddress]);
+
+  useEffect(() => {
+    return () => {
+      if (proofPreview) URL.revokeObjectURL(proofPreview);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    // cleanup quand preview change
+    return () => {
+      if (proofPreview) URL.revokeObjectURL(proofPreview);
+    };
+  }, [proofPreview]);
 
   // ---------------- handlers ----------------
   async function handleClaim(marketAddress: string) {
@@ -483,16 +631,9 @@ export default function DashboardPage() {
         })
         .rpc();
 
-      alert(
-        `Claim success 🎉\n\nTx: ${sig.slice(
-          0,
-          16
-        )}...\n\nhttps://explorer.solana.com/tx/${sig}?cluster=devnet`
-      );
+      alert(`Claim success 🎉\n\nTx: ${sig.slice(0, 16)}...\n\nhttps://explorer.solana.com/tx/${sig}?cluster=devnet`);
 
-      setClaimables((prev) =>
-        prev.filter((c) => c.marketAddress !== marketAddress)
-      );
+      setClaimables((prev) => prev.filter((c) => c.marketAddress !== marketAddress));
     } catch (e: any) {
       alert(`Claim failed: ${e?.message || "Unknown error"}`);
     } finally {
@@ -500,63 +641,81 @@ export default function DashboardPage() {
     }
   }
 
-  async function handleResolve() {
-    if (
-      !connected ||
-      !publicKey ||
-      !program ||
-      !resolvingMarket ||
-      selectedOutcome === null
-    )
-      return;
-
+  // ✅ Step 1: propose resolution OFF-CHAIN (no on-chain resolve)
+  async function handleProposeResolution() {
+    if (!connected || !publicKey || !resolvingMarket || selectedOutcome === null) return;
     const marketAddress = resolvingMarket.market_address;
     if (!marketAddress) return;
+
+    // validate proof
+    if (!proofOk) {
+      alert(proofMode === "link" ? "Please provide a proof URL." : "Please upload a proof image.");
+      return;
+    }
+
+    const note = proofNote.trim();
 
     try {
       setResolveLoading(true);
 
-      const marketPk = new PublicKey(marketAddress);
+      // 1) Prepare proof first (UPLOAD OR LINK)
+      let proposedProofUrl: string | null = null;
+      let proposedProofImage: string | null = null;
 
-      const sig = await (program as any).methods
-        .resolveMarket(selectedOutcome)
-        .accounts({
-          market: marketPk,
-          creator: publicKey,
-        })
-        .rpc();
+      if (proofMode === "link") {
+        proposedProofUrl = proofUrl.trim();
+        proposedProofImage = null;
+      } else {
+        if (!proofFile) throw new Error("Missing proof file");
+        proposedProofImage = await uploadResolutionProofImage(proofFile, marketAddress);
+        proposedProofUrl = null;
+      }
 
-      const labels = resolvingMarket.outcome_names || ["YES", "NO"];
-      alert(
-        `Market resolved! 🎉\n\nWinning outcome: ${
-          labels[selectedOutcome] || `Option ${selectedOutcome + 1}`
-        }\n\nTx: ${sig.slice(
-          0,
-          16
-        )}...\n\nhttps://explorer.solana.com/tx/${sig}?cluster=devnet`
-      );
+      // 2) contest deadline = now + 24h
+      const now = Date.now();
+      const deadlineIso = new Date(now + 24 * 60 * 60 * 1000).toISOString();
 
-      // update local state
+      // 3) Update DB via lib (Step 1)
+      await proposeResolution({
+        market_address: marketAddress,
+        proposed_winning_outcome: selectedOutcome,
+        contest_deadline_iso: deadlineIso,
+        proposed_proof_url: proposedProofUrl,
+        proposed_proof_image: proposedProofImage,
+        proposed_proof_note: note || null,
+      });
+
+      // optimistic UI
+      const proposedAtIso = new Date().toISOString();
       setMyCreatedMarkets((prev) =>
         prev.map((m) =>
-          m.market_address === marketAddress ? { ...m, resolved: true } : m
+          m.market_address === marketAddress
+            ? {
+                ...m,
+                resolution_status: "proposed",
+                proposed_winning_outcome: selectedOutcome,
+                resolution_proposed_at: proposedAtIso,
+                contest_deadline: deadlineIso,
+                contested: false,
+                contest_count: 0,
+                proposed_proof_url: proposedProofUrl,
+                proposed_proof_image: proposedProofImage,
+                proposed_proof_note: note || null,
+              }
+            : m
         )
       );
 
-      // update Supabase (best-effort)
-      try {
-        await supabase
-          .from("markets")
-          .update({ resolved: true, winning_outcome: selectedOutcome } as any)
-          .eq("market_address", marketAddress);
-      } catch {
-        /* ignore */
-      }
+      const labels = resolvingMarket.outcome_names || ["YES", "NO"];
+      resetResolveModal();
 
-      setResolvingMarket(null);
-      setSelectedOutcome(null);
+      alert(
+        `Resolution proposed ✅\n\nOutcome: ${
+          labels[selectedOutcome] || `Option ${selectedOutcome + 1}`
+        }\n\nContest window: 24h\n\nTrading is now locked (UI).`
+      );
     } catch (e: any) {
-      alert(`Resolution failed: ${e?.message || "Unknown error"}`);
+      alert(`Propose failed: ${e?.message || "Unknown error"}`);
     } finally {
       setResolveLoading(false);
     }
@@ -577,21 +736,11 @@ export default function DashboardPage() {
 
       const side = t.is_buy ? "BUY" : "SELL";
 
-      const shares =
-        t.shares != null
-          ? Math.floor(toNum(t.shares))
-          : Math.floor(toNum(t.amount)); // legacy
+      const shares = t.shares != null ? Math.floor(toNum(t.shares)) : Math.floor(toNum(t.amount));
 
       const names = (mk?.outcome_names || null) as string[] | null;
 
-      const outcomeIndex =
-        t.outcome_index != null
-          ? Number(t.outcome_index)
-          : t.is_yes == null
-          ? null
-          : t.is_yes
-          ? 0
-          : 1;
+      const outcomeIndex = t.outcome_index != null ? Number(t.outcome_index) : t.is_yes == null ? null : t.is_yes ? 0 : 1;
 
       const pseudoMarket = { outcome_names: names };
 
@@ -623,9 +772,7 @@ export default function DashboardPage() {
       <div className="max-w-6xl mx-auto px-4 py-12">
         <h1 className="text-4xl font-bold text-white mb-6">Dashboard</h1>
         <div className="card-pump">
-          <p className="text-gray-400">
-            Connect wallet to view your dashboard.
-          </p>
+          <p className="text-gray-400">Connect wallet to view your dashboard.</p>
         </div>
       </div>
     );
@@ -633,88 +780,53 @@ export default function DashboardPage() {
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-10">
-      {/* Header + profile row */}
       <div className="flex items-center justify-between gap-6 mb-6">
-        <h1 className="text-3xl md:text-4xl font-bold text-white">
-          Portfolio
-        </h1>
+        <h1 className="text-3xl md:text-4xl font-bold text-white">Portfolio</h1>
         <div className="text-xs md:text-sm text-gray-400">
-          Wallet:{" "}
-          <span className="font-mono text-white/80">{walletLabel}</span>
+          Wallet: <span className="font-mono text-white/80">{walletLabel}</span>
         </div>
       </div>
 
       {errorMsg && (
-        <div className="mb-6 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">
-          {errorMsg}
-        </div>
+        <div className="mb-6 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">{errorMsg}</div>
       )}
 
-      {/* Top row – profile + PnL style card */}
+      {/* Top row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-8">
-        {/* Profile / stats */}
         <div className="card-pump lg:col-span-2 flex items-center justify-between gap-6">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-full bg-gradient-to-br from-pump-green to-purple-500 flex items-center justify-center text-black font-bold text-lg">
               FM
             </div>
             <div>
-              <div className="text-xs text-gray-500 mb-1">
-                Connected wallet
-              </div>
-              <div className="text-sm md:text-base font-semibold text-white">
-                {walletLabel}
-              </div>
-              <div className="text-[11px] text-gray-500 mt-1">
-                Degens become fortune tellers here ⚡
-              </div>
+              <div className="text-xs text-gray-500 mb-1">Connected wallet</div>
+              <div className="text-sm md:text-base font-semibold text-white">{walletLabel}</div>
+              <div className="text-[11px] text-gray-500 mt-1">Degens become fortune tellers here ⚡</div>
             </div>
           </div>
 
-          {/* small stats inline */}
           <div className="grid grid-cols-3 gap-4 text-right">
             <div>
-              <div className="text-[11px] uppercase tracking-wide text-gray-500">
-                Positions
-              </div>
-              <div className="text-xl font-semibold text-white">
-                {portfolioStats.positions}
-              </div>
+              <div className="text-[11px] uppercase tracking-wide text-gray-500">Positions</div>
+              <div className="text-xl font-semibold text-white">{portfolioStats.positions}</div>
               <div className="text-[11px] text-gray-500">Markets traded</div>
             </div>
-
             <div>
-              <div className="text-[11px] uppercase tracking-wide text-gray-500">
-                Volume traded
-              </div>
-              <div className="text-xl font-semibold text-white">
-                {portfolioStats.tradedVolumeSol.toFixed(2)} SOL
-              </div>
-              <div className="text-[11px] text-gray-500">
-                Based on your fills
-              </div>
+              <div className="text-[11px] uppercase tracking-wide text-gray-500">Volume traded</div>
+              <div className="text-xl font-semibold text-white">{portfolioStats.tradedVolumeSol.toFixed(2)} SOL</div>
+              <div className="text-[11px] text-gray-500">Based on your fills</div>
             </div>
-
             <div>
-              <div className="text-[11px] uppercase tracking-wide text-gray-500">
-                Markets created
-              </div>
-              <div className="text-xl font-semibold text-white">
-                {stats.created}
-              </div>
-              <div className="text-[11px] text-gray-500">
-                Creator fees ~{stats.creatorFeesSol.toFixed(3)} SOL
-              </div>
+              <div className="text-[11px] uppercase tracking-wide text-gray-500">Markets created</div>
+              <div className="text-xl font-semibold text-white">{stats.created}</div>
+              <div className="text-[11px] text-gray-500">Creator fees ~{stats.creatorFeesSol.toFixed(3)} SOL</div>
             </div>
           </div>
         </div>
 
-        {/* PnL card (visuel, PnL tracking à venir) */}
         <div className="card-pump flex flex-col justify-between">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs text-gray-500 uppercase tracking-wide">
-              Profit / Loss
-            </span>
+            <span className="text-xs text-gray-500 uppercase tracking-wide">Profit / Loss</span>
             <div className="flex items-center gap-1 text-[10px] bg-pump-dark/60 rounded-full px-2 py-1 text-gray-400">
               <span className="h-2 w-2 rounded-full bg-yellow-400" />
               <span>Beta</span>
@@ -723,18 +835,14 @@ export default function DashboardPage() {
           <div className="text-3xl font-bold text-white mb-1">
             0.00 <span className="text-base text-gray-400">SOL</span>
           </div>
-          <div className="text-[11px] text-gray-500 mb-3">
-            P&amp;L tracking & charts coming in the next update.
-          </div>
+          <div className="text-[11px] text-gray-500 mb-3">P&amp;L tracking & charts coming in the next update.</div>
 
           <div className="flex gap-1 justify-end">
-            {["1D", "1W", "1M", "ALL"].map((label, i) => (
+            {["1D", "1W", "1M", "ALL"].map((label) => (
               <button
                 key={label}
                 className={`px-2 py-1 rounded-md text-[11px] ${
-                  label === "1M"
-                    ? "bg-pump-green text-black font-semibold"
-                    : "bg-pump-dark/70 text-gray-300"
+                  label === "1M" ? "bg-pump-green text-black font-semibold" : "bg-pump-dark/70 text-gray-300"
                 }`}
                 type="button"
               >
@@ -748,20 +856,14 @@ export default function DashboardPage() {
       {/* Claimable Winnings */}
       <div className="card-pump mb-8">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg md:text-xl font-bold text-white">
-            🏆 Claimable winnings
-          </h2>
-          <span className="text-xs text-gray-500">
-            Resolved markets where you hold winning shares
-          </span>
+          <h2 className="text-lg md:text-xl font-bold text-white">🏆 Claimable winnings</h2>
+          <span className="text-xs text-gray-500">Resolved on-chain markets where you hold winning shares</span>
         </div>
 
         {loadingClaimables ? (
           <p className="text-gray-400 text-sm">Checking claimables…</p>
         ) : claimables.length === 0 ? (
-          <p className="text-gray-500 text-sm">
-            No claimable winnings yet. Degens who never bet, never win.
-          </p>
+          <p className="text-gray-500 text-sm">No claimable winnings yet. Degens who never bet, never win.</p>
         ) : (
           <div className="space-y-3">
             {claimables.map((c) => (
@@ -770,17 +872,13 @@ export default function DashboardPage() {
                 className="rounded-xl border border-pump-green/40 bg-pump-green/5 p-4 flex items-center justify-between gap-4"
               >
                 <div className="min-w-0">
-                  <div className="text-white font-semibold truncate">
-                    {c.marketQuestion}
-                  </div>
+                  <div className="text-white font-semibold truncate">{c.marketQuestion}</div>
                   <div className="text-xs text-gray-500 mt-1 truncate">
                     {shortAddr(c.marketAddress)}
                     {typeof c.estPayoutLamports === "number" && (
                       <>
                         {" • "}
-                        <span className="text-pump-green font-semibold">
-                          ~{lamportsToSol(c.estPayoutLamports).toFixed(4)} SOL
-                        </span>
+                        <span className="text-pump-green font-semibold">~{lamportsToSol(c.estPayoutLamports).toFixed(4)} SOL</span>
                       </>
                     )}
                   </div>
@@ -803,47 +901,27 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* Positions + My markets – 2 colonnes */}
+      {/* Positions + My markets */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        {/* Positions / activity */}
         <div className="card-pump">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg md:text-xl font-bold text-white">
-              Positions & activity
-            </h2>
-            {loadingTxs ? (
-              <span className="text-xs text-gray-500">Loading…</span>
-            ) : (
-              <span className="text-xs text-gray-500">
-                {txRows.length} transactions
-              </span>
-            )}
+            <h2 className="text-lg md:text-xl font-bold text-white">Positions & activity</h2>
+            {loadingTxs ? <span className="text-xs text-gray-500">Loading…</span> : <span className="text-xs text-gray-500">{txRows.length} transactions</span>}
           </div>
 
           {loadingTxs ? (
             <p className="text-gray-400 text-sm">Loading transactions…</p>
           ) : txRows.length === 0 ? (
-            <p className="text-gray-500 text-sm">
-              You haven&apos;t entered any markets yet.
-            </p>
+            <p className="text-gray-500 text-sm">You haven&apos;t entered any markets yet.</p>
           ) : (
             <div className="space-y-4">
               {txRows.map((r) => (
-                <div
-                  key={r.id}
-                  className="rounded-xl border border-white/10 bg-pump-dark/40 p-4 flex items-center justify-between gap-6"
-                >
+                <div key={r.id} className="rounded-xl border border-white/10 bg-pump-dark/40 p-4 flex items-center justify-between gap-6">
                   <div className="min-w-0">
-                    <div className="text-white font-medium text-sm md:text-base">
-                      {r.title}
-                    </div>
-                    <div className="text-xs text-gray-400 mt-1 truncate">
-                      {r.marketQuestion || shortAddr(r.marketAddress)}
-                    </div>
+                    <div className="text-white font-medium text-sm md:text-base">{r.title}</div>
+                    <div className="text-xs text-gray-400 mt-1 truncate">{r.marketQuestion || shortAddr(r.marketAddress)}</div>
                     <div className="text-[11px] text-gray-500 mt-1">
-                      {r.createdAt
-                        ? r.createdAt.toLocaleString("fr-FR")
-                        : ""}
+                      {r.createdAt ? r.createdAt.toLocaleString("fr-FR") : ""}
                       {r.sig && (
                         <>
                           {" • "}
@@ -862,11 +940,7 @@ export default function DashboardPage() {
 
                   <div className="flex items-center gap-3 flex-shrink-0">
                     <div className="text-right">
-                      <div className="text-pump-green font-bold text-sm md:text-base">
-                        {r.costSol > 0
-                          ? `${r.costSol.toFixed(4)} SOL`
-                          : "0.0000 SOL"}
-                      </div>
+                      <div className="text-pump-green font-bold text-sm md:text-base">{r.costSol > 0 ? `${r.costSol.toFixed(4)} SOL` : "0.0000 SOL"}</div>
                     </div>
 
                     {r.marketAddress && (
@@ -884,27 +958,16 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* My markets (creator) */}
         <div className="card-pump">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg md:text-xl font-bold text-white">
-              Markets you created
-            </h2>
-            {loadingMarkets ? (
-              <span className="text-xs text-gray-500">Loading…</span>
-            ) : (
-              <span className="text-xs text-gray-500">
-                {myCreatedMarkets.length} markets
-              </span>
-            )}
+            <h2 className="text-lg md:text-xl font-bold text-white">Markets you created</h2>
+            {loadingMarkets ? <span className="text-xs text-gray-500">Loading…</span> : <span className="text-xs text-gray-500">{myCreatedMarkets.length} markets</span>}
           </div>
 
           {loadingMarkets ? (
             <p className="text-gray-400 text-sm">Loading markets…</p>
           ) : myCreatedMarkets.length === 0 ? (
-            <p className="text-gray-500 text-sm">
-              You haven&apos;t created any markets yet.
-            </p>
+            <p className="text-gray-500 text-sm">You haven&apos;t created any markets yet.</p>
           ) : (
             <div className="space-y-4">
               {myCreatedMarkets.map((m, idx) => {
@@ -913,57 +976,71 @@ export default function DashboardPage() {
                 const volSol = lamportsToSol(toNum(m.total_volume));
 
                 const ended = isMarketEnded(m.end_date);
-                const canResolve = !m.resolved && ended;
+                const status = toResolutionStatus(m.resolution_status);
                 const timeStatus = formatTimeStatus(m.end_date);
+
+                const isResolvedFinal = !!m.resolved || status === "finalized";
+                const isProposed = status === "proposed";
+                const isCancelled = status === "cancelled";
+
+                const deadlineMs = m.contest_deadline ? new Date(m.contest_deadline).getTime() : NaN;
+                const remainingMs = Number.isFinite(deadlineMs) ? deadlineMs - Date.now() : NaN;
+
+                // Step 1 rule: can propose only if ended + not already proposed/finalized/cancelled/resolved
+                const canPropose = ended && !isResolvedFinal && !isProposed && status !== "cancelled";
 
                 return (
                   <div
                     key={String(m.id || addr || idx)}
                     className={`rounded-xl border p-4 flex items-center justify-between gap-6 ${
-                      m.resolved
-                        ? "border-gray-600 bg-gray-800/30"
-                        : canResolve
-                        ? "border-yellow-500/60 bg-yellow-500/5"
-                        : "border-white/10 bg-pump-dark/40"
-                    }`}
+  isResolvedFinal
+    ? "border-gray-600 bg-gray-800/30"
+    : isCancelled
+    ? "border-[#ff5c73]/60 bg-[#ff5c73]/5"
+    : isProposed
+    ? "border-pump-green/60 bg-pump-green/5"
+    : canPropose
+    ? "border-yellow-500/60 bg-yellow-500/5"
+    : "border-white/10 bg-pump-dark/40"
+}`}
                   >
                     <div className="min-w-0">
-                      <div className="text-white font-semibold truncate text-sm md:text-base">
-                        {q}
-                      </div>
+                      <div className="text-white font-semibold truncate text-sm md:text-base">{q}</div>
+
                       <div className="text-[11px] text-gray-500 mt-1 flex items-center gap-2">
                         <span>{addr ? shortAddr(addr) : ""}</span>
                         <span>•</span>
-                        {m.resolved ? (
-                          <span className="text-green-400">✓ Resolved</span>
-                        ) : (
-                          <span
-                            className={
-                              ended ? "text-yellow-400" : "text-gray-400"
-                            }
-                          >
-                            {timeStatus}
-                          </span>
-                        )}
+
+                        {isResolvedFinal ? (
+  <span className="text-green-400">✓ Finalized</span>
+) : isCancelled ? (
+  <span className="text-[#ff5c73]">Cancelled • refundable</span>
+) : isProposed ? (
+  <span className="text-pump-green">
+    Proposed{Number.isFinite(remainingMs) ? ` (${formatMsToHhMm(Math.max(0, remainingMs))} left)` : ""}
+  </span>
+) : (
+  <span className={ended ? "text-yellow-400" : "text-gray-400"}>{timeStatus}</span>
+)}
                       </div>
                     </div>
 
                     <div className="flex items-center gap-3 flex-shrink-0">
                       <div className="text-right">
-                        <div className="text-white font-semibold text-sm md:text-base">
-                          {volSol.toFixed(2)} SOL
-                        </div>
+                        <div className="text-white font-semibold text-sm md:text-base">{volSol.toFixed(2)} SOL</div>
                       </div>
 
-                      {canResolve && (
+                      {canPropose && (
                         <button
                           onClick={() => {
                             setResolvingMarket(m);
                             setSelectedOutcome(null);
+                            setMode("upload");
+                            setProofNote("");
                           }}
                           className="px-3 py-1.5 md:px-4 md:py-2 rounded-lg bg-yellow-500 text-black text-xs md:text-sm font-semibold hover:bg-yellow-400 transition"
                         >
-                          ⚖️ Resolve
+                          ⚖️ Propose
                         </button>
                       )}
 
@@ -988,66 +1065,139 @@ export default function DashboardPage() {
       {resolvingMarket && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
           <div className="bg-pump-dark border border-white/20 rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl">
-            <h3 className="text-xl font-bold text-white mb-2">
-              Resolve market
-            </h3>
-            <p className="text-gray-400 text-sm mb-4 truncate">
-              {resolvingMarket.question}
-            </p>
+            <h3 className="text-xl font-bold text-white mb-2">Propose resolution</h3>
+            <p className="text-gray-400 text-sm mb-1 truncate">{resolvingMarket.question}</p>
+            <p className="text-[11px] text-gray-500 mb-4">⏳ Contest window: 24h — trading will be locked (UI) during this period.</p>
 
             <div className="mb-4">
-              <label className="text-sm text-gray-400 mb-2 block">
-                Select winning outcome:
-              </label>
+              <label className="text-sm text-gray-400 mb-2 block">Select proposed winning outcome:</label>
               <div className="space-y-2">
-                {(resolvingMarket.outcome_names || ["YES", "NO"]).map(
-                  (label, idx) => (
-                    <button
-                      key={idx}
-                      onClick={() => setSelectedOutcome(idx)}
-                      className={`w-full p-3 rounded-lg border text-left transition ${
-                        selectedOutcome === idx
-                          ? "border-pump-green bg-pump-green/20 text-white"
-                          : "border-white/20 bg-white/5 text-gray-300 hover:border-white/40"
-                      }`}
-                    >
-                      <span className="font-semibold">{label}</span>
-                      {selectedOutcome === idx && (
-                        <span className="float-right text-pump-green">✓</span>
-                      )}
-                    </button>
-                  )
-                )}
+                {(resolvingMarket.outcome_names || ["YES", "NO"]).map((label, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => setSelectedOutcome(idx)}
+                    className={`w-full p-3 rounded-lg border text-left transition ${
+                      selectedOutcome === idx
+                        ? "border-pump-green bg-pump-green/20 text-white"
+                        : "border-white/20 bg-white/5 text-gray-300 hover:border-white/40"
+                    }`}
+                  >
+                    <span className="font-semibold">{label}</span>
+                    {selectedOutcome === idx && <span className="float-right text-pump-green">✓</span>}
+                  </button>
+                ))}
               </div>
+            </div>
+
+            {/* Proof inputs (LINK OR UPLOAD) */}
+            <div className="mb-4 space-y-3">
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setMode("upload")}
+                  className={`flex-1 px-3 py-2 rounded-lg border text-sm font-semibold transition ${
+                    proofMode === "upload"
+                      ? "border-pump-green bg-pump-green/20 text-white"
+                      : "border-white/20 bg-white/5 text-gray-300 hover:border-white/40"
+                  }`}
+                >
+                  Upload image
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setMode("link")}
+                  className={`flex-1 px-3 py-2 rounded-lg border text-sm font-semibold transition ${
+                    proofMode === "link"
+                      ? "border-pump-green bg-pump-green/20 text-white"
+                      : "border-white/20 bg-white/5 text-gray-300 hover:border-white/40"
+                  }`}
+                >
+                  Proof link
+                </button>
+              </div>
+
+              {proofMode === "link" ? (
+                <div>
+                  <label className="text-sm text-gray-400 mb-1 block">Proof URL (required)</label>
+                  <input
+                    value={proofUrl}
+                    onChange={(e) => setProofUrl(e.target.value)}
+                    placeholder="https://..."
+                    className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-white placeholder:text-gray-500 focus:outline-none focus:border-pump-green/60"
+                  />
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <label className="text-sm text-gray-400 mb-1 block">Upload proof image (required)</label>
+
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0] || null;
+                      setProofFile(f);
+                      if (proofPreview) URL.revokeObjectURL(proofPreview);
+                      if (f) {
+                        const url = URL.createObjectURL(f);
+                        setProofPreview(url);
+                      } else {
+                        setProofPreview("");
+                      }
+                    }}
+                    className="w-full text-sm text-gray-300"
+                  />
+
+                  {proofPreview && (
+                    <div className="rounded-xl overflow-hidden border border-white/10 bg-black/30">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={proofPreview} alt="Proof preview" className="w-full h-40 object-cover" />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div>
+                <label className="text-sm text-gray-400 mb-1 block">Proof note (optional)</label>
+                <textarea
+                  value={proofNote}
+                  onChange={(e) => setProofNote(e.target.value)}
+                  placeholder="Short explanation..."
+                  rows={3}
+                  className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-white placeholder:text-gray-500 focus:outline-none focus:border-pump-green/60"
+                />
+              </div>
+
+              {!proofOk && (
+                <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded-lg p-2">
+                  {proofMode === "link" ? "Please provide a proof URL." : "Please upload a proof image."}
+                </div>
+              )}
             </div>
 
             <div className="flex gap-3">
               <button
-                onClick={() => {
-                  setResolvingMarket(null);
-                  setSelectedOutcome(null);
-                }}
+                onClick={resetResolveModal}
                 className="flex-1 px-4 py-2 rounded-lg border border-white/20 text-gray-300 hover:bg-white/10 transition"
               >
                 Cancel
               </button>
 
               <button
-                onClick={handleResolve}
-                disabled={selectedOutcome === null || resolveLoading}
+                onClick={handleProposeResolution}
+                disabled={selectedOutcome === null || resolveLoading || !proofOk}
                 className={`flex-1 px-4 py-2 rounded-lg font-semibold transition ${
-                  selectedOutcome === null || resolveLoading
+                  selectedOutcome === null || resolveLoading || !proofOk
                     ? "bg-gray-700 text-gray-400 cursor-not-allowed"
                     : "bg-yellow-500 text-black hover:bg-yellow-400"
                 }`}
               >
-                {resolveLoading ? "Resolving…" : "Confirm resolution"}
+                {resolveLoading ? "Proposing…" : "Confirm proposal"}
               </button>
             </div>
 
-            <p className="text-xs text-red-400 mt-4 text-center">
-              ⚠️ This action is irreversible. Make sure you select the correct
-              outcome.
+            <p className="text-xs text-gray-400 mt-4 text-center">
+              ⚠️ This does NOT finalize on-chain yet. It starts a 24h contest window.
             </p>
           </div>
         </div>
