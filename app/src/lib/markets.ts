@@ -2,42 +2,37 @@
 import { supabase } from "@/lib/supabaseClient";
 
 /* -------------------------------------------------------------------------- */
-/*  Types                                                                     */
+/*  Types                                                                      */
 /* -------------------------------------------------------------------------- */
 
 export type ResolutionStatus = "open" | "proposed" | "finalized" | "cancelled";
 
-export type DbMarketRow = {
-  id: string;
+export type DbMarket = {
+  id?: string;
+  created_at?: string;
+
   market_address: string;
-  question: string | null;
-  description: string | null;
-  category: string | null;
-  image_url: string | null;
-  end_date: string; // timestamptz
-  creator: string;
-  social_links: any | null;
+  creator?: string | null;
 
-  yes_supply: number | null;
-  no_supply: number | null;
-  total_volume: number; // lamports numeric
+  question?: string | null;
+  description?: string | null;
+  category?: string | null;
+  image_url?: string | null;
 
-  resolved: boolean;
-  created_at: string;
+  total_volume?: number | null; // lamports
+  end_date?: string | null;
 
-  market_type: number | null;
-  outcome_names: string[] | null;
-  outcome_supplies: number[] | null;
+  resolved?: boolean | null;
 
-  // legacy resolved (on-chain)
+  // on-chain fields (mirrored in DB)
   winning_outcome?: number | null;
+  resolved_at?: string | null;
   resolution_proof_url?: string | null;
   resolution_proof_image?: string | null;
   resolution_proof_note?: string | null;
-  resolved_at?: string | null;
 
-  // Off-chain contest flow (REAL schema)
-  resolution_status?: ResolutionStatus | null;
+  // off-chain contest flow
+  resolution_status?: ResolutionStatus | string | null;
   proposed_winning_outcome?: number | null;
   resolution_proposed_at?: string | null;
   contest_deadline?: string | null;
@@ -47,225 +42,200 @@ export type DbMarketRow = {
   proposed_proof_url?: string | null;
   proposed_proof_image?: string | null;
   proposed_proof_note?: string | null;
+
+  // optional
+  social_links?: any;
+  market_type?: number | null; // 0 binary, 1 multi
+  outcome_names?: any;
+  outcome_supplies?: any;
+  yes_supply?: number | null;
+  no_supply?: number | null;
 };
 
-export type DbTransactionRow = {
-  id: string;
-  market_id: string;
+export type RecordTxInput = {
+  market_id?: string | null;
+  market_address: string;
+
   user_address: string;
   tx_signature: string;
+
   is_buy: boolean;
-  is_yes: boolean;
-  amount: number;
-  cost: number;
-  created_at: string;
+  is_yes?: boolean | null;
 
-  market_address: string | null;
-  outcome_index: number | null;
-  outcome_name: string | null;
-  shares: number | null;
+  amount?: number | null; // legacy
+  shares?: number | null; // new
+  cost?: number | null; // SOL, not lamports (as you already do)
+
+  outcome_index?: number | null;
+  outcome_name?: string | null;
 };
-
-/* -------------------------------------------------------------------------- */
-/*  Helpers                                                                   */
-/* -------------------------------------------------------------------------- */
-
-function toNumber(value: any, fallback = 0): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function toResolutionStatus(x: any): ResolutionStatus | "open" {
-  const s = String(x || "").toLowerCase().trim();
-  if (s === "proposed" || s === "finalized" || s === "cancelled" || s === "open") return s as ResolutionStatus;
-  return "open";
-}
-
-/* -------------------------------------------------------------------------- */
-/*  Market loading                                                            */
-/* -------------------------------------------------------------------------- */
-
-export async function getMarketByAddress(marketAddress: string): Promise<DbMarketRow | null> {
-  const { data, error } = await supabase
-    .from("markets")
-    .select(
-      `
-      id,
-      market_address,
-      question,
-      description,
-      category,
-      image_url,
-      creator,
-      social_links,
-
-      market_type,
-      outcome_names,
-      outcome_supplies,
-      yes_supply,
-      no_supply,
-
-      total_volume,
-      end_date,
-
-      resolved,
-      winning_outcome,
-      resolved_at,
-      resolution_proof_url,
-      resolution_proof_image,
-      resolution_proof_note,
-
-      resolution_status,
-      proposed_winning_outcome,
-      resolution_proposed_at,
-      contest_deadline,
-      contested,
-      contest_count,
-
-      proposed_proof_url,
-      proposed_proof_image,
-      proposed_proof_note
-      `
-    )
-    .eq("market_address", marketAddress)
-    .maybeSingle();
-
-  if (error) throw error;
-  if (!data) return null;
-
-  // normalize numbers / enums
-  const m: any = data;
-  const row: DbMarketRow = {
-    ...m,
-    id: String(m.id),
-    market_address: String(m.market_address),
-    creator: String(m.creator),
-
-    yes_supply: m.yes_supply == null ? null : toNumber(m.yes_supply, 0),
-    no_supply: m.no_supply == null ? null : toNumber(m.no_supply, 0),
-    total_volume: toNumber(m.total_volume, 0),
-
-    market_type: typeof m.market_type === "number" ? m.market_type : 0,
-    outcome_names: Array.isArray(m.outcome_names) ? m.outcome_names.map(String) : null,
-    outcome_supplies: Array.isArray(m.outcome_supplies) ? m.outcome_supplies.map((v: any) => toNumber(v, 0)) : null,
-
-    winning_outcome: m.winning_outcome == null ? null : toNumber(m.winning_outcome, 0),
-
-    resolution_status: toResolutionStatus(m.resolution_status),
-    proposed_winning_outcome: m.proposed_winning_outcome == null ? null : toNumber(m.proposed_winning_outcome, 0),
-    contest_count: m.contest_count == null ? 0 : toNumber(m.contest_count, 0),
-    contested: !!m.contested,
-  };
-
-  return row;
-}
-
-/* -------------------------------------------------------------------------- */
-/*  Resolution (off-chain)                                                    */
-/* -------------------------------------------------------------------------- */
 
 export type ProposeResolutionInput = {
   market_address: string;
   proposed_winning_outcome: number;
-  contest_deadline_iso: string; // ISO string
+  contest_deadline_iso: string;
   proposed_proof_url?: string | null;
   proposed_proof_image?: string | null;
   proposed_proof_note?: string | null;
 };
 
+export type ApplyTradeInput = {
+  market_address: string;
+  market_type: 0 | 1;
+  outcome_index: number;
+  delta_shares: number; // + buy, - sell
+  delta_volume_lamports: number; // lamports
+};
+
+/* -------------------------------------------------------------------------- */
+/*  Helpers                                                                    */
+/* -------------------------------------------------------------------------- */
+
+function toNumber(x: any, fallback = 0) {
+  const n = Number(x);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function toInt(x: any, fallback = 0) {
+  return Math.floor(toNumber(x, fallback));
+}
+
+export function toResolutionStatus(x: any): ResolutionStatus {
+  const s = String(x || "").toLowerCase().trim();
+  if (s === "proposed" || s === "finalized" || s === "cancelled") return s;
+  return "open";
+}
+
+/* -------------------------------------------------------------------------- */
+/*  READ                                                                        */
+/* -------------------------------------------------------------------------- */
+
+export async function getMarketByAddress(marketAddress: string): Promise<DbMarket | null> {
+  const addr = String(marketAddress || "").trim();
+  if (!addr) return null;
+
+  // Prefer a “full” select, but keep it resilient if columns differ.
+  const trySelects = [
+    [
+      "id",
+      "created_at",
+      "market_address",
+      "creator",
+      "question",
+      "description",
+      "category",
+      "image_url",
+      "total_volume",
+      "end_date",
+      "resolved",
+      "market_type",
+      "outcome_names",
+      "outcome_supplies",
+      "yes_supply",
+      "no_supply",
+      "social_links",
+
+      // on-chain mirror
+      "winning_outcome",
+      "resolved_at",
+      "resolution_proof_url",
+      "resolution_proof_image",
+      "resolution_proof_note",
+
+      // off-chain flow
+      "resolution_status",
+      "proposed_winning_outcome",
+      "resolution_proposed_at",
+      "contest_deadline",
+      "contested",
+      "contest_count",
+      "proposed_proof_url",
+      "proposed_proof_image",
+      "proposed_proof_note",
+      "cancelled_at",
+      "cancel_reason",
+    ].join(","),
+    "id,market_address,creator,question,description,category,image_url,total_volume,end_date,resolved,market_type,outcome_names,outcome_supplies,yes_supply,no_supply",
+    "id,market_address,creator,question,total_volume,end_date,resolved",
+  ];
+
+  for (const sel of trySelects) {
+    const { data, error } = await supabase.from("markets").select(sel).eq("market_address", addr).maybeSingle();
+
+    if (!error) return (data as any) || null;
+
+    const msg = String((error as any)?.message || "");
+    // if schema mismatch, try next select
+    if (!msg.includes("column") && !msg.includes("does not exist")) {
+      console.error("getMarketByAddress error:", error);
+      return null;
+    }
+  }
+
+  return null;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  WRITE (secure via API routes)                                              */
+/* -------------------------------------------------------------------------- */
+
 export async function proposeResolution(input: ProposeResolutionInput): Promise<void> {
-  const payload: any = {
-    resolution_status: "proposed",
-    proposed_winning_outcome: Math.floor(toNumber(input.proposed_winning_outcome, 0)),
-    resolution_proposed_at: new Date().toISOString(),
-    contest_deadline: input.contest_deadline_iso,
-
-    contested: false,
-    contest_count: 0,
-
+  const payload = {
+    market_address: String(input.market_address || "").trim(),
+    proposed_winning_outcome: toInt(input.proposed_winning_outcome, 0),
+    contest_deadline_iso: String(input.contest_deadline_iso || "").trim(),
     proposed_proof_url: input.proposed_proof_url ?? null,
     proposed_proof_image: input.proposed_proof_image ?? null,
     proposed_proof_note: input.proposed_proof_note ?? null,
   };
 
+  if (!payload.market_address) throw new Error("market_address is required");
+  if (!payload.contest_deadline_iso) throw new Error("contest_deadline_iso is required");
+
   if (payload.proposed_proof_url && payload.proposed_proof_image) {
     throw new Error("Provide either proposed_proof_url OR proposed_proof_image, not both.");
   }
 
-  const { error } = await supabase.from("markets").update(payload).eq("market_address", input.market_address);
+  const res = await fetch("/api/markets/propose", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
 
-  if (error) {
-    console.error("proposeResolution error:", error);
-    throw error;
-  }
-}
-
-export type ContestResolutionInput = {
-  market_address: string;
-  // optional: store a proof/comment via comments table in your /contest page
-};
-
-export async function contestResolution(input: ContestResolutionInput): Promise<void> {
-  // MVP: just flips flags + increments counter
-  // (Better: do it in an RPC to avoid race condition; MVP ok.)
-  const { data: current, error: readErr } = await supabase
-    .from("markets")
-    .select("contest_count, contested, resolution_status")
-    .eq("market_address", input.market_address)
-    .maybeSingle();
-
-  if (readErr) throw readErr;
-  const prevCount = toNumber((current as any)?.contest_count, 0);
-
-  const { error } = await supabase
-    .from("markets")
-    .update({
-      contested: true,
-      contest_count: prevCount + 1,
-    })
-    .eq("market_address", input.market_address);
-
-  if (error) {
-    console.error("contestResolution error:", error);
-    throw error;
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    throw new Error(j?.error || `Propose failed (${res.status})`);
   }
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Transactions                                                              */
+/*  Transactions (insert from client is ok if table policy allows)             */
 /* -------------------------------------------------------------------------- */
-
-export type RecordTxInput = {
-  market_id?: string | null;
-  market_address?: string | null;
-  user_address: string;
-  tx_signature: string;
-  is_buy: boolean;
-  is_yes: boolean | null;
-  amount: number;
-  cost: number;
-  outcome_index?: number | null;
-  outcome_name?: string | null;
-  shares?: number | null;
-};
 
 export async function recordTransaction(input: RecordTxInput): Promise<void> {
-  const row = {
+  const payload: any = {
     market_id: input.market_id ?? null,
-    market_address: input.market_address ?? null,
-    user_address: input.user_address,
-    tx_signature: input.tx_signature,
-    is_buy: input.is_buy,
-    is_yes: input.is_yes ?? false, // schema NOT NULL
-    amount: Math.floor(toNumber(input.amount, 0)),
-    cost: toNumber(input.cost, 0),
+    market_address: String(input.market_address || "").trim(),
+    user_address: String(input.user_address || "").trim(),
+    tx_signature: String(input.tx_signature || "").trim(),
+
+    is_buy: !!input.is_buy,
+    is_yes: input.is_yes ?? null,
+
+    amount: input.amount ?? input.shares ?? null,
+    shares: input.shares ?? input.amount ?? null,
+
+    cost: input.cost ?? null,
+
     outcome_index: input.outcome_index ?? null,
     outcome_name: input.outcome_name ?? null,
-    shares: input.shares ?? input.amount,
   };
 
-  const { error } = await supabase.from("transactions").insert(row as any);
+  if (!payload.market_address) throw new Error("recordTransaction: market_address missing");
+  if (!payload.user_address) throw new Error("recordTransaction: user_address missing");
+  if (!payload.tx_signature) throw new Error("recordTransaction: tx_signature missing");
 
+  const { error } = await supabase.from("transactions").insert(payload);
   if (error) {
     console.error("recordTransaction error:", error);
     throw error;
@@ -273,100 +243,168 @@ export async function recordTransaction(input: RecordTxInput): Promise<void> {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Apply trade to market (RPC)                                               */
+/*  Apply trade to market in Supabase                                          */
+/*  NOTE: Idéalement -> move server-side (API + service role)                  */
 /* -------------------------------------------------------------------------- */
 
-export type ApplyTradeArgs = {
-  market_address: string;
-  market_type: number;
-  outcome_index: number;
-  delta_shares: number;
-  delta_volume_lamports: number;
-};
+export async function applyTradeToMarketInSupabase(input: ApplyTradeInput): Promise<void> {
+  const payload = {
+    market_address: String(input.market_address || "").trim(),
+    market_type: input.market_type,
+    outcome_index: toInt(input.outcome_index, 0),
+    delta_shares: toInt(input.delta_shares, 0),
+    delta_volume_lamports: toInt(input.delta_volume_lamports, 0),
+  };
 
-export async function applyTradeToMarketInSupabase(args: ApplyTradeArgs): Promise<void> {
-  const { error } = await supabase.rpc("apply_trade_to_market", {
-    p_market_address: args.market_address,
-    p_outcome_index: Math.floor(toNumber(args.outcome_index, 0)),
-    p_delta_shares: Math.floor(toNumber(args.delta_shares, 0)),
-    p_delta_volume_lamports: Math.floor(toNumber(args.delta_volume_lamports, 0)),
-  });
+  if (!payload.market_address) throw new Error("applyTrade: market_address missing");
 
-  if (error) {
-    console.error("applyTradeToMarketInSupabase rpc error:", error);
-    throw error;
-  }
-}
+  /**
+   * Option A (best): call API route (secure)
+   * - Create /api/markets/apply-trade with service role
+   */
+  // const res = await fetch("/api/markets/apply-trade", {
+  //   method: "POST",
+  //   headers: { "Content-Type": "application/json" },
+  //   body: JSON.stringify(payload),
+  // });
+  // if (!res.ok) {
+  //   const j = await res.json().catch(() => ({}));
+  //   throw new Error(j?.error || `apply-trade failed (${res.status})`);
+  // }
+  // return;
 
-/* -------------------------------------------------------------------------- */
-/*  Index market                                                              */
-/* -------------------------------------------------------------------------- */
+  /**
+   * Option B (temp): do it client-side (less secure)
+   * - Requires policies allowing update
+   * - Works for dev, but move to API before launch
+   */
+  const mk = await getMarketByAddress(payload.market_address);
+  if (!mk) throw new Error("applyTrade: market not found");
 
-export type IndexMarketInput = Partial<DbMarketRow> & {
-  marketAddress?: string;
-  imageUrl?: string;
-  endDate?: string;
-  creatorAddress?: string;
-  outcomes?: string[];
-};
+  // Update total volume (lamports)
+  const nextTotal = toNumber(mk.total_volume, 0) + payload.delta_volume_lamports;
 
-export async function indexMarket(market: IndexMarketInput | null | undefined): Promise<void> {
-  if (!market) return;
+  // Update supplies depending on market_type
+  if (payload.market_type === 0) {
+    // binary uses yes_supply/no_supply
+    const yes = toNumber(mk.yes_supply, 0);
+    const no = toNumber(mk.no_supply, 0);
 
-  const addr = market.market_address || market.marketAddress || (market as any).address;
-  if (!addr) {
-    console.warn("indexMarket: missing market_address", market);
+    const nextYes = payload.outcome_index === 0 ? Math.max(0, yes + payload.delta_shares) : yes;
+    const nextNo = payload.outcome_index === 1 ? Math.max(0, no + payload.delta_shares) : no;
+
+    const { error } = await supabase
+    .from("markets")
+    .update({
+      total_volume: nextTotal,
+      yes_supply: nextYes,
+      no_supply: nextNo,
+  
+      // 🔥 IMPORTANT: keep outcome_supplies in sync for binary markets
+      outcome_supplies: [nextYes, nextNo],
+    })
+    .eq("market_address", payload.market_address);
+
+    if (error) throw error;
     return;
   }
 
-  const nowIso = new Date().toISOString();
-  const creator = market.creator || market.creatorAddress || (market as any).wallet || "";
+  // multi-choice uses outcome_supplies array
+  const raw = mk.outcome_supplies;
+  const arr: number[] = Array.isArray(raw)
+    ? raw.map((x: any) => toInt(x, 0))
+    : typeof raw === "string"
+    ? (() => {
+        try {
+          const p = JSON.parse(raw);
+          return Array.isArray(p) ? p.map((x) => toInt(x, 0)) : [];
+        } catch {
+          return [];
+        }
+      })()
+    : [];
 
-  const outcomeNames: string[] | null =
-    (market.outcome_names as any) ??
-    (market.outcomes ? market.outcomes.map(String) : null) ??
-    (Array.isArray((market as any).outcomes) ? (market as any).outcomes.map(String) : null);
+  while (arr.length <= payload.outcome_index) arr.push(0);
+  arr[payload.outcome_index] = Math.max(0, toInt(arr[payload.outcome_index], 0) + payload.delta_shares);
+
+  const { error } = await supabase
+    .from("markets")
+    .update({
+      total_volume: nextTotal,
+      outcome_supplies: arr,
+    })
+    .eq("market_address", payload.market_address);
+
+  if (error) throw error;
+}
+/* -------------------------------------------------------------------------- */
+/*  CREATE / INDEX market (used by /create)                                    */
+/* -------------------------------------------------------------------------- */
+
+export type IndexMarketInput = {
+  market_address: string;
+  creator?: string | null;
+
+  question?: string | null;
+  description?: string | null;
+  category?: string | null;
+  image_url?: string | null;
+
+  end_date?: string | null;
+  market_type?: number | null; // 0 binary, 1 multi
+  outcome_names?: any;
+  outcome_supplies?: any;
+  yes_supply?: number | null;
+  no_supply?: number | null;
+
+  social_links?: any;
+
+  // optional
+  total_volume?: number | null; // lamports
+};
+
+export async function indexMarket(input: IndexMarketInput): Promise<void> {
+  const market_address = String(input.market_address || "").trim();
+  if (!market_address) throw new Error("indexMarket: market_address missing");
 
   const payload: any = {
-    market_address: addr,
-    question: market.question ?? null,
-    description: market.description ?? null,
-    category: market.category ?? null,
-    image_url: market.image_url ?? market.imageUrl ?? null,
-    end_date: market.end_date ?? market.endDate ?? nowIso,
-    creator,
-    social_links: market.social_links ?? (market as any).socialLinks ?? null,
+    market_address,
+    creator: input.creator ?? null,
 
-    yes_supply: toNumber((market as any).yes_supply ?? market.yes_supply ?? 0, 0),
-    no_supply: toNumber((market as any).no_supply ?? market.no_supply ?? 0, 0),
-    total_volume: toNumber((market as any).total_volume ?? market.total_volume ?? 0, 0),
-    resolved: !!(market as any).resolved,
+    question: input.question ?? null,
+    description: input.description ?? null,
+    category: input.category ?? null,
+    image_url: input.image_url ?? null,
 
-    created_at: (market as any).created_at ?? nowIso,
+    end_date: input.end_date ?? null,
 
-    market_type:
-      typeof market.market_type === "number"
-        ? market.market_type
-        : outcomeNames && outcomeNames.length > 2
-        ? 1
-        : 0,
+    market_type: input.market_type ?? null,
+    outcome_names: input.outcome_names ?? null,
+    outcome_supplies: input.outcome_supplies ?? null,
+    yes_supply: input.yes_supply ?? null,
+    no_supply: input.no_supply ?? null,
 
-    outcome_names: outcomeNames,
-    outcome_supplies:
-      market.outcome_supplies ??
-      (Array.isArray((market as any).outcome_supplies)
-        ? (market as any).outcome_supplies.map((v: any) => toNumber(v, 0))
-        : null),
+    social_links: input.social_links ?? null,
 
-    outcome_count: market.outcome_count ?? (outcomeNames ? outcomeNames.length : null),
-    program_id: market.program_id ?? (market as any).programId ?? null,
-    cluster: market.cluster ?? (market as any).cluster ?? null,
+    total_volume: input.total_volume ?? 0,
+
+    // defaults safe
+    resolved: false,
+    resolution_status: "open",
+    contested: false,
+    contest_count: 0,
   };
 
-  const { error } = await supabase.from("markets").insert(payload as any);
+  // Upsert by market_address (requires unique index on market_address)
+  const { error } = await supabase
+    .from("markets")
+    .upsert(payload, { onConflict: "market_address" });
 
   if (error) {
-    console.error("indexMarket insert error:", error);
+    console.error("indexMarket error:", error);
     throw error;
   }
 }
+
+/** Optional alias if your UI expects createMarket() */
+export const createMarket = indexMarket;
