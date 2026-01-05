@@ -1,9 +1,7 @@
-// app/src/app/trade/[id]/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import Link from "next/link";
 import Image from "next/image";
 
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
@@ -41,25 +39,22 @@ type UiMarket = {
   creator: string;
 
   totalVolume: number;
-  resolutionTime: number; // unix sec from end_date
-  creatorResolveDeadline?: string | null; // end_date + 72h
+  resolutionTime: number;
+  creatorResolveDeadline?: string | null;
   resolved: boolean;
 
-  // on-chain resolved fields
   winningOutcome?: number | null;
   resolvedAt?: string | null;
   resolutionProofUrl?: string | null;
   resolutionProofImage?: string | null;
   resolutionProofNote?: string | null;
 
-  // off-chain contest flow
   resolutionStatus?: "open" | "proposed" | "finalized" | "cancelled";
   proposedOutcome?: number | null;
   proposedAt?: string | null;
   contestDeadline?: string | null;
   contested?: boolean;
   contestCount?: number;
-
 
   proposedProofUrl?: string | null;
   proposedProofImage?: string | null;
@@ -87,6 +82,18 @@ type Derived = {
 
 type OddsRange = "24h" | "7d" | "30d" | "all";
 type BottomTab = "discussion" | "activity";
+
+function useIsMobile(breakpointPx = 1024) {
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width:${breakpointPx - 1}px)`);
+    const onChange = () => setIsMobile(mq.matches);
+    onChange();
+    mq.addEventListener?.("change", onChange);
+    return () => mq.removeEventListener?.("change", onChange);
+  }, [breakpointPx]);
+  return isMobile;
+}
 
 function safeParamId(p: unknown): string | null {
   if (!p) return null;
@@ -144,6 +151,7 @@ function formatMsToHhMm(ms: number) {
   if (h <= 0) return `${m}m`;
   return `${h}h ${m}m`;
 }
+
 function addHoursIso(ms: number, hours: number): string | null {
   if (!Number.isFinite(ms)) return null;
   const t = ms + hours * 60 * 60 * 1000;
@@ -151,6 +159,7 @@ function addHoursIso(ms: number, hours: number): string | null {
   if (!Number.isFinite(d.getTime())) return null;
   return d.toISOString();
 }
+
 /**
  * Parse end_date safely:
  * - "YYYY-MM-DD" => end of day UTC
@@ -189,6 +198,8 @@ export default function TradePage() {
   const { connection } = useConnection();
   const program = useProgram();
 
+  const isMobile = useIsMobile(1024);
+
   const [market, setMarket] = useState<UiMarket | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -199,6 +210,11 @@ export default function TradePage() {
   const [oddsRange, setOddsRange] = useState<OddsRange>("24h");
   const [oddsPoints, setOddsPoints] = useState<{ t: number; pct: number[] }[]>([]);
   const [bottomTab, setBottomTab] = useState<BottomTab>("discussion");
+
+  // Mobile drawer state
+  const [mobileTradeOpen, setMobileTradeOpen] = useState(false);
+  const [mobileOutcomeIndex, setMobileOutcomeIndex] = useState(0);
+  const [mobileDefaultSide, setMobileDefaultSide] = useState<"buy" | "sell">("buy");
 
   useEffect(() => {
     if (!id) return;
@@ -221,11 +237,8 @@ export default function TradePage() {
       const supplies = toNumberArray(supabaseMarket.outcome_supplies) ?? [];
 
       const endMs = parseEndDateMs(supabaseMarket?.end_date);
-      const resolutionTime = Number.isFinite(endMs)
-        ? Math.floor(endMs / 1000)
-        : 0;
-      
-      const creatorResolveDeadline = addHoursIso(endMs, 72); // ✅ UNIQUE
+      const resolutionTime = Number.isFinite(endMs) ? Math.floor(endMs / 1000) : 0;
+      const creatorResolveDeadline = addHoursIso(endMs, 72);
 
       const transformed: UiMarket = {
         dbId: supabaseMarket.id,
@@ -362,7 +375,7 @@ export default function TradePage() {
     const status = market.resolutionStatus ?? "open";
     if (status !== "proposed") return;
 
-    const t = setInterval(() => void loadMarket(id), 25000); // 25s
+    const t = setInterval(() => void loadMarket(id), 25000);
     return () => clearInterval(t);
   }, [id, market]);
 
@@ -452,9 +465,7 @@ export default function TradePage() {
     // optimistic UI
     setMarket((prev) => {
       if (!prev) return prev;
-      const nextSupplies = Array.isArray(prev.outcomeSupplies)
-        ? prev.outcomeSupplies.slice()
-        : Array(derived.names.length).fill(0);
+      const nextSupplies = Array.isArray(prev.outcomeSupplies) ? prev.outcomeSupplies.slice() : Array(derived.names.length).fill(0);
       while (nextSupplies.length < derived.names.length) nextSupplies.push(0);
 
       const delta = side === "buy" ? safeShares : -safeShares;
@@ -533,11 +544,11 @@ export default function TradePage() {
 
       await loadMarket(id);
 
+      // close drawer on success (mobile)
+      if (isMobile) setMobileTradeOpen(false);
+
       alert(
-        `Success! 🎉\n\n${side === "buy" ? "Bought" : "Sold"} ${safeShares} shares of "${name}"\n\nTx: ${txSig.slice(
-          0,
-          16
-        )}...\n\nhttps://explorer.solana.com/tx/${txSig}?cluster=devnet`
+        `Success! 🎉\n\n${side === "buy" ? "Bought" : "Sold"} ${safeShares} shares of "${name}"\n\nTx: ${txSig.slice(0, 16)}...\n\nhttps://explorer.solana.com/tx/${txSig}?cluster=devnet`
       );
     } catch (error: any) {
       console.error(`${side.toUpperCase()} shares error:`, error);
@@ -548,7 +559,6 @@ export default function TradePage() {
     }
   }
 
-  // ---------------------- Loading / Not found ----------------------
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -568,15 +578,12 @@ export default function TradePage() {
     );
   }
 
-  // ---------------------- Derived UI state ----------------------
   const { marketType, names, supplies, percentages, isBinaryStyle, missingOutcomes } = derived;
 
   const nowSec = Math.floor(Date.now() / 1000);
   const hasValidEnd = Number.isFinite(market.resolutionTime) && market.resolutionTime > 0;
-
   const ended = hasValidEnd ? nowSec >= market.resolutionTime : false;
 
-  // robust “proposed” detection (DB signals)
   const status = market.resolutionStatus ?? "open";
   const isResolvedOnChain = !!market.resolved;
 
@@ -591,7 +598,6 @@ export default function TradePage() {
   const showProposedBox = isProposed && !isResolvedOnChain;
   const showResolvedProofBox = isResolvedOnChain;
 
-  // lock trading when ended OR proposed OR resolved
   const marketClosed = isResolvedOnChain || isProposed || ended;
 
   const endLabel = hasValidEnd
@@ -606,270 +612,335 @@ export default function TradePage() {
 
   const winningLabel =
     market.winningOutcome != null && Number.isFinite(Number(market.winningOutcome))
-      ? names[Math.max(0, Math.min(Number(market.winningOutcome), names.length - 1))] ||
-        `Option ${Number(market.winningOutcome) + 1}`
+      ? names[Math.max(0, Math.min(Number(market.winningOutcome), names.length - 1))] || `Option ${Number(market.winningOutcome) + 1}`
       : null;
 
   const proposedLabel =
     market.proposedOutcome != null && Number.isFinite(Number(market.proposedOutcome))
-      ? names[Math.max(0, Math.min(Number(market.proposedOutcome), names.length - 1))] ||
-        `Option ${Number(market.proposedOutcome) + 1}`
+      ? names[Math.max(0, Math.min(Number(market.proposedOutcome), names.length - 1))] || `Option ${Number(market.proposedOutcome) + 1}`
       : null;
 
   const deadlineMs = market.contestDeadline ? new Date(market.contestDeadline).getTime() : NaN;
   const contestRemainingMs = Number.isFinite(deadlineMs) ? deadlineMs - Date.now() : NaN;
   const contestOpen = Number.isFinite(contestRemainingMs) ? contestRemainingMs > 0 : false;
 
-  // ---------------------- Render ----------------------
-  return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* LEFT */}
-        <div className="lg:col-span-2 space-y-6">
-          <div className="card-pump">
-            <div className="flex items-start gap-4">
-              <div className="flex-shrink-0 w-20 h-20 rounded-xl overflow-hidden bg-pump-dark">
-                {market.imageUrl ? (
-                  <Image
-                    src={market.imageUrl}
-                    alt={market.question}
-                    width={80}
-                    height={80}
-                    className="object-cover w-full h-full"
-                  />
-                ) : (
-                  <CategoryImagePlaceholder category={market.category || "crypto"} className="w-full h-full scale-[0.4]" />
-                )}
-              </div>
+  const openMobileTrade = (idx: number) => {
+    if (!isMobile) return;
+    setMobileOutcomeIndex(Math.max(0, Math.min(idx, names.length - 1)));
+    setMobileDefaultSide("buy"); // ✅ always open on BUY
+    setMobileTradeOpen(true);
+  };
 
-              <div className="flex-1 min-w-0">
-                <div className="flex items-start justify-between mb-3 gap-3">
-                  <h1 className="text-3xl font-bold text-white flex-1 leading-tight">{market.question}</h1>
-                  <MarketActions marketId={market.publicKey} question={market.question} />
+  return (
+    <>
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* LEFT */}
+          <div className="lg:col-span-2 space-y-6">
+            <div className="card-pump">
+              <div className="flex items-start gap-4">
+                <div className="flex-shrink-0 w-20 h-20 rounded-xl overflow-hidden bg-pump-dark">
+                  {market.imageUrl ? (
+                    <Image src={market.imageUrl} alt={market.question} width={80} height={80} className="object-cover w-full h-full" />
+                  ) : (
+                    <CategoryImagePlaceholder category={market.category || "crypto"} className="w-full h-full scale-[0.4]" />
+                  )}
                 </div>
 
-                {market.socialLinks && (
-                  <div className="mb-0">
-                    <CreatorSocialLinks socialLinks={market.socialLinks} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-start justify-between mb-3 gap-3">
+                    <h1 className="text-3xl font-bold text-white flex-1 leading-tight">{market.question}</h1>
+                    <MarketActions
+  marketAddress={market.publicKey}
+  marketDbId={market.dbId ?? null}
+  question={market.question}
+/>
                   </div>
-                )}
-              </div>
-            </div>
 
-            <div className="flex gap-4 text-sm text-gray-400 mt-4 pt-4 border-t border-gray-800">
-              <div>
-                <span className="text-gray-500">{formatVol(market.totalVolume)} SOL Vol</span>
-              </div>
-              <div>{endLabel}</div>
-
-              <div className="ml-auto text-xs text-gray-500 flex items-center gap-2">
-                <span>{marketType === 1 ? "Multi-choice" : "Binary"}</span>
-
-                {showProposedBox && (
-                  <span className="px-2 py-1 rounded-full border border-pump-green/40 bg-pump-green/10 text-pump-green">
-                    Proposed
-                  </span>
-                )}
-
-                {showResolvedProofBox && (
-                  <span className="px-2 py-1 rounded-full border border-gray-600 bg-gray-800/40 text-green-400">
-                    Resolved
-                  </span>
-                )}
-              </div>
-            </div>
-
-            <p className="text-gray-400 mt-4 mb-4">{market.description}</p>
-
-            {missingOutcomes && (
-              <div className="mb-4 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-yellow-200">
-                Outcomes are still indexing… (Supabase/outcomes not ready yet)
-              </div>
-            )}
-
-            {/* Banner proposed (small hint in main card) */}
-            {showProposedBox && (
-              <div className="mb-4 rounded-xl border border-pump-green/30 bg-pump-green/10 p-4">
-                <div className="text-sm text-white font-semibold">Resolution proposed — contest window open</div>
-                <div className="text-xs text-gray-300 mt-1">
-                  Trading is locked while the resolution is contestable.
-                  {contestOpen && Number.isFinite(contestRemainingMs) ? (
-                    <>
-                      {" "}
-                      <span className="text-pump-green font-semibold">{formatMsToHhMm(contestRemainingMs)} remaining</span>
-                    </>
-                  ) : (
-                    <>
-                      {" "}
-                      <span className="text-yellow-300 font-semibold">contest window may have ended</span>
-                    </>
+                  {market.socialLinks && (
+                    <div className="mb-0">
+                      <CreatorSocialLinks socialLinks={market.socialLinks} />
+                    </div>
                   )}
                 </div>
               </div>
-            )}
 
-            {/* Outcomes */}
-            {isBinaryStyle ? (
-              <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-                {names.slice(0, 2).map((outcome, index) => {
-                  const pct = (percentages[index] ?? 0).toFixed(1);
-                  const supply = supplies[index] || 0;
-                  const isYes = index === 0;
+              <div className="flex gap-4 text-sm text-gray-400 mt-4 pt-4 border-t border-gray-800">
+                <div>
+                  <span className="text-gray-500">{formatVol(market.totalVolume)} SOL Vol</span>
+                </div>
+                <div>{endLabel}</div>
 
-                  return (
-                    <div
+                <div className="ml-auto text-xs text-gray-500 flex items-center gap-2">
+                  <span>{marketType === 1 ? "Multi-choice" : "Binary"}</span>
+
+                  {showProposedBox && (
+                    <span className="px-2 py-1 rounded-full border border-pump-green/40 bg-pump-green/10 text-pump-green">
+                      Proposed
+                    </span>
+                  )}
+
+                  {showResolvedProofBox && (
+                    <span className="px-2 py-1 rounded-full border border-gray-600 bg-gray-800/40 text-green-400">
+                      Resolved
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <p className="text-gray-400 mt-4 mb-4">{market.description}</p>
+
+              {missingOutcomes && (
+                <div className="mb-4 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-yellow-200">
+                  Outcomes are still indexing… (Supabase/outcomes not ready yet)
+                </div>
+              )}
+
+              {showProposedBox && (
+                <div className="mb-4 rounded-xl border border-pump-green/30 bg-pump-green/10 p-4">
+                  <div className="text-sm text-white font-semibold">Resolution proposed — contest window open</div>
+                  <div className="text-xs text-gray-300 mt-1">
+                    Trading is locked while the resolution is contestable.
+                    {contestOpen && Number.isFinite(contestRemainingMs) ? (
+                      <>
+                        {" "}
+                        <span className="text-pump-green font-semibold">{formatMsToHhMm(contestRemainingMs)} remaining</span>
+                      </>
+                    ) : (
+                      <>
+                        {" "}
+                        <span className="text-yellow-300 font-semibold">contest window may have ended</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Outcomes (click opens drawer on mobile) */}
+              {isBinaryStyle ? (
+                <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {names.slice(0, 2).map((outcome, index) => {
+                    const pct = (percentages[index] ?? 0).toFixed(1);
+                    const supply = supplies[index] || 0;
+                    const isYes = index === 0;
+
+                    return (
+                      <button
+                        key={index}
+                        onClick={() => openMobileTrade(index)}
+                        disabled={!isMobile || marketClosed}
+                        className={`text-left rounded-2xl px-5 py-4 md:px-6 md:py-5 border bg-pump-dark/80 transition ${
+                          isYes ? "border-pump-green/60" : "border-[#ff5c73]/60"
+                        } ${isMobile && !marketClosed ? "active:scale-[0.99]" : ""}`}
+                      >
+                        <div className="flex items-center justify-between text-xs text-gray-400 mb-2">
+                          <span className={`uppercase tracking-wide font-semibold ${isYes ? "text-pump-green" : "text-[#ff5c73]"}`}>
+                            {outcome}
+                          </span>
+                          <span className="text-gray-500">Supply: {supply}</span>
+                        </div>
+
+                        <div className={`text-3xl md:text-4xl font-bold tabular-nums ${isYes ? "text-pump-green" : "text-[#ff5c73]"}`}>
+                          {pct}%
+                        </div>
+
+                        {isMobile && !marketClosed && (
+                          <div className="mt-2 text-xs text-gray-500">Tap to trade</div>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {names.map((outcome, index) => (
+                    <button
                       key={index}
-                      className={`rounded-2xl px-5 py-4 md:px-6 md:py-5 border bg-pump-dark/80 ${
-                        isYes ? "border-pump-green/60" : "border-[#ff5c73]/60"
+                      onClick={() => openMobileTrade(index)}
+                      disabled={!isMobile || marketClosed}
+                      className={`text-left rounded-xl p-4 border border-pump-border bg-pump-dark/60 transition ${
+                        isMobile && !marketClosed ? "active:scale-[0.99]" : ""
                       }`}
                     >
-                      <div className="flex items-center justify-between text-xs text-gray-400 mb-2">
-                        <span className={`uppercase tracking-wide font-semibold ${isYes ? "text-pump-green" : "text-[#ff5c73]"}`}>
-                          {outcome}
-                        </span>
-                        <span className="text-gray-500">Supply: {supply}</span>
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-sm font-semibold text-white truncate">{outcome}</div>
+                        <div className="text-pump-green font-bold">{(percentages[index] ?? 0).toFixed(1)}%</div>
                       </div>
+                      <div className="mt-2 text-xs text-gray-500">Supply: {supplies[index] || 0}</div>
+                      {isMobile && !marketClosed && <div className="mt-2 text-xs text-gray-500">Tap to trade</div>}
+                    </button>
+                  ))}
+                </div>
+              )}
 
-                      <div className={`text-3xl md:text-4xl font-bold tabular-nums ${isYes ? "text-pump-green" : "text-[#ff5c73]"}`}>
-                        {pct}%
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {names.map((outcome, index) => (
-                  <div key={index} className="rounded-xl p-4 border border-pump-border bg-pump-dark/60">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="text-sm font-semibold text-white truncate">{outcome}</div>
-                      <div className="text-pump-green font-bold">{(percentages[index] ?? 0).toFixed(1)}%</div>
-                    </div>
-                    <div className="mt-2 text-xs text-gray-500">Supply: {supplies[index] || 0}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Stats */}
-            <div className="grid grid-cols-2 gap-4 pt-4 border-t border-gray-700 mt-6">
-              <div>
-                <div className="text-xs text-gray-500 mb-1">Volume</div>
-                <div className="text-lg font-semibold text-white">{lamportsToSol(market.totalVolume).toFixed(2)} SOL</div>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 mb-1">Outcomes</div>
-                <div className="text-lg font-semibold text-white">{names.length}</div>
-              </div>
-            </div>
-          </div>
-
-          {/* Odds history */}
-          <div className="card-pump">
-            <div className="flex items-center justify-between gap-4 mb-4">
-              <h2 className="text-xl font-bold text-white">Odds history</h2>
-
-              <div className="flex items-center gap-2">
-                {(["24h", "7d", "30d", "all"] as OddsRange[]).map((r) => (
-                  <button
-                    key={r}
-                    onClick={() => setOddsRange(r)}
-                    className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition ${
-                      oddsRange === r ? "bg-pump-green text-black" : "bg-pump-dark/60 text-gray-300 hover:bg-pump-dark"
-                    }`}
-                  >
-                    {r.toUpperCase()}
-                  </button>
-                ))}
+              {/* Stats */}
+              <div className="grid grid-cols-2 gap-4 pt-4 border-t border-gray-700 mt-6">
+                <div>
+                  <div className="text-xs text-gray-500 mb-1">Volume</div>
+                  <div className="text-lg font-semibold text-white">{lamportsToSol(market.totalVolume).toFixed(2)} SOL</div>
+                </div>
+                <div>
+                  <div className="text-xs text-gray-500 mb-1">Outcomes</div>
+                  <div className="text-lg font-semibold text-white">{names.length}</div>
+                </div>
               </div>
             </div>
 
-            {filteredOddsPoints.length ? (
-              <OddsHistoryChart points={filteredOddsPoints} outcomeNames={names} />
-            ) : (
-              <div className="text-sm text-gray-400 bg-pump-dark/40 border border-gray-800 rounded-xl p-4">
-                No history yet (need transactions for this market).
+            {/* Odds history */}
+            <div className="card-pump">
+              <div className="flex items-center justify-between gap-4 mb-4">
+                <h2 className="text-xl font-bold text-white">Odds history</h2>
+
+                <div className="flex items-center gap-2">
+                  {(["24h", "7d", "30d", "all"] as OddsRange[]).map((r) => (
+                    <button
+                      key={r}
+                      onClick={() => setOddsRange(r)}
+                      className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition ${
+                        oddsRange === r ? "bg-pump-green text-black" : "bg-pump-dark/60 text-gray-300 hover:bg-pump-dark"
+                      }`}
+                    >
+                      {r.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
               </div>
+
+              {filteredOddsPoints.length ? (
+                <OddsHistoryChart points={filteredOddsPoints} outcomeNames={names} />
+              ) : (
+                <div className="text-sm text-gray-400 bg-pump-dark/40 border border-gray-800 rounded-xl p-4">
+                  No history yet (need transactions for this market).
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* RIGHT (desktop only TradingPanel) */}
+          <div className="lg:col-span-1 space-y-4">
+            {!isMobile && (
+              <TradingPanel
+                mode="desktop"
+                market={{
+                  resolved: market.resolved,
+                  marketType: market.marketType,
+                  outcomeNames: names,
+                  outcomeSupplies: supplies,
+                  yesSupply: names.length >= 2 ? supplies[0] || 0 : market.yesSupply || 0,
+                  noSupply: names.length >= 2 ? supplies[1] || 0 : market.noSupply || 0,
+                }}
+                connected={connected}
+                submitting={submitting}
+                onTrade={(s, outcomeIndex, side, costSol) => void handleTrade(s, outcomeIndex, side, costSol)}
+                marketBalanceLamports={marketBalanceLamports}
+                userHoldings={userSharesForUi}
+                marketClosed={marketClosed}
+              />
             )}
+
+            <ResolutionPanel
+              marketAddress={market.publicKey}
+              resolutionStatus={market.resolutionStatus ?? "open"}
+              proposedOutcomeLabel={proposedLabel}
+              proposedAt={market.proposedAt}
+              contestDeadline={market.contestDeadline}
+              contestCount={market.contestCount ?? 0}
+              proposedProofUrl={market.proposedProofUrl}
+              proposedProofImage={market.proposedProofImage}
+              proposedProofNote={market.proposedProofNote}
+              resolved={!!market.resolved}
+              winningOutcomeLabel={winningLabel}
+              resolvedAt={market.resolvedAt}
+              resolutionProofUrl={market.resolutionProofUrl}
+              resolutionProofImage={market.resolutionProofImage}
+              resolutionProofNote={market.resolutionProofNote}
+              ended={ended}
+              creatorResolveDeadline={market.creatorResolveDeadline ?? null}
+            />
           </div>
         </div>
 
-        {/* RIGHT */}
-        <div className="lg:col-span-1 space-y-4">
-          <TradingPanel
-            market={{
-              resolved: market.resolved,
-              marketType: market.marketType,
-              outcomeNames: names,
-              outcomeSupplies: supplies,
-              yesSupply: names.length >= 2 ? supplies[0] || 0 : market.yesSupply || 0,
-              noSupply: names.length >= 2 ? supplies[1] || 0 : market.noSupply || 0,
-            }}
-            connected={connected}
-            submitting={submitting}
-            onTrade={(s, outcomeIndex, side, costSol) => void handleTrade(s, outcomeIndex, side, costSol)}
-            marketAddress={market.publicKey}
-            marketBalanceLamports={marketBalanceLamports}
-            userHoldings={userSharesForUi}
-            marketClosed={marketClosed}
-          />
+        {/* Discussion / Activity */}
+        <div className="mt-8">
+          <div className="flex items-center gap-2 mb-4">
+            <button
+              onClick={() => setBottomTab("discussion")}
+              className={`px-4 py-2 rounded-lg border text-sm font-semibold transition ${
+                bottomTab === "discussion"
+                  ? "bg-pump-green/15 border-pump-green text-pump-green"
+                  : "bg-pump-dark/40 border-gray-800 text-gray-300 hover:border-gray-600"
+              }`}
+            >
+              Discussion
+            </button>
 
-          {/* Single source of truth for resolution/proposal UI (no duplicates) */}
-          <ResolutionPanel
-            marketAddress={market.publicKey}
-            resolutionStatus={market.resolutionStatus ?? "open"}
-            proposedOutcomeLabel={proposedLabel}
-            proposedAt={market.proposedAt}
-            contestDeadline={market.contestDeadline}
-            contestCount={market.contestCount ?? 0}
-            proposedProofUrl={market.proposedProofUrl}
-            proposedProofImage={market.proposedProofImage}
-            proposedProofNote={market.proposedProofNote}
-            resolved={!!market.resolved}
-            winningOutcomeLabel={winningLabel}
-            resolvedAt={market.resolvedAt}
-            resolutionProofUrl={market.resolutionProofUrl}
-            resolutionProofImage={market.resolutionProofImage}
-            resolutionProofNote={market.resolutionProofNote}
-            ended={ended}
-            creatorResolveDeadline={market.creatorResolveDeadline ?? null}
-            // ✅ ADD THIS
-          />
+            <button
+              onClick={() => setBottomTab("activity")}
+              className={`px-4 py-2 rounded-lg border text-sm font-semibold transition ${
+                bottomTab === "activity"
+                  ? "bg-pump-green/15 border-pump-green text-pump-green"
+                  : "bg-pump-dark/40 border-gray-800 text-gray-300 hover:border-gray-600"
+              }`}
+            >
+              Activity
+            </button>
+          </div>
+
+          {bottomTab === "discussion" ? (
+            <CommentsSection marketId={market.publicKey} />
+          ) : (
+            <MarketActivityTab marketDbId={market.dbId} marketAddress={market.publicKey} outcomeNames={names} />
+          )}
         </div>
       </div>
 
-      {/* Discussion / Activity */}
-      <div className="mt-8">
-        <div className="flex items-center gap-2 mb-4">
+      {/* Mobile drawer */}
+      {isMobile && mobileTradeOpen && !marketClosed && (
+        <div className="fixed inset-0 z-50">
           <button
-            onClick={() => setBottomTab("discussion")}
-            className={`px-4 py-2 rounded-lg border text-sm font-semibold transition ${
-              bottomTab === "discussion"
-                ? "bg-pump-green/15 border-pump-green text-pump-green"
-                : "bg-pump-dark/40 border-gray-800 text-gray-300 hover:border-gray-600"
-            }`}
-          >
-            Discussion
-          </button>
+            className="absolute inset-0 bg-black/70"
+            onClick={() => setMobileTradeOpen(false)}
+            aria-label="Close overlay"
+          />
 
-          <button
-            onClick={() => setBottomTab("activity")}
-            className={`px-4 py-2 rounded-lg border text-sm font-semibold transition ${
-              bottomTab === "activity"
-                ? "bg-pump-green/15 border-pump-green text-pump-green"
-                : "bg-pump-dark/40 border-gray-800 text-gray-300 hover:border-gray-600"
-            }`}
+          {/* Drawer: never under top navbar + safe bottom space */}
+          <div
+            className="
+              absolute left-0 right-0 bottom-0
+              top-[72px]
+              rounded-t-3xl border border-gray-800 bg-black shadow-2xl
+              overflow-hidden
+            "
           >
-            Activity
-          </button>
+            {/* Scroll area so CTA can stay visible if TradingPanel uses sticky footer */}
+            <div className="h-full overflow-y-auto overscroll-contain pb-[calc(env(safe-area-inset-bottom)+96px)]">
+              <TradingPanel
+                mode="drawer"
+                title="Trade"
+                defaultSide={mobileDefaultSide}
+                defaultOutcomeIndex={mobileOutcomeIndex}
+                onClose={() => setMobileTradeOpen(false)}
+                market={{
+                  resolved: market.resolved,
+                  marketType: market.marketType,
+                  outcomeNames: names,
+                  outcomeSupplies: supplies,
+                  yesSupply: names.length >= 2 ? supplies[0] || 0 : market.yesSupply || 0,
+                  noSupply: names.length >= 2 ? supplies[1] || 0 : market.noSupply || 0,
+                }}
+                connected={connected}
+                submitting={submitting}
+                onTrade={(s, outcomeIndex, side, costSol) =>
+                  void handleTrade(s, outcomeIndex, side, costSol)
+                }
+                marketBalanceLamports={marketBalanceLamports}
+                userHoldings={userSharesForUi}
+                marketClosed={marketClosed}
+              />
+            </div>
+          </div>
         </div>
-
-        {bottomTab === "discussion" ? (
-          <CommentsSection marketId={market.publicKey} />
-        ) : (
-          <MarketActivityTab marketDbId={market.dbId} marketAddress={market.publicKey} outcomeNames={names} />
-        )}
-      </div>
-    </div>
+      )}
+    </>
   );
 }

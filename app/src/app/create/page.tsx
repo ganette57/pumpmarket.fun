@@ -7,7 +7,7 @@ import { BN } from "@coral-xyz/anchor";
 import { useRouter } from "next/navigation";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
-import { Calendar, Upload, X } from "lucide-react";
+import { Calendar, Upload, X, Plus, Trash2 } from "lucide-react";
 import Image from "next/image";
 
 import { validateMarketQuestion, validateMarketDescription } from "@/utils/bannedWords";
@@ -33,9 +33,52 @@ function toStringArray(x: any): string[] {
   return [];
 }
 
+function outcomesToText(arr: string[]) {
+  return (arr || [])
+    .map((s) => String(s || "").trim())
+    .filter(Boolean)
+    .slice(0, 10)
+    .join("\n");
+}
+
+function TypeCard({
+  active,
+  onClick,
+  title,
+  desc,
+}: {
+  active: boolean;
+  onClick: () => void;
+  title: string;
+  desc: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "w-full text-left rounded-2xl border p-4 transition",
+        active
+          ? "border-pump-green bg-pump-green/10"
+          : "border-white/10 bg-pump-dark/40 hover:border-white/20",
+      ].join(" ")}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-white font-bold">{title}</div>
+        {active && (
+          <span className="px-2 py-1 rounded-full text-xs font-semibold border border-pump-green/40 bg-pump-green/10 text-pump-green">
+            Selected
+          </span>
+        )}
+      </div>
+      <div className="text-sm text-gray-400 mt-1">{desc}</div>
+    </button>
+  );
+}
+
 export default function CreateMarketPage() {
   const { publicKey, connected } = useWallet();
-  const { connection } = useConnection();
+  const { connection } = useConnection(); // keep
   const router = useRouter();
   const program = useProgram();
 
@@ -47,6 +90,9 @@ export default function CreateMarketPage() {
 
   const [marketType, setMarketType] = useState<0 | 1>(0); // 0=binary, 1=multi
   const [outcomesText, setOutcomesText] = useState("YES\nNO");
+
+  // ✅ new UI state (but we still keep outcomesText as canonical for existing flow)
+  const [outcomeInputs, setOutcomeInputs] = useState<string[]>(["YES", "NO"]);
 
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string>("");
@@ -68,9 +114,25 @@ export default function CreateMarketPage() {
   const DEFAULT_MAX_TRADE_SHARES = 5_000_000; // allowed max
   const DEFAULT_COOLDOWN_SECONDS = 0; // disabled
 
+  // when switching type: reset/ensure valid outcomes UI
   useEffect(() => {
-    if (marketType === 0) setOutcomesText("YES\nNO");
+    if (marketType === 0) {
+      setOutcomeInputs(["YES", "NO"]);
+    } else {
+      setOutcomeInputs((prev) => {
+        const cleaned = (prev || []).map((s) => String(s || "").trim()).filter(Boolean);
+        if (cleaned.length >= 2) return cleaned.slice(0, 10);
+        return ["Option 1", "Option 2"];
+      });
+    }
   }, [marketType]);
+
+  // sync: outcomeInputs -> outcomesText (so existing parseOutcomes/outcomes stays same)
+  useEffect(() => {
+    const txt = outcomesToText(outcomeInputs);
+    setOutcomesText(txt || (marketType === 0 ? "YES\nNO" : "Option 1\nOption 2"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [outcomeInputs]);
 
   const outcomes = useMemo(() => parseOutcomes(outcomesText), [outcomesText]);
 
@@ -125,6 +187,32 @@ export default function CreateMarketPage() {
     setImageError("");
   };
 
+  function updateOutcomeAt(i: number, value: string) {
+    setOutcomeInputs((prev) => {
+      const next = prev.slice();
+      next[i] = value;
+      return next;
+    });
+  }
+
+  function addOutcome() {
+    setOutcomeInputs((prev) => {
+      if (prev.length >= 10) return prev;
+      const next = prev.slice();
+      next.push(`Option ${next.length + 1}`);
+      return next;
+    });
+  }
+
+  function removeOutcome(i: number) {
+    setOutcomeInputs((prev) => {
+      if (prev.length <= 2) return prev;
+      const next = prev.slice();
+      next.splice(i, 1);
+      return next;
+    });
+  }
+
   async function handleCreateMarket() {
     if (!canSubmit || !publicKey || !program) return;
 
@@ -139,13 +227,13 @@ export default function CreateMarketPage() {
 
       const tx = await (program as any).methods
         .createMarket(
-          new BN(resolutionTimestamp),         // i64
-          outcomes,                            // Vec<String>
-          marketType,                          // u8
-          new BN(bLamportsU64),                // u64
-          DEFAULT_MAX_POSITION_BPS,            // u16
-          new BN(DEFAULT_MAX_TRADE_SHARES),    // u64
-          new BN(DEFAULT_COOLDOWN_SECONDS)     // i64
+          new BN(resolutionTimestamp), // i64
+          outcomes, // Vec<String>
+          marketType, // u8
+          new BN(bLamportsU64), // u64
+          DEFAULT_MAX_POSITION_BPS, // u16
+          new BN(DEFAULT_MAX_TRADE_SHARES), // u64
+          new BN(DEFAULT_COOLDOWN_SECONDS) // i64
         )
         .accounts({
           market: marketKeypair.publicKey,
@@ -191,17 +279,17 @@ export default function CreateMarketPage() {
         end_date: resolutionDate.toISOString(),
         creator: publicKey.toBase58(),
         social_links: socialLinks,
-
+      
         market_type: onchainType,
         outcome_names: onchainNames,
         outcome_supplies: onchainSupplies,
-
+      
         yes_supply: isBinary ? (onchainSupplies[0] ?? 0) : null,
         no_supply: isBinary ? (onchainSupplies[1] ?? 0) : null,
-
+      
         total_volume: 0,
         resolved: false,
-      });
+      } as any);
 
       router.push(`/trade/${marketKeypair.publicKey.toBase58()}`);
     } catch (e: any) {
@@ -213,9 +301,9 @@ export default function CreateMarketPage() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-      <div className="mb-8">
-        <h1 className="text-4xl font-bold text-white mb-2">Create Market</h1>
+    <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-12">
+      <div className="mb-7 sm:mb-8">
+        <h1 className="text-3xl sm:text-4xl font-bold text-white mb-2">Create Market</h1>
         <p className="text-gray-400">Launch a prediction market. Keep it clean - banned words are blocked.</p>
       </div>
 
@@ -254,44 +342,104 @@ export default function CreateMarketPage() {
           {descriptionError && <p className="text-pump-red text-sm mt-2 font-semibold">❌ {descriptionError}</p>}
         </div>
 
-        {/* Market type */}
+        {/* Market type (clean cards) */}
         <div className="mb-6">
           <label className="block text-white font-semibold mb-2">Market type *</label>
-          <select
-            value={marketType}
-            onChange={(e) => setMarketType(Number(e.target.value) as 0 | 1)}
-            className="input-pump w-full"
-          >
-            <option value={0}>Binary (exactly 2 outcomes)</option>
-            <option value={1}>Multi-choice (2 to 10 outcomes)</option>
-          </select>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <TypeCard
+              active={marketType === 0}
+              onClick={() => setMarketType(0)}
+              title="Binary"
+              desc="Exactly 2 outcomes (YES/NO). Clean + fast."
+            />
+            <TypeCard
+              active={marketType === 1}
+              onClick={() => setMarketType(1)}
+              title="Multi-choice"
+              desc="2–10 outcomes. Add/remove options easily."
+            />
+          </div>
         </div>
 
-        {/* Outcomes */}
+        {/* Outcomes (dynamic inputs) */}
         <div className="mb-6">
-          <label className="block text-white font-semibold mb-2">
-            Outcomes (1 per line) *{" "}
-            <span className="text-gray-500 font-normal text-sm ml-2">
-              ({marketType === 0 ? "must be 2" : "2 to 10"})
-            </span>
-          </label>
-          <textarea
-            value={outcomesText}
-            onChange={(e) => setOutcomesText(e.target.value)}
-            rows={4}
-            className={`input-pump w-full ${outcomesError ? "input-error" : ""}`}
-            placeholder={marketType === 0 ? "YES\nNO" : "packers\nbroncos"}
-          />
+          <div className="flex items-end justify-between gap-3 mb-2">
+            <label className="block text-white font-semibold">
+              Outcomes *{" "}
+              <span className="text-gray-500 font-normal text-sm ml-2">
+                ({marketType === 0 ? "must be 2" : "2 to 10"})
+              </span>
+            </label>
+
+            {marketType === 1 && (
+              <button
+                type="button"
+                onClick={addOutcome}
+                disabled={outcomeInputs.length >= 10}
+                className={[
+                  "px-3 py-2 rounded-lg text-sm font-semibold transition flex items-center gap-2",
+                  outcomeInputs.length >= 10
+                    ? "bg-gray-700 text-gray-400 cursor-not-allowed"
+                    : "bg-pump-green text-black hover:opacity-90",
+                ].join(" ")}
+              >
+                <Plus className="w-4 h-4" />
+                Add
+              </button>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            {outcomeInputs.map((val, idx) => {
+              const showRemove = marketType === 1 && outcomeInputs.length > 2;
+
+              return (
+                <div key={idx} className="flex items-center gap-2">
+                  <div className="w-12 text-xs text-gray-500 font-mono flex-shrink-0">
+                    {marketType === 0 ? (idx === 0 ? "YES" : "NO") : `#${idx + 1}`}
+                  </div>
+
+                  <input
+                    value={val}
+                    onChange={(e) => updateOutcomeAt(idx, e.target.value)}
+                    className={`input-pump w-full ${outcomesError ? "input-error" : ""}`}
+                    placeholder={marketType === 0 ? (idx === 0 ? "YES" : "NO") : `Option ${idx + 1}`}
+                  />
+
+                  {showRemove ? (
+                    <button
+                      type="button"
+                      onClick={() => removeOutcome(idx)}
+                      className="w-10 h-10 rounded-lg border border-white/10 bg-black/30 hover:border-white/20 transition flex items-center justify-center"
+                      title="Remove"
+                    >
+                      <Trash2 className="w-4 h-4 text-gray-300" />
+                    </button>
+                  ) : (
+                    <div className="w-10 h-10" />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
           <div className="text-xs text-gray-500 mt-2">
             Parsed: {outcomes.length} {outcomes.length ? `(${outcomes.join(", ")})` : ""}
           </div>
           {outcomesError && <p className="text-pump-red text-sm mt-2 font-semibold">❌ {outcomesError}</p>}
+
+          {/* keep outcomesText (debug + flow safety) */}
+          <textarea value={outcomesText} readOnly className="hidden" />
         </div>
 
         {/* Category */}
         <div className="mb-6">
           <label className="block text-white font-semibold mb-2">Category *</label>
-          <select value={category} onChange={(e) => setCategory(e.target.value as CategoryId)} className="input-pump w-full">
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value as CategoryId)}
+            className="input-pump w-full"
+          >
             {CATEGORIES.map((cat) => (
               <option key={cat.id} value={cat.id}>
                 {cat.icon} {cat.label}

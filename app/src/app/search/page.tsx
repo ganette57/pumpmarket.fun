@@ -1,126 +1,119 @@
-// app/src/app/search/page.tsx
-'use client';
+import Link from "next/link";
+import { supabase } from "@/lib/supabaseClient";
 
-import { useEffect, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
-import { supabase } from '@/lib/supabaseClient';
-import MarketCard from '@/components/MarketCard';
-
-type MarketRow = {
-  id: string;
-  market_address: string;
-  question: string | null;
-  description: string | null;
-  category: string | null;
-  image_url: string | null;
-  yes_supply: number | null;
-  no_supply: number | null;
-  total_volume: number | null;
-  end_date: string;
-  resolved: boolean;
+type Props = {
+  searchParams?: { q?: string };
 };
 
-export default function SearchPage() {
-  const searchParams = useSearchParams();
-  const q = (searchParams.get('q') || '').trim();
+export default async function SearchPage({ searchParams }: Props) {
+  const q = (searchParams?.q || "").trim();
 
-  const [loading, setLoading] = useState(true);
-  const [markets, setMarkets] = useState<MarketRow[]>([]);
+  // Si pas de query => prompt
+  if (!q) {
+    return (
+      <div className="max-w-3xl mx-auto px-4 py-8">
+        <h1 className="text-xl font-semibold mb-2">Search</h1>
+        <p className="text-gray-400">
+          Type something in the search bar (markets, creators, categories).
+        </p>
+      </div>
+    );
+  }
 
-  useEffect(() => {
-    if (!q) {
-      setMarkets([]);
-      setLoading(false);
-      return;
-    }
+  // Query supabase (simple, robuste)
+  // - on cherche dans question / category / creator / market_address
+  const { data, error } = await supabase
+    .from("markets")
+    .select("market_address,question,category,image_url,market_type,end_date,total_volume,resolution_status,contested,contest_deadline")
+    .or(
+      [
+        `question.ilike.%${q}%`,
+        `category.ilike.%${q}%`,
+        `creator.ilike.%${q}%`,
+        `market_address.ilike.%${q}%`,
+      ].join(",")
+    )
+    .order("created_at", { ascending: false })
+    .limit(30);
 
-    async function load() {
-      setLoading(true);
-      try {
-        // 👇 simple search sur question / description / category
-        const { data, error } = await supabase
-          .from('markets')
-          .select(
-            `
-            id,
-            market_address,
-            question,
-            description,
-            category,
-            image_url,
-            yes_supply,
-            no_supply,
-            total_volume,
-            end_date,
-            resolved
-          `
-          )
-          .or(
-            `question.ilike.%${q}%,description.ilike.%${q}%,category.ilike.%${q}%`
-          )
-          .order('created_at', { ascending: false })
-          .limit(50);
+  if (error) {
+    return (
+      <div className="max-w-3xl mx-auto px-4 py-8">
+        <h1 className="text-xl font-semibold mb-2">Search</h1>
+        <p className="text-red-400 text-sm">Error: {error.message}</p>
+      </div>
+    );
+  }
 
-        if (error) throw error;
-        setMarkets((data || []) as MarketRow[]);
-      } catch (e) {
-        console.error('Error searching markets', e);
-        setMarkets([]);
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    void load();
-  }, [q]);
+  const rows = data || [];
 
   return (
-    <div className="py-8">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold text-white mb-1">
-            Search results
-          </h1>
-          <p className="text-sm text-gray-400">
-            Query: <span className="font-mono text-gray-200">"{q}"</span> •{' '}
-            {loading
-              ? 'Loading...'
-              : `${markets.length} market${
-                  markets.length === 1 ? '' : 's'
-                } found`}
-          </p>
-        </div>
-
-        {loading ? (
-          <div className="text-gray-400">Loading markets...</div>
-        ) : markets.length === 0 ? (
-          <div className="text-gray-400">
-            No markets match this query. Try another keyword.
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 auto-rows-fr">
-            {markets.map((m) => (
-              <MarketCard
-                key={m.id}
-                market={{
-                  publicKey: m.market_address,
-                  question: m.question || '',
-                  description: m.description || '',
-                  category: m.category || 'Other',
-                  imageUrl: m.image_url || undefined,
-                  yesSupply: Number(m.yes_supply || 0),
-                  noSupply: Number(m.no_supply || 0),
-                  totalVolume: Number(m.total_volume || 0),
-                  resolutionTime: Math.floor(
-                    new Date(m.end_date).getTime() / 1000
-                  ),
-                  resolved: m.resolved,
-                }}
-              />
-            ))}
-          </div>
-        )}
+    <div className="max-w-3xl mx-auto px-4 py-8">
+      <div className="flex items-baseline justify-between mb-4">
+        <h1 className="text-xl font-semibold">Search</h1>
+        <div className="text-sm text-gray-400">{rows.length} results</div>
       </div>
+
+      {rows.length === 0 ? (
+        <div className="rounded-2xl border border-gray-800 p-6 bg-black/40">
+          <div className="text-gray-300 font-medium">No results</div>
+          <div className="text-gray-500 text-sm mt-1">
+            Try another keyword. Example: “sports”, “elon”, “binary”, “sol”.
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {rows.map((m) => (
+            <Link
+              key={m.market_address}
+              href={`/trade/${m.market_address}`}
+              className="block rounded-2xl border border-gray-800 bg-black/40 hover:bg-black/60 transition p-4"
+            >
+              <div className="flex gap-3">
+                <div className="h-14 w-14 rounded-xl overflow-hidden border border-gray-800 bg-black flex-shrink-0">
+                  {m.image_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={m.image_url} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="h-full w-full flex items-center justify-center text-gray-500 text-xs">
+                      No image
+                    </div>
+                  )}
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  <div className="font-semibold text-gray-100 truncate">
+                    {m.question || "Untitled market"}
+                  </div>
+
+                  <div className="text-xs text-gray-400 mt-1 flex flex-wrap gap-2">
+                    {m.category && (
+                      <span className="px-2 py-1 rounded-full border border-gray-800">{m.category}</span>
+                    )}
+                    <span className="px-2 py-1 rounded-full border border-gray-800">
+                      {m.market_type === 1 ? "Multi-choice" : "Binary"}
+                    </span>
+                    {m.resolution_status === "proposed" && (
+                      <span className="px-2 py-1 rounded-full border border-[#61ff9a] text-[#61ff9a]">
+                        Proposed
+                      </span>
+                    )}
+                    {m.contested && (
+                      <span className="px-2 py-1 rounded-full border border-red-400 text-red-300">
+                        Contested
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="text-xs text-gray-500 mt-2 truncate">
+                    {m.market_address}
+                  </div>
+                </div>
+              </div>
+            </Link>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

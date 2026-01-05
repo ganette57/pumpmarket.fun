@@ -1,4 +1,4 @@
-// app/src/app/dashboard/page.tsx
+// src/app/dashboard/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -14,7 +14,10 @@ import { outcomeLabelFromMarket } from "@/utils/outcomes";
 import { uploadResolutionProofImage } from "@/lib/proofs";
 import { proposeResolution } from "@/lib/markets";
 
-// ---------------- helpers ----------------
+/* -------------------------------------------------------------------------- */
+/* Helpers                                                                    */
+/* -------------------------------------------------------------------------- */
+
 function shortSig(sig?: string) {
   if (!sig) return "";
   if (sig.length <= 12) return sig;
@@ -33,6 +36,7 @@ function toNum(x: any) {
 }
 
 function isMarketEnded(endDate?: string): boolean {
+  if (!endDate) return false;
   const end = new Date(endDate);
   return end.getTime() <= Date.now();
 }
@@ -41,7 +45,6 @@ function formatTimeStatus(endDate?: string): string {
   if (!endDate) return "No end date";
   const end = new Date(endDate);
   const now = Date.now();
-
   if (end.getTime() <= now) return "Ended";
 
   const diff = end.getTime() - now;
@@ -67,7 +70,10 @@ function toResolutionStatus(x: any): "open" | "proposed" | "finalized" | "cancel
   return "open";
 }
 
-// ---------------- types ----------------
+/* -------------------------------------------------------------------------- */
+/* Types                                                                      */
+/* -------------------------------------------------------------------------- */
+
 type DbMarket = {
   id?: string;
   market_address?: string;
@@ -78,14 +84,14 @@ type DbMarket = {
   resolved?: boolean;
   outcome_names?: string[] | null;
 
-  // legacy resolved fields (still exist)
+  // legacy resolved fields
   winning_outcome?: number | null;
   resolved_at?: string | null;
   resolution_proof_url?: string | null;
   resolution_proof_image?: string | null;
   resolution_proof_note?: string | null;
 
-  // ✅ off-chain contest flow fields (Step 1/2)
+  // off-chain contest flow
   resolution_status?: "open" | "proposed" | "finalized" | "cancelled" | string | null;
   proposed_winning_outcome?: number | null;
   resolution_proposed_at?: string | null;
@@ -104,17 +110,16 @@ type DbTx = {
 
   market_id?: string | null;
   market_address?: string | null;
-
   user_address?: string | null;
 
-  // legacy schema
+  // legacy
   is_buy?: boolean | null;
   is_yes?: boolean | null;
   amount?: number | null;
   cost?: number | null;
   tx_signature?: string | null;
 
-  // newer schema
+  // new
   outcome_index?: number | null;
   shares?: number | null;
   outcome_name?: string | null;
@@ -127,7 +132,16 @@ type Claimable = {
   winningIndex?: number;
 };
 
-// ---------------- data helpers ----------------
+// ✅ bookmarks now store market_id (uuid)
+type BookmarkRow = {
+  market_id: string;
+  created_at?: string;
+};
+
+/* -------------------------------------------------------------------------- */
+/* Data fetch (schema-resilient)                                              */
+/* -------------------------------------------------------------------------- */
+
 async function safeFetchUserTransactions(walletAddress: string, limit = 50): Promise<DbTx[]> {
   const trySelects = [
     "id,created_at,market_id,market_address,user_address,is_buy,is_yes,amount,cost,tx_signature,outcome_index,shares,outcome_name",
@@ -143,14 +157,12 @@ async function safeFetchUserTransactions(walletAddress: string, limit = 50): Pro
       .limit(limit);
 
     if (!error) return (data as any[]) || [];
-
     const msg = String((error as any)?.message || "");
     if (!msg.includes("does not exist")) {
       console.error("safeFetchUserTransactions error:", error);
       return [];
     }
   }
-
   return [];
 }
 
@@ -158,6 +170,7 @@ async function safeFetchMyCreatedMarkets(walletBase58: string): Promise<DbMarket
   const trySelects = [
     [
       "id",
+      "created_at",
       "market_address",
       "creator",
       "question",
@@ -166,14 +179,12 @@ async function safeFetchMyCreatedMarkets(walletBase58: string): Promise<DbMarket
       "resolved",
       "outcome_names",
 
-      // legacy resolved
       "winning_outcome",
       "resolved_at",
       "resolution_proof_url",
       "resolution_proof_image",
       "resolution_proof_note",
 
-      // new off-chain flow
       "resolution_status",
       "proposed_winning_outcome",
       "resolution_proposed_at",
@@ -183,9 +194,11 @@ async function safeFetchMyCreatedMarkets(walletBase58: string): Promise<DbMarket
       "proposed_proof_url",
       "proposed_proof_image",
       "proposed_proof_note",
+      "cancelled_at",
+      "cancel_reason",
     ].join(","),
-    "id,market_address,creator,question,total_volume,end_date,resolved,outcome_names,winning_outcome,resolved_at,resolution_proof_url,resolution_proof_image,resolution_proof_note",
-    "id,market_address,creator,question,total_volume,end_date,resolved,outcome_names",
+    "id,created_at,market_address,creator,question,total_volume,end_date,resolved,outcome_names",
+    "id,market_address,creator,question,total_volume,end_date,resolved",
   ];
 
   for (const sel of trySelects) {
@@ -196,17 +209,16 @@ async function safeFetchMyCreatedMarkets(walletBase58: string): Promise<DbMarket
       .order("created_at", { ascending: false });
 
     if (!error) return (((data as any[]) || []) as DbMarket[]) || [];
-
     const msg = String((error as any)?.message || "");
     if (!msg.includes("does not exist") && !msg.includes("column")) {
       console.error("safeFetchMyCreatedMarkets error:", error);
       return [];
     }
   }
-
   return [];
 }
 
+// ✅ local-only helper: fetch bookmarked markets by DB ids (uuid)
 async function safeFetchMarketsByIds(ids: string[]): Promise<DbMarket[]> {
   if (!ids.length) return [];
   const trySelects = [
@@ -219,11 +231,13 @@ async function safeFetchMarketsByIds(ids: string[]): Promise<DbMarket[]> {
       "end_date",
       "resolved",
       "outcome_names",
+
       "winning_outcome",
       "resolved_at",
       "resolution_proof_url",
       "resolution_proof_image",
       "resolution_proof_note",
+
       "resolution_status",
       "proposed_winning_outcome",
       "resolution_proposed_at",
@@ -234,14 +248,17 @@ async function safeFetchMarketsByIds(ids: string[]): Promise<DbMarket[]> {
       "proposed_proof_image",
       "proposed_proof_note",
     ].join(","),
-    "id,market_address,creator,question,total_volume,end_date,resolved,outcome_names,winning_outcome,resolved_at,resolution_proof_url,resolution_proof_image,resolution_proof_note",
     "id,market_address,creator,question,total_volume,end_date,resolved,outcome_names",
+    "id,market_address,question,total_volume,end_date,resolved",
   ];
 
   for (const sel of trySelects) {
-    const { data, error } = await supabase.from("markets").select(sel).in("id", ids.slice(0, 100));
-    if (!error) return (((data as any[]) || []) as DbMarket[]) || [];
+    const { data, error } = await supabase
+      .from("markets")
+      .select(sel)
+      .in("id", ids.slice(0, 200));
 
+    if (!error) return (((data as any[]) || []) as DbMarket[]) || [];
     const msg = String((error as any)?.message || "");
     if (!msg.includes("does not exist") && !msg.includes("column")) {
       console.error("safeFetchMarketsByIds error:", error);
@@ -251,84 +268,99 @@ async function safeFetchMarketsByIds(ids: string[]): Promise<DbMarket[]> {
   return [];
 }
 
-async function safeFetchMarketsByAddresses(addrs: string[]): Promise<DbMarket[]> {
-  if (!addrs.length) return [];
-  const trySelects = [
-    [
-      "id",
-      "market_address",
-      "creator",
-      "question",
-      "total_volume",
-      "end_date",
-      "resolved",
-      "outcome_names",
-      "winning_outcome",
-      "resolved_at",
-      "resolution_proof_url",
-      "resolution_proof_image",
-      "resolution_proof_note",
-      "resolution_status",
-      "proposed_winning_outcome",
-      "resolution_proposed_at",
-      "contest_deadline",
-      "contested",
-      "contest_count",
-      "proposed_proof_url",
-      "proposed_proof_image",
-      "proposed_proof_note",
-    ].join(","),
-    "id,market_address,creator,question,total_volume,end_date,resolved,outcome_names,winning_outcome,resolved_at,resolution_proof_url,resolution_proof_image,resolution_proof_note",
-    "id,market_address,creator,question,total_volume,end_date,resolved,outcome_names",
-  ];
+async function safeFetchBookmarks(walletAddress: string, limit = 200): Promise<BookmarkRow[]> {
+  const tryTables = ["bookmarks", "market_bookmarks"];
 
-  for (const sel of trySelects) {
-    const { data, error } = await supabase.from("markets").select(sel).in("market_address", addrs.slice(0, 100));
-    if (!error) return (((data as any[]) || []) as DbMarket[]) || [];
+  for (const table of tryTables) {
+    const { data, error } = await supabase
+      .from(table)
+      // ✅ market_id instead of market_address
+      .select("market_id,created_at")
+      .eq("user_address", walletAddress)
+      .order("created_at", { ascending: false })
+      .limit(limit);
 
+    if (!error) return (data as any[]) || [];
     const msg = String((error as any)?.message || "");
-    if (!msg.includes("does not exist") && !msg.includes("column")) {
-      console.error("safeFetchMarketsByAddresses error:", error);
+    if (!msg.toLowerCase().includes("does not exist") && !msg.toLowerCase().includes("relation")) {
+      console.warn("safeFetchBookmarks error:", error);
       return [];
     }
   }
+
   return [];
 }
 
-// ---------------- component ----------------
+/* -------------------------------------------------------------------------- */
+/* UI: Tabs                                                                    */
+/* -------------------------------------------------------------------------- */
+
+type TabKey = "activity" | "created" | "bookmarks";
+
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "px-4 py-2 rounded-xl text-sm font-semibold transition border",
+        active
+          ? "bg-pump-green text-black border-pump-green"
+          : "bg-black/30 text-gray-300 border-white/10 hover:border-white/20",
+      ].join(" ")}
+    >
+      {children}
+    </button>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Component                                                                   */
+/* -------------------------------------------------------------------------- */
+
 export default function DashboardPage() {
   const { publicKey, connected } = useWallet();
   const walletBase58 = publicKey?.toBase58() || "";
   const { connection } = useConnection();
   const program = useProgram();
 
+  const [tab, setTab] = useState<TabKey>("activity");
+
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const [loadingMarkets, setLoadingMarkets] = useState(false);
   const [loadingTxs, setLoadingTxs] = useState(false);
   const [loadingClaimables, setLoadingClaimables] = useState(false);
+  const [loadingBookmarks, setLoadingBookmarks] = useState(false);
 
-  // data
   const [myCreatedMarkets, setMyCreatedMarkets] = useState<DbMarket[]>([]);
   const [myTxs, setMyTxs] = useState<DbTx[]>([]);
-  const [refMarkets, setRefMarkets] = useState<DbMarket[]>([]);
-
   const [claimables, setClaimables] = useState<Claimable[]>([]);
   const [claimingMarket, setClaimingMarket] = useState<string | null>(null);
 
-  // resolve UI (now = propose off-chain)
+  // ✅ bookmarks now track DB ids
+  const [bookmarkIds, setBookmarkIds] = useState<string[]>([]);
+  const [bookmarkedMarkets, setBookmarkedMarkets] = useState<DbMarket[]>([]);
+
+  // resolve/propose modal
   const [resolvingMarket, setResolvingMarket] = useState<DbMarket | null>(null);
   const [selectedOutcome, setSelectedOutcome] = useState<number | null>(null);
   const [resolveLoading, setResolveLoading] = useState(false);
 
-  // ✅ proof: LINK OR UPLOAD
+  // proof
   type ProofMode = "upload" | "link";
   const [proofMode, setProofMode] = useState<ProofMode>("upload");
-
   const [proofUrl, setProofUrl] = useState("");
   const [proofFile, setProofFile] = useState<File | null>(null);
   const [proofPreview, setProofPreview] = useState<string>("");
-
   const [proofNote, setProofNote] = useState("");
 
   const proofOk = proofMode === "link" ? proofUrl.trim().length > 0 : !!proofFile;
@@ -351,32 +383,32 @@ export default function DashboardPage() {
     setProofNote("");
   }
 
-  // ---------------- derived maps ----------------
-  const marketsById = useMemo(() => {
-    const m = new Map<string, DbMarket>();
-    for (const mk of [...myCreatedMarkets, ...refMarkets]) {
-      if (mk.id) m.set(mk.id, mk);
-    }
-    return m;
-  }, [myCreatedMarkets, refMarkets]);
+  // cleanup preview urls
+  useEffect(() => {
+    return () => {
+      if (proofPreview) URL.revokeObjectURL(proofPreview);
+    };
+  }, [proofPreview]);
 
+  // derived maps for tx outcome labels
   const marketsByAddress = useMemo(() => {
     const m = new Map<string, DbMarket>();
-    for (const mk of [...myCreatedMarkets, ...refMarkets]) {
-      const addr = mk.market_address;
-      if (addr) m.set(addr, mk);
+    for (const mk of [...myCreatedMarkets, ...bookmarkedMarkets]) {
+      if (mk.market_address) m.set(mk.market_address, mk);
     }
     return m;
-  }, [myCreatedMarkets, refMarkets]);
+  }, [myCreatedMarkets, bookmarkedMarkets]);
 
-  // ---------------- load dashboard data ----------------
+  /* ---------------- Load base dashboard data ---------------- */
+
   useEffect(() => {
     if (!connected || !walletBase58) {
       setErrorMsg(null);
       setMyCreatedMarkets([]);
       setMyTxs([]);
-      setRefMarkets([]);
       setClaimables([]);
+      setBookmarkIds([]);
+      setBookmarkedMarkets([]);
       return;
     }
 
@@ -385,28 +417,33 @@ export default function DashboardPage() {
     (async () => {
       setErrorMsg(null);
 
-      // 1) created markets
       setLoadingMarkets(true);
-      try {
-        const markets = await safeFetchMyCreatedMarkets(walletBase58);
-        if (!cancelled) setMyCreatedMarkets(markets);
-      } catch (e: any) {
-        if (!cancelled) setErrorMsg(e?.message || "Failed to load markets");
-        if (!cancelled) setMyCreatedMarkets([]);
-      } finally {
-        if (!cancelled) setLoadingMarkets(false);
-      }
-
-      // 2) txs
       setLoadingTxs(true);
+      setLoadingBookmarks(true);
+
       try {
-        const txs = await safeFetchUserTransactions(walletBase58, 50);
-        if (!cancelled) setMyTxs(txs || []);
+        const [markets, txs, bms] = await Promise.all([
+          safeFetchMyCreatedMarkets(walletBase58),
+          safeFetchUserTransactions(walletBase58, 80),
+          safeFetchBookmarks(walletBase58, 200),
+        ]);
+
+        if (cancelled) return;
+
+        setMyCreatedMarkets(markets || []);
+        setMyTxs(txs || []);
+
+        // ✅ bookmarks -> market_id list
+        const ids = Array.from(new Set((bms || []).map((x) => String(x.market_id || "")).filter(Boolean)));
+        setBookmarkIds(ids);
       } catch (e: any) {
-        if (!cancelled) setErrorMsg(e?.message || "Failed to load transactions");
-        if (!cancelled) setMyTxs([]);
+        if (!cancelled) setErrorMsg(e?.message || "Failed to load dashboard");
       } finally {
-        if (!cancelled) setLoadingTxs(false);
+        if (!cancelled) {
+          setLoadingMarkets(false);
+          setLoadingTxs(false);
+          setLoadingBookmarks(false);
+        }
       }
     })();
 
@@ -415,69 +452,41 @@ export default function DashboardPage() {
     };
   }, [connected, walletBase58]);
 
-  // 3) fetch referenced markets for txs (for bettors)
+  /* ---------------- Load bookmarked market rows ---------------- */
+
   useEffect(() => {
     if (!connected || !walletBase58) return;
-    if (!myTxs.length) {
-      setRefMarkets([]);
-      return;
-    }
-
     let cancelled = false;
 
     (async () => {
+      if (!bookmarkIds.length) {
+        setBookmarkedMarkets([]);
+        return;
+      }
+      setLoadingBookmarks(true);
       try {
-        const ids = Array.from(new Set(myTxs.map((t) => t.market_id).filter(Boolean).map(String)));
-        const addrs = Array.from(new Set(myTxs.map((t) => t.market_address).filter(Boolean).map(String)));
+        const mkts = await safeFetchMarketsByIds(bookmarkIds);
 
-        const out: DbMarket[] = [];
+        // keep bookmark order stable
+        const byId = new Map<string, DbMarket>();
+        for (const m of mkts || []) if (m.id) byId.set(String(m.id), m);
+        const ordered = bookmarkIds.map((id) => byId.get(id)).filter(Boolean) as DbMarket[];
 
-        if (ids.length) out.push(...(await safeFetchMarketsByIds(ids)));
-        if (addrs.length) out.push(...(await safeFetchMarketsByAddresses(addrs)));
-
-        // dedupe
-        const byAddr = new Map<string, DbMarket>();
-        for (const m of out) {
-          if (m.market_address) byAddr.set(m.market_address, m);
-          else if (m.id) byAddr.set(`id:${m.id}`, m);
-        }
-
-        if (!cancelled) setRefMarkets(Array.from(byAddr.values()));
-      } catch (e: any) {
-        console.warn("refMarkets fetch failed:", e?.message || e);
-        if (!cancelled) setRefMarkets([]);
+        if (!cancelled) setBookmarkedMarkets(ordered);
+      } catch {
+        if (!cancelled) setBookmarkedMarkets([]);
+      } finally {
+        if (!cancelled) setLoadingBookmarks(false);
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [connected, walletBase58, myTxs]);
+  }, [connected, walletBase58, bookmarkIds]);
 
-  // ---------------- stats ----------------
-  const stats = useMemo(() => {
-    const created = myCreatedMarkets.length;
-    const volLamports = myCreatedMarkets.reduce((sum, m) => sum + toNum(m.total_volume), 0);
-    const volSol = lamportsToSol(volLamports);
-    const creatorFeesSol = volSol * 0.01;
-    return { created, volSol, creatorFeesSol };
-  }, [myCreatedMarkets]);
+  /* ---------------- Claimables (on-chain) ---------------- */
 
-  const portfolioStats = useMemo(() => {
-    const markets = new Set<string>();
-    let tradedVolumeSol = 0;
-
-    for (const t of myTxs) {
-      if (t.market_address) markets.add(String(t.market_address));
-      else if (t.market_id) markets.add(String(t.market_id));
-      const c = toNum(t.cost);
-      if (c) tradedVolumeSol += Math.abs(c);
-    }
-
-    return { positions: markets.size, trades: myTxs.length, tradedVolumeSol };
-  }, [myTxs]);
-
-  // ---------------- claimables (on-chain) ----------------
   useEffect(() => {
     if (!connected || !publicKey || !program) {
       setClaimables([]);
@@ -489,23 +498,14 @@ export default function DashboardPage() {
     (async () => {
       setLoadingClaimables(true);
       try {
-        const marketAddresses: string[] = [];
+        // gather candidate markets: created + bookmarked + traded
+        const addresses: string[] = [];
 
-        // bettors: txs
-        for (const t of myTxs) {
-          if (t.market_address) marketAddresses.push(String(t.market_address));
-          else if (t.market_id) {
-            const mk = marketsById.get(String(t.market_id));
-            if (mk?.market_address) marketAddresses.push(String(mk.market_address));
-          }
-        }
+        for (const m of myCreatedMarkets) if (m.market_address) addresses.push(String(m.market_address));
+        for (const m of bookmarkedMarkets) if (m.market_address) addresses.push(String(m.market_address));
+        for (const t of myTxs) if (t.market_address) addresses.push(String(t.market_address));
 
-        // creators: their own markets
-        for (const m of myCreatedMarkets) {
-          if (m.market_address) marketAddresses.push(String(m.market_address));
-        }
-
-        const unique = Array.from(new Set(marketAddresses)).slice(0, 50);
+        const unique = Array.from(new Set(addresses)).slice(0, 60);
         const out: Claimable[] = [];
 
         for (const addr of unique) {
@@ -576,7 +576,8 @@ export default function DashboardPage() {
             estPayoutLamports = Number(payout);
           }
 
-          const mkDb = marketsByAddress.get(addr);
+          const mkDb = marketsByAddress.get(addr) || myCreatedMarkets.find((x) => x.market_address === addr) || null;
+
           out.push({
             marketAddress: addr,
             marketQuestion: mkDb?.question || "(Market)",
@@ -596,23 +597,82 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [connected, publicKey, program, connection, myTxs, myCreatedMarkets, marketsById, marketsByAddress]);
+  }, [connected, publicKey, program, connection, myTxs, myCreatedMarkets, bookmarkedMarkets, marketsByAddress]);
 
-  useEffect(() => {
-    return () => {
-      if (proofPreview) URL.revokeObjectURL(proofPreview);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  /* ---------------- Stats ---------------- */
 
-  useEffect(() => {
-    // cleanup quand preview change
-    return () => {
-      if (proofPreview) URL.revokeObjectURL(proofPreview);
-    };
-  }, [proofPreview]);
+  const walletLabel = useMemo(() => shortAddr(walletBase58), [walletBase58]);
+  const gainsSol = useMemo(() => {
+    // Gains = somme des payouts estimés des claimables (0 si none)
+    return (claimables || []).reduce((sum, c) => sum + lamportsToSol(toNum(c.estPayoutLamports)), 0);
+  }, [claimables]);
 
-  // ---------------- handlers ----------------
+  const stats = useMemo(() => {
+    const created = myCreatedMarkets.length;
+    const volLamports = myCreatedMarkets.reduce((sum, m) => sum + toNum(m.total_volume), 0);
+    const volSol = lamportsToSol(volLamports);
+    const creatorFeesSol = volSol * 0.01;
+    return { created, volSol, creatorFeesSol };
+  }, [myCreatedMarkets]);
+
+  const portfolioStats = useMemo(() => {
+    const markets = new Set<string>();
+    let tradedVolumeSol = 0;
+
+    for (const t of myTxs) {
+      if (t.market_address) markets.add(String(t.market_address));
+      const c = toNum(t.cost);
+      if (c) tradedVolumeSol += Math.abs(c);
+    }
+
+    return { positions: markets.size, trades: myTxs.length, tradedVolumeSol };
+  }, [myTxs]);
+
+  const txRows = useMemo(() => {
+    return myTxs.map((t) => {
+      const mk = t.market_address ? marketsByAddress.get(String(t.market_address)) : null;
+      const marketAddress = (mk?.market_address || t.market_address || "") as string;
+      const marketQuestion = (mk?.question || "(Market)") as string;
+
+      const side = t.is_buy ? "BUY" : "SELL";
+      const shares = t.shares != null ? Math.floor(toNum(t.shares)) : Math.floor(toNum(t.amount));
+
+      const names = (mk?.outcome_names || null) as string[] | null;
+      const outcomeIndex =
+        t.outcome_index != null
+          ? Number(t.outcome_index)
+          : t.is_yes == null
+          ? null
+          : t.is_yes
+          ? 0
+          : 1;
+
+      const pseudoMarket = { outcome_names: names };
+
+      const outcomeLabel = outcomeLabelFromMarket(pseudoMarket, {
+        outcomeIndex,
+        isYes: t.is_yes,
+        txOutcomeName: t.outcome_name ?? null,
+      });
+
+      const title = `${side} • ${outcomeLabel} • ${shares} shares`;
+      const costSol = toNum(t.cost);
+      const createdAt = t.created_at ? new Date(t.created_at) : null;
+
+      return {
+        id: String(t.id || t.tx_signature || Math.random()),
+        title,
+        marketAddress,
+        marketQuestion,
+        sig: String(t.tx_signature || ""),
+        costSol,
+        createdAt,
+      };
+    });
+  }, [myTxs, marketsByAddress]);
+
+  /* ---------------- Actions ---------------- */
+
   async function handleClaim(marketAddress: string) {
     if (!connected || !publicKey || !program) return;
 
@@ -631,7 +691,9 @@ export default function DashboardPage() {
         })
         .rpc();
 
-      alert(`Claim success 🎉\n\nTx: ${sig.slice(0, 16)}...\n\nhttps://explorer.solana.com/tx/${sig}?cluster=devnet`);
+      alert(
+        `Claim success 🎉\n\nTx: ${sig.slice(0, 16)}...\n\nhttps://explorer.solana.com/tx/${sig}?cluster=devnet`
+      );
 
       setClaimables((prev) => prev.filter((c) => c.marketAddress !== marketAddress));
     } catch (e: any) {
@@ -641,13 +703,11 @@ export default function DashboardPage() {
     }
   }
 
-  // ✅ Step 1: propose resolution OFF-CHAIN (no on-chain resolve)
   async function handleProposeResolution() {
     if (!connected || !publicKey || !resolvingMarket || selectedOutcome === null) return;
     const marketAddress = resolvingMarket.market_address;
     if (!marketAddress) return;
 
-    // validate proof
     if (!proofOk) {
       alert(proofMode === "link" ? "Please provide a proof URL." : "Please upload a proof image.");
       return;
@@ -658,7 +718,6 @@ export default function DashboardPage() {
     try {
       setResolveLoading(true);
 
-      // 1) Prepare proof first (UPLOAD OR LINK)
       let proposedProofUrl: string | null = null;
       let proposedProofImage: string | null = null;
 
@@ -671,11 +730,9 @@ export default function DashboardPage() {
         proposedProofUrl = null;
       }
 
-      // 2) contest deadline = now + 24h
       const now = Date.now();
       const deadlineIso = new Date(now + 24 * 60 * 60 * 1000).toISOString();
 
-      // 3) Update DB via lib (Step 1)
       await proposeResolution({
         market_address: marketAddress,
         proposed_winning_outcome: selectedOutcome,
@@ -685,7 +742,7 @@ export default function DashboardPage() {
         proposed_proof_note: note || null,
       });
 
-      // optimistic UI
+      // optimistic update
       const proposedAtIso = new Date().toISOString();
       setMyCreatedMarkets((prev) =>
         prev.map((m) =>
@@ -710,9 +767,7 @@ export default function DashboardPage() {
       resetResolveModal();
 
       alert(
-        `Resolution proposed ✅\n\nOutcome: ${
-          labels[selectedOutcome] || `Option ${selectedOutcome + 1}`
-        }\n\nContest window: 24h\n\nTrading is now locked (UI).`
+        `Resolution proposed ✅\n\nOutcome: ${labels[selectedOutcome] || `Option ${selectedOutcome + 1}`}\n\nContest window: 24h\n\nTrading is now locked (UI).`
       );
     } catch (e: any) {
       alert(`Propose failed: ${e?.message || "Unknown error"}`);
@@ -721,56 +776,14 @@ export default function DashboardPage() {
     }
   }
 
-  // ---------------- UI derived ----------------
-  const walletLabel = useMemo(() => shortAddr(walletBase58), [walletBase58]);
+  /* -------------------------------------------------------------------------- */
+  /* Render                                                                     */
+  /* -------------------------------------------------------------------------- */
 
-  const txRows = useMemo(() => {
-    return myTxs.map((t) => {
-      const mk =
-        (t.market_id && marketsById.get(String(t.market_id))) ||
-        (t.market_address && marketsByAddress.get(String(t.market_address))) ||
-        null;
-
-      const marketAddress = (mk?.market_address || t.market_address || "") as string;
-      const marketQuestion = (mk?.question || "(Market)") as string;
-
-      const side = t.is_buy ? "BUY" : "SELL";
-
-      const shares = t.shares != null ? Math.floor(toNum(t.shares)) : Math.floor(toNum(t.amount));
-
-      const names = (mk?.outcome_names || null) as string[] | null;
-
-      const outcomeIndex = t.outcome_index != null ? Number(t.outcome_index) : t.is_yes == null ? null : t.is_yes ? 0 : 1;
-
-      const pseudoMarket = { outcome_names: names };
-
-      const outcomeLabel = outcomeLabelFromMarket(pseudoMarket, {
-        outcomeIndex,
-        isYes: t.is_yes,
-        txOutcomeName: t.outcome_name ?? null,
-      });
-
-      const title = `${side} • ${outcomeLabel} • ${shares} shares`;
-      const costSol = toNum(t.cost);
-      const createdAt = t.created_at ? new Date(t.created_at) : null;
-
-      return {
-        id: String(t.id || t.tx_signature || Math.random()),
-        title,
-        marketAddress,
-        marketQuestion,
-        sig: String(t.tx_signature || ""),
-        costSol,
-        createdAt,
-      };
-    });
-  }, [myTxs, marketsById, marketsByAddress]);
-
-  // ---------------- render ----------------
   if (!connected) {
     return (
       <div className="max-w-6xl mx-auto px-4 py-12">
-        <h1 className="text-4xl font-bold text-white mb-6">Dashboard</h1>
+        <h1 className="text-3xl md:text-4xl font-bold text-white mb-6">Dashboard</h1>
         <div className="card-pump">
           <p className="text-gray-400">Connect wallet to view your dashboard.</p>
         </div>
@@ -779,91 +792,90 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-10">
-      <div className="flex items-center justify-between gap-6 mb-6">
-        <h1 className="text-3xl md:text-4xl font-bold text-white">Portfolio</h1>
-        <div className="text-xs md:text-sm text-gray-400">
-          Wallet: <span className="font-mono text-white/80">{walletLabel}</span>
-        </div>
-      </div>
+    <div className="max-w-6xl mx-auto px-4 py-8 md:py-10">
+      {/* Header */}
+<div className="flex items-start md:items-center justify-between gap-6 mb-5">
+  <div>
+    <h1 className="text-3xl md:text-4xl font-bold text-white">Balance</h1>
+
+    <div className="text-xs md:text-sm text-gray-400 mt-1 flex items-center gap-2 flex-wrap">
+      <span>
+        Wallet: <span className="font-mono text-white/80">{walletLabel}</span>
+      </span>
+
+      <span className="text-gray-600">•</span>
+
+      <span className="inline-flex items-center gap-2">
+        Profit
+        <span className="font-semibold text-pump-green">+{gainsSol.toFixed(2)} SOL</span>
+      </span>
+    </div>
+  </div>
+
+  {/* ✅ removed: top-right repeated stats */}
+</div>
 
       {errorMsg && (
-        <div className="mb-6 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">{errorMsg}</div>
+        <div className="mb-5 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">
+          {errorMsg}
+        </div>
       )}
 
-      {/* Top row */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-8">
-        <div className="card-pump lg:col-span-2 flex items-center justify-between gap-6">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-full bg-gradient-to-br from-pump-green to-purple-500 flex items-center justify-center text-black font-bold text-lg">
-              FM
-            </div>
-            <div>
-              <div className="text-xs text-gray-500 mb-1">Connected wallet</div>
-              <div className="text-sm md:text-base font-semibold text-white">{walletLabel}</div>
-              <div className="text-[11px] text-gray-500 mt-1">Degens become fortune tellers here ⚡</div>
-            </div>
+      {/* Summary cards */}
+      <div className="mt-4 mb-6">
+        <div className="hidden md:grid grid-cols-3 gap-4">
+          <div className="card-pump p-4">
+            <div className="text-xs text-gray-500 uppercase tracking-wide">Positions</div>
+            <div className="text-2xl font-bold text-white mt-1">{portfolioStats.positions}</div>
+            <div className="text-xs text-gray-500 mt-1">Markets traded</div>
           </div>
 
-          <div className="grid grid-cols-3 gap-4 text-right">
-            <div>
-              <div className="text-[11px] uppercase tracking-wide text-gray-500">Positions</div>
-              <div className="text-xl font-semibold text-white">{portfolioStats.positions}</div>
-              <div className="text-[11px] text-gray-500">Markets traded</div>
-            </div>
-            <div>
-              <div className="text-[11px] uppercase tracking-wide text-gray-500">Volume traded</div>
-              <div className="text-xl font-semibold text-white">{portfolioStats.tradedVolumeSol.toFixed(2)} SOL</div>
-              <div className="text-[11px] text-gray-500">Based on your fills</div>
-            </div>
-            <div>
-              <div className="text-[11px] uppercase tracking-wide text-gray-500">Markets created</div>
-              <div className="text-xl font-semibold text-white">{stats.created}</div>
-              <div className="text-[11px] text-gray-500">Creator fees ~{stats.creatorFeesSol.toFixed(3)} SOL</div>
-            </div>
+          <div className="card-pump p-4">
+            <div className="text-xs text-gray-500 uppercase tracking-wide">Traded</div>
+            <div className="text-2xl font-bold text-white mt-1">{portfolioStats.tradedVolumeSol.toFixed(2)} SOL</div>
+            <div className="text-xs text-gray-500 mt-1">Based on your fills</div>
+          </div>
+
+          <div className="card-pump p-4">
+            <div className="text-xs text-gray-500 uppercase tracking-wide">Created</div>
+            <div className="text-2xl font-bold text-white mt-1">{stats.created}</div>
+            <div className="text-xs text-gray-500 mt-1">Fees ~{stats.creatorFeesSol.toFixed(3)} SOL</div>
           </div>
         </div>
 
-        <div className="card-pump flex flex-col justify-between">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs text-gray-500 uppercase tracking-wide">Profit / Loss</span>
-            <div className="flex items-center gap-1 text-[10px] bg-pump-dark/60 rounded-full px-2 py-1 text-gray-400">
-              <span className="h-2 w-2 rounded-full bg-yellow-400" />
-              <span>Beta</span>
-            </div>
+        {/* Mobile: horizontal scroll cards */}
+        <div className="md:hidden flex gap-3 overflow-x-auto pb-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="card-pump p-4 min-w-[220px]">
+            <div className="text-xs text-gray-500 uppercase tracking-wide">Positions</div>
+            <div className="text-2xl font-bold text-white mt-1">{portfolioStats.positions}</div>
+            <div className="text-xs text-gray-500 mt-1">Markets traded</div>
           </div>
-          <div className="text-3xl font-bold text-white mb-1">
-            0.00 <span className="text-base text-gray-400">SOL</span>
+          <div className="card-pump p-4 min-w-[220px]">
+            <div className="text-xs text-gray-500 uppercase tracking-wide">Traded</div>
+            <div className="text-2xl font-bold text-white mt-1">{portfolioStats.tradedVolumeSol.toFixed(2)} SOL</div>
+            <div className="text-xs text-gray-500 mt-1">Based on your fills</div>
           </div>
-          <div className="text-[11px] text-gray-500 mb-3">P&amp;L tracking & charts coming in the next update.</div>
-
-          <div className="flex gap-1 justify-end">
-            {["1D", "1W", "1M", "ALL"].map((label) => (
-              <button
-                key={label}
-                className={`px-2 py-1 rounded-md text-[11px] ${
-                  label === "1M" ? "bg-pump-green text-black font-semibold" : "bg-pump-dark/70 text-gray-300"
-                }`}
-                type="button"
-              >
-                {label}
-              </button>
-            ))}
+          <div className="card-pump p-4 min-w-[220px]">
+            <div className="text-xs text-gray-500 uppercase tracking-wide">Created</div>
+            <div className="text-2xl font-bold text-white mt-1">{stats.created}</div>
+            <div className="text-xs text-gray-500 mt-1">Fees ~{stats.creatorFeesSol.toFixed(3)} SOL</div>
           </div>
         </div>
       </div>
 
-      {/* Claimable Winnings */}
-      <div className="card-pump mb-8">
+      {/* Claimables */}
+      <div className="card-pump mb-6">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-lg md:text-xl font-bold text-white">🏆 Claimable winnings</h2>
-          <span className="text-xs text-gray-500">Resolved on-chain markets where you hold winning shares</span>
+          <span className="hidden md:inline text-xs text-gray-500">
+            Resolved on-chain markets where you hold winning shares
+          </span>
         </div>
 
         {loadingClaimables ? (
           <p className="text-gray-400 text-sm">Checking claimables…</p>
         ) : claimables.length === 0 ? (
-          <p className="text-gray-500 text-sm">No claimable winnings yet. Degens who never bet, never win.</p>
+          <p className="text-gray-500 text-sm">No claimable winnings yet.</p>
         ) : (
           <div className="space-y-3">
             {claimables.map((c) => (
@@ -878,7 +890,9 @@ export default function DashboardPage() {
                     {typeof c.estPayoutLamports === "number" && (
                       <>
                         {" • "}
-                        <span className="text-pump-green font-semibold">~{lamportsToSol(c.estPayoutLamports).toFixed(4)} SOL</span>
+                        <span className="text-pump-green font-semibold">
+                          ~{lamportsToSol(c.estPayoutLamports).toFixed(4)} SOL
+                        </span>
                       </>
                     )}
                   </div>
@@ -887,11 +901,12 @@ export default function DashboardPage() {
                 <button
                   onClick={() => handleClaim(c.marketAddress)}
                   disabled={claimingMarket === c.marketAddress}
-                  className={`px-5 py-2 rounded-lg font-semibold transition ${
+                  className={[
+                    "px-5 py-2 rounded-lg font-semibold transition",
                     claimingMarket === c.marketAddress
                       ? "bg-gray-700 text-gray-300 cursor-not-allowed"
-                      : "bg-pump-green text-black hover:opacity-90"
-                  }`}
+                      : "bg-pump-green text-black hover:opacity-90",
+                  ].join(" ")}
                 >
                   {claimingMarket === c.marketAddress ? "Claiming…" : "💰 Claim"}
                 </button>
@@ -901,164 +916,239 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* Positions + My markets */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        <div className="card-pump">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg md:text-xl font-bold text-white">Positions & activity</h2>
-            {loadingTxs ? <span className="text-xs text-gray-500">Loading…</span> : <span className="text-xs text-gray-500">{txRows.length} transactions</span>}
-          </div>
-
-          {loadingTxs ? (
-            <p className="text-gray-400 text-sm">Loading transactions…</p>
-          ) : txRows.length === 0 ? (
-            <p className="text-gray-500 text-sm">You haven&apos;t entered any markets yet.</p>
-          ) : (
-            <div className="space-y-4">
-              {txRows.map((r) => (
-                <div key={r.id} className="rounded-xl border border-white/10 bg-pump-dark/40 p-4 flex items-center justify-between gap-6">
-                  <div className="min-w-0">
-                    <div className="text-white font-medium text-sm md:text-base">{r.title}</div>
-                    <div className="text-xs text-gray-400 mt-1 truncate">{r.marketQuestion || shortAddr(r.marketAddress)}</div>
-                    <div className="text-[11px] text-gray-500 mt-1">
-                      {r.createdAt ? r.createdAt.toLocaleString("fr-FR") : ""}
-                      {r.sig && (
-                        <>
-                          {" • "}
-                          <a
-                            href={`https://explorer.solana.com/tx/${r.sig}?cluster=devnet`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-pump-green hover:underline"
-                          >
-                            tx: {shortSig(r.sig)}
-                          </a>
-                        </>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-3 flex-shrink-0">
-                    <div className="text-right">
-                      <div className="text-pump-green font-bold text-sm md:text-base">{r.costSol > 0 ? `${r.costSol.toFixed(4)} SOL` : "0.0000 SOL"}</div>
-                    </div>
-
-                    {r.marketAddress && (
-                      <Link
-                        href={`/trade/${r.marketAddress}`}
-                        className="hidden sm:inline-flex px-4 py-2 rounded-lg bg-pump-green text-black text-sm font-semibold hover:opacity-90 transition"
-                      >
-                        View
-                      </Link>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+      {/* Tabs (like Trade page) */}
+      <div className="flex items-center gap-2 mb-4">
+        <TabButton active={tab === "activity"} onClick={() => setTab("activity")}>
+          Activity
+        </TabButton>
+        <TabButton active={tab === "created"} onClick={() => setTab("created")}>
+          My markets
+        </TabButton>
+        <TabButton active={tab === "bookmarks"} onClick={() => setTab("bookmarks")}>
+          Bookmarked
+        </TabButton>
+        <div className="ml-auto text-xs text-gray-500">
+          {tab === "activity" && (loadingTxs ? "Loading…" : `${txRows.length} txs`)}
+          {tab === "created" && (loadingMarkets ? "Loading…" : `${myCreatedMarkets.length} markets`)}
+          {tab === "bookmarks" && (loadingBookmarks ? "Loading…" : `${bookmarkedMarkets.length} saved`)}
         </div>
+      </div>
 
-        <div className="card-pump">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg md:text-xl font-bold text-white">Markets you created</h2>
-            {loadingMarkets ? <span className="text-xs text-gray-500">Loading…</span> : <span className="text-xs text-gray-500">{myCreatedMarkets.length} markets</span>}
-          </div>
-
-          {loadingMarkets ? (
-            <p className="text-gray-400 text-sm">Loading markets…</p>
-          ) : myCreatedMarkets.length === 0 ? (
-            <p className="text-gray-500 text-sm">You haven&apos;t created any markets yet.</p>
-          ) : (
-            <div className="space-y-4">
-              {myCreatedMarkets.map((m, idx) => {
-                const addr = String(m.market_address || "");
-                const q = String(m.question || "Market");
-                const volSol = lamportsToSol(toNum(m.total_volume));
-
-                const ended = isMarketEnded(m.end_date);
-                const status = toResolutionStatus(m.resolution_status);
-                const timeStatus = formatTimeStatus(m.end_date);
-
-                const isResolvedFinal = !!m.resolved || status === "finalized";
-                const isProposed = status === "proposed";
-                const isCancelled = status === "cancelled";
-
-                const deadlineMs = m.contest_deadline ? new Date(m.contest_deadline).getTime() : NaN;
-                const remainingMs = Number.isFinite(deadlineMs) ? deadlineMs - Date.now() : NaN;
-
-                // Step 1 rule: can propose only if ended + not already proposed/finalized/cancelled/resolved
-                const canPropose = ended && !isResolvedFinal && !isProposed && status !== "cancelled";
-
-                return (
+      {/* Panels */}
+      <div className="card-pump">
+        {/* ACTIVITY */}
+        {tab === "activity" && (
+          <>
+            {loadingTxs ? (
+              <p className="text-gray-400 text-sm">Loading transactions…</p>
+            ) : txRows.length === 0 ? (
+              <p className="text-gray-500 text-sm">No activity yet.</p>
+            ) : (
+              <div className="space-y-3">
+                {txRows.map((r) => (
                   <div
-                    key={String(m.id || addr || idx)}
-                    className={`rounded-xl border p-4 flex items-center justify-between gap-6 ${
-  isResolvedFinal
-    ? "border-gray-600 bg-gray-800/30"
-    : isCancelled
-    ? "border-[#ff5c73]/60 bg-[#ff5c73]/5"
-    : isProposed
-    ? "border-pump-green/60 bg-pump-green/5"
-    : canPropose
-    ? "border-yellow-500/60 bg-yellow-500/5"
-    : "border-white/10 bg-pump-dark/40"
-}`}
+                    key={r.id}
+                    className="rounded-xl border border-white/10 bg-pump-dark/40 p-4 flex items-start sm:items-center justify-between gap-4"
                   >
                     <div className="min-w-0">
-                      <div className="text-white font-semibold truncate text-sm md:text-base">{q}</div>
-
-                      <div className="text-[11px] text-gray-500 mt-1 flex items-center gap-2">
-                        <span>{addr ? shortAddr(addr) : ""}</span>
-                        <span>•</span>
-
-                        {isResolvedFinal ? (
-  <span className="text-green-400">✓ Finalized</span>
-) : isCancelled ? (
-  <span className="text-[#ff5c73]">Cancelled • refundable</span>
-) : isProposed ? (
-  <span className="text-pump-green">
-    Proposed{Number.isFinite(remainingMs) ? ` (${formatMsToHhMm(Math.max(0, remainingMs))} left)` : ""}
-  </span>
-) : (
-  <span className={ended ? "text-yellow-400" : "text-gray-400"}>{timeStatus}</span>
-)}
+                      <div className="text-white font-medium text-sm md:text-base">{r.title}</div>
+                      <div className="text-xs text-gray-400 mt-1 truncate">
+                        {r.marketQuestion || shortAddr(r.marketAddress)}
+                      </div>
+                      <div className="text-[11px] text-gray-500 mt-1 flex flex-wrap items-center gap-2">
+                        <span>{r.createdAt ? r.createdAt.toLocaleString("fr-FR") : ""}</span>
+                        {r.sig && (
+                          <>
+                            <span className="opacity-40">•</span>
+                            <a
+                              href={`https://explorer.solana.com/tx/${r.sig}?cluster=devnet`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-pump-green hover:underline"
+                            >
+                              tx: {shortSig(r.sig)}
+                            </a>
+                          </>
+                        )}
                       </div>
                     </div>
 
                     <div className="flex items-center gap-3 flex-shrink-0">
                       <div className="text-right">
-                        <div className="text-white font-semibold text-sm md:text-base">{volSol.toFixed(2)} SOL</div>
+                        <div className="text-pump-green font-bold text-sm md:text-base">
+                          {r.costSol > 0 ? `${r.costSol.toFixed(4)} SOL` : "0.0000 SOL"}
+                        </div>
                       </div>
 
-                      {canPropose && (
-                        <button
-                          onClick={() => {
-                            setResolvingMarket(m);
-                            setSelectedOutcome(null);
-                            setMode("upload");
-                            setProofNote("");
-                          }}
-                          className="px-3 py-1.5 md:px-4 md:py-2 rounded-lg bg-yellow-500 text-black text-xs md:text-sm font-semibold hover:bg-yellow-400 transition"
-                        >
-                          ⚖️ Propose
-                        </button>
-                      )}
-
-                      {addr && (
+                      {r.marketAddress && (
                         <Link
-                          href={`/trade/${addr}`}
-                          className="px-3 py-1.5 md:px-4 md:py-2 rounded-lg bg-pump-green text-black text-xs md:text-sm font-semibold hover:opacity-90 transition"
+                          href={`/trade/${r.marketAddress}`}
+                          className="px-4 py-2 rounded-lg bg-pump-green text-black text-sm font-semibold hover:opacity-90 transition"
                         >
                           View
                         </Link>
                       )}
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* CREATED */}
+        {tab === "created" && (
+          <>
+            {loadingMarkets ? (
+              <p className="text-gray-400 text-sm">Loading markets…</p>
+            ) : myCreatedMarkets.length === 0 ? (
+              <p className="text-gray-500 text-sm">You haven&apos;t created any markets yet.</p>
+            ) : (
+              <div className="space-y-3">
+                {myCreatedMarkets.map((m, idx) => {
+                  const addr = String(m.market_address || "");
+                  const q = String(m.question || "Market");
+                  const volSol = lamportsToSol(toNum(m.total_volume));
+
+                  const ended = isMarketEnded(m.end_date);
+                  const status = toResolutionStatus(m.resolution_status);
+                  const timeStatus = formatTimeStatus(m.end_date);
+
+                  const isResolvedFinal = !!m.resolved || status === "finalized";
+                  const isProposed = status === "proposed";
+                  const isCancelled = status === "cancelled";
+
+                  const deadlineMs = m.contest_deadline ? new Date(m.contest_deadline).getTime() : NaN;
+                  const remainingMs = Number.isFinite(deadlineMs) ? deadlineMs - Date.now() : NaN;
+
+                  const canPropose = ended && !isResolvedFinal && !isProposed && status !== "cancelled";
+
+                  const boxCls = isResolvedFinal
+                    ? "border-gray-600 bg-gray-800/30"
+                    : isCancelled
+                    ? "border-[#ff5c73]/60 bg-[#ff5c73]/5"
+                    : isProposed
+                    ? "border-pump-green/60 bg-pump-green/5"
+                    : canPropose
+                    ? "border-yellow-500/60 bg-yellow-500/5"
+                    : "border-white/10 bg-pump-dark/40";
+
+                  return (
+                    <div
+                      key={String(m.id || addr || idx)}
+                      className={`rounded-xl border p-4 flex items-start sm:items-center justify-between gap-4 ${boxCls}`}
+                    >
+                      <div className="min-w-0">
+                        <div className="text-white font-semibold truncate">{q}</div>
+                        <div className="text-[11px] text-gray-500 mt-1 flex flex-wrap items-center gap-2">
+                          <span>{addr ? shortAddr(addr) : ""}</span>
+                          <span className="opacity-40">•</span>
+
+                          {isResolvedFinal ? (
+                            <span className="text-green-400">✓ Finalized</span>
+                          ) : isCancelled ? (
+                            <span className="text-[#ff5c73]">Cancelled • refundable</span>
+                          ) : isProposed ? (
+                            <span className="text-pump-green">
+                              Proposed
+                              {Number.isFinite(remainingMs)
+                                ? ` (${formatMsToHhMm(Math.max(0, remainingMs))} left)`
+                                : ""}
+                            </span>
+                          ) : (
+                            <span className={ended ? "text-yellow-400" : "text-gray-400"}>{timeStatus}</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3 flex-shrink-0">
+                        <div className="text-right">
+                          <div className="text-white font-semibold">{volSol.toFixed(2)} SOL</div>
+                          <div className="text-[11px] text-gray-500">volume</div>
+                        </div>
+
+                        {canPropose && (
+                          <button
+                            onClick={() => {
+                              setResolvingMarket(m);
+                              setSelectedOutcome(null);
+                              setMode("upload");
+                              setProofNote("");
+                            }}
+                            className="px-4 py-2 rounded-lg bg-yellow-500 text-black text-sm font-semibold hover:bg-yellow-400 transition"
+                          >
+                            ⚖️ Propose
+                          </button>
+                        )}
+
+                        {addr && (
+                          <Link
+                            href={`/trade/${addr}`}
+                            className="px-4 py-2 rounded-lg bg-pump-green text-black text-sm font-semibold hover:opacity-90 transition"
+                          >
+                            View
+                          </Link>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* BOOKMARKS */}
+        {tab === "bookmarks" && (
+          <>
+            {loadingBookmarks ? (
+              <p className="text-gray-400 text-sm">Loading bookmarks…</p>
+            ) : bookmarkedMarkets.length === 0 ? (
+              <p className="text-gray-500 text-sm">No bookmarked markets yet.</p>
+            ) : (
+              <div className="space-y-3">
+                {bookmarkedMarkets.map((m, idx) => {
+                  const addr = String(m.market_address || "");
+                  const q = String(m.question || "Market");
+                  const volSol = lamportsToSol(toNum(m.total_volume));
+                  const status = formatTimeStatus(m.end_date);
+
+                  return (
+                    <div
+                      key={String(m.id || addr || idx)}
+                      className="rounded-xl border border-white/10 bg-pump-dark/40 p-4 flex items-start sm:items-center justify-between gap-4"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-white font-semibold truncate">{q}</div>
+                        <div className="text-[11px] text-gray-500 mt-1 flex flex-wrap items-center gap-2">
+                          <span>{shortAddr(addr)}</span>
+                          <span className="opacity-40">•</span>
+                          <span className="text-gray-400">{status}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3 flex-shrink-0">
+                        <div className="text-right">
+                          <div className="text-white font-semibold">{volSol.toFixed(2)} SOL</div>
+                          <div className="text-[11px] text-gray-500">volume</div>
+                        </div>
+
+                        {addr && (
+                          <Link
+                            href={`/trade/${addr}`}
+                            className="px-4 py-2 rounded-lg bg-pump-green text-black text-sm font-semibold hover:opacity-90 transition"
+                          >
+                            View
+                          </Link>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       {/* Resolve Modal */}
@@ -1067,7 +1157,9 @@ export default function DashboardPage() {
           <div className="bg-pump-dark border border-white/20 rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl">
             <h3 className="text-xl font-bold text-white mb-2">Propose resolution</h3>
             <p className="text-gray-400 text-sm mb-1 truncate">{resolvingMarket.question}</p>
-            <p className="text-[11px] text-gray-500 mb-4">⏳ Contest window: 24h — trading will be locked (UI) during this period.</p>
+            <p className="text-[11px] text-gray-500 mb-4">
+              ⏳ Contest window: 24h — trading will be locked (UI) during this period.
+            </p>
 
             <div className="mb-4">
               <label className="text-sm text-gray-400 mb-2 block">Select proposed winning outcome:</label>
@@ -1076,11 +1168,12 @@ export default function DashboardPage() {
                   <button
                     key={idx}
                     onClick={() => setSelectedOutcome(idx)}
-                    className={`w-full p-3 rounded-lg border text-left transition ${
+                    className={[
+                      "w-full p-3 rounded-lg border text-left transition",
                       selectedOutcome === idx
                         ? "border-pump-green bg-pump-green/20 text-white"
-                        : "border-white/20 bg-white/5 text-gray-300 hover:border-white/40"
-                    }`}
+                        : "border-white/20 bg-white/5 text-gray-300 hover:border-white/40",
+                    ].join(" ")}
                   >
                     <span className="font-semibold">{label}</span>
                     {selectedOutcome === idx && <span className="float-right text-pump-green">✓</span>}
@@ -1095,11 +1188,12 @@ export default function DashboardPage() {
                 <button
                   type="button"
                   onClick={() => setMode("upload")}
-                  className={`flex-1 px-3 py-2 rounded-lg border text-sm font-semibold transition ${
+                  className={[
+                    "flex-1 px-3 py-2 rounded-lg border text-sm font-semibold transition",
                     proofMode === "upload"
                       ? "border-pump-green bg-pump-green/20 text-white"
-                      : "border-white/20 bg-white/5 text-gray-300 hover:border-white/40"
-                  }`}
+                      : "border-white/20 bg-white/5 text-gray-300 hover:border-white/40",
+                  ].join(" ")}
                 >
                   Upload image
                 </button>
@@ -1107,11 +1201,12 @@ export default function DashboardPage() {
                 <button
                   type="button"
                   onClick={() => setMode("link")}
-                  className={`flex-1 px-3 py-2 rounded-lg border text-sm font-semibold transition ${
+                  className={[
+                    "flex-1 px-3 py-2 rounded-lg border text-sm font-semibold transition",
                     proofMode === "link"
                       ? "border-pump-green bg-pump-green/20 text-white"
-                      : "border-white/20 bg-white/5 text-gray-300 hover:border-white/40"
-                  }`}
+                      : "border-white/20 bg-white/5 text-gray-300 hover:border-white/40",
+                  ].join(" ")}
                 >
                   Proof link
                 </button>
@@ -1186,11 +1281,12 @@ export default function DashboardPage() {
               <button
                 onClick={handleProposeResolution}
                 disabled={selectedOutcome === null || resolveLoading || !proofOk}
-                className={`flex-1 px-4 py-2 rounded-lg font-semibold transition ${
+                className={[
+                  "flex-1 px-4 py-2 rounded-lg font-semibold transition",
                   selectedOutcome === null || resolveLoading || !proofOk
                     ? "bg-gray-700 text-gray-400 cursor-not-allowed"
-                    : "bg-yellow-500 text-black hover:bg-yellow-400"
-                }`}
+                    : "bg-yellow-500 text-black hover:bg-yellow-400",
+                ].join(" ")}
               >
                 {resolveLoading ? "Proposing…" : "Confirm proposal"}
               </button>

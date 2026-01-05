@@ -1,164 +1,238 @@
-'use client';
+// app/src/components/MarketActions.tsx
+"use client";
 
-import { useState, useEffect } from 'react';
-import { Heart, Share2, Check } from 'lucide-react';
+import { useEffect, useMemo, useState } from "react";
+import { useWallet } from "@solana/wallet-adapter-react";
+import { supabase } from "@/lib/supabaseClient";
+import { Heart, Share2 } from "lucide-react";
 
-interface MarketActionsProps {
-  marketId: string;
+type Props = {
+  // ✅ compat: ancien prop (parfois c’était l’adresse solana)
+  marketId?: string;
+
+  // ✅ nouveaux props
+  marketAddress?: string; // adresse solana
+  marketDbId?: string | null; // uuid markets.id
+
   question: string;
-  className?: string;
-}
+};
 
-export default function MarketActions({ marketId, question, className = '' }: MarketActionsProps) {
-  const [isBookmarked, setIsBookmarked] = useState(false);
-  const [showShareToast, setShowShareToast] = useState(false);
+export default function MarketActions({
+  marketId,
+  marketAddress,
+  marketDbId,
+  question,
+}: Props) {
+  const { publicKey } = useWallet();
 
-  // Load bookmark status on mount
+  const [busy, setBusy] = useState(false);
+
+  // ✅ On stocke l'id du bookmark (source of truth) -> coeur rempli si non-null
+  const [bookmarkRowId, setBookmarkRowId] = useState<string | null>(null);
+
+  // ✅ On stocke le market uuid (markets.id) une seule fois
+  const [marketUuid, setMarketUuid] = useState<string | null>(marketDbId ?? null);
+
+  // source of truth: solana address pour share + fallback lookup markets.id
+  const address = useMemo(
+    () => marketAddress || marketId || "",
+    [marketAddress, marketId]
+  );
+
+  const userAddress = useMemo(
+    () => publicKey?.toBase58() ?? null,
+    [publicKey]
+  );
+
+  const bookmarked = !!bookmarkRowId;
+
+  async function getMarketUuidFallback(): Promise<string | null> {
+    if (!address) return null;
+
+    try {
+      const { data, error } = await supabase
+        .from("markets")
+        .select("id")
+        .eq("market_address", address)
+        .maybeSingle();
+
+      if (error) return null;
+      return data?.id ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function fetchBookmarkRowId(params: { user: string; mid: string }) {
+    const { user, mid } = params;
+
+    const { data, error } = await supabase
+      .from("bookmarks")
+      .select("id")
+      .eq("user_address", user)
+      .eq("market_id", mid)
+      .maybeSingle();
+
+    if (error) throw error;
+    return data?.id ?? null;
+  }
+
+  // ✅ AU MOUNT / quand wallet ou market change:
+  // 1) resolve marketUuid
+  // 2) fetch bookmarkRowId
   useEffect(() => {
-    loadBookmarkStatus();
-  }, [marketId]);
+    let alive = true;
 
-  function loadBookmarkStatus() {
-    try {
-      const savedMarkets = localStorage.getItem('savedMarkets');
-      if (savedMarkets) {
-        const markets = JSON.parse(savedMarkets);
-        setIsBookmarked(markets.includes(marketId));
-      }
-    } catch (error) {
-      console.error('Error loading bookmark status:', error);
-    }
-  }
-
-  function toggleBookmark() {
-    try {
-      const savedMarkets = localStorage.getItem('savedMarkets');
-      let markets: string[] = savedMarkets ? JSON.parse(savedMarkets) : [];
-
-      if (isBookmarked) {
-        // Remove bookmark
-        markets = markets.filter((id) => id !== marketId);
-        setIsBookmarked(false);
-      } else {
-        // Add bookmark
-        markets.push(marketId);
-        setIsBookmarked(true);
-      }
-
-      localStorage.setItem('savedMarkets', JSON.stringify(markets));
-    } catch (error) {
-      console.error('Error toggling bookmark:', error);
-    }
-  }
-
-  async function handleShare() {
-    const shareData = {
-      title: `Funmarket.pump - ${question}`,
-      text: `Check out this prediction market: ${question}`,
-      url: window.location.href,
-    };
-
-    // Try native share first (mobile)
-    if (navigator.share) {
-      try {
-        await navigator.share(shareData);
+    async function run() {
+      if (!userAddress) {
+        if (alive) setBookmarkRowId(null);
         return;
-      } catch (error) {
-        // User cancelled or error - fall through to clipboard
-        if ((error as Error).name !== 'AbortError') {
-          console.error('Error sharing:', error);
-        }
+      }
+
+      // Resolve market uuid (db id)
+      let mid = marketDbId ?? marketUuid ?? null;
+
+      if (!mid) {
+        const fallback = await getMarketUuidFallback();
+        mid = fallback ?? null;
+      }
+
+      if (!alive) return;
+
+      setMarketUuid(mid);
+
+      if (!mid) {
+        setBookmarkRowId(null);
+        return;
+      }
+
+      try {
+        const rowId = await fetchBookmarkRowId({ user: userAddress, mid });
+        if (!alive) return;
+        setBookmarkRowId(rowId);
+      } catch (e) {
+        console.warn("fetch bookmark failed", e);
+        if (!alive) return;
+        setBookmarkRowId(null);
       }
     }
 
-    // Fallback to clipboard
+    run();
+
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userAddress, marketDbId, address]);
+
+  async function toggleBookmark() {
+    if (!userAddress) return alert("Connect your wallet");
+    if (!address) return;
+
+    setBusy(true);
+
+    // optimistic snapshot
+    const prev = bookmarkRowId;
+
     try {
-      await navigator.clipboard.writeText(window.location.href);
-      setShowShareToast(true);
-      setTimeout(() => setShowShareToast(false), 3000);
-    } catch (error) {
-      console.error('Error copying to clipboard:', error);
-      // Final fallback - select text (for older browsers)
-      const tempInput = document.createElement('input');
-      tempInput.value = window.location.href;
-      document.body.appendChild(tempInput);
-      tempInput.select();
-      document.execCommand('copy');
-      document.body.removeChild(tempInput);
-      setShowShareToast(true);
-      setTimeout(() => setShowShareToast(false), 3000);
+      let mid = marketUuid ?? marketDbId ?? null;
+      if (!mid) mid = await getMarketUuidFallback();
+
+      if (!mid) {
+        alert("Market not indexed yet (no DB id). Refresh in a few seconds.");
+        return;
+      }
+
+      // ✅ OPTIMISTIC UI
+      if (prev) setBookmarkRowId(null);
+      else setBookmarkRowId("optimistic");
+
+      if (prev) {
+        // delete by bookmark row id (no re-fetch)
+        const { error } = await supabase.from("bookmarks").delete().eq("id", prev);
+        if (error) throw error;
+        // already null
+      } else {
+        // insert with ONLY the columns that exist: user_address + market_id
+        const { data, error } = await supabase
+          .from("bookmarks")
+          .insert({ user_address: userAddress, market_id: mid })
+          .select("id")
+          .single();
+
+        if (error) throw error;
+        setBookmarkRowId(data?.id ?? null);
+      }
+    } catch (e: any) {
+      console.error("bookmark error", e);
+      // rollback
+      setBookmarkRowId(prev);
+      alert(e?.message || "Bookmark failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function share() {
+    if (!address) return;
+
+    const url =
+      typeof window !== "undefined"
+        ? `${window.location.origin}/trade/${address}`
+        : `/trade/${address}`;
+
+    // Try native share
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: "Funmarket",
+          text: question,
+          url,
+        });
+        return;
+      }
+    } catch {
+      // user canceled share -> ignore
+      return;
+    }
+
+    // Clipboard fallback
+    try {
+      await navigator.clipboard.writeText(url);
+      alert("Link copied ✅");
+    } catch {
+      prompt("Copy link:", url);
     }
   }
 
   return (
-    <>
-      <div className={`flex items-center space-x-3 ${className}`}>
-        {/* Bookmark Button */}
-        <button
-          onClick={toggleBookmark}
-          className={`
-            group relative
-            flex items-center justify-center
-            w-10 h-10 rounded-full
-            transition-all duration-200
-            ${
-              isBookmarked
-                ? 'bg-pump-green/20 border border-pump-green text-pump-green'
-                : 'bg-pump-gray border border-gray-700 text-gray-400 hover:border-pump-green hover:text-pump-green'
-            }
-            hover:scale-110 hover:shadow-lg
-          `}
-          title={isBookmarked ? 'Remove bookmark' : 'Bookmark market'}
-        >
-          <Heart
-            className={`w-5 h-5 transition-all ${
-              isBookmarked ? 'fill-pump-green scale-110' : ''
-            } group-hover:scale-110`}
-          />
+    <div className="flex items-center gap-2">
+      {/* Bookmark */}
+      <button
+        disabled={busy}
+        onClick={toggleBookmark}
+        className={`w-10 h-10 rounded-full border transition flex items-center justify-center ${
+          bookmarked
+            ? "border-pump-green bg-pump-green/10"
+            : "border-gray-700 hover:border-pump-green"
+        }`}
+        title={bookmarked ? "Bookmarked" : "Bookmark"}
+      >
+        <Heart
+          className={`w-5 h-5 ${
+            bookmarked ? "text-pump-green fill-pump-green" : "text-gray-300"
+          }`}
+        />
+      </button>
 
-          {/* Tooltip */}
-          <span className="absolute -top-10 left-1/2 transform -translate-x-1/2 px-3 py-1.5 bg-pump-dark border border-gray-700 rounded-lg text-xs text-white whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
-            {isBookmarked ? 'Remove bookmark' : 'Bookmark'}
-          </span>
-        </button>
-
-        {/* Share Button */}
-        <button
-          onClick={handleShare}
-          className="
-            group relative
-            flex items-center justify-center
-            w-10 h-10 rounded-full
-            bg-pump-gray border border-gray-700
-            text-gray-400 hover:border-pump-green hover:text-pump-green
-            transition-all duration-200
-            hover:scale-110 hover:shadow-lg
-          "
-          title="Share market"
-        >
-          <Share2 className="w-5 h-5 group-hover:scale-110 transition-transform" />
-
-          {/* Tooltip */}
-          <span className="absolute -top-10 left-1/2 transform -translate-x-1/2 px-3 py-1.5 bg-pump-dark border border-gray-700 rounded-lg text-xs text-white whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
-            Share
-          </span>
-        </button>
-      </div>
-
-      {/* Share Toast */}
-      {showShareToast && (
-        <div className="fixed bottom-8 right-8 z-50 animate-slideUp">
-          <div className="flex items-center space-x-3 px-6 py-4 bg-pump-dark border border-pump-green rounded-lg shadow-2xl">
-            <div className="w-8 h-8 rounded-full bg-pump-green/20 flex items-center justify-center">
-              <Check className="w-5 h-5 text-pump-green" />
-            </div>
-            <div>
-              <p className="text-white font-semibold">Link copied!</p>
-              <p className="text-sm text-gray-400">Share this market with your friends</p>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
+      {/* Share */}
+      <button
+        onClick={share}
+        className="w-10 h-10 rounded-full border border-gray-700 hover:border-gray-500 transition flex items-center justify-center"
+        title="Share"
+      >
+        <Share2 className="w-5 h-5 text-gray-300" />
+      </button>
+    </div>
   );
 }

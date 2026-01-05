@@ -108,8 +108,8 @@ export default function LiveBuysTicker({
   const isBreaking = variant === "breaking";
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-[60] border-t border-white/15 bg-black/85 backdrop-blur">
-      <div className="max-w-7xl mx-auto px-4 py-2 overflow-hidden flex items-center gap-3">
+    <div className="hidden md:block fixed bottom-0 left-0 right-0 z-[60] border-t border-white/15 bg-black/85 backdrop-blur"> 
+         <div className="max-w-7xl mx-auto px-4 py-2 overflow-hidden flex items-center gap-3">
         {isBreaking && (
           <span className="shrink-0 inline-flex items-center px-2 py-1 rounded-md text-[11px] font-extrabold tracking-wide
                            bg-[#ff5c73]/15 text-[#ff5c73] border border-[#ff5c73]/35

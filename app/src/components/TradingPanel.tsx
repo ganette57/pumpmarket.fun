@@ -1,4 +1,3 @@
-// app/src/components/TradingPanel.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -20,32 +19,43 @@ interface TradingPanelProps {
   connected: boolean;
   submitting?: boolean;
 
-  // ✅ added costSol (UI estimate) as optional 4th arg
-  onTrade: (
-    shares: number,
-    outcomeIndex: number,
-    side: "buy" | "sell",
-    costSol?: number
-  ) => void;
+  onTrade: (shares: number, outcomeIndex: number, side: "buy" | "sell", costSol?: number) => void;
 
   marketBalanceLamports?: number | null;
   userHoldings?: number[] | null;
-
   marketClosed?: boolean;
-  marketAddress?: string;
+
+  // NEW (safe, no breaking)
+  mode?: "desktop" | "drawer";
+  defaultSide?: "buy" | "sell";
+  defaultOutcomeIndex?: number;
+  onClose?: () => void;
+  title?: string;
 }
 
 // UI-only linear estimate (NOT LMSR)
 const BASE_PRICE_LAMPORTS = 10_000_000; // 0.01 SOL
 const SLOPE_LAMPORTS_PER_SUPPLY = 1_000; // +0.000001 SOL per share supply
 
-// on-chain fees: 1% platform + 2% creator = 3%
 function feeLamports3pct(costLamports: number) {
   return Math.floor((costLamports * 3) / 100);
 }
 
 function clampInt(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, Math.floor(n)));
+}
+
+function InfoTip({ text }: { text: string }) {
+  return (
+    <span className="relative inline-flex items-center group">
+      <span className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded-full border border-gray-700 text-[11px] text-gray-300">
+        ?
+      </span>
+      <span className="pointer-events-none absolute right-0 top-7 z-20 w-[260px] rounded-lg border border-gray-800 bg-black/90 p-2 text-xs text-gray-200 opacity-0 shadow-xl backdrop-blur transition group-hover:opacity-100">
+        {text}
+      </span>
+    </span>
+  );
 }
 
 export default function TradingPanel({
@@ -55,6 +65,12 @@ export default function TradingPanel({
   onTrade,
   userHoldings,
   marketClosed,
+
+  mode = "desktop",
+  defaultSide = "buy",
+  defaultOutcomeIndex = 0,
+  onClose,
+  title = "Trade",
 }: TradingPanelProps) {
   const outcomes = useMemo(() => {
     const names = (market.outcomeNames || []).map(String).filter(Boolean);
@@ -63,28 +79,19 @@ export default function TradingPanel({
   }, [market.outcomeNames]);
 
   const supplies = useMemo(() => {
-    const arr = Array.isArray(market.outcomeSupplies)
-      ? market.outcomeSupplies
-      : [];
-    if (arr.length >= outcomes.length)
-      return arr.slice(0, outcomes.length).map((x) => Number(x || 0));
+    const arr = Array.isArray(market.outcomeSupplies) ? market.outcomeSupplies : [];
+    if (arr.length >= outcomes.length) return arr.slice(0, outcomes.length).map((x) => Number(x || 0));
 
-    if (outcomes.length === 2)
-      return [Number(market.yesSupply || 0), Number(market.noSupply || 0)];
+    if (outcomes.length === 2) return [Number(market.yesSupply || 0), Number(market.noSupply || 0)];
     return Array(outcomes.length).fill(0);
   }, [market.outcomeSupplies, market.yesSupply, market.noSupply, outcomes]);
 
-  const totalSupply = useMemo(
-    () => supplies.reduce((sum, x) => sum + (x || 0), 0),
-    [supplies]
-  );
+  const totalSupply = useMemo(() => supplies.reduce((sum, x) => sum + (x || 0), 0), [supplies]);
 
   const probs = useMemo(
     () =>
       supplies.map((s) =>
-        totalSupply > 0
-          ? (s / totalSupply) * 100
-          : 100 / (supplies.length || 1)
+        totalSupply > 0 ? (s / totalSupply) * 100 : 100 / (supplies.length || 1)
       ),
     [supplies, totalSupply]
   );
@@ -101,9 +108,18 @@ export default function TradingPanel({
 
   const isBinaryStyle = outcomes.length === 2;
 
-  const [selectedIndex, setSelectedIndex] = useState<number>(0);
+  const [selectedIndex, setSelectedIndex] = useState<number>(defaultOutcomeIndex);
   const [shares, setShares] = useState<number>(100);
-  const [side, setSide] = useState<"buy" | "sell">("buy");
+  const [side, setSide] = useState<"buy" | "sell">(defaultSide);
+
+  // keep in sync when drawer opens with a different outcome
+  useEffect(() => {
+    setSelectedIndex(Math.max(0, Math.min(defaultOutcomeIndex, outcomes.length - 1)));
+  }, [defaultOutcomeIndex, outcomes.length]);
+
+  useEffect(() => {
+    setSide(defaultSide);
+  }, [defaultSide]);
 
   useEffect(() => {
     if (selectedIndex > outcomes.length - 1) setSelectedIndex(0);
@@ -121,10 +137,7 @@ export default function TradingPanel({
     return Math.max(0, Math.floor(Number(x) || 0));
   }, [userHoldings, selectedIndex]);
 
-  const maxSell = useMemo(
-    () => (side === "sell" ? userCurrent : 100000),
-    [side, userCurrent]
-  );
+  const maxSell = useMemo(() => (side === "sell" ? userCurrent : 100000), [side, userCurrent]);
 
   const isRedOutcome = isBinaryStyle && selectedIndex === 1;
   const isRedBuy = side === "buy" && isRedOutcome;
@@ -141,10 +154,8 @@ export default function TradingPanel({
 
   const mainAccentAmountClass = isRedBuy ? "text-[#ff5c73]" : "text-pump-green";
 
-  // UI estimate only
   const buyCostLamports = useMemo(() => {
-    const pricePerUnit =
-      BASE_PRICE_LAMPORTS + currentSupply * SLOPE_LAMPORTS_PER_SUPPLY;
+    const pricePerUnit = BASE_PRICE_LAMPORTS + currentSupply * SLOPE_LAMPORTS_PER_SUPPLY;
     const cost = safeShares * pricePerUnit;
     const fees = feeLamports3pct(cost);
     const totalPay = cost + fees;
@@ -153,16 +164,14 @@ export default function TradingPanel({
 
   const sellRefundLamports = useMemo(() => {
     const startSupply = Math.max(0, currentSupply - safeShares);
-    const pricePerUnit =
-      BASE_PRICE_LAMPORTS + startSupply * SLOPE_LAMPORTS_PER_SUPPLY;
+    const pricePerUnit = BASE_PRICE_LAMPORTS + startSupply * SLOPE_LAMPORTS_PER_SUPPLY;
     const refund = safeShares * pricePerUnit;
     const fees = feeLamports3pct(refund);
     const netReceive = Math.max(0, refund - fees);
     return { pricePerUnit, refund, fees, netReceive, startSupply };
   }, [currentSupply, safeShares]);
 
-  const payOrReceiveLamports =
-    side === "buy" ? buyCostLamports.totalPay : sellRefundLamports.netReceive;
+  const payOrReceiveLamports = side === "buy" ? buyCostLamports.totalPay : sellRefundLamports.netReceive;
   const feeLamports = side === "buy" ? buyCostLamports.fees : sellRefundLamports.fees;
 
   const avgPriceSol = useMemo(() => {
@@ -172,34 +181,13 @@ export default function TradingPanel({
 
   const selectedOddsX = oddsX[selectedIndex] || 1;
 
-  const stakeSol = useMemo(
-    () => (side === "buy" ? lamportsToSol(buyCostLamports.totalPay) : 0),
-    [buyCostLamports.totalPay, side]
-  );
+  const stakeSol = useMemo(() => (side === "buy" ? lamportsToSol(buyCostLamports.totalPay) : 0), [buyCostLamports.totalPay, side]);
 
   const payoutIfWinSol = useMemo(() => {
     if (side !== "buy") return null;
     if (stakeSol <= 0 || !Number.isFinite(selectedOddsX)) return null;
     return stakeSol * selectedOddsX;
   }, [side, stakeSol, selectedOddsX]);
-
-  const profitIfWinSol = useMemo(() => {
-    if (payoutIfWinSol == null) return null;
-    return payoutIfWinSol - stakeSol;
-  }, [payoutIfWinSol, stakeSol]);
-
-  const roiPct = useMemo(() => {
-    if (profitIfWinSol == null) return null;
-    if (stakeSol <= 0) return null;
-    return (profitIfWinSol / stakeSol) * 100;
-  }, [profitIfWinSol, stakeSol]);
-
-  const profitClass =
-    profitIfWinSol != null && profitIfWinSol >= 0
-      ? "text-pump-green"
-      : "text-[#ff5c73]";
-  const roiClass =
-    roiPct != null && roiPct >= 0 ? "text-pump-green" : "text-[#ff5c73]";
 
   const handleAmountChange: React.ChangeEventHandler<HTMLInputElement> = (e) => {
     const raw = e.target.value.replace(/[^\d]/g, "");
@@ -224,10 +212,8 @@ export default function TradingPanel({
     else setShares(100_000);
   };
 
-  // ✅ UPDATED: pass UI-estimated costSol to the page
   const handleTrade = () => {
-    const s =
-      side === "sell" ? clampInt(safeShares, 1, maxSell || 1) : safeShares;
+    const s = side === "sell" ? clampInt(safeShares, 1, maxSell || 1) : safeShares;
 
     const costSol =
       side === "buy"
@@ -239,226 +225,198 @@ export default function TradingPanel({
 
   if (marketClosed) return null;
 
+  const rootClass =
+    mode === "drawer"
+      ? "w-full"
+      : "card-pump sticky top-20";
+
   return (
-    <div className="card-pump sticky top-20">
-      <div className="grid grid-cols-2 gap-2 mb-4">
-        <button
-          onClick={() => setSide("buy")}
-          className={`py-2 rounded-lg font-semibold transition ${
-            side === "buy"
-              ? "bg-pump-green text-black"
-              : "bg-pump-dark/60 text-gray-300 hover:bg-pump-dark"
-          }`}
-        >
-          Buy
-        </button>
-        <button
-          onClick={() => setSide("sell")}
-          className={`py-2 rounded-lg font-semibold transition ${
-            side === "sell"
-              ? "bg-gray-200 text-black"
-              : "bg-pump-dark/60 text-gray-300 hover:bg-pump-dark"
-          }`}
-        >
-          Sell
-        </button>
-      </div>
-
-      {isBinaryStyle ? (
-        <div className="grid grid-cols-2 gap-3 mb-6">
-          {[0, 1].map((i) => {
-            const selected = selectedIndex === i;
-            const isRed = i === 1;
-
-            const baseClass = isRed
-              ? "bg-[#ff5c73]/10 text-[#ff5c73] border border-[#ff5c73]/40 hover:bg-[#ff5c73]/20"
-              : "bg-pump-green/10 text-pump-green border border-pump-green/40 hover:bg-pump-green/20";
-
-            const activeClass = isRed
-              ? "bg-[#ff5c73] text-black shadow-lg scale-105"
-              : "bg-pump-green text-black shadow-lg scale-105";
-
-            const oddsColor = isRed ? "text-[#ff5c73]" : "text-pump-green";
-
-            return (
-              <button
-                key={i}
-                onClick={() => setSelectedIndex(i)}
-                className={`flex flex-col items-center justify-center py-4 rounded-xl font-bold transition-all ${
-                  selected ? activeClass : baseClass
-                }`}
-              >
-                <span className="text-sm mb-1">{outcomes[i]}</span>
-                <span className="text-2xl">{(probs[i] ?? 0).toFixed(0)}¢</span>
-                <span
-                  className={`mt-1 font-extrabold ${
-                    selected ? "text-black" : oddsColor
-                  } text-lg`}
-                >
-                  {oddsX[i].toFixed(2)}x
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      ) : (
-        <div className="mb-6">
-          <label className="block text-white font-semibold mb-2">Outcome</label>
-          <select
-            value={selectedIndex}
-            onChange={(e) => setSelectedIndex(Number(e.target.value))}
-            className="input-pump w-full"
-          >
-            {outcomes.map((o, i) => (
-              <option key={`${o}-${i}`} value={i}>
-                {o} ({(probs[i] ?? 0).toFixed(1)}% • {oddsX[i].toFixed(2)}x)
-              </option>
-            ))}
-          </select>
-
-          <div className="mt-3 flex items-center justify-between text-sm text-gray-400">
-            <span>Selected</span>
-            <span className="text-white font-semibold">
-              {(probs[selectedIndex] ?? 0).toFixed(1)}% •{" "}
-              {oddsX[selectedIndex].toFixed(2)}x
-            </span>
-          </div>
+    <div className={rootClass}>
+      {/* Header (drawer) */}
+      {mode === "drawer" && (
+        <div className="flex items-center justify-between px-4 pt-4">
+          <div className="text-white font-bold text-lg">{title}</div>
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="h-9 w-9 rounded-full border border-gray-800 bg-pump-dark/60 text-gray-200"
+              aria-label="Close"
+            >
+              ✕
+            </button>
+          )}
         </div>
       )}
 
-      <div className="mb-4">
-        <label className="text-xs text-gray-400 mb-1 block">
-          Amount (shares)
-        </label>
-        <input
-          type="number"
-          min={1}
-          value={shares || ""}
-          onChange={handleAmountChange}
-          className="w-full bg-transparent border-none outline-none text-5xl md:text-6xl font-bold text-white tabular-nums text-right [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-          inputMode="numeric"
-        />
-        <div className="text-xs text-gray-500 mt-1 text-right">
-          avg {avgPriceSol.toFixed(6)} SOL / share (incl. fees)
+      <div className={mode === "drawer" ? "px-4 pb-2 pt-3" : ""}>
+        {/* Buy / Sell */}
+        <div className="grid grid-cols-2 gap-2 mb-4">
+          <button
+            onClick={() => setSide("buy")}
+            className={`py-2 rounded-lg font-semibold transition ${
+              side === "buy" ? "bg-pump-green text-black" : "bg-pump-dark/60 text-gray-300 hover:bg-pump-dark"
+            }`}
+          >
+            Buy
+          </button>
+          <button
+            onClick={() => setSide("sell")}
+            className={`py-2 rounded-lg font-semibold transition ${
+              side === "sell" ? "bg-gray-200 text-black" : "bg-pump-dark/60 text-gray-300 hover:bg-pump-dark"
+            }`}
+          >
+            Sell
+          </button>
         </div>
-      </div>
 
-      <div className="flex gap-2 justify-end mb-6">
-        <button
-          onClick={() => bumpShares(1)}
-          className="px-4 py-2 bg-pump-dark rounded-lg font-semibold transition text-sm text-white border border-gray-700 hover:border-pump-green"
-        >
-          +1
-        </button>
-        <button
-          onClick={() => bumpShares(20)}
-          className="px-4 py-2 bg-pump-dark rounded-lg font-semibold transition text-sm text-white border border-gray-700 hover:border-pump-green"
-        >
-          +20
-        </button>
-        <button
-          onClick={() => bumpShares(100)}
-          className="px-4 py-2 bg-pump-dark rounded-lg font-semibold transition text-sm text-white border border-gray-700 hover:border-pump-green"
-        >
-          +100
-        </button>
-        <button
-          onClick={handleMax}
-          className={`px-4 py-2 bg-pump-dark rounded-lg font-semibold transition text-sm ${
-            isRedBuy
-              ? "border border-[#ff5c73] text-[#ff5c73]"
-              : "border border-pump-green text-pump-green"
-          }`}
-        >
-          Max
-        </button>
-      </div>
+        {/* Outcome pick */}
+        {isBinaryStyle ? (
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            {[0, 1].map((i) => {
+              const selected = selectedIndex === i;
+              const isRed = i === 1;
 
-      <div className="bg-pump-dark rounded-xl p-4 mb-6 space-y-4">
-        <div className="flex justify-between items-end">
-          <div>
-            <p className="text-gray-400 text-sm mb-1">
-              {side === "buy" ? "You pay (est.)" : "You receive (est.)"}
-            </p>
-            <p className="text-xs text-gray-500">
-              Fee: {lamportsToSol(feeLamports).toFixed(6)} SOL (3%)
-            </p>
+              const baseClass = isRed
+                ? "bg-[#ff5c73]/10 text-[#ff5c73] border border-[#ff5c73]/40 hover:bg-[#ff5c73]/20"
+                : "bg-pump-green/10 text-pump-green border border-pump-green/40 hover:bg-pump-green/20";
+
+              const activeClass = isRed
+                ? "bg-[#ff5c73] text-black shadow-lg"
+                : "bg-pump-green text-black shadow-lg";
+
+              return (
+                <button
+                  key={i}
+                  onClick={() => setSelectedIndex(i)}
+                  className={`flex flex-col items-center justify-center py-4 rounded-xl font-bold transition-all ${
+                    selected ? activeClass : baseClass
+                  }`}
+                >
+                  <span className="text-sm mb-1">{outcomes[i]}</span>
+                  <span className="text-2xl">{(probs[i] ?? 0).toFixed(0)}¢</span>
+                  <span className={`mt-1 font-extrabold ${selected ? "text-black" : isRed ? "text-[#ff5c73]" : "text-pump-green"} text-lg`}>
+                    {oddsX[i].toFixed(2)}x
+                  </span>
+                </button>
+              );
+            })}
           </div>
-          <div className="text-right">
-            <div className={`text-3xl font-bold ${mainAccentAmountClass}`}>
+        ) : (
+          <div className="mb-4">
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-white font-semibold">Outcome</label>
+            </div>
+            <select
+              value={selectedIndex}
+              onChange={(e) => setSelectedIndex(Number(e.target.value))}
+              className="input-pump w-full"
+            >
+              {outcomes.map((o, i) => (
+                <option key={`${o}-${i}`} value={i}>
+                  {o} ({(probs[i] ?? 0).toFixed(1)}% • {oddsX[i].toFixed(2)}x)
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Amount */}
+        <div className="mb-4">
+          <div className="flex items-center justify-between">
+            <label className="text-xs text-gray-400 mb-1 block">Amount (shares)</label>
+            <div className="text-xs text-gray-500">
+              avg {avgPriceSol.toFixed(6)}
+              <InfoTip text="Average UI estimate per share (includes 3% fees). Not LMSR." />
+            </div>
+          </div>
+
+          <input
+            type="number"
+            min={1}
+            value={shares || ""}
+            onChange={handleAmountChange}
+            className="w-full bg-transparent border-none outline-none text-5xl md:text-6xl font-bold text-white tabular-nums text-right [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+            inputMode="numeric"
+          />
+
+          <div className="flex gap-2 justify-end mt-3">
+            <button onClick={() => bumpShares(1)} className="px-4 py-2 bg-pump-dark rounded-lg font-semibold transition text-sm text-white border border-gray-700 hover:border-pump-green">
+              +1
+            </button>
+            <button onClick={() => bumpShares(20)} className="px-4 py-2 bg-pump-dark rounded-lg font-semibold transition text-sm text-white border border-gray-700 hover:border-pump-green">
+              +20
+            </button>
+            <button onClick={() => bumpShares(100)} className="px-4 py-2 bg-pump-dark rounded-lg font-semibold transition text-sm text-white border border-gray-700 hover:border-pump-green">
+              +100
+            </button>
+            <button
+              onClick={handleMax}
+              className={`px-4 py-2 bg-pump-dark rounded-lg font-semibold transition text-sm ${
+                isRedBuy ? "border border-[#ff5c73] text-[#ff5c73]" : "border border-pump-green text-pump-green"
+              }`}
+            >
+              Max
+            </button>
+          </div>
+        </div>
+
+        {/* Summary (minimal) */}
+        <div className="bg-pump-dark rounded-xl p-4">
+          <div className="flex items-center justify-between">
+            <div className="text-sm text-gray-400">
+              {side === "buy" ? "You pay" : "You receive"}
+              <InfoTip text={`Includes a 3% fee. Fee right now: ${lamportsToSol(feeLamports).toFixed(6)} SOL.`} />
+            </div>
+            <div className={`text-2xl font-extrabold ${mainAccentAmountClass}`}>
               {lamportsToSol(payOrReceiveLamports).toFixed(6)} SOL
             </div>
           </div>
-        </div>
 
-        <div className="border-t border-white/10 pt-4">
-          {side === "buy" ? (
-            <div className="flex justify-between items-end gap-4">
-              <div className="min-w-0">
-                <p className="text-gray-400 text-sm mb-1">
-                  If this outcome wins (est.)
-                </p>
-                <p className="text-xs text-gray-500">
-                  UI estimate only (not LMSR).
-                </p>
+          {side === "buy" && payoutIfWinSol != null && (
+            <div className="mt-3 flex items-center justify-between">
+              <div className="text-sm text-gray-400">
+                To win
+                <InfoTip text="Approx. value if this outcome wins (UI estimate, not LMSR)." />
               </div>
-
-              <div className="text-right">
-                <div className="flex items-baseline justify-end gap-3">
-                  <div className="text-3xl font-bold text-white">
-                    {payoutIfWinSol == null
-                      ? "—"
-                      : `${payoutIfWinSol.toFixed(6)} SOL`}
-                  </div>
-                  <div
-                    className={`text-2xl font-extrabold ${outcomeAccentText}`}
-                  >
-                    {selectedOddsX.toFixed(2)}x
-                  </div>
-                </div>
-
-                {profitIfWinSol != null && roiPct != null && (
-                  <div className="text-xs mt-1">
-                    <span className={profitClass}>
-                      Profit (est.): {profitIfWinSol >= 0 ? "+" : ""}
-                      {profitIfWinSol.toFixed(6)} SOL
-                    </span>
-                    <span className="text-gray-500"> • </span>
-                    <span className={roiClass}>
-                      ROI: {roiPct >= 0 ? "+" : ""}
-                      {roiPct.toFixed(0)}%
-                    </span>
-                  </div>
-                )}
+              <div className="flex items-baseline gap-2">
+                <div className="text-xl font-bold text-white">{payoutIfWinSol.toFixed(6)} SOL</div>
+                <div className={`text-lg font-extrabold ${outcomeAccentText}`}>{selectedOddsX.toFixed(2)}x</div>
               </div>
             </div>
-          ) : (
-            <p className="text-xs text-gray-400">
-              You are selling your existing shares. UI estimate only.
-            </p>
           )}
         </div>
+
+        {/* Wallet / Resolved warnings */}
+        {!connected && (
+          <div className="mt-3 text-center p-3 bg-pump-dark rounded-xl">
+            <p className="text-gray-400 text-sm">Connect wallet to trade</p>
+          </div>
+        )}
+        {connected && market.resolved && (
+          <div className="mt-3 text-center p-3 bg-pump-dark rounded-xl">
+            <p className="text-gray-400 text-sm">Market resolved</p>
+          </div>
+        )}
       </div>
 
-      {!connected ? (
-        <div className="text-center p-4 bg-pump-dark rounded-xl">
-          <p className="text-gray-400">Connect wallet to trade</p>
-        </div>
-      ) : market.resolved ? (
-        <div className="text-center p-4 bg-pump-dark rounded-xl">
-          <p className="text-gray-400">Market resolved</p>
-        </div>
-      ) : (
+      {/* CTA (sticky in drawer to be visible without scroll) */}
+      <div
+        className={
+          mode === "drawer"
+            ? "sticky bottom-0 z-10 bg-gradient-to-t from-black/90 via-black/70 to-transparent px-4 pb-4 pt-3"
+            : "mt-4"
+        }
+      >
         <button
-          disabled={!!submitting || (side === "sell" && userCurrent <= 0)}
+          disabled={!!submitting || !connected || market.resolved || (side === "sell" && userCurrent <= 0)}
           onClick={handleTrade}
           className={`w-full py-4 rounded-xl font-bold text-lg transition-all ${
-            submitting || (side === "sell" && userCurrent <= 0)
+            submitting || !connected || market.resolved || (side === "sell" && userCurrent <= 0)
               ? "bg-gray-700 text-gray-300 cursor-not-allowed"
               : isBinaryStyle
               ? selectedIndex === 0
-                ? "bg-pump-green hover:bg-[#74ffb8] text-black shadow-lg hover:shadow-xl"
-                : "bg-[#ff5c73] hover:bg-[#ff7c90] text-black shadow-lg hover:shadow-xl"
+                ? "bg-pump-green hover:bg-[#74ffb8] text-black shadow-lg"
+                : "bg-[#ff5c73] hover:bg-[#ff7c90] text-black shadow-lg"
               : `btn-pump glow-green ${outcomeAccentBg}`
           }`}
         >
@@ -468,7 +426,7 @@ export default function TradingPanel({
             ? `Buy ${String(outcomes[selectedIndex] || "SHARES").toUpperCase()}`
             : `Sell ${String(outcomes[selectedIndex] || "SHARES").toUpperCase()}`}
         </button>
-      )}
+      </div>
     </div>
   );
 }

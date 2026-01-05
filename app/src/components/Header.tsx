@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { useWallet } from '@solana/wallet-adapter-react';
 import HowItWorksModal from '@/components/HowItWorksModal';
@@ -12,11 +12,8 @@ function useClickOutside(ref: React.RefObject<HTMLDivElement>, onClose: () => vo
   useEffect(() => {
     function handleClick(event: MouseEvent) {
       if (!ref.current) return;
-      if (!ref.current.contains(event.target as Node)) {
-        onClose();
-      }
+      if (!ref.current.contains(event.target as Node)) onClose();
     }
-
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
   }, [ref, onClose]);
@@ -24,6 +21,7 @@ function useClickOutside(ref: React.RefObject<HTMLDivElement>, onClose: () => vo
 
 export default function Header() {
   const router = useRouter();
+  const sp = useSearchParams();
   const { connected, publicKey, disconnect } = useWallet();
 
   const [search, setSearch] = useState('');
@@ -33,40 +31,51 @@ export default function Header() {
   const menuRef = useRef<HTMLDivElement>(null);
   useClickOutside(menuRef, () => setMenuOpen(false));
 
-  const avatarLabel = publicKey
-    ? publicKey.toBase58().slice(0, 2).toUpperCase()
-    : '??';
+  // pré-remplir search si on est sur /search?q=
+  useEffect(() => {
+    const q = sp.get('q') || '';
+    setSearch(q);
+  }, [sp]);
+
+  const avatarLabel = useMemo(() => {
+    return publicKey ? publicKey.toBase58().slice(0, 2).toUpperCase() : '??';
+  }, [publicKey]);
 
   const handleSearchSubmit = () => {
     const q = search.trim();
-    if (!q) return;
-    router.push(`/search?q=${encodeURIComponent(q)}`);
+    router.push(q ? `/search?q=${encodeURIComponent(q)}` : '/search');
   };
 
   return (
     <>
-      <header className="sticky top-0 z-40 border-b border-pump-border bg-pump-dark/95 backdrop-blur">
+      {/* HEADER FIXE */}
+      <header className="fixed top-0 left-0 right-0 z-[70] border-b border-pump-border bg-pump-dark/95 backdrop-blur">
         <div className="mx-auto flex max-w-7xl items-center gap-4 px-4 py-3 sm:px-6 lg:px-8">
           {/* Logo + name -> home */}
-          <Link href="/" className="flex items-center gap-3">
+          <Link href="/" className="flex items-center gap-3 shrink-0">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-pump-border bg-black text-sm font-semibold text-white">
               F
             </div>
-            <span className="text-lg font-semibold text-white">
-              Funmarket
-            </span>
+            <div className="flex items-center gap-2">
+  <span className="text-xl font-bold text-white">FunMarket</span>
+  <span className="px-2 py-0.5 text-[10px] font-bold uppercase rounded-full bg-pump-green text-black">
+    beta
+  </span>
+</div>
           </Link>
 
           {/* Search bar */}
-          <div className="flex-1">
+          <div className="flex-1 min-w-0">
             <div className="flex items-center rounded-full border border-pump-border bg-black px-4 py-2 text-sm text-gray-300">
               <button
                 type="button"
                 onClick={handleSearchSubmit}
                 className="mr-3 text-gray-500 hover:text-gray-300"
+                aria-label="Search"
               >
                 ⌕
               </button>
+
               <input
                 type="text"
                 value={search}
@@ -81,7 +90,7 @@ export default function Header() {
           </div>
 
           {/* Right side */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 shrink-0">
             {/* How it works */}
             <button
               type="button"
@@ -99,9 +108,9 @@ export default function Header() {
               Create
             </Link>
 
-            {/* Wallet button (violet par défaut, style lib) */}
+            {/* Wallet button */}
             <div className="flex items-center">
-              <WalletMultiButton />
+              <WalletMultiButton className="!h-11 !rounded-full !bg-pump-green !text-black hover:!opacity-90 !font-semibold" />
             </div>
 
             {/* Avatar + menu quand wallet connecté */}
@@ -111,12 +120,13 @@ export default function Header() {
                   type="button"
                   onClick={() => setMenuOpen((v) => !v)}
                   className="flex h-9 w-9 items-center justify-center rounded-full border border-pump-border bg-black text-xs font-semibold text-white hover:border-pump-green transition"
+                  aria-label="User menu"
                 >
                   {avatarLabel}
                 </button>
 
                 {menuOpen && (
-                  <div className="absolute right-0 mt-2 w-40 rounded-xl border border-pump-border bg-pump-gray shadow-lg py-1 text-sm text-gray-100">
+                  <div className="absolute right-0 mt-2 w-44 rounded-xl border border-pump-border bg-pump-gray shadow-lg py-1 text-sm text-gray-100">
                     <Link
                       href="/dashboard"
                       className="block px-4 py-2 hover:bg-pump-dark"
@@ -124,6 +134,7 @@ export default function Header() {
                     >
                       Dashboard
                     </Link>
+
                     <button
                       type="button"
                       className="block w-full px-4 py-2 text-left text-red-400 hover:bg-pump-dark hover:text-red-300"
@@ -132,7 +143,7 @@ export default function Header() {
                         try {
                           await disconnect();
                         } catch {
-                          // ignore errors
+                          // ignore
                         }
                       }}
                     >
@@ -146,11 +157,11 @@ export default function Header() {
         </div>
       </header>
 
+      {/* SPACER : évite que le contenu passe sous le header fixe */}
+      <div className="h-[64px]" />
+
       {/* How it works modal */}
-      <HowItWorksModal
-        isOpen={isHowItWorksOpen}
-        onClose={() => setIsHowItWorksOpen(false)}
-      />
+      <HowItWorksModal isOpen={isHowItWorksOpen} onClose={() => setIsHowItWorksOpen(false)} />
     </>
   );
 }
