@@ -1080,15 +1080,29 @@ export default function DashboardPage() {
                             ⚖️ Propose
                           </button>
                         )}
+{toResolutionStatus(m.resolution_status) === "proposed" && addr && (
+  <Link
+    href={`/contest/${addr}`}
+    className={[
+      "px-4 py-2 rounded-lg text-sm font-semibold transition border",
+      (Number(m.contest_count || 0) > 0)
+        ? "bg-[#ff5c73]/15 border-[#ff5c73]/40 text-[#ff5c73] hover:bg-[#ff5c73]/20"
+        : "bg-black/30 border-white/10 text-gray-300 hover:border-white/20",
+    ].join(" ")}
+    title="Open contest / disputes"
+  >
+    Disputes{Number(m.contest_count || 0) > 0 ? ` (${Number(m.contest_count)})` : ""}
+  </Link>
+)}
 
-                        {addr && (
-                          <Link
-                            href={`/trade/${addr}`}
-                            className="px-4 py-2 rounded-lg bg-pump-green text-black text-sm font-semibold hover:opacity-90 transition"
-                          >
-                            View
-                          </Link>
-                        )}
+{addr && (
+  <Link
+    href={`/trade/${addr}`}
+    className="px-4 py-2 rounded-lg bg-pump-green text-black text-sm font-semibold hover:opacity-90 transition"
+  >
+    View
+  </Link>
+)}
                       </div>
                     </div>
                   );

@@ -1,18 +1,18 @@
-import { Connection, PublicKey, clusterApiUrl } from "@solana/web3.js";
+import { Connection, PublicKey } from "@solana/web3.js";
 import { AnchorProvider } from "@coral-xyz/anchor";
 import type { AnchorWallet } from "@solana/wallet-adapter-react";
-import { Buffer } from "buffer";
 
 export const PROGRAM_ID = new PublicKey(
-  "FomHPbnvgSp7qLqAJFkDwut3MygPG9cmyK5TwebSNLTg"
-);
-export const NETWORK = clusterApiUrl("devnet");
-export const PLATFORM_WALLET = new PublicKey(
-  "7DVR8gnBbLYN1aAAhbEJpNLxdzPzuqwAPaLRCRt4v93Z"
+  process.env.NEXT_PUBLIC_PROGRAM_ID ?? "FomHPbnvgSp7qLqAJFkDwut3MygPG9cmyK5TwebSNLTg"
 );
 
-// 1 UI share => this many "raw shares" on-chain (u64)
-export const SHARE_SCALE = 1_000_000; // 0.001 SOL worth of granularity (in lamports units)
+export const NETWORK =
+  process.env.NEXT_PUBLIC_SOLANA_RPC ?? "https://api.devnet.solana.com";
+
+export const PLATFORM_WALLET = new PublicKey(
+  process.env.NEXT_PUBLIC_PLATFORM_WALLET ??
+    "6szhvTU23WtiKXqPs8vuX5G7JXu2TcUdVJNByNwVGYMV"
+);
 
 export function getConnection(): Connection {
   return new Connection(NETWORK, "confirmed");

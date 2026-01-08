@@ -32,8 +32,8 @@ type Props = {
   // UI helpers
   ended: boolean;
 
-  // ✅ NEW: 72h creator propose deadline (ISO string)
-  // computed in /trade/[id]/page.tsx as end_date + 72h
+  // ✅ NEW: 48h creator propose deadline (ISO string)
+  // computed in /trade/[id]/page.tsx as end_date + 48h
   creatorResolveDeadline?: string | null;
 };
 
@@ -216,7 +216,7 @@ export default function ResolutionPanel(props: Props) {
     ? "Cancelled • funds refundable"
     : isPending
     ? creatorWindowOpen
-      ? `Creator has ${formatMsToHhMm(creatorRemainingMs)} to propose (72h window)`
+? `Creator has ${formatMsToHhMm(creatorRemainingMs)} to propose (48h window)`
       : creatorWindowExpired
       ? "Creator window expired — cancelling / refunding"
       : "Waiting for proposal"
@@ -280,9 +280,9 @@ export default function ResolutionPanel(props: Props) {
                 : isCancelled
                 ? "No proposal needed (market cancelled)."
                 : creatorWindowOpen
-                ? "Creator must propose within 72h after end."
+                ? "Creator must propose within 48h after end."
                 : creatorWindowExpired
-                ? "No proposal in 72h → auto-cancel + refund."
+             ? "No proposal in 48h → auto-cancel + refund."
                 : "No proposal yet."
             }
             right={
@@ -317,14 +317,22 @@ export default function ResolutionPanel(props: Props) {
                 : "Opens after proposal."
             }
             right={
-              isProposed ? (
-                <div className="text-xs text-gray-400">
-                  {typeof contestCount === "number" && contestCount > 0
-                    ? `${contestCount} disputes`
-                    : "No disputes yet"}
-                </div>
-              ) : null
-            }
+                isProposed ? (
+                  <Link
+                    href={contestHref}
+                    className={`text-xs font-semibold transition ${
+                      typeof contestCount === "number" && contestCount > 0
+                        ? "text-[#ff5c73] hover:underline"
+                        : "text-gray-400 hover:text-pump-green hover:underline"
+                    }`}
+                    title="Open contest / disputes"
+                  >
+                    {typeof contestCount === "number" && contestCount > 0
+                      ? `${contestCount} disputes`
+                      : "No disputes yet"}
+                  </Link>
+                ) : null
+              }
           />
 
           <Step
@@ -436,7 +444,7 @@ export default function ResolutionPanel(props: Props) {
 
         <p className="mt-3 text-xs text-gray-500">
           Flow: ended → propose → 24h dispute window → finalize/payout.{" "}
-          {isPending ? "If no proposal in 72h: cancel + refund." : null}
+          {isPending ? "If no proposal in 48h: cancel + refund." : null}
         </p>
       </div>
 

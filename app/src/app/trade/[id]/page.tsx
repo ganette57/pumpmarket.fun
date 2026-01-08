@@ -238,7 +238,7 @@ export default function TradePage() {
 
       const endMs = parseEndDateMs(supabaseMarket?.end_date);
       const resolutionTime = Number.isFinite(endMs) ? Math.floor(endMs / 1000) : 0;
-      const creatorResolveDeadline = addHoursIso(endMs, 72);
+      const creatorResolveDeadline = addHoursIso(endMs, 48);
 
       const transformed: UiMarket = {
         dbId: supabaseMarket.id,

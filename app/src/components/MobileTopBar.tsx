@@ -49,7 +49,7 @@ export default function MobileTopBar({ showSearch }: { showSearch: boolean }) {
   <span className="shrink-0 px-2 py-0.5 text-[10px] font-bold uppercase rounded-full bg-pump-green text-black">
     beta
   </span>
-</div>              <div className="text-xs text-gray-400 truncate">predict, earn, repeat</div>
+</div>             
             </div>
           </Link>
 

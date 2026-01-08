@@ -3,7 +3,7 @@ export default function LivePage() {
       <div className="max-w-3xl mx-auto px-4 py-8">
         <h1 className="text-xl font-semibold mb-2">Live</h1>
         <p className="text-gray-400">
-          Streaming mode (V2). For now: coming soon.
+          Streaming mode (V2). coming soon.
         </p>
   
         <div className="mt-6 rounded-2xl border border-gray-800 bg-black/40 p-6">
