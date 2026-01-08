@@ -1,4 +1,7 @@
+<<<<<<< HEAD
 // app/src/app/api/admin/overview/route.ts
+=======
+>>>>>>> 46904d2 (chore(admin): move admin dashboard to app router structure)
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { isAdminRequest } from "@/lib/admin";
@@ -14,6 +17,7 @@ function toNumber(x: any) {
   return Number.isFinite(n) ? n : 0;
 }
 
+<<<<<<< HEAD
 type MarketRow = {
   market_address: string;
   question: string | null;
@@ -21,6 +25,8 @@ type MarketRow = {
   contest_count: number;
 };
 
+=======
+>>>>>>> 46904d2 (chore(admin): move admin dashboard to app router structure)
 export async function GET(req: Request) {
   // ✅ protect route with your admin cookie/session
   const ok = await isAdminRequest(req);
@@ -36,9 +42,13 @@ export async function GET(req: Request) {
     // We fetch minimal columns once then compute. (simple + stable)
     const { data: markets, error: mErr } = await supabase
       .from("markets")
+<<<<<<< HEAD
       .select(
         "id, resolved, resolution_status, end_date, total_volume, contest_count, contested, contest_deadline, question, market_address"
       )
+=======
+      .select("id, resolved, resolution_status, end_date, total_volume, contest_count, contested, contest_deadline, question, market_address")
+>>>>>>> 46904d2 (chore(admin): move admin dashboard to app router structure)
       .limit(5000);
 
     if (mErr) throw mErr;
@@ -54,8 +64,17 @@ export async function GET(req: Request) {
 
     let volume_sol_total = 0;
 
+<<<<<<< HEAD
     const proposed_markets: MarketRow[] = [];
     const disputed_markets: MarketRow[] = [];
+=======
+    const recent_proposed: Array<{
+      market_address: string;
+      question: string | null;
+      contest_deadline: string | null;
+      contest_count: number | null;
+    }> = [];
+>>>>>>> 46904d2 (chore(admin): move admin dashboard to app router structure)
 
     for (const mk of markets || []) {
       markets_total += 1;
@@ -70,6 +89,7 @@ export async function GET(req: Request) {
 
       if (status === "cancelled") markets_cancelled += 1;
       if (status === "finalized" || resolved) markets_finalized += 1;
+<<<<<<< HEAD
 
       if (status === "proposed") {
         markets_proposed += 1;
@@ -83,6 +103,16 @@ export async function GET(req: Request) {
 
         proposed_markets.push(row);
         if (row.contest_count > 0) disputed_markets.push(row);
+=======
+      if (status === "proposed") {
+        markets_proposed += 1;
+        recent_proposed.push({
+          market_address: String(mk.market_address),
+          question: mk.question ?? null,
+          contest_deadline: mk.contest_deadline ?? null,
+          contest_count: mk.contest_count ?? 0,
+        });
+>>>>>>> 46904d2 (chore(admin): move admin dashboard to app router structure)
       }
 
       // "open" = not resolved, not proposed, not cancelled, not ended
@@ -92,13 +122,18 @@ export async function GET(req: Request) {
     }
 
     // sort proposed by contest_deadline soonest first (or most disputed)
+<<<<<<< HEAD
     proposed_markets.sort((a, b) => {
+=======
+    recent_proposed.sort((a, b) => {
+>>>>>>> 46904d2 (chore(admin): move admin dashboard to app router structure)
       const ad = a.contest_deadline ? new Date(a.contest_deadline).getTime() : Infinity;
       const bd = b.contest_deadline ? new Date(b.contest_deadline).getTime() : Infinity;
       if (ad !== bd) return ad - bd;
       return (b.contest_count || 0) - (a.contest_count || 0);
     });
 
+<<<<<<< HEAD
     // disputes: hottest first
     disputed_markets.sort((a, b) => {
       if (a.contest_count !== b.contest_count) return b.contest_count - a.contest_count;
@@ -107,6 +142,8 @@ export async function GET(req: Request) {
       return ad - bd;
     });
 
+=======
+>>>>>>> 46904d2 (chore(admin): move admin dashboard to app router structure)
     // ---- TRANSACTIONS KPIs ----
     const { count: tx_count, error: txErr } = await supabase
       .from("transactions")
@@ -115,12 +152,22 @@ export async function GET(req: Request) {
 
     // unique traders (fetch distinct user_address)
     // If your table is big, you can optimize later with an RPC.
+<<<<<<< HEAD
     const { data: traders, error: trErr } = await supabase.from("transactions").select("user_address").limit(5000);
     if (trErr) throw trErr;
 
     const unique_traders = new Set(
       (traders || []).map((t: any) => String(t.user_address || "")).filter(Boolean)
     ).size;
+=======
+    const { data: traders, error: trErr } = await supabase
+      .from("transactions")
+      .select("user_address")
+      .limit(5000);
+    if (trErr) throw trErr;
+
+    const unique_traders = new Set((traders || []).map((t: any) => String(t.user_address || "")).filter(Boolean)).size;
+>>>>>>> 46904d2 (chore(admin): move admin dashboard to app router structure)
 
     // ---- DISPUTES KPIs ----
     // If you track disputes via contested/contest_count on markets:
@@ -154,8 +201,12 @@ export async function GET(req: Request) {
         disputes_open,
         disputes_total,
       },
+<<<<<<< HEAD
       proposed_markets: proposed_markets.slice(0, 30),
       disputed_markets: disputed_markets.slice(0, 30),
+=======
+      recent_proposed: recent_proposed.slice(0, 20),
+>>>>>>> 46904d2 (chore(admin): move admin dashboard to app router structure)
     });
   } catch (e: any) {
     console.error("admin overview error", e);
