@@ -169,10 +169,12 @@ export default function CommentsSection({ marketId }: { marketId: string }) {
       arr.push(c);
       map.set(c.parent_id, arr);
     }
-    for (const [k, arr] of map.entries()) {
-      arr.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    map.forEach((arr, k) => {
+      arr.sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
       map.set(k, arr);
-    }
+    });
     return { roots, childrenByParent: map };
   }, [comments]);
 
