@@ -1,11 +1,6 @@
 "use client";
 
-interface CategoryFiltersProps {
-  selectedCategory: string; // "all" | category id
-  onSelectCategory: (id: string) => void;
-}
-
-const CATEGORIES: { id: string; label: string }[] = [
+export const CATEGORIES = [
   { id: "all", label: "All" },
   { id: "trending", label: "Trending" },
   { id: "breaking", label: "Breaking news" },
@@ -18,20 +13,26 @@ const CATEGORIES: { id: string; label: string }[] = [
   { id: "science", label: "Science" },
   { id: "entertainment", label: "Entertainment" },
   { id: "other", label: "Other" },
-];
+] as const;
 
-export default function CategoryFilters({
-  selectedCategory,
-  onSelectCategory,
-}: CategoryFiltersProps) {
+export type CategoryId = (typeof CATEGORIES)[number]["id"];
+
+interface CategoryFiltersProps {
+  selectedCategory: CategoryId;
+  onSelectCategory: (id: CategoryId) => void;
+}
+
+export default function CategoryFilters({ selectedCategory, onSelectCategory }: CategoryFiltersProps) {
   return (
     <div className="py-4">
       <div className="flex gap-2 overflow-x-auto no-scrollbar">
         {CATEGORIES.map((cat) => {
           const active = selectedCategory === cat.id;
+
           return (
             <button
               key={cat.id}
+              type="button"
               onClick={() => onSelectCategory(cat.id)}
               className={[
                 "whitespace-nowrap rounded-full px-4 py-1.5 text-sm font-medium transition-all",

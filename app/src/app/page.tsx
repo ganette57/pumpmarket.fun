@@ -12,7 +12,7 @@ import GeoblockModal from "@/components/GeoblockModal";
 import LiveBuysTicker from "@/components/LiveBuysTicker";
 import Footer from "@/components/SiteFooter";
 import { SkeletonCard, SkeletonFeaturedCard } from "@/components/SkeletonCard";
-import { CategoryId } from "@/utils/categories";
+import type { CategoryId } from "@/components/CategoryFilters";
 import { supabase } from "@/lib/supabaseClient";
 
 type Market = {
@@ -100,9 +100,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  const [selectedCategory, setSelectedCategory] = useState<CategoryId | "all">(
-    "all"
-  );
+  const [selectedCategory, setSelectedCategory] = useState<CategoryId>("all");
 
   const [statusFilter, setStatusFilter] = useState<MarketStatusFilter>("open");
 
@@ -490,6 +488,6 @@ export default function Home() {
       <Footer />
 
       {/* ✅ Live buys ticker (20 latest BUY) */}
-      <LiveBuysTicker variant="breaking" />    </>
+  <LiveBuysTicker variant="breaking" />    </>
   );
 }
