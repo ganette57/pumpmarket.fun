@@ -2,8 +2,15 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { AnchorProvider } from "@coral-xyz/anchor";
 import type { AnchorWallet } from "@solana/wallet-adapter-react";
 
+/**
+ * ✅ Single source of truth
+ * Accept both env names to avoid regressions.
+ */
 export const PROGRAM_ID = new PublicKey(
-  process.env.NEXT_PUBLIC_PROGRAM_ID ?? "FomHPbnvgSp7qLqAJFkDwut3MygPG9cmyK5TwebSNLTg"
+  process.env.NEXT_PUBLIC_PROGRAM_ID ??
+    process.env.NEXT_PUBLIC_FUNMARKET_PROGRAM_ID ??
+    // dev fallback (your old one)
+    "A2EqnLDYW1WAi8mhR12ncGVvt92G3jisJqCe46YoV7SJ"
 );
 
 export const NETWORK =

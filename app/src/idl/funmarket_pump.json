@@ -1,5 +1,5 @@
 {
-  "address": "FomHPbnvgSp7qLqAJFkDwut3MygPG9cmyK5TwebSNLTg",
+  "address": "A2EqnLDYW1WAi8mhR12ncGVvt92G3jisJqCe46YoV7SJ",
   "metadata": {
     "name": "funmarket_pump",
     "version": "0.1.0",
@@ -7,6 +7,63 @@
     "description": "Funmarket.pump - Prediction markets with bonding curves on Solana"
   },
   "instructions": [
+    {
+      "name": "admin_cancel",
+      "discriminator": [
+        34,
+        225,
+        37,
+        131,
+        38,
+        121,
+        43,
+        237
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "address": "2FuGyidfE3N1tAf6vWFFystFcEVRp4WydHTmFr71pA9Y"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "admin_finalize",
+      "discriminator": [
+        3,
+        58,
+        185,
+        90,
+        3,
+        10,
+        55,
+        224
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "address": "2FuGyidfE3N1tAf6vWFFystFcEVRp4WydHTmFr71pA9Y"
+        }
+      ],
+      "args": [
+        {
+          "name": "winning_outcome",
+          "type": "u8"
+        }
+      ]
+    },
     {
       "name": "buy_shares",
       "discriminator": [
@@ -60,7 +117,8 @@
         },
         {
           "name": "platform_wallet",
-          "writable": true
+          "writable": true,
+          "address": "6szhvTU23WtiKXqPs8vuX5G7JXu2TcUdVJNByNwVGYMV"
         },
         {
           "name": "creator",
@@ -86,6 +144,89 @@
           "type": "u8"
         }
       ]
+    },
+    {
+      "name": "cancel_if_no_proposal",
+      "discriminator": [
+        241,
+        206,
+        216,
+        34,
+        198,
+        147,
+        91,
+        174
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "user",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "claim_refund",
+      "discriminator": [
+        15,
+        16,
+        30,
+        161,
+        255,
+        228,
+        97,
+        60
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "user_position",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  117,
+                  115,
+                  101,
+                  114,
+                  95,
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        }
+      ],
+      "args": []
     },
     {
       "name": "claim_winnings",
@@ -208,16 +349,64 @@
       ]
     },
     {
-      "name": "resolve_market",
+      "name": "dispute",
       "discriminator": [
-        155,
+        216,
+        92,
+        128,
+        146,
+        202,
+        85,
+        135,
+        73
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "user",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "finalize_if_no_disputes",
+      "discriminator": [
+        57,
+        28,
+        104,
+        11,
+        172,
+        236,
+        72,
+        5
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "user",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "propose_resolution",
+      "discriminator": [
+        19,
+        68,
+        181,
         23,
-        80,
-        173,
-        46,
-        74,
-        23,
-        239
+        194,
+        146,
+        152,
+        252
       ],
       "accounts": [
         {
@@ -234,7 +423,7 @@
       ],
       "args": [
         {
-          "name": "winning_outcome",
+          "name": "proposed_outcome",
           "type": "u8"
         }
       ]
@@ -292,7 +481,8 @@
         },
         {
           "name": "platform_wallet",
-          "writable": true
+          "writable": true,
+          "address": "6szhvTU23WtiKXqPs8vuX5G7JXu2TcUdVJNByNwVGYMV"
         },
         {
           "name": "creator",
@@ -348,6 +538,99 @@
       ]
     }
   ],
+  "events": [
+    {
+      "name": "Cancelled",
+      "discriminator": [
+        136,
+        23,
+        42,
+        65,
+        143,
+        233,
+        234,
+        46
+      ]
+    },
+    {
+      "name": "Claimed",
+      "discriminator": [
+        217,
+        192,
+        123,
+        72,
+        108,
+        150,
+        248,
+        33
+      ]
+    },
+    {
+      "name": "Disputed",
+      "discriminator": [
+        186,
+        235,
+        91,
+        209,
+        148,
+        93,
+        152,
+        217
+      ]
+    },
+    {
+      "name": "Finalized",
+      "discriminator": [
+        4,
+        77,
+        242,
+        80,
+        20,
+        152,
+        247,
+        252
+      ]
+    },
+    {
+      "name": "MarketCreated",
+      "discriminator": [
+        88,
+        184,
+        130,
+        231,
+        226,
+        84,
+        6,
+        58
+      ]
+    },
+    {
+      "name": "ResolutionProposed",
+      "discriminator": [
+        209,
+        21,
+        193,
+        193,
+        218,
+        234,
+        131,
+        108
+      ]
+    },
+    {
+      "name": "TradeExecuted",
+      "discriminator": [
+        41,
+        110,
+        64,
+        129,
+        60,
+        79,
+        179,
+        80
+      ]
+    }
+  ],
   "errors": [
     {
       "code": 6000,
@@ -366,121 +649,286 @@
     },
     {
       "code": 6003,
-      "name": "MarketClosed",
-      "msg": "Market is closed (past end time)"
-    },
-    {
-      "code": 6004,
-      "name": "MarketResolved",
-      "msg": "Market already resolved"
-    },
-    {
-      "code": 6005,
-      "name": "MarketNotEnded",
-      "msg": "Market not ended yet"
-    },
-    {
-      "code": 6006,
-      "name": "MarketNotResolved",
-      "msg": "Market not resolved"
-    },
-    {
-      "code": 6007,
-      "name": "InvalidShares",
-      "msg": "Invalid shares"
-    },
-    {
-      "code": 6008,
-      "name": "InvalidOutcomeIndex",
-      "msg": "Invalid outcome index"
-    },
-    {
-      "code": 6009,
-      "name": "TradeTooLarge",
-      "msg": "Trade too large"
-    },
-    {
-      "code": 6010,
-      "name": "CooldownActive",
-      "msg": "Cooldown active: wait before trading again"
-    },
-    {
-      "code": 6011,
-      "name": "PositionCapExceeded",
-      "msg": "Position cap exceeded for this outcome"
-    },
-    {
-      "code": 6012,
       "name": "InvalidAntiManip",
       "msg": "Invalid anti-manip config"
     },
     {
+      "code": 6004,
+      "name": "MarketClosed",
+      "msg": "Market is closed (past end time)"
+    },
+    {
+      "code": 6005,
+      "name": "MarketResolved",
+      "msg": "Market already resolved"
+    },
+    {
+      "code": 6006,
+      "name": "MarketNotEnded",
+      "msg": "Market not ended yet"
+    },
+    {
+      "code": 6007,
+      "name": "MarketNotResolved",
+      "msg": "Market not resolved"
+    },
+    {
+      "code": 6008,
+      "name": "InvalidState",
+      "msg": "Invalid state"
+    },
+    {
+      "code": 6009,
+      "name": "TooEarly",
+      "msg": "Too early"
+    },
+    {
+      "code": 6010,
+      "name": "TooLateToPropose",
+      "msg": "Too late to propose"
+    },
+    {
+      "code": 6011,
+      "name": "InvalidShares",
+      "msg": "Invalid shares"
+    },
+    {
+      "code": 6012,
+      "name": "InvalidOutcomeIndex",
+      "msg": "Invalid outcome index"
+    },
+    {
       "code": 6013,
+      "name": "TradeTooLarge",
+      "msg": "Trade too large"
+    },
+    {
+      "code": 6014,
+      "name": "CooldownActive",
+      "msg": "Cooldown active: wait before trading again"
+    },
+    {
+      "code": 6015,
+      "name": "PositionCapExceeded",
+      "msg": "Position cap exceeded for this outcome"
+    },
+    {
+      "code": 6016,
       "name": "NotEnoughShares",
       "msg": "Not enough shares to sell"
     },
     {
-      "code": 6014,
+      "code": 6017,
       "name": "InvalidCost",
-      "msg": "Invalid cost/refund"
+      "msg": "Invalid cost or refund"
     },
     {
-      "code": 6015,
+      "code": 6018,
       "name": "InvalidPayout",
       "msg": "Invalid payout"
     },
     {
-      "code": 6016,
+      "code": 6019,
       "name": "NoWinningShares",
       "msg": "No winning shares to claim"
     },
     {
-      "code": 6017,
+      "code": 6020,
       "name": "InvalidSupply",
       "msg": "Invalid supply"
     },
     {
-      "code": 6018,
+      "code": 6021,
       "name": "AlreadyClaimed",
       "msg": "Already claimed"
     },
     {
-      "code": 6019,
+      "code": 6022,
+      "name": "NothingToRefund",
+      "msg": "Nothing to refund"
+    },
+    {
+      "code": 6023,
+      "name": "DisputeWindowClosed",
+      "msg": "Dispute window closed"
+    },
+    {
+      "code": 6024,
+      "name": "HasDisputes",
+      "msg": "Has disputes; requires admin"
+    },
+    {
+      "code": 6025,
+      "name": "NoDispute",
+      "msg": "No dispute"
+    },
+    {
+      "code": 6026,
+      "name": "Unauthorized",
+      "msg": "Unauthorized"
+    },
+    {
+      "code": 6027,
+      "name": "NotCancelled",
+      "msg": "Market not cancelled"
+    },
+    {
+      "code": 6028,
       "name": "InsufficientMarketBalance",
       "msg": "Insufficient market balance"
     },
     {
-      "code": 6020,
+      "code": 6029,
       "name": "InvalidUserPosition",
       "msg": "Invalid user position account"
     },
     {
-      "code": 6021,
-      "name": "Overflow",
-      "msg": "Overflow"
-    },
-    {
-      "code": 6022,
+      "code": 6030,
       "name": "MathOverflow",
       "msg": "Math overflow"
     },
     {
-      "code": 6023,
+      "code": 6031,
       "name": "InvalidLiquidityParameter",
       "msg": "Invalid liquidity parameter"
     },
     {
-      "code": 6024,
+      "code": 6032,
       "name": "InvalidOutcomeCount",
       "msg": "Invalid outcome count"
     },
     {
-      "code": 6025,
+      "code": 6033,
       "name": "InsufficientShares",
       "msg": "Insufficient shares"
+    },
+    {
+      "code": 6034,
+      "name": "Overflow",
+      "msg": "Overflow"
     }
   ],
   "types": [
+    {
+      "name": "CancelReason",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "NoProposal48h"
+          },
+          {
+            "name": "Admin"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Cancelled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "by",
+            "type": "pubkey"
+          },
+          {
+            "name": "reason",
+            "type": {
+              "defined": {
+                "name": "CancelReason"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ClaimKind",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Winnings"
+          },
+          {
+            "name": "Refund"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Claimed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "user",
+            "type": "pubkey"
+          },
+          {
+            "name": "kind",
+            "type": {
+              "defined": {
+                "name": "ClaimKind"
+              }
+            }
+          },
+          {
+            "name": "amount_lamports",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Disputed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "by",
+            "type": "pubkey"
+          },
+          {
+            "name": "dispute_count",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Finalized",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "winning_outcome",
+            "type": "u8"
+          },
+          {
+            "name": "by",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
     {
       "name": "Market",
       "type": {
@@ -493,16 +941,6 @@
           {
             "name": "resolution_time",
             "type": "i64"
-          },
-          {
-            "name": "resolved",
-            "type": "bool"
-          },
-          {
-            "name": "winning_outcome",
-            "type": {
-              "option": "u8"
-            }
           },
           {
             "name": "market_type",
@@ -526,6 +964,50 @@
             }
           },
           {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "MarketStatus"
+              }
+            }
+          },
+          {
+            "name": "resolved",
+            "type": "bool"
+          },
+          {
+            "name": "cancelled",
+            "type": "bool"
+          },
+          {
+            "name": "winning_outcome",
+            "type": {
+              "option": "u8"
+            }
+          },
+          {
+            "name": "proposed_outcome",
+            "type": {
+              "option": "u8"
+            }
+          },
+          {
+            "name": "proposed_at",
+            "type": {
+              "option": "i64"
+            }
+          },
+          {
+            "name": "contest_deadline",
+            "type": {
+              "option": "i64"
+            }
+          },
+          {
+            "name": "dispute_count",
+            "type": "u32"
+          },
+          {
             "name": "max_position_bps",
             "type": "u16"
           },
@@ -542,6 +1024,122 @@
             "type": {
               "vec": "string"
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "MarketCreated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "resolution_time",
+            "type": "i64"
+          },
+          {
+            "name": "market_type",
+            "type": "u8"
+          },
+          {
+            "name": "outcome_count",
+            "type": "u8"
+          },
+          {
+            "name": "b_lamports",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MarketStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Open"
+          },
+          {
+            "name": "Proposed"
+          },
+          {
+            "name": "Finalized"
+          },
+          {
+            "name": "Cancelled"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ResolutionProposed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "proposed_outcome",
+            "type": "u8"
+          },
+          {
+            "name": "proposed_at",
+            "type": "i64"
+          },
+          {
+            "name": "contest_deadline",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TradeExecuted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "user",
+            "type": "pubkey"
+          },
+          {
+            "name": "is_buy",
+            "type": "bool"
+          },
+          {
+            "name": "outcome_index",
+            "type": "u8"
+          },
+          {
+            "name": "shares",
+            "type": "u64"
+          },
+          {
+            "name": "amount_lamports",
+            "type": "u64"
+          },
+          {
+            "name": "platform_fee_lamports",
+            "type": "u64"
+          },
+          {
+            "name": "creator_fee_lamports",
+            "type": "u64"
           }
         ]
       }
@@ -575,6 +1173,10 @@
           {
             "name": "last_trade_ts",
             "type": "i64"
+          },
+          {
+            "name": "net_cost_lamports",
+            "type": "i128"
           }
         ]
       }

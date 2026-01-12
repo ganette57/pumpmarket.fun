@@ -1,18 +1,16 @@
 // src/app/dashboard/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
-
 import { supabase } from "@/lib/supabaseClient";
 import { useProgram } from "@/hooks/useProgram";
 import { lamportsToSol, getUserPositionPDA } from "@/utils/solana";
 import { outcomeLabelFromMarket } from "@/utils/outcomes";
-
 import { uploadResolutionProofImage } from "@/lib/proofs";
-import { proposeResolution } from "@/lib/markets";
+import { proposeResolution as proposeResolutionDb } from "@/lib/markets";
 
 /* -------------------------------------------------------------------------- */
 /* Helpers                                                                    */
@@ -64,10 +62,35 @@ function formatMsToHhMm(ms: number) {
   return `${h}h ${m}m`;
 }
 
-function toResolutionStatus(x: any): "open" | "proposed" | "finalized" | "cancelled" {
+type ResolutionStatus = "open" | "proposed" | "finalized" | "cancelled";
+function toResolutionStatus(x: any): ResolutionStatus {
   const s = String(x || "").toLowerCase().trim();
   if (s === "proposed" || s === "finalized" || s === "cancelled") return s;
   return "open";
+}
+
+// Anchor enum decoding: MarketStatus::Open/Proposed/Finalized/Cancelled
+function decodeMarketStatus(status: any): ResolutionStatus {
+  // Anchor often returns: { open: {} } or { proposed: {} } etc.
+  if (status && typeof status === "object") {
+    if ("open" in status) return "open";
+    if ("proposed" in status) return "proposed";
+    if ("finalized" in status) return "finalized";
+    if ("cancelled" in status) return "cancelled";
+  }
+  // Sometimes it’s a string
+  const s = String(status || "").toLowerCase();
+  if (s.includes("proposed")) return "proposed";
+  if (s.includes("final")) return "finalized";
+  if (s.includes("cancel")) return "cancelled";
+  return "open";
+}
+
+function toI64Sec(v: any): number {
+  if (v == null) return 0;
+  if (typeof v === "number") return Math.floor(v);
+  if (typeof v?.toNumber === "function") return v.toNumber();
+  return Math.floor(Number(v) || 0);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -84,15 +107,13 @@ type DbMarket = {
   resolved?: boolean;
   outcome_names?: string[] | null;
 
-  // legacy resolved fields
   winning_outcome?: number | null;
   resolved_at?: string | null;
   resolution_proof_url?: string | null;
   resolution_proof_image?: string | null;
   resolution_proof_note?: string | null;
 
-  // off-chain contest flow
-  resolution_status?: "open" | "proposed" | "finalized" | "cancelled" | string | null;
+  resolution_status?: ResolutionStatus | string | null;
   proposed_winning_outcome?: number | null;
   resolution_proposed_at?: string | null;
   contest_deadline?: string | null;
@@ -112,14 +133,12 @@ type DbTx = {
   market_address?: string | null;
   user_address?: string | null;
 
-  // legacy
   is_buy?: boolean | null;
   is_yes?: boolean | null;
   amount?: number | null;
   cost?: number | null;
   tx_signature?: string | null;
 
-  // new
   outcome_index?: number | null;
   shares?: number | null;
   outcome_name?: string | null;
@@ -132,7 +151,6 @@ type Claimable = {
   winningIndex?: number;
 };
 
-// ✅ bookmarks now store market_id (uuid)
 type BookmarkRow = {
   market_id: string;
   created_at?: string;
@@ -218,7 +236,6 @@ async function safeFetchMyCreatedMarkets(walletBase58: string): Promise<DbMarket
   return [];
 }
 
-// ✅ local-only helper: fetch bookmarked markets by DB ids (uuid)
 async function safeFetchMarketsByIds(ids: string[]): Promise<DbMarket[]> {
   if (!ids.length) return [];
   const trySelects = [
@@ -253,11 +270,7 @@ async function safeFetchMarketsByIds(ids: string[]): Promise<DbMarket[]> {
   ];
 
   for (const sel of trySelects) {
-    const { data, error } = await supabase
-      .from("markets")
-      .select(sel)
-      .in("id", ids.slice(0, 200));
-
+    const { data, error } = await supabase.from("markets").select(sel).in("id", ids.slice(0, 200));
     if (!error) return (((data as any[]) || []) as DbMarket[]) || [];
     const msg = String((error as any)?.message || "");
     if (!msg.includes("does not exist") && !msg.includes("column")) {
@@ -274,7 +287,6 @@ async function safeFetchBookmarks(walletAddress: string, limit = 200): Promise<B
   for (const table of tryTables) {
     const { data, error } = await supabase
       .from(table)
-      // ✅ market_id instead of market_address
       .select("market_id,created_at")
       .eq("user_address", walletAddress)
       .order("created_at", { ascending: false })
@@ -287,7 +299,6 @@ async function safeFetchBookmarks(walletAddress: string, limit = 200): Promise<B
       return [];
     }
   }
-
   return [];
 }
 
@@ -346,7 +357,6 @@ export default function DashboardPage() {
   const [claimables, setClaimables] = useState<Claimable[]>([]);
   const [claimingMarket, setClaimingMarket] = useState<string | null>(null);
 
-  // ✅ bookmarks now track DB ids
   const [bookmarkIds, setBookmarkIds] = useState<string[]>([]);
   const [bookmarkedMarkets, setBookmarkedMarkets] = useState<DbMarket[]>([]);
 
@@ -358,10 +368,10 @@ export default function DashboardPage() {
   // proof
   type ProofMode = "upload" | "link";
   const [proofMode, setProofMode] = useState<ProofMode>("upload");
-  const [proofUrl, setProofUrl] = useState("");
+  const [proofUrl, setProofUrl] = useState<string>(""); // keep controlled
   const [proofFile, setProofFile] = useState<File | null>(null);
-  const [proofPreview, setProofPreview] = useState<string>("");
-  const [proofNote, setProofNote] = useState("");
+  const [proofPreview, setProofPreview] = useState<string>(""); // keep controlled
+  const [proofNote, setProofNote] = useState<string>("");
 
   const proofOk = proofMode === "link" ? proofUrl.trim().length > 0 : !!proofFile;
 
@@ -369,16 +379,17 @@ export default function DashboardPage() {
     setProofMode(m);
     setProofUrl("");
     setProofFile(null);
+    if (proofPreview) URL.revokeObjectURL(proofPreview);
     setProofPreview("");
   }
 
   function resetResolveModal() {
     setResolvingMarket(null);
     setSelectedOutcome(null);
-
     setProofMode("upload");
     setProofUrl("");
     setProofFile(null);
+    if (proofPreview) URL.revokeObjectURL(proofPreview);
     setProofPreview("");
     setProofNote("");
   }
@@ -390,7 +401,7 @@ export default function DashboardPage() {
     };
   }, [proofPreview]);
 
-  // derived maps for tx outcome labels
+  // derived map
   const marketsByAddress = useMemo(() => {
     const m = new Map<string, DbMarket>();
     for (const mk of [...myCreatedMarkets, ...bookmarkedMarkets]) {
@@ -416,7 +427,6 @@ export default function DashboardPage() {
 
     (async () => {
       setErrorMsg(null);
-
       setLoadingMarkets(true);
       setLoadingTxs(true);
       setLoadingBookmarks(true);
@@ -433,8 +443,9 @@ export default function DashboardPage() {
         setMyCreatedMarkets(markets || []);
         setMyTxs(txs || []);
 
-        // ✅ bookmarks -> market_id list
-        const ids = Array.from(new Set((bms || []).map((x) => String(x.market_id || "")).filter(Boolean)));
+        const ids = Array.from(
+          new Set((bms || []).map((x) => String(x.market_id || "")).filter(Boolean))
+        );
         setBookmarkIds(ids);
       } catch (e: any) {
         if (!cancelled) setErrorMsg(e?.message || "Failed to load dashboard");
@@ -467,7 +478,6 @@ export default function DashboardPage() {
       try {
         const mkts = await safeFetchMarketsByIds(bookmarkIds);
 
-        // keep bookmark order stable
         const byId = new Map<string, DbMarket>();
         for (const m of mkts || []) if (m.id) byId.set(String(m.id), m);
         const ordered = bookmarkIds.map((id) => byId.get(id)).filter(Boolean) as DbMarket[];
@@ -498,9 +508,7 @@ export default function DashboardPage() {
     (async () => {
       setLoadingClaimables(true);
       try {
-        // gather candidate markets: created + bookmarked + traded
         const addresses: string[] = [];
-
         for (const m of myCreatedMarkets) if (m.market_address) addresses.push(String(m.market_address));
         for (const m of bookmarkedMarkets) if (m.market_address) addresses.push(String(m.market_address));
         for (const t of myTxs) if (t.market_address) addresses.push(String(t.market_address));
@@ -526,8 +534,8 @@ export default function DashboardPage() {
           }
 
           const resolved = !!marketAcc?.resolved;
-          const winningOpt = marketAcc?.winningOutcome;
 
+          const winningOpt = marketAcc?.winningOutcome;
           const winningIndex =
             winningOpt == null
               ? null
@@ -559,15 +567,14 @@ export default function DashboardPage() {
           const winningShares = Math.floor(Number(sharesArr[winningIndex] || 0));
           if (winningShares <= 0) continue;
 
-          const totalWinningSupply = Array.isArray(marketAcc?.outcomeSupplies)
-            ? Number(
-                typeof marketAcc.outcomeSupplies[winningIndex] === "number"
-                  ? marketAcc.outcomeSupplies[winningIndex]
-                  : typeof marketAcc.outcomeSupplies[winningIndex]?.toNumber === "function"
-                  ? marketAcc.outcomeSupplies[winningIndex].toNumber()
-                  : marketAcc.outcomeSupplies[winningIndex] || 0
+          // Your SC market uses q[] not outcomeSupplies. Try q first.
+          const qArr = Array.isArray(marketAcc?.q)
+            ? marketAcc.q.map((x: any) =>
+                typeof x === "number" ? x : typeof x?.toNumber === "function" ? x.toNumber() : Number(x || 0)
               )
-            : 0;
+            : [];
+
+          const totalWinningSupply = Number(qArr[winningIndex] || 0);
 
           let estPayoutLamports: number | undefined = undefined;
           if (totalWinningSupply > 0) {
@@ -602,8 +609,8 @@ export default function DashboardPage() {
   /* ---------------- Stats ---------------- */
 
   const walletLabel = useMemo(() => shortAddr(walletBase58), [walletBase58]);
+
   const gainsSol = useMemo(() => {
-    // Gains = somme des payouts estimés des claimables (0 si none)
     return (claimables || []).reduce((sum, c) => sum + lamportsToSol(toNum(c.estPayoutLamports)), 0);
   }, [claimables]);
 
@@ -648,7 +655,6 @@ export default function DashboardPage() {
           : 1;
 
       const pseudoMarket = { outcome_names: names };
-
       const outcomeLabel = outcomeLabelFromMarket(pseudoMarket, {
         outcomeIndex,
         isYes: t.is_yes,
@@ -704,23 +710,91 @@ export default function DashboardPage() {
   }
 
   async function handleProposeResolution() {
-    if (!connected || !publicKey || !resolvingMarket || selectedOutcome === null) return;
+    if (resolveLoading) return;
+    if (!connected || !publicKey || !program || !resolvingMarket) return;
+    if (selectedOutcome === null) return;
+  
     const marketAddress = resolvingMarket.market_address;
     if (!marketAddress) return;
-
+  
     if (!proofOk) {
       alert(proofMode === "link" ? "Please provide a proof URL." : "Please upload a proof image.");
       return;
     }
-
-    const note = proofNote.trim();
-
+  
+    const parseStatus = (statusRaw: any): "open" | "proposed" | "finalized" | "cancelled" | "unknown" => {
+      if (!statusRaw) return "unknown";
+      if (typeof statusRaw === "string") {
+        const s = statusRaw.toLowerCase();
+        if (s === "open" || s === "proposed" || s === "finalized" || s === "cancelled") return s;
+        return "unknown";
+      }
+      // Anchor enum object shape: { open: {} } / { proposed: {} } ...
+      if (statusRaw.open) return "open";
+      if (statusRaw.proposed) return "proposed";
+      if (statusRaw.finalized) return "finalized";
+      if (statusRaw.cancelled) return "cancelled";
+      return "unknown";
+    };
+  
+    const bnToNum = (x: any) =>
+      typeof x?.toNumber === "function" ? x.toNumber() : Number(x ?? 0);
+  
     try {
       setResolveLoading(true);
-
+  
+      const marketPk = new PublicKey(marketAddress);
+  
+      // --------------------------
+      // 1) Fetch on-chain market + validate
+      // --------------------------
+      const before = await (program as any).account.market.fetch(marketPk);
+  
+      const onchainCreator: PublicKey | undefined = before?.creator;
+      if (!onchainCreator) throw new Error("On-chain market has no creator");
+      if (!onchainCreator.equals(publicKey)) {
+        throw new Error(
+          `Wrong creator wallet.\nOn-chain creator = ${onchainCreator.toBase58()}\nYou = ${publicKey.toBase58()}`
+        );
+      }
+  
+      const statusStr = parseStatus(before?.status);
+  
+      const nowSec = Math.floor(Date.now() / 1000);
+      const resolutionTimeSec = bnToNum(before?.resolutionTime);
+  
+      if (resolutionTimeSec && nowSec < resolutionTimeSec) {
+        throw new Error(`Market not ended on-chain yet. Ends in ${resolutionTimeSec - nowSec}s`);
+      }
+  
+      // Some programs use booleans, some rely purely on status.
+      if (before?.resolved) throw new Error("Market already resolved on-chain.");
+      if (before?.cancelled) throw new Error("Market cancelled on-chain.");
+      if (statusStr === "finalized") throw new Error("Market already finalized on-chain.");
+      if (statusStr === "cancelled") throw new Error("Market cancelled on-chain.");
+  
+      // If already proposed, ensure we're not trying to change outcome off-chain.
+      const proposedOutcomeOnChain =
+        before?.proposedOutcome != null ? bnToNum(before?.proposedOutcome) : null;
+  
+      if (statusStr === "proposed" && proposedOutcomeOnChain != null && proposedOutcomeOnChain !== selectedOutcome) {
+        throw new Error(
+          `Market already proposed on-chain with a different outcome.\n` +
+            `On-chain: ${proposedOutcomeOnChain} • You selected: ${selectedOutcome}\n` +
+            `You must keep the on-chain proposed outcome.`
+        );
+      }
+  
+      if (statusStr !== "open" && statusStr !== "proposed") {
+        throw new Error(`Invalid on-chain status: ${statusStr}. (Needs: open/proposed)`);
+      }
+  
+      // --------------------------
+      // 2) Prepare proof (only after validations)
+      // --------------------------
       let proposedProofUrl: string | null = null;
       let proposedProofImage: string | null = null;
-
+  
       if (proofMode === "link") {
         proposedProofUrl = proofUrl.trim();
         proposedProofImage = null;
@@ -729,48 +803,98 @@ export default function DashboardPage() {
         proposedProofImage = await uploadResolutionProofImage(proofFile, marketAddress);
         proposedProofUrl = null;
       }
-
-      const now = Date.now();
-      const deadlineIso = new Date(now + 24 * 60 * 60 * 1000).toISOString();
-
-      await proposeResolution({
+  
+      const note = proofNote.trim() || null;
+  
+      // --------------------------
+      // 3) On-chain propose ONLY if status is OPEN
+      // --------------------------
+      let sig: string | null = null;
+  
+      if (statusStr === "open") {
+        sig = await (program as any).methods
+          .proposeResolution(selectedOutcome)
+          .accounts({
+            market: marketPk,
+            creator: publicKey,
+          })
+          .rpc();
+  
+        console.log("✅ proposeResolution on-chain tx =", sig);
+      } else {
+        console.log("ℹ️ Market already proposed on-chain, skipping propose tx");
+      }
+  
+      // --------------------------
+      // 4) Read contest deadline + proposedAt from chain (source of truth)
+      // --------------------------
+      const after = await (program as any).account.market.fetch(marketPk);
+  
+      const contestDeadlineSec = bnToNum(after?.contestDeadline);
+      const proposedAtSec = bnToNum(after?.proposedAt);
+  
+      const deadlineIso =
+        contestDeadlineSec && Number.isFinite(contestDeadlineSec) && contestDeadlineSec > 0
+          ? new Date(contestDeadlineSec * 1000).toISOString()
+          : new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  
+      const proposedAtIso =
+        proposedAtSec && Number.isFinite(proposedAtSec) && proposedAtSec > 0
+          ? new Date(proposedAtSec * 1000).toISOString()
+          : new Date().toISOString();
+  
+      // If already proposed, keep the chain outcome as truth
+      const finalProposedOutcome =
+        after?.proposedOutcome != null ? bnToNum(after?.proposedOutcome) : selectedOutcome;
+  
+      // --------------------------
+      // 5) DB commit (proof + UI fields)
+      // --------------------------
+      await proposeResolutionDb({
         market_address: marketAddress,
-        proposed_winning_outcome: selectedOutcome,
+        proposed_winning_outcome: finalProposedOutcome,
         contest_deadline_iso: deadlineIso,
         proposed_proof_url: proposedProofUrl,
         proposed_proof_image: proposedProofImage,
-        proposed_proof_note: note || null,
-      });
-
-      // optimistic update
-      const proposedAtIso = new Date().toISOString();
+        proposed_proof_note: note,
+        tx_sig: sig, // can be null when already proposed
+      } as any);
+  
+      // --------------------------
+      // 6) Optimistic UI update + close
+      // --------------------------
       setMyCreatedMarkets((prev) =>
         prev.map((m) =>
           m.market_address === marketAddress
             ? {
                 ...m,
                 resolution_status: "proposed",
-                proposed_winning_outcome: selectedOutcome,
+                proposed_winning_outcome: finalProposedOutcome,
                 resolution_proposed_at: proposedAtIso,
                 contest_deadline: deadlineIso,
                 contested: false,
                 contest_count: 0,
                 proposed_proof_url: proposedProofUrl,
                 proposed_proof_image: proposedProofImage,
-                proposed_proof_note: note || null,
+                proposed_proof_note: note,
               }
             : m
         )
       );
-
+  
       const labels = resolvingMarket.outcome_names || ["YES", "NO"];
       resetResolveModal();
-
+  
       alert(
-        `Resolution proposed ✅\n\nOutcome: ${labels[selectedOutcome] || `Option ${selectedOutcome + 1}`}\n\nContest window: 24h\n\nTrading is now locked (UI).`
+        "Resolution proposed ✅\n\n" +
+          "Outcome: " +
+          (labels[finalProposedOutcome] || `Option ${finalProposedOutcome + 1}`) +
+          (sig ? `\n\nTx: ${sig.slice(0, 16)}…` : "\n\n(On-chain already proposed)") +
+          "\n\nContest window: 24h"
       );
     } catch (e: any) {
-      alert(`Propose failed: ${e?.message || "Unknown error"}`);
+      console.error("PROPOSE FAILED", e);
+      alert("Propose failed: " + (e?.message || "Unknown error"));
     } finally {
       setResolveLoading(false);
     }
@@ -794,26 +918,23 @@ export default function DashboardPage() {
   return (
     <div className="max-w-6xl mx-auto px-4 py-8 md:py-10">
       {/* Header */}
-<div className="flex items-start md:items-center justify-between gap-6 mb-5">
-  <div>
-    <h1 className="text-3xl md:text-4xl font-bold text-white">Balance</h1>
+      <div className="flex items-start md:items-center justify-between gap-6 mb-5">
+        <div>
+          <h1 className="text-3xl md:text-4xl font-bold text-white">Balance</h1>
 
-    <div className="text-xs md:text-sm text-gray-400 mt-1 flex items-center gap-2 flex-wrap">
-      <span>
-        Wallet: <span className="font-mono text-white/80">{walletLabel}</span>
-      </span>
+          <div className="text-xs md:text-sm text-gray-400 mt-1 flex items-center gap-2 flex-wrap">
+            <span>
+              Wallet: <span className="font-mono text-white/80">{walletLabel}</span>
+            </span>
 
-      <span className="text-gray-600">•</span>
+            <span className="text-gray-600">•</span>
 
-      <span className="inline-flex items-center gap-2">
-        Profit
-        <span className="font-semibold text-pump-green">+{gainsSol.toFixed(2)} SOL</span>
-      </span>
-    </div>
-  </div>
-
-  {/* ✅ removed: top-right repeated stats */}
-</div>
+            <span className="inline-flex items-center gap-2">
+              Profit <span className="font-semibold text-pump-green">+{gainsSol.toFixed(2)} SOL</span>
+            </span>
+          </div>
+        </div>
+      </div>
 
       {errorMsg && (
         <div className="mb-5 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">
@@ -843,7 +964,6 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Mobile: horizontal scroll cards */}
         <div className="md:hidden flex gap-3 overflow-x-auto pb-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <div className="card-pump p-4 min-w-[220px]">
             <div className="text-xs text-gray-500 uppercase tracking-wide">Positions</div>
@@ -916,7 +1036,7 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* Tabs (like Trade page) */}
+      {/* Tabs */}
       <div className="flex items-center gap-2 mb-4">
         <TabButton active={tab === "activity"} onClick={() => setTab("activity")}>
           Activity
@@ -927,6 +1047,7 @@ export default function DashboardPage() {
         <TabButton active={tab === "bookmarks"} onClick={() => setTab("bookmarks")}>
           Bookmarked
         </TabButton>
+
         <div className="ml-auto text-xs text-gray-500">
           {tab === "activity" && (loadingTxs ? "Loading…" : `${txRows.length} txs`)}
           {tab === "created" && (loadingMarkets ? "Loading…" : `${myCreatedMarkets.length} markets`)}
@@ -934,7 +1055,6 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Panels */}
       <div className="card-pump">
         {/* ACTIVITY */}
         {tab === "activity" && (
@@ -955,6 +1075,7 @@ export default function DashboardPage() {
                       <div className="text-xs text-gray-400 mt-1 truncate">
                         {r.marketQuestion || shortAddr(r.marketAddress)}
                       </div>
+
                       <div className="text-[11px] text-gray-500 mt-1 flex flex-wrap items-center gap-2">
                         <span>{r.createdAt ? r.createdAt.toLocaleString("fr-FR") : ""}</span>
                         {r.sig && (
@@ -1021,7 +1142,7 @@ export default function DashboardPage() {
                   const deadlineMs = m.contest_deadline ? new Date(m.contest_deadline).getTime() : NaN;
                   const remainingMs = Number.isFinite(deadlineMs) ? deadlineMs - Date.now() : NaN;
 
-                  const canPropose = ended && !isResolvedFinal && !isProposed && status !== "cancelled";
+                  const canPropose = ended && !isResolvedFinal && !isProposed && !isCancelled;
 
                   const boxCls = isResolvedFinal
                     ? "border-gray-600 bg-gray-800/30"
@@ -1080,29 +1201,30 @@ export default function DashboardPage() {
                             ⚖️ Propose
                           </button>
                         )}
-{toResolutionStatus(m.resolution_status) === "proposed" && addr && (
-  <Link
-    href={`/contest/${addr}`}
-    className={[
-      "px-4 py-2 rounded-lg text-sm font-semibold transition border",
-      (Number(m.contest_count || 0) > 0)
-        ? "bg-[#ff5c73]/15 border-[#ff5c73]/40 text-[#ff5c73] hover:bg-[#ff5c73]/20"
-        : "bg-black/30 border-white/10 text-gray-300 hover:border-white/20",
-    ].join(" ")}
-    title="Open contest / disputes"
-  >
-    Disputes{Number(m.contest_count || 0) > 0 ? ` (${Number(m.contest_count)})` : ""}
-  </Link>
-)}
 
-{addr && (
-  <Link
-    href={`/trade/${addr}`}
-    className="px-4 py-2 rounded-lg bg-pump-green text-black text-sm font-semibold hover:opacity-90 transition"
-  >
-    View
-  </Link>
-)}
+                        {toResolutionStatus(m.resolution_status) === "proposed" && addr && (
+                          <Link
+                            href={`/contest/${addr}`}
+                            className={[
+                              "px-4 py-2 rounded-lg text-sm font-semibold transition border",
+                              Number(m.contest_count || 0) > 0
+                                ? "bg-[#ff5c73]/15 border-[#ff5c73]/40 text-[#ff5c73] hover:bg-[#ff5c73]/20"
+                                : "bg-black/30 border-white/10 text-gray-300 hover:border-white/20",
+                            ].join(" ")}
+                            title="Open contest / disputes"
+                          >
+                            Disputes{Number(m.contest_count || 0) > 0 ? ` (${Number(m.contest_count)})` : ""}
+                          </Link>
+                        )}
+
+                        {addr && (
+                          <Link
+                            href={`/trade/${addr}`}
+                            className="px-4 py-2 rounded-lg bg-pump-green text-black text-sm font-semibold hover:opacity-90 transition"
+                          >
+                            View
+                          </Link>
+                        )}
                       </div>
                     </div>
                   );
@@ -1196,7 +1318,7 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            {/* Proof inputs (LINK OR UPLOAD) */}
+            {/* Proof inputs */}
             <div className="mb-4 space-y-3">
               <div className="flex gap-2">
                 <button

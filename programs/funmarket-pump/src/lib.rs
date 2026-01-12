@@ -2,7 +2,7 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::{program::invoke, system_instruction};
 
-declare_id!("FomHPbnvgSp7qLqAJFkDwut3MygPG9cmyK5TwebSNLTg");
+declare_id!("A2EqnLDYW1WAi8mhR12ncGVvt92G3jisJqCe46YoV7SJ");
 
 pub mod math;
 
@@ -32,7 +32,7 @@ pub const PLATFORM_WALLET: Pubkey =
 
 // ✅ Admin key (your wallet) for dispute resolution (ONLY used if disputes > 0)
 pub const ADMIN_AUTHORITY: Pubkey =
-    pubkey!("6szhvTU23WtiKXqPs8vuX5G7JXu2TcUdVJNByNwVGYMV");
+    pubkey!("2FuGyidfE3N1tAf6vWFFystFcEVRp4WydHTmFr71pA9Y");
 
 /* ============================== PROGRAM ============================== */
 
@@ -178,6 +178,33 @@ pub fn propose_resolution(
         proposed_outcome,
         proposed_at: now,
         contest_deadline: market.contest_deadline.unwrap(),
+    });
+
+    Ok(())
+}
+
+/* ---------- DISPUTE (any user during contest window) ---------- */
+
+pub fn dispute(ctx: Context<Dispute>) -> Result<()> {
+    let market = &mut ctx.accounts.market;
+    let now = Clock::get()?.unix_timestamp;
+
+    // Must be proposed
+    require!(market.status == MarketStatus::Proposed, ErrorCode::InvalidState);
+    require!(!market.cancelled, ErrorCode::InvalidState);
+    require!(!market.resolved, ErrorCode::MarketResolved);
+
+    // Must be within contest window
+    let deadline = market.contest_deadline.ok_or(ErrorCode::InvalidState)?;
+    require!(now < deadline, ErrorCode::DisputeWindowClosed);
+
+    // Increment counter
+    market.dispute_count = market.dispute_count.saturating_add(1);
+
+    emit!(Disputed {
+        market: market.key(),
+        by: ctx.accounts.user.key(),
+        dispute_count: market.dispute_count,
     });
 
     Ok(())

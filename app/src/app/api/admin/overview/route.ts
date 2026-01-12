@@ -1,3 +1,4 @@
+// app/src/app/api/admin/overview/route.ts
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { isAdminRequest } from "@/lib/admin";
@@ -12,6 +13,13 @@ function toNumber(x: any) {
   const n = Number(x);
   return Number.isFinite(n) ? n : 0;
 }
+
+type MarketRow = {
+  market_address: string;
+  question: string | null;
+  contest_deadline: string | null;
+  contest_count: number;
+};
 
 export async function GET(req: Request) {
   // ✅ protect route with your admin cookie/session
@@ -28,7 +36,9 @@ export async function GET(req: Request) {
     // We fetch minimal columns once then compute. (simple + stable)
     const { data: markets, error: mErr } = await supabase
       .from("markets")
-      .select("id, resolved, resolution_status, end_date, total_volume, contest_count, contested, contest_deadline, question, market_address")
+      .select(
+        "id, resolved, resolution_status, end_date, total_volume, contest_count, contested, contest_deadline, question, market_address"
+      )
       .limit(5000);
 
     if (mErr) throw mErr;
@@ -44,12 +54,8 @@ export async function GET(req: Request) {
 
     let volume_sol_total = 0;
 
-    const recent_proposed: Array<{
-      market_address: string;
-      question: string | null;
-      contest_deadline: string | null;
-      contest_count: number | null;
-    }> = [];
+    const proposed_markets: MarketRow[] = [];
+    const disputed_markets: MarketRow[] = [];
 
     for (const mk of markets || []) {
       markets_total += 1;
@@ -64,14 +70,19 @@ export async function GET(req: Request) {
 
       if (status === "cancelled") markets_cancelled += 1;
       if (status === "finalized" || resolved) markets_finalized += 1;
+
       if (status === "proposed") {
         markets_proposed += 1;
-        recent_proposed.push({
-          market_address: String(mk.market_address),
+
+        const row: MarketRow = {
+          market_address: String(mk.market_address || ""),
           question: mk.question ?? null,
           contest_deadline: mk.contest_deadline ?? null,
-          contest_count: mk.contest_count ?? 0,
-        });
+          contest_count: Number(mk.contest_count || 0) || 0,
+        };
+
+        proposed_markets.push(row);
+        if (row.contest_count > 0) disputed_markets.push(row);
       }
 
       // "open" = not resolved, not proposed, not cancelled, not ended
@@ -81,11 +92,19 @@ export async function GET(req: Request) {
     }
 
     // sort proposed by contest_deadline soonest first (or most disputed)
-    recent_proposed.sort((a, b) => {
+    proposed_markets.sort((a, b) => {
       const ad = a.contest_deadline ? new Date(a.contest_deadline).getTime() : Infinity;
       const bd = b.contest_deadline ? new Date(b.contest_deadline).getTime() : Infinity;
       if (ad !== bd) return ad - bd;
       return (b.contest_count || 0) - (a.contest_count || 0);
+    });
+
+    // disputes: hottest first
+    disputed_markets.sort((a, b) => {
+      if (a.contest_count !== b.contest_count) return b.contest_count - a.contest_count;
+      const ad = a.contest_deadline ? new Date(a.contest_deadline).getTime() : Infinity;
+      const bd = b.contest_deadline ? new Date(b.contest_deadline).getTime() : Infinity;
+      return ad - bd;
     });
 
     // ---- TRANSACTIONS KPIs ----
@@ -96,13 +115,12 @@ export async function GET(req: Request) {
 
     // unique traders (fetch distinct user_address)
     // If your table is big, you can optimize later with an RPC.
-    const { data: traders, error: trErr } = await supabase
-      .from("transactions")
-      .select("user_address")
-      .limit(5000);
+    const { data: traders, error: trErr } = await supabase.from("transactions").select("user_address").limit(5000);
     if (trErr) throw trErr;
 
-    const unique_traders = new Set((traders || []).map((t: any) => String(t.user_address || "")).filter(Boolean)).size;
+    const unique_traders = new Set(
+      (traders || []).map((t: any) => String(t.user_address || "")).filter(Boolean)
+    ).size;
 
     // ---- DISPUTES KPIs ----
     // If you track disputes via contested/contest_count on markets:
@@ -136,7 +154,8 @@ export async function GET(req: Request) {
         disputes_open,
         disputes_total,
       },
-      recent_proposed: recent_proposed.slice(0, 20),
+      proposed_markets: proposed_markets.slice(0, 30),
+      disputed_markets: disputed_markets.slice(0, 30),
     });
   } catch (e: any) {
     console.error("admin overview error", e);
