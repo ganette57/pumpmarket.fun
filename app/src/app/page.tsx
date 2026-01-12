@@ -453,7 +453,7 @@ export default function Home() {
                       className="h-full"
                     >
                       {/* ✅ ended badge via prop (add ended prop in MarketCard) */}
-                      <MarketCard market={market as any} ended={ended} />
+                      <MarketCard market={market as any} />
                     </motion.div>
                   );
                 })}
