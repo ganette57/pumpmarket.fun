@@ -90,7 +90,7 @@ function getProgram() {
   const ProgramAny: any = Program;
 
   // ensure idl has an address when using the 2-arg constructor
-  const pid = new PublicKey(env("NEXT_PUBLIC_PROGRAM_ID"));
+  const pid = programId;
   const idlAny: any = idl;
   if (!idlAny.address) idlAny.address = pid.toBase58();
 
@@ -99,7 +99,9 @@ function getProgram() {
       ? new ProgramAny(idlAny as Idl, pid, provider)
       : new ProgramAny(idlAny as Idl, provider);
 
-  return { program, connection, signer };}
+  // ✅ return programId too (for owner guard)
+  return { program, connection, signer, programId: pid };
+}
 
 export async function GET(req: Request) {
   let step = "init";
@@ -115,9 +117,7 @@ export async function GET(req: Request) {
     const now = new Date().toISOString();
     const { data: rows, error } = await supabase
       .from("markets")
-      .select(
-        "market_address, proposed_winning_outcome, contest_deadline, resolved, cancelled, resolution_status"
-      )
+      .select("market_address, proposed_winning_outcome, contest_deadline, resolved, cancelled, resolution_status")
       .eq("resolution_status", "proposed")
       .eq("resolved", false)
       .eq("cancelled", false)
@@ -127,7 +127,7 @@ export async function GET(req: Request) {
     if (error) throw error;
 
     step = "anchor_init";
-    const { program, connection, signer } = getProgram();
+    const { program, connection, signer, programId } = getProgram();
 
     const results: any[] = [];
 
@@ -136,8 +136,23 @@ export async function GET(req: Request) {
       const marketAddr = String(m.market_address);
 
       try {
-        step = `fetch_market:${marketAddr}`;
         const marketPk = new PublicKey(marketAddr);
+
+        // ✅ Guard: skip markets owned by another program (old SC, etc.)
+        step = `owner_check:${marketAddr}`;
+        const info = await connection.getAccountInfo(marketPk);
+        if (!info) {
+          results.push({ market: marketAddr, ok: false, skip: true, reason: "missing_account" });
+          continue;
+        }
+        const owner = info.owner.toBase58();
+        const expected = programId.toBase58();
+        if (owner !== expected) {
+          results.push({ market: marketAddr, ok: false, skip: true, reason: "wrong_program_owner", owner, expected });
+          continue;
+        }
+
+        step = `fetch_market:${marketAddr}`;
         const acct: any = await (program as any).account.market.fetch(marketPk);
 
         const statusObj = acct?.status ?? acct?.marketStatus ?? acct?.market_status;
@@ -146,13 +161,9 @@ export async function GET(req: Request) {
             ? statusObj.toLowerCase()
             : Object.keys(statusObj || {})[0]?.toLowerCase();
 
-        const disputeCount = Number(
-          acct?.disputeCount?.toString?.() ?? acct?.dispute_count?.toString?.() ?? 0
-        );
+        const disputeCount = Number(acct?.disputeCount?.toString?.() ?? acct?.dispute_count?.toString?.() ?? 0);
 
-        const contestDeadlineSec = Number(
-          acct?.contestDeadline?.toString?.() ?? acct?.contest_deadline?.toString?.() ?? 0
-        );
+        const contestDeadlineSec = Number(acct?.contestDeadline?.toString?.() ?? acct?.contest_deadline?.toString?.() ?? 0);
 
         const deadlinePassed = contestDeadlineSec > 0 && Date.now() >= contestDeadlineSec * 1000;
 
@@ -173,7 +184,7 @@ export async function GET(req: Request) {
         tx.sign(signer);
 
         step = `send_tx:${marketAddr}`;
-        const raw = tx.serialize(); // if this breaks, step will show it
+        const raw = tx.serialize();
         const txSig = await connection.sendRawTransaction(raw, {
           skipPreflight: false,
           preflightCommitment: "confirmed",
@@ -185,6 +196,7 @@ export async function GET(req: Request) {
 
         step = `db_update:${marketAddr}`;
         const wo = Number(m.proposed_winning_outcome ?? 0);
+
         const { error: updErr } = await supabase
           .from("markets")
           .update({
