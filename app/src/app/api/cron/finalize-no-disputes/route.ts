@@ -84,10 +84,22 @@ function getProgram() {
   } as any;
 
   const provider = new AnchorProvider(connection, wallet, { commitment: "confirmed" });
-  const program = new (Program as any)(idl as Idl, programId, provider);
 
-  return { program, connection, signer };
-}
+  // ✅ Anchor compat: some versions use new Program(idl, provider),
+  // others use new Program(idl, programId, provider)
+  const ProgramAny: any = Program;
+
+  // ensure idl has an address when using the 2-arg constructor
+  const pid = new PublicKey(env("NEXT_PUBLIC_PROGRAM_ID"));
+  const idlAny: any = idl;
+  if (!idlAny.address) idlAny.address = pid.toBase58();
+
+  const program =
+    ProgramAny.length >= 3
+      ? new ProgramAny(idlAny as Idl, pid, provider)
+      : new ProgramAny(idlAny as Idl, provider);
+
+  return { program, connection, signer };}
 
 export async function GET(req: Request) {
   let step = "init";
