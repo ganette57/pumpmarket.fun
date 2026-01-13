@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import { Connection, Keypair, PublicKey, Transaction } from "@solana/web3.js";
 import { AnchorProvider, Program, Idl, utils } from "@coral-xyz/anchor";
 import idl from "@/idl/funmarket_pump.json";
 
@@ -26,41 +26,62 @@ function supabaseAdmin() {
 }
 
 function getSigner(): Keypair {
-  // option 1: base58 secret key
   const b58 = env("CRON_SIGNER_SECRET_KEY_B58");
+  // Anchor fournit un bs58 stable via utils
   return Keypair.fromSecretKey(utils.bytes.bs58.decode(b58));
 }
 
-function getProgram() {
-    const rpc = env("SOLANA_RPC");
-    const signer = getSigner();
-    const programId = new PublicKey(env("NEXT_PUBLIC_PROGRAM_ID"));
-  
-    const connection = new Connection(rpc, "confirmed");
-  
-    const wallet = {
-      publicKey: signer.publicKey,
-      signTransaction: async (tx: any) => {
-        tx.partialSign(signer);
-        return tx;
-      },
-      signAllTransactions: async (txs: any[]) => {
-        txs.forEach((t) => t.partialSign(signer));
-        return txs;
-      },
-    } as any;
-  
-    const provider = new AnchorProvider(connection, wallet, { commitment: "confirmed" });
-  
-    // ✅ Rend l’IDL compatible avec les versions d’Anchor qui attendent idl.address
-    const idlAny: any = idl as any;
-    if (!idlAny.address) idlAny.address = programId.toBase58();
-  
-    // ✅ Constructeur “safe” (évite les soucis d’overloads TS/Anchor)
-    const program = new (Program as any)(idlAny, provider);
-  
-    return { program, connection };
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * ✅ Confirm HTTP-only (no signatureSubscribe)
+ */
+async function confirmByPolling(connection: Connection, signature: string, timeoutMs = 60_000) {
+  const start = Date.now();
+
+  while (Date.now() - start < timeoutMs) {
+    const st = await connection.getSignatureStatuses([signature], { searchTransactionHistory: true });
+    const s = st.value[0];
+
+    if (s?.err) throw new Error(`Tx failed: ${JSON.stringify(s.err)}`);
+    // confirmationStatus: "processed" | "confirmed" | "finalized"
+    if (s?.confirmationStatus === "confirmed" || s?.confirmationStatus === "finalized") return;
+
+    await sleep(1200);
   }
+
+  throw new Error(`Timeout confirming tx ${signature}`);
+}
+
+function getProgram() {
+  const rpc = env("SOLANA_RPC"); // https endpoint
+  const programId = new PublicKey(env("NEXT_PUBLIC_PROGRAM_ID"));
+  const signer = getSigner();
+
+  const connection = new Connection(rpc, {
+    commitment: "confirmed",
+    // ⚠️ on n'utilise pas ws, donc pas besoin de wsEndpoint
+  });
+
+  const wallet = {
+    publicKey: signer.publicKey,
+    signTransaction: async (tx: Transaction) => {
+      tx.partialSign(signer);
+      return tx;
+    },
+    signAllTransactions: async (txs: Transaction[]) => {
+      txs.forEach((t) => t.partialSign(signer));
+      return txs;
+    },
+  } as any;
+
+  const provider = new AnchorProvider(connection, wallet, { commitment: "confirmed" });
+  const program = new (Program as any)(idl as Idl, programId, provider);
+
+  return { program, connection, signer };
+}
 
 export async function GET(req: Request) {
   try {
@@ -69,10 +90,11 @@ export async function GET(req: Request) {
     const supabase = supabaseAdmin();
     const now = new Date().toISOString();
 
-    // 1) candidates: DB says proposed AND contest window closed
     const { data: rows, error } = await supabase
       .from("markets")
-      .select("market_address, proposed_winning_outcome, contest_deadline, contest_count, resolved, cancelled, resolution_status")
+      .select(
+        "market_address, proposed_winning_outcome, contest_deadline, contest_count, resolved, cancelled, resolution_status"
+      )
       .eq("resolution_status", "proposed")
       .eq("resolved", false)
       .eq("cancelled", false)
@@ -81,22 +103,29 @@ export async function GET(req: Request) {
 
     if (error) throw error;
 
-    const { program } = getProgram();
-
+    const { program, connection, signer } = getProgram();
     const results: any[] = [];
 
     for (const m of rows || []) {
       const marketAddr = String(m.market_address);
 
       try {
-        // 2) verify on-chain state (0 disputes + proposed + deadline passed)
         const marketPk = new PublicKey(marketAddr);
         const acct: any = await (program as any).account.market.fetch(marketPk);
 
         const statusObj = acct?.status ?? acct?.marketStatus ?? acct?.market_status;
-        const status = typeof statusObj === "string" ? statusObj.toLowerCase() : Object.keys(statusObj || {})[0]?.toLowerCase();
-        const disputeCount = Number(acct?.disputeCount?.toString?.() ?? acct?.dispute_count?.toString?.() ?? 0);
-        const contestDeadlineSec = Number(acct?.contestDeadline?.toString?.() ?? acct?.contest_deadline?.toString?.() ?? 0);
+        const status =
+          typeof statusObj === "string"
+            ? statusObj.toLowerCase()
+            : Object.keys(statusObj || {})[0]?.toLowerCase();
+
+        const disputeCount = Number(
+          acct?.disputeCount?.toString?.() ?? acct?.dispute_count?.toString?.() ?? 0
+        );
+
+        const contestDeadlineSec = Number(
+          acct?.contestDeadline?.toString?.() ?? acct?.contest_deadline?.toString?.() ?? 0
+        );
 
         const deadlinePassed = contestDeadlineSec > 0 && Date.now() >= contestDeadlineSec * 1000;
 
@@ -105,13 +134,26 @@ export async function GET(req: Request) {
           continue;
         }
 
-        // 3) finalizeIfNoDisputes (any signer)
-        const txSig = await (program as any).methods
+        // ✅ build tx (no .rpc() to avoid websocket confirm)
+        const tx = await (program as any).methods
           .finalizeIfNoDisputes()
-          .accounts({ market: marketPk, user: (program as any).provider.wallet.publicKey })
-          .rpc();
+          .accounts({ market: marketPk, user: signer.publicKey })
+          .transaction();
 
-        // 4) DB commit
+        tx.feePayer = signer.publicKey;
+        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+        tx.recentBlockhash = blockhash;
+        tx.sign(signer);
+
+        const txSig = await connection.sendRawTransaction(tx.serialize(), {
+          skipPreflight: false,
+          preflightCommitment: "confirmed",
+          maxRetries: 3,
+        });
+
+        // ✅ confirm via polling HTTP
+        await confirmByPolling(connection, txSig, 90_000);
+
         const wo = Number(m.proposed_winning_outcome ?? 0);
 
         const { error: updErr } = await supabase
@@ -128,14 +170,14 @@ export async function GET(req: Request) {
 
         if (updErr) throw updErr;
 
-        results.push({ market: marketAddr, ok: true, txSig });
+        results.push({ market: marketAddr, ok: true, txSig, lastValidBlockHeight });
       } catch (e: any) {
         results.push({ market: marketAddr, ok: false, error: String(e?.message || e) });
       }
     }
 
     return NextResponse.json({ ok: true, count: results.length, results });
-} catch (e: any) {
+  } catch (e: any) {
     const msg = String(e?.message || e);
     const status = msg.includes("Unauthorized") ? 401 : 500;
     return NextResponse.json({ ok: false, error: msg }, { status });
