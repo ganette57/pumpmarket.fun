@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/resolve-no-dispute",
+      "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/cron/cancel-no-proposal",
+      "schedule": "0 3 * * *"
+    }
+  ]
+}
