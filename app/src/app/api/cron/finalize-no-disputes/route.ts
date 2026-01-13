@@ -32,9 +32,9 @@ function getSigner(): Keypair {
 }
 
 function getProgram() {
-    const rpc = env("SOLANA_RPC"); // server-side RPC
-    const programId = new PublicKey(env("NEXT_PUBLIC_PROGRAM_ID")); // <-- IMPORTANT: ici
+    const rpc = env("SOLANA_RPC");
     const signer = getSigner();
+    const programId = new PublicKey(env("NEXT_PUBLIC_PROGRAM_ID"));
   
     const connection = new Connection(rpc, "confirmed");
   
@@ -52,7 +52,12 @@ function getProgram() {
   
     const provider = new AnchorProvider(connection, wallet, { commitment: "confirmed" });
   
-    const program = new (Program as any)(idl as Idl, programId, provider);
+    // ✅ Rend l’IDL compatible avec les versions d’Anchor qui attendent idl.address
+    const idlAny: any = idl as any;
+    if (!idlAny.address) idlAny.address = programId.toBase58();
+  
+    // ✅ Constructeur “safe” (évite les soucis d’overloads TS/Anchor)
+    const program = new (Program as any)(idlAny, provider);
   
     return { program, connection };
   }
