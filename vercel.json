@@ -1,11 +1,11 @@
 {
   "crons": [
     {
-      "path": "/api/cron/resolve-no-dispute",
+      "path": "/api/cron/finalize-no-disputes",
       "schedule": "0 2 * * *"
     },
     {
-      "path": "/api/cron/cancel-no-proposal",
+      "path": "/api/cron/stale-no-propose",
       "schedule": "0 3 * * *"
     }
   ]
