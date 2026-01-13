@@ -32,25 +32,30 @@ function getSigner(): Keypair {
 }
 
 function getProgram() {
-  const rpc = env("SOLANA_RPC"); // server-side RPC
-  const signer = getSigner();
-
-  const connection = new Connection(rpc, "confirmed");
-  const wallet = {
-    publicKey: signer.publicKey,
-    signTransaction: async (tx: any) => {
-      tx.partialSign(signer);
-      return tx;
-    },
-    signAllTransactions: async (txs: any[]) => {
-      txs.forEach((t) => t.partialSign(signer));
-      return txs;
-    },
-  } as any;
-
-  const provider = new AnchorProvider(connection, wallet, { commitment: "confirmed" });
-  const program = new (Program as any)(idl as Idl, programId, provider);  return { program, connection };
-}
+    const rpc = env("SOLANA_RPC"); // server-side RPC
+    const programId = new PublicKey(env("NEXT_PUBLIC_PROGRAM_ID")); // <-- IMPORTANT: ici
+    const signer = getSigner();
+  
+    const connection = new Connection(rpc, "confirmed");
+  
+    const wallet = {
+      publicKey: signer.publicKey,
+      signTransaction: async (tx: any) => {
+        tx.partialSign(signer);
+        return tx;
+      },
+      signAllTransactions: async (txs: any[]) => {
+        txs.forEach((t) => t.partialSign(signer));
+        return txs;
+      },
+    } as any;
+  
+    const provider = new AnchorProvider(connection, wallet, { commitment: "confirmed" });
+  
+    const program = new (Program as any)(idl as Idl, programId, provider);
+  
+    return { program, connection };
+  }
 
 export async function GET(req: Request) {
   try {
