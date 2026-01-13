@@ -143,7 +143,7 @@ export default function MarketCard({ market }: MarketCardProps) {
             {/* time left */}
             <div className="flex items-center gap-1">
               <Clock className="w-3 h-3" />
-              <span>{daysLeft}d left</span>
+              <span>{(market.resolved || now >= market.resolutionTime) ? "Ended" : `${daysLeft}d left`}</span>
             </div>
           </div>
         </div>

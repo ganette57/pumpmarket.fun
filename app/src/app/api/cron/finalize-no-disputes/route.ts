@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
-import bs58 from "bs58";
-import { AnchorProvider, Program, Idl } from "@coral-xyz/anchor";
+import { AnchorProvider, Program, Idl, utils } from "@coral-xyz/anchor";
 import idl from "@/idl/funmarket_pump.json";
 
 export const runtime = "nodejs";
@@ -29,12 +28,11 @@ function supabaseAdmin() {
 function getSigner(): Keypair {
   // option 1: base58 secret key
   const b58 = env("CRON_SIGNER_SECRET_KEY_B58");
-  return Keypair.fromSecretKey(bs58.decode(b58));
+  return Keypair.fromSecretKey(utils.bytes.bs58.decode(b58));
 }
 
 function getProgram() {
   const rpc = env("SOLANA_RPC"); // server-side RPC
-  const programId = new PublicKey(env("NEXT_PUBLIC_PROGRAM_ID"));
   const signer = getSigner();
 
   const connection = new Connection(rpc, "confirmed");
@@ -51,8 +49,7 @@ function getProgram() {
   } as any;
 
   const provider = new AnchorProvider(connection, wallet, { commitment: "confirmed" });
-  const program = new Program(idl as Idl, programId, provider);
-  return { program, connection };
+  const program = new (Program as any)(idl as Idl, programId, provider);  return { program, connection };
 }
 
 export async function GET(req: Request) {
