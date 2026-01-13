@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { Connection, Keypair, PublicKey, Transaction } from "@solana/web3.js";
-import { AnchorProvider, Program, Idl, utils } from "@coral-xyz/anchor";
+import { AnchorProvider, Program, Idl } from "@coral-xyz/anchor";
 import idl from "@/idl/funmarket_pump.json";
 
 export const runtime = "nodejs";
@@ -25,45 +25,51 @@ function supabaseAdmin() {
   });
 }
 
+// ✅ bs58 decode safe (works CJS/ESM on Vercel)
+function bs58Decode(str: string): Uint8Array {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const mod = require("bs58");
+  const bs58 = mod?.decode ? mod : mod?.default; // handle default export
+  if (!bs58?.decode) throw new Error("bs58 decode not available");
+  return bs58.decode(str.trim());
+}
+
 function getSigner(): Keypair {
   const b58 = env("CRON_SIGNER_SECRET_KEY_B58");
-  // Anchor fournit un bs58 stable via utils
-  return Keypair.fromSecretKey(utils.bytes.bs58.decode(b58));
+  const decoded = bs58Decode(b58);
+
+  // Keypair secretKey must be 64 bytes
+  if (!decoded || decoded.length !== 64) {
+    throw new Error(`CRON_SIGNER_SECRET_KEY_B58 must decode to 64 bytes, got ${decoded?.length}`);
+  }
+  return Keypair.fromSecretKey(decoded);
 }
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-/**
- * ✅ Confirm HTTP-only (no signatureSubscribe)
- */
-async function confirmByPolling(connection: Connection, signature: string, timeoutMs = 60_000) {
+// ✅ HTTP polling confirm (no websocket / signatureSubscribe)
+async function confirmByPolling(connection: Connection, signature: string, timeoutMs = 90_000) {
   const start = Date.now();
-
   while (Date.now() - start < timeoutMs) {
     const st = await connection.getSignatureStatuses([signature], { searchTransactionHistory: true });
     const s = st.value[0];
 
     if (s?.err) throw new Error(`Tx failed: ${JSON.stringify(s.err)}`);
-    // confirmationStatus: "processed" | "confirmed" | "finalized"
     if (s?.confirmationStatus === "confirmed" || s?.confirmationStatus === "finalized") return;
 
     await sleep(1200);
   }
-
   throw new Error(`Timeout confirming tx ${signature}`);
 }
 
 function getProgram() {
-  const rpc = env("SOLANA_RPC"); // https endpoint
+  const rpc = env("SOLANA_RPC");
   const programId = new PublicKey(env("NEXT_PUBLIC_PROGRAM_ID"));
   const signer = getSigner();
 
-  const connection = new Connection(rpc, {
-    commitment: "confirmed",
-    // ⚠️ on n'utilise pas ws, donc pas besoin de wsEndpoint
-  });
+  const connection = new Connection(rpc, { commitment: "confirmed" });
 
   const wallet = {
     publicKey: signer.publicKey,
@@ -84,16 +90,21 @@ function getProgram() {
 }
 
 export async function GET(req: Request) {
+  let step = "init";
+
   try {
+    step = "auth";
     assertCronAuth(req);
 
+    step = "supabase";
     const supabase = supabaseAdmin();
-    const now = new Date().toISOString();
 
+    step = "select_candidates";
+    const now = new Date().toISOString();
     const { data: rows, error } = await supabase
       .from("markets")
       .select(
-        "market_address, proposed_winning_outcome, contest_deadline, contest_count, resolved, cancelled, resolution_status"
+        "market_address, proposed_winning_outcome, contest_deadline, resolved, cancelled, resolution_status"
       )
       .eq("resolution_status", "proposed")
       .eq("resolved", false)
@@ -103,13 +114,17 @@ export async function GET(req: Request) {
 
     if (error) throw error;
 
+    step = "anchor_init";
     const { program, connection, signer } = getProgram();
+
     const results: any[] = [];
 
+    step = "loop";
     for (const m of rows || []) {
       const marketAddr = String(m.market_address);
 
       try {
+        step = `fetch_market:${marketAddr}`;
         const marketPk = new PublicKey(marketAddr);
         const acct: any = await (program as any).account.market.fetch(marketPk);
 
@@ -134,28 +149,30 @@ export async function GET(req: Request) {
           continue;
         }
 
-        // ✅ build tx (no .rpc() to avoid websocket confirm)
+        step = `build_tx:${marketAddr}`;
         const tx = await (program as any).methods
           .finalizeIfNoDisputes()
           .accounts({ market: marketPk, user: signer.publicKey })
           .transaction();
 
         tx.feePayer = signer.publicKey;
-        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+        const { blockhash } = await connection.getLatestBlockhash("confirmed");
         tx.recentBlockhash = blockhash;
         tx.sign(signer);
 
-        const txSig = await connection.sendRawTransaction(tx.serialize(), {
+        step = `send_tx:${marketAddr}`;
+        const raw = tx.serialize(); // if this breaks, step will show it
+        const txSig = await connection.sendRawTransaction(raw, {
           skipPreflight: false,
           preflightCommitment: "confirmed",
           maxRetries: 3,
         });
 
-        // ✅ confirm via polling HTTP
-        await confirmByPolling(connection, txSig, 90_000);
+        step = `confirm_tx:${marketAddr}`;
+        await confirmByPolling(connection, txSig);
 
+        step = `db_update:${marketAddr}`;
         const wo = Number(m.proposed_winning_outcome ?? 0);
-
         const { error: updErr } = await supabase
           .from("markets")
           .update({
@@ -170,16 +187,16 @@ export async function GET(req: Request) {
 
         if (updErr) throw updErr;
 
-        results.push({ market: marketAddr, ok: true, txSig, lastValidBlockHeight });
+        results.push({ market: marketAddr, ok: true, txSig });
       } catch (e: any) {
-        results.push({ market: marketAddr, ok: false, error: String(e?.message || e) });
+        results.push({ market: marketAddr, ok: false, step, error: String(e?.message || e) });
       }
     }
 
-    return NextResponse.json({ ok: true, count: results.length, results });
+    return NextResponse.json({ ok: true, step: "done", count: results.length, results });
   } catch (e: any) {
     const msg = String(e?.message || e);
     const status = msg.includes("Unauthorized") ? 401 : 500;
-    return NextResponse.json({ ok: false, error: msg }, { status });
+    return NextResponse.json({ ok: false, step, error: msg }, { status });
   }
 }
