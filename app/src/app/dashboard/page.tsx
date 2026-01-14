@@ -93,6 +93,49 @@ function toI64Sec(v: any): number {
   return Math.floor(Number(v) || 0);
 }
 
+function toBigIntI128(v: any): bigint {
+  if (v == null) return 0n;
+
+  // Anchor BN
+  if (typeof v?.toArrayLike === "function") {
+    try {
+      const buf = v.toArrayLike(Uint8Array, "le", 16);
+      return i128FromLeBytes(buf);
+    } catch {
+      // fallback below
+    }
+  }
+
+  // { bytes: number[] } or array
+  if (Array.isArray(v?.bytes)) return i128FromLeBytes(Uint8Array.from(v.bytes));
+  if (Array.isArray(v)) return i128FromLeBytes(Uint8Array.from(v));
+
+  // string/number
+  const s = String(v);
+  if (s && s !== "undefined" && s !== "null") {
+    const n = BigInt(Math.trunc(Number(s) || 0));
+    return n;
+  }
+
+  return 0n;
+}
+
+function i128FromLeBytes(le: Uint8Array): bigint {
+  // little-endian signed 128
+  let x = 0n;
+  for (let i = 0; i < Math.min(16, le.length); i++) {
+    x |= BigInt(le[i]!) << (8n * BigInt(i));
+  }
+  // sign bit (bit 127)
+  const sign = 1n << 127n;
+  if (x & sign) x = x - (1n << 128n);
+  return x;
+}
+
+function absBigInt(x: bigint): bigint {
+  return x < 0n ? -x : x;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Types                                                                      */
 /* -------------------------------------------------------------------------- */
@@ -149,6 +192,12 @@ type Claimable = {
   marketQuestion: string;
   estPayoutLamports?: number;
   winningIndex?: number;
+};
+
+type Refundable = {
+  marketAddress: string;
+  marketQuestion: string;
+  estRefundLamports?: number;
 };
 
 type BookmarkRow = {
@@ -356,6 +405,8 @@ export default function DashboardPage() {
   const [myTxs, setMyTxs] = useState<DbTx[]>([]);
   const [claimables, setClaimables] = useState<Claimable[]>([]);
   const [claimingMarket, setClaimingMarket] = useState<string | null>(null);
+  const [refundables, setRefundables] = useState<Refundable[]>([]);
+const [refundingMarket, setRefundingMarket] = useState<string | null>(null);
 
   const [bookmarkIds, setBookmarkIds] = useState<string[]>([]);
   const [bookmarkedMarkets, setBookmarkedMarkets] = useState<DbMarket[]>([]);
@@ -420,6 +471,8 @@ export default function DashboardPage() {
       setClaimables([]);
       setBookmarkIds([]);
       setBookmarkedMarkets([]);
+      setClaimables([]);
+setRefundables([]);
       return;
     }
 
@@ -606,6 +659,91 @@ export default function DashboardPage() {
     };
   }, [connected, publicKey, program, connection, myTxs, myCreatedMarkets, bookmarkedMarkets, marketsByAddress]);
 
+
+/* ---------------- Refundables (on-chain) ---------------- */
+
+useEffect(() => {
+  if (!connected || !publicKey || !program) {
+    setRefundables([]);
+    return;
+  }
+
+  let cancelled = false;
+
+  (async () => {
+    setLoadingClaimables(true); // (option) tu peux créer un loadingRefundables dédié plus tard
+    try {
+      const addresses: string[] = [];
+      for (const m of myCreatedMarkets) if (m.market_address) addresses.push(String(m.market_address));
+      for (const m of bookmarkedMarkets) if (m.market_address) addresses.push(String(m.market_address));
+      for (const t of myTxs) if (t.market_address) addresses.push(String(t.market_address));
+
+      const unique = Array.from(new Set(addresses)).slice(0, 80);
+      const out: Refundable[] = [];
+
+      for (const addr of unique) {
+        if (cancelled) return;
+
+        let marketPk: PublicKey;
+        try {
+          marketPk = new PublicKey(addr);
+        } catch {
+          continue;
+        }
+
+        // Fetch market
+        let marketAcc: any = null;
+        try {
+          marketAcc = await (program as any).account.market.fetch(marketPk);
+        } catch {
+          continue;
+        }
+
+        const isCancelledOnChain =
+          !!marketAcc?.cancelled ||
+          decodeMarketStatus(marketAcc?.status) === "cancelled";
+
+        if (!isCancelledOnChain) continue;
+
+        // Fetch user position
+        const [posPda] = getUserPositionPDA(marketPk, publicKey);
+
+        let posAcc: any = null;
+        try {
+          posAcc = await (program as any).account.userPosition.fetch(posPda);
+        } catch {
+          continue;
+        }
+
+        if (posAcc?.claimed) continue;
+
+        const netCost = toBigIntI128(posAcc?.netCostLamports ?? posAcc?.net_cost_lamports);
+        const estRefundLamports = Number(absBigInt(netCost)); // safe enough for devnet-scale
+
+        if (estRefundLamports <= 0) continue;
+
+        const mkDb = marketsByAddress.get(addr) || null;
+
+        out.push({
+          marketAddress: addr,
+          marketQuestion: mkDb?.question || "(Market)",
+          estRefundLamports,
+        });
+      }
+
+      if (!cancelled) setRefundables(out);
+    } catch {
+      if (!cancelled) setRefundables([]);
+    } finally {
+      if (!cancelled) setLoadingClaimables(false);
+    }
+  })();
+
+  return () => {
+    cancelled = true;
+  };
+}, [connected, publicKey, program, myTxs, myCreatedMarkets, bookmarkedMarkets, marketsByAddress]);
+
   /* ---------------- Stats ---------------- */
 
   const walletLabel = useMemo(() => shortAddr(walletBase58), [walletBase58]);
@@ -706,6 +844,36 @@ export default function DashboardPage() {
       alert(`Claim failed: ${e?.message || "Unknown error"}`);
     } finally {
       setClaimingMarket(null);
+    }
+  }
+
+  async function handleRefund(marketAddress: string) {
+    if (!connected || !publicKey || !program) return;
+  
+    try {
+      setRefundingMarket(marketAddress);
+  
+      const marketPk = new PublicKey(marketAddress);
+      const [posPda] = getUserPositionPDA(marketPk, publicKey);
+  
+      const sig = await (program as any).methods
+        .claimRefund()
+        .accounts({
+          market: marketPk,
+          userPosition: posPda,
+          user: publicKey,
+        })
+        .rpc();
+  
+      alert(
+        `Refund success 🎉\n\nTx: ${sig.slice(0, 16)}...\n\nhttps://explorer.solana.com/tx/${sig}?cluster=devnet`
+      );
+  
+      setRefundables((prev) => prev.filter((r) => r.marketAddress !== marketAddress));
+    } catch (e: any) {
+      alert(`Refund failed: ${e?.message || "Unknown error"}`);
+    } finally {
+      setRefundingMarket(null);
     }
   }
 
@@ -1035,6 +1203,59 @@ export default function DashboardPage() {
           </div>
         )}
       </div>
+
+{/* Refundables */}
+<div className="card-pump mb-6">
+  <div className="flex items-center justify-between mb-3">
+    <h2 className="text-lg md:text-xl font-bold text-white">💸 Refundable funds</h2>
+    <span className="hidden md:inline text-xs text-gray-500">
+      Cancelled on-chain markets where you can claim a refund
+    </span>
+  </div>
+
+  {loadingClaimables ? (
+    <p className="text-gray-400 text-sm">Checking refunds…</p>
+  ) : refundables.length === 0 ? (
+    <p className="text-gray-500 text-sm">No refundable markets.</p>
+  ) : (
+    <div className="space-y-3">
+      {refundables.map((r) => (
+        <div
+          key={r.marketAddress}
+          className="rounded-xl border border-[#ff5c73]/40 bg-[#ff5c73]/5 p-4 flex items-center justify-between gap-4"
+        >
+          <div className="min-w-0">
+            <div className="text-white font-semibold truncate">{r.marketQuestion}</div>
+            <div className="text-xs text-gray-500 mt-1 truncate">
+              {shortAddr(r.marketAddress)}
+              {typeof r.estRefundLamports === "number" && (
+                <>
+                  {" • "}
+                  <span className="text-[#ff5c73] font-semibold">
+                    ~{lamportsToSol(r.estRefundLamports).toFixed(4)} SOL
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+
+          <button
+            onClick={() => handleRefund(r.marketAddress)}
+            disabled={refundingMarket === r.marketAddress}
+            className={[
+              "px-5 py-2 rounded-lg font-semibold transition",
+              refundingMarket === r.marketAddress
+                ? "bg-gray-700 text-gray-300 cursor-not-allowed"
+                : "bg-[#ff5c73] text-black hover:opacity-90",
+            ].join(" ")}
+          >
+            {refundingMarket === r.marketAddress ? "Refunding…" : "💸 Refund"}
+          </button>
+        </div>
+      ))}
+    </div>
+  )}
+</div>
 
       {/* Tabs */}
       <div className="flex items-center gap-2 mb-4">
