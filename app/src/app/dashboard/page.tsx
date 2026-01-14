@@ -86,15 +86,16 @@ function decodeMarketStatus(status: any): ResolutionStatus {
   return "open";
 }
 
-function toI64Sec(v: any): number {
-  if (v == null) return 0;
-  if (typeof v === "number") return Math.floor(v);
-  if (typeof v?.toNumber === "function") return v.toNumber();
-  return Math.floor(Number(v) || 0);
-}
+const BI_0 = BigInt(0);
+const BI_1 = BigInt(1);
+const BI_8 = BigInt(8);
+const BI_16 = BigInt(16);
+const BI_64 = BigInt(64);
+const BI_127 = BigInt(127);
+const BI_128 = BigInt(128);
 
 function toBigIntI128(v: any): bigint {
-  if (v == null) return 0n;
+  if (v == null) return BI_0;
 
   // Anchor BN
   if (typeof v?.toArrayLike === "function") {
@@ -113,27 +114,33 @@ function toBigIntI128(v: any): bigint {
   // string/number
   const s = String(v);
   if (s && s !== "undefined" && s !== "null") {
-    const n = BigInt(Math.trunc(Number(s) || 0));
-    return n;
+    try {
+      return BigInt(s);
+    } catch {
+      const n = BigInt(Math.trunc(Number(s) || 0));
+      return n;
+    }
   }
 
-  return 0n;
+  return BI_0;
 }
 
 function i128FromLeBytes(le: Uint8Array): bigint {
   // little-endian signed 128
-  let x = 0n;
+  let x = BI_0;
   for (let i = 0; i < Math.min(16, le.length); i++) {
-    x |= BigInt(le[i]!) << (8n * BigInt(i));
+    x |= BigInt(le[i]!) << (BI_8 * BigInt(i));
   }
+
   // sign bit (bit 127)
-  const sign = 1n << 127n;
-  if (x & sign) x = x - (1n << 128n);
+  const sign = BI_1 << BI_127;
+  if ((x & sign) !== BI_0) x = x - (BI_1 << BI_128);
+
   return x;
 }
 
 function absBigInt(x: bigint): bigint {
-  return x < 0n ? -x : x;
+  return x < BI_0 ? -x : x;
 }
 
 /* -------------------------------------------------------------------------- */
