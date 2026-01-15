@@ -22,7 +22,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       </div>
 
       {/* Main content: padding bottom pour la bottom nav */}
-      <main className="min-h-screen pb-28 md:pb-0">{children}</main>
+      <main className="min-h-screen pb-32 md:pb-0">{children}</main>
 
       {/* Footer desktop only */}
       <footer className="hidden md:block border-t border-gray-800 mt-20">

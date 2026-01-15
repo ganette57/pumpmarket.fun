@@ -15,12 +15,10 @@ export default function MobileTopBar({ showSearch }: { showSearch: boolean }) {
 
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  // keep local input synced when querystring changes
   useEffect(() => {
     setQ(sp.get("q") || "");
   }, [sp]);
 
-  // auto-focus when arriving on /search
   useEffect(() => {
     if (!showSearch) return;
     const t = setTimeout(() => inputRef.current?.focus(), 50);
@@ -34,34 +32,42 @@ export default function MobileTopBar({ showSearch }: { showSearch: boolean }) {
 
   return (
     <>
-      {/* Fixed top bar */}
       <div className="fixed top-0 left-0 right-0 z-[70] border-b border-gray-800 bg-black/80 backdrop-blur">
         {/* Row 1 */}
-        <div className="px-4 py-3 flex items-center justify-between gap-3">
-          <Link href="/" className="flex items-center gap-0.5 min-w-0">
-          <img
-  src="/logo2.png"
-  alt="FunMarket"
-  className="h-12 w-12 shrink-0 object-contain"
-/>
+        <div className="px-4 py-2 flex items-center gap-3">
+          {/* Brand */}
+          <Link href="/" className="flex items-center gap-2 flex-1 min-w-0">
+            <img
+              src="/logo2.png"
+              alt="FunMarket"
+              className="h-12 w-12 shrink-0 object-contain"
+            />
 
-            <div className="leading-tight min-w-0">
             <div className="flex items-center gap-2 min-w-0">
-  <div className="font-semibold text-white truncate">FunMarket</div>
-  <span className="shrink-0 px-2 py-0.5 text-[10px] font-bold uppercase rounded-full bg-pump-green text-black">
-    beta
-  </span>
-</div>             
+              <span className="font-semibold text-white truncate">
+                FunMarket
+              </span>
+
+              <span className="shrink-0 px-2 py-0.5 text-[9px] font-bold uppercase rounded-full bg-pump-green text-black">
+                beta
+              </span>
             </div>
           </Link>
 
-          {/* Real wallet button (Wallet Adapter) */}
+          {/* Wallet – ultra compact */}
           <div className="shrink-0">
-            <WalletMultiButton className="!h-10 !px-3 !rounded-xl !bg-pump-green !text-black hover:!opacity-90 !font-semibold" />
+            <WalletMultiButton
+              className={[
+                "!h-8 !rounded-lg !bg-pump-green !text-black",
+                "!px-2 !text-xs !font-semibold",
+                "!min-w-0 !max-w-[96px]",
+                "truncate",
+              ].join(" ")}
+            />
           </div>
         </div>
 
-        {/* Row 2: Search only when active */}
+        {/* Search */}
         {showSearch && (
           <div className="px-4 pb-3">
             <div className="flex gap-2">
@@ -70,14 +76,14 @@ export default function MobileTopBar({ showSearch }: { showSearch: boolean }) {
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && submit()}
-                placeholder="Search markets, creators, categories…"
+                placeholder="Search markets…"
                 className="w-full rounded-xl bg-black/40 border border-gray-800 px-4 py-3 text-sm text-white placeholder:text-gray-500 outline-none focus:border-pump-green/60"
               />
 
               <button
                 type="button"
                 onClick={() => submit()}
-                className="rounded-xl px-4 py-3 text-sm font-extrabold bg-pump-green text-black hover:opacity-90 transition"
+                className="rounded-xl px-4 py-3 text-sm font-extrabold bg-pump-green text-black"
               >
                 Go
               </button>
@@ -86,8 +92,8 @@ export default function MobileTopBar({ showSearch }: { showSearch: boolean }) {
         )}
       </div>
 
-      {/* Spacer so page content doesn't hide under fixed bar */}
-      <div className={showSearch ? "h-[124px]" : "h-[60px]"} />
+      {/* Spacer */}
+      <div className={showSearch ? "h-[112px]" : "h-[52px]"} />
     </>
   );
 }

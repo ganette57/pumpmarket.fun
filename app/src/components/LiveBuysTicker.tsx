@@ -23,15 +23,17 @@ export default function LiveBuysTicker({
   variant = "breaking",
   limit = 20,
   refreshMs = 4000,
+  className = "",
 }: {
   variant?: Variant;
   limit?: number;
   refreshMs?: number;
+  className?: string;
 }) {
   const [rows, setRows] = useState<(TxRow & { __market_question?: string })[]>([]);
+  const [loadedOnce, setLoadedOnce] = useState(false);
 
   async function fetchLatest() {
-    // 1) fetch last BUY txs
     const { data: txs, error: txErr } = await supabase
       .from("transactions")
       .select("id,created_at,is_buy,shares,outcome_name,market_address")
@@ -42,12 +44,12 @@ export default function LiveBuysTicker({
     if (txErr) {
       console.error("LiveBuysTicker tx fetch error:", txErr);
       setRows([]);
+      setLoadedOnce(true);
       return;
     }
 
     const cleanTxs = (((txs as any[]) || []) as TxRow[]).filter((r) => r.is_buy);
 
-    // 2) fetch market questions by market_address (no FK required)
     const addresses = Array.from(
       new Set(cleanTxs.map((r) => r.market_address).filter((x): x is string => !!x))
     );
@@ -72,9 +74,13 @@ export default function LiveBuysTicker({
     setRows(
       cleanTxs.map((r) => ({
         ...r,
-        __market_question: r.market_address ? marketMap.get(r.market_address) || "a market" : "a market",
+        __market_question: r.market_address
+          ? marketMap.get(r.market_address) || "a market"
+          : "a market",
       }))
     );
+
+    setLoadedOnce(true);
   }
 
   useEffect(() => {
@@ -93,27 +99,23 @@ export default function LiveBuysTicker({
     });
   }, [rows]);
 
-  if (!items.length) {
-    return (
-      <div className="fixed bottom-0 left-0 right-0 z-[60] border-t border-white/15 bg-black/85 backdrop-blur">
-        <div className="max-w-7xl mx-auto px-4 py-3 overflow-hidden">
-          <span className="text-sm text-gray-300">
-            No recent buys yet — be the first degen 😈
-          </span>
-        </div>
-      </div>
-    );
-  }
-
   const isBreaking = variant === "breaking";
 
-  return (
-    <div className="hidden md:block fixed bottom-0 left-0 right-0 z-[60] border-t border-white/15 bg-black/85 backdrop-blur"> 
-         <div className="max-w-7xl mx-auto px-4 py-2 overflow-hidden flex items-center gap-3">
+  if (!loadedOnce) return null;
+
+  const content =
+    items.length === 0 ? (
+      <span className="text-sm text-gray-300">
+        No recent buys yet — be the first degen 😈
+      </span>
+    ) : (
+      <>
         {isBreaking && (
-          <span className="shrink-0 inline-flex items-center px-2 py-1 rounded-md text-[11px] font-extrabold tracking-wide
-                           bg-[#ff5c73]/15 text-[#ff5c73] border border-[#ff5c73]/35
-                           animate-[pulsePill_0.4s_ease-in-out_infinite]">
+          <span
+            className="shrink-0 inline-flex items-center px-2 py-1 rounded-md text-[11px] font-extrabold tracking-wide
+                       bg-[#ff5c73]/15 text-[#ff5c73] border border-[#ff5c73]/35
+                       animate-[pulsePill_0.4s_ease-in-out_infinite]"
+          >
             BREAKING
           </span>
         )}
@@ -128,6 +130,18 @@ export default function LiveBuysTicker({
             ))}
           </div>
         </div>
+      </>
+    );
+
+  return (
+    <div
+    className={[
+      "fixed left-0 right-0 bottom-0 z-[60] border-t border-white/15 bg-black/85 backdrop-blur",
+      className,
+    ].join(" ")}
+    >
+      <div className="max-w-7xl mx-auto px-4 py-2 overflow-hidden flex items-center gap-3">
+        {content}
       </div>
 
       <style jsx>{`

@@ -10,7 +10,6 @@ import MarketCard from "@/components/MarketCard";
 import FeaturedMarketCardFull from "@/components/FeaturedMarketCardFull";
 import CategoryFilters from "@/components/CategoryFilters";
 import GeoblockModal from "@/components/GeoblockModal";
-import LiveBuysTicker from "@/components/LiveBuysTicker";
 import Footer from "@/components/SiteFooter";
 import { SkeletonCard, SkeletonFeaturedCard } from "@/components/SkeletonCard";
 import type { CategoryId } from "@/components/CategoryFilters";
@@ -550,7 +549,6 @@ useEffect(() => {
       </div>
 
       <Footer />
-      <LiveBuysTicker variant="breaking" />
     </>
   );
 }

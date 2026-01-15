@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 function Icon({
   children,
@@ -10,29 +10,24 @@ function Icon({
   children: React.ReactNode;
   active: boolean;
 }) {
-  return (
-    <div
-      className={`h-6 w-6 ${
-        active ? "text-[#61ff9a]" : "text-gray-400"
-      }`}
-    >
-      {children}
-    </div>
-  );
+  return <div className={`h-6 w-6 ${active ? "text-[#61ff9a]" : "text-gray-400"}`}>{children}</div>;
 }
 
 function Item({
   href,
   active,
   icon,
+  onClick,
 }: {
   href: string;
   active: boolean;
   icon: React.ReactNode;
+  onClick?: (e: React.MouseEvent) => void;
 }) {
   return (
     <Link
       href={href}
+      onClick={onClick}
       className="flex h-10 w-10 items-center justify-center rounded-xl"
     >
       <Icon active={active}>{icon}</Icon>
@@ -42,16 +37,31 @@ function Item({
 
 export default function MobileNav() {
   const pathname = usePathname();
-  const isActive = (p: string) =>
-    pathname === p || pathname?.startsWith(p + "/");
+  const router = useRouter();
+
+  const isActive = (p: string) => pathname === p || pathname?.startsWith(p + "/");
+
+  const handleHomeTap = (e: React.MouseEvent) => {
+    // If we're already on home, tap again => scroll top + refresh (feed-style)
+    if (isActive("/")) {
+      e.preventDefault();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+
+      // small delay to let scroll start, then refresh
+      setTimeout(() => {
+        router.refresh();
+      }, 250);
+    }
+  };
 
   return (
-    <div className="md:hidden fixed bottom-0 left-0 right-0 z-50 border-t border-gray-800 bg-black/90 backdrop-blur">
+    <div className="md:hidden fixed bottom-0 left-0 right-0 z-50 h-14 border-t border-gray-800 bg-black/90 backdrop-blur">
       <div className="mx-auto max-w-md px-4 py-2 flex items-center justify-between">
         {/* Home */}
         <Item
           href="/"
           active={isActive("/")}
+          onClick={handleHomeTap}
           icon={
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M3 10.5L12 3l9 7.5" />
@@ -75,7 +85,7 @@ export default function MobileNav() {
         {/* Create (center action) */}
         <Link
           href="/create"
-          className="-mt-6 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#61ff9a] text-black shadow"
+          className="-mt-1 flex h-10 w-10 items-center justify-center rounded-2xl bg-[#61ff9a] text-black shadow"
         >
           <svg
             viewBox="0 0 24 24"
@@ -91,25 +101,25 @@ export default function MobileNav() {
 
         {/* Live / streaming */}
         <Item
-  href="/live"
-  active={isActive("/live")}
-  icon={
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="12" cy="12" r="2" />
-      <path d="M16.24 7.76a6 6 0 0 1 0 8.48" />
-      <path d="M7.76 7.76a6 6 0 0 0 0 8.48" />
-      <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-      <path d="M4.93 4.93a10 10 0 0 0 0 14.14" />
-    </svg>
-  }
-/>
+          href="/live"
+          active={isActive("/live")}
+          icon={
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <circle cx="12" cy="12" r="2" />
+              <path d="M16.24 7.76a6 6 0 0 1 0 8.48" />
+              <path d="M7.76 7.76a6 6 0 0 0 0 8.48" />
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+              <path d="M4.93 4.93a10 10 0 0 0 0 14.14" />
+            </svg>
+          }
+        />
 
         {/* Dashboard / profile */}
         <Item
