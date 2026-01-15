@@ -38,7 +38,7 @@ export default function MobileTopBar({ showSearch }: { showSearch: boolean }) {
       <div className="fixed top-0 left-0 right-0 z-[70] border-b border-gray-800 bg-black/80 backdrop-blur">
         {/* Row 1 */}
         <div className="px-4 py-3 flex items-center justify-between gap-3">
-          <Link href="/" className="flex items-center gap-2 min-w-0">
+          <Link href="/" className="flex items-center gap-0.5 min-w-0">
           <img
   src="/logo2.png"
   alt="FunMarket"

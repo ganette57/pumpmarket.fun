@@ -1,10 +1,11 @@
+// src/app/page.tsx
 "use client";
 
-import { useEffect, useState, useRef, useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { motion } from "framer-motion";
 import { ChevronLeft, ChevronRight, ChevronDown } from "lucide-react";
-import Link from "next/link";
-
+import { useRouter, useSearchParams } from "next/navigation";
 import MarketCard from "@/components/MarketCard";
 import FeaturedMarketCardFull from "@/components/FeaturedMarketCardFull";
 import CategoryFilters from "@/components/CategoryFilters";
@@ -29,6 +30,7 @@ type Market = {
 
   resolutionTime: number;
   resolved: boolean;
+
   marketType: 0 | 1;
   outcomeNames?: string[];
   outcomeSupplies?: number[];
@@ -44,7 +46,6 @@ type Market = {
 type MarketStatusFilter = "all" | "open" | "resolved";
 
 function isMarketResolved(m: Market) {
-  // on garde ton flag + time-based safety
   const nowSec = Date.now() / 1000;
   const endedByTime = !!m.resolutionTime && nowSec >= m.resolutionTime;
   return !!m.resolved || endedByTime;
@@ -58,13 +59,12 @@ function StatusFilterDropdown({
   onChange: (v: MarketStatusFilter) => void;
 }) {
   const [open, setOpen] = useState(false);
-
-  const label =
-    value === "all" ? "All" : value === "open" ? "Open" : "Resolved";
+  const label = value === "all" ? "All" : value === "open" ? "Open" : "Resolved";
 
   return (
     <div className="relative">
       <button
+        type="button"
         onClick={() => setOpen((v) => !v)}
         className="flex items-center gap-2 px-4 py-2 rounded-xl border border-white/15 bg-black text-white text-sm font-semibold hover:border-white/25 transition"
       >
@@ -78,6 +78,7 @@ function StatusFilterDropdown({
           {(["all", "open", "resolved"] as MarketStatusFilter[]).map((k) => (
             <button
               key={k}
+              type="button"
               onClick={() => {
                 onChange(k);
                 setOpen(false);
@@ -101,16 +102,19 @@ export default function Home() {
   const [loadingMore, setLoadingMore] = useState(false);
 
   const [selectedCategory, setSelectedCategory] = useState<CategoryId>("all");
-
   const [statusFilter, setStatusFilter] = useState<MarketStatusFilter>("open");
 
   const [currentFeaturedIndex, setCurrentFeaturedIndex] = useState(0);
   const [displayedCount, setDisplayedCount] = useState(12);
+  const router = useRouter();
+const sp = useSearchParams();
 
   const observerTarget = useRef<HTMLDivElement>(null);
 
-  // ------- LOAD MARKETS FROM SUPABASE -------
+  // ✅ used only on mobile to detect which slide is centered
+  const mobileFeaturedRef = useRef<HTMLDivElement | null>(null);
 
+  // ------- LOAD MARKETS FROM SUPABASE -------
   useEffect(() => {
     void loadMarkets();
   }, []);
@@ -200,97 +204,84 @@ export default function Home() {
       setLoading(false);
     }
   }
-
-  // ------- FILTERS / DERIVED LISTS -------
-
+// ✅ read status from URL (keeps last selected when coming back)
+useEffect(() => {
+  const s = (sp.get("status") || "open") as MarketStatusFilter;
+  if (s === "all" || s === "open" || s === "resolved") {
+    setStatusFilter(s);
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [sp]);
+  // ------- FILTERS -------
   const categoryFiltered = useMemo(() => {
-    return markets.filter((m) => {
-      const categoryMatch = selectedCategory === "all" || m.category === selectedCategory;
-      return categoryMatch;
-    });
+    return markets.filter((m) => selectedCategory === "all" || m.category === selectedCategory);
   }, [markets, selectedCategory]);
 
   const statusFiltered = useMemo(() => {
     if (statusFilter === "all") return categoryFiltered;
     if (statusFilter === "resolved") return categoryFiltered.filter((m) => isMarketResolved(m));
-    return categoryFiltered.filter((m) => !isMarketResolved(m)); // open
+    return categoryFiltered.filter((m) => !isMarketResolved(m));
   }, [categoryFiltered, statusFilter]);
 
-  // ------- CAROUSEL (AUTO OPEN ONLY) -------
-
+  // ------- FEATURED (top 3 by volume, prefer open + binary-like) -------
   const featuredMarkets = useMemo(() => {
     const openOnly = categoryFiltered.filter((m) => !isMarketResolved(m));
     const base = openOnly.length ? openOnly : categoryFiltered;
 
-    const binaryLike = base.filter((m) => {
-      const isBinary =
-        (m.marketType ?? 0) === 0 ||
-        (Array.isArray(m.outcomeNames) && m.outcomeNames.length === 2);
-      return isBinary;
-    });
-
+    const binaryLike = base.filter((m) => (m.marketType ?? 0) === 0 || (m.outcomeNames?.length ?? 0) === 2);
     const featuredBase = binaryLike.length ? binaryLike : base;
 
     return [...featuredBase]
       .sort((a, b) => Number(b.totalVolume || 0) - Number(a.totalVolume || 0))
       .slice(0, 3)
       .map((market) => {
-        const totalSupply = Number(market.yesSupply || 0) + Number(market.noSupply || 0);
-        const yesPercent = totalSupply > 0 ? Math.round((market.yesSupply / totalSupply) * 100) : 50;
-        const noPercent = 100 - yesPercent;
-
         const now = Date.now() / 1000;
-        const timeLeft = market.resolutionTime - now;
-        const daysLeft = Math.max(0, Math.floor(timeLeft / 86400));
+        const daysLeft = Math.max(0, Math.floor((market.resolutionTime - now) / 86400));
 
         return {
-          id: market.publicKey,
+          id: market.publicKey, // route /trade/:id (on-chain address)
+          dbId: market.id, // ✅ for odds chart fetch
           question: market.question,
           category: market.category,
           imageUrl: market.imageUrl ?? undefined,
-          yesPercent,
-          noPercent,
           volume: market.totalVolume,
           daysLeft,
           creator: market.creator ?? undefined,
           socialLinks: market.socialLinks ?? undefined,
           yesSupply: market.yesSupply,
           noSupply: market.noSupply,
+          marketType: market.marketType,
           outcomeNames: market.outcomeNames,
           outcomeSupplies: market.outcomeSupplies,
-          resolved: false,
         };
       });
   }, [categoryFiltered]);
 
-  // reset carousel index if list changes
+  // reset index when list changes
   useEffect(() => {
     setCurrentFeaturedIndex(0);
+    // reset scroll position on mobile
+    const el = mobileFeaturedRef.current;
+    if (el) el.scrollLeft = 0;
   }, [featuredMarkets.length]);
 
-  // ------- LIST FOR GRID -------
-
-  const displayedMarkets = useMemo(() => {
-    return statusFiltered.slice(0, displayedCount);
-  }, [statusFiltered, displayedCount]);
-
   // ------- INFINITE SCROLL -------
+  const displayedMarkets = useMemo(() => statusFiltered.slice(0, displayedCount), [statusFiltered, displayedCount]);
 
   useEffect(() => {
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting && !loading && statusFiltered.length > displayedCount) {
+        if (entries[0]?.isIntersecting && !loading && statusFiltered.length > displayedCount) {
           loadMore();
         }
       },
       { threshold: 0.1 }
     );
 
-    const currentTarget = observerTarget.current;
-    if (currentTarget) observer.observe(currentTarget);
-
+    const t = observerTarget.current;
+    if (t) observer.observe(t);
     return () => {
-      if (currentTarget) observer.unobserve(currentTarget);
+      if (t) observer.unobserve(t);
     };
   }, [displayedCount, loading, statusFiltered.length]);
 
@@ -303,33 +294,69 @@ export default function Home() {
     }, 400);
   }, [loadingMore]);
 
-  // when filters change, reset paging
   useEffect(() => {
     setDisplayedCount(12);
   }, [selectedCategory, statusFilter]);
+// ✅ persist status in URL
+useEffect(() => {
+  const params = new URLSearchParams(sp.toString());
+  params.set("status", statusFilter);
+  router.replace(`/?${params.toString()}`, { scroll: false });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [statusFilter]);
+  // persist status filter in URL (?status=open|resolved|all)
+useEffect(() => {
+  const params = new URLSearchParams(sp.toString());
+  params.set("status", statusFilter);
+  router.replace(`/?${params.toString()}`, { scroll: false });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [statusFilter]);
 
-  // ------- AUTOPLAY CAROUSEL -------
-
-  useEffect(() => {
-    if (!featuredMarkets.length) return;
-
-    const id = setInterval(() => {
-      setCurrentFeaturedIndex((prev) => (prev === featuredMarkets.length - 1 ? 0 : prev + 1));
-    }, 8000);
-
-    return () => clearInterval(id);
-  }, [featuredMarkets.length]);
-
+  // ------- DESKTOP BUTTONS -------
   const handlePrevFeatured = () => {
+    if (!featuredMarkets.length) return;
     setCurrentFeaturedIndex((prev) => (prev === 0 ? featuredMarkets.length - 1 : prev - 1));
   };
 
   const handleNextFeatured = () => {
+    if (!featuredMarkets.length) return;
     setCurrentFeaturedIndex((prev) => (prev === featuredMarkets.length - 1 ? 0 : prev + 1));
   };
 
-  // ------- RENDER -------
+  // ------- MOBILE: update dots based on scroll (simple center calc) -------
+  const onMobileScroll = () => {
+    const el = mobileFeaturedRef.current;
+    if (!el) return;
 
+    const children = Array.from(el.children) as HTMLElement[];
+    if (!children.length) return;
+
+    const center = el.scrollLeft + el.clientWidth / 2;
+    let best = 0;
+    let bestDist = Infinity;
+
+    for (let i = 0; i < children.length; i++) {
+      const c = children[i]!;
+      const cCenter = c.offsetLeft + c.clientWidth / 2;
+      const d = Math.abs(cCenter - center);
+      if (d < bestDist) {
+        bestDist = d;
+        best = i;
+      }
+    }
+
+    if (best !== currentFeaturedIndex) setCurrentFeaturedIndex(best);
+  };
+
+  const scrollMobileTo = (i: number) => {
+    const el = mobileFeaturedRef.current;
+    if (!el) return;
+    const target = el.children[i] as HTMLElement | undefined;
+    target?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+    setCurrentFeaturedIndex(i);
+  };
+
+  // ------- RENDER -------
   return (
     <>
       <GeoblockModal />
@@ -347,13 +374,13 @@ export default function Home() {
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center space-x-2">
               <h2 className="text-2xl md:text-3xl font-bold text-white">Top markets</h2>
-              <p className="text-gray-400 text-sm hidden md:block">
-                Trending predictions with high volume
-              </p>
+              <p className="text-gray-400 text-sm hidden md:block">Trending predictions with high volume</p>
             </div>
 
-            <div className="flex gap-2">
+            {/* Desktop arrows only */}
+            <div className="hidden md:flex gap-2">
               <button
+                type="button"
                 onClick={handlePrevFeatured}
                 disabled={!featuredMarkets.length}
                 className="p-2 bg-black/70 hover:bg-black border border-white/20 hover:border-white/40 rounded-lg transition disabled:opacity-40"
@@ -362,6 +389,7 @@ export default function Home() {
                 <ChevronLeft className="w-5 h-5 text-white" />
               </button>
               <button
+                type="button"
                 onClick={handleNextFeatured}
                 disabled={!featuredMarkets.length}
                 className="p-2 bg-black/70 hover:bg-black border border-white/20 hover:border-white/40 rounded-lg transition disabled:opacity-40"
@@ -372,11 +400,12 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="relative">
-            {loading ? (
-              <SkeletonFeaturedCard />
-            ) : featuredMarkets.length > 0 ? (
-              <div className="relative overflow-hidden rounded-2xl border border-white/20 bg-black">
+          {loading ? (
+            <SkeletonFeaturedCard />
+          ) : featuredMarkets.length > 0 ? (
+            <div className="relative">
+              {/* DESKTOP: your existing slider */}
+              <div className="hidden md:block relative overflow-hidden rounded-2xl border border-white/20 bg-black">
                 <div
                   className="flex transition-transform duration-500 ease-out"
                   style={{ transform: `translateX(-${currentFeaturedIndex * 100}%)` }}
@@ -388,25 +417,66 @@ export default function Home() {
                   ))}
                 </div>
 
-                <div className="flex justify-center gap-2 mt-4 pb-4">
-                  {featuredMarkets.map((_, index) => (
-                    <button
-                      key={index}
-                      onClick={() => setCurrentFeaturedIndex(index)}
-                      className={`h-2 rounded-full transition-all duration-300 ${
-                        index === currentFeaturedIndex ? "w-8 bg-white" : "w-2 bg-white/30"
-                      }`}
-                      aria-label={`Go to featured market ${index + 1}`}
-                    />
+                {/* dots */}
+                {featuredMarkets.length > 1 && (
+                  <div className="flex justify-center gap-2 mt-4 pb-4">
+                    {featuredMarkets.map((_, index) => (
+                      <button
+                        key={index}
+                        type="button"
+                        onClick={() => setCurrentFeaturedIndex(index)}
+                        className={`h-2 rounded-full transition-all duration-300 ${
+                          index === currentFeaturedIndex ? "w-8 bg-white" : "w-2 bg-white/30"
+                        }`}
+                        aria-label={`Go to featured market ${index + 1}`}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* MOBILE: swipe (simple scroll-snap) */}
+              <div className="md:hidden">
+                <div
+                  ref={mobileFeaturedRef}
+                  onScroll={onMobileScroll}
+                  className={[
+                    "flex gap-4 overflow-x-auto pb-3",
+                    "snap-x snap-mandatory",
+                    "[-ms-overflow-style:none] [scrollbar-width:none]",
+                    "[&::-webkit-scrollbar]:hidden",
+                  ].join(" ")}
+                >
+                  {featuredMarkets.map((market) => (
+                    <div key={market.id} className="min-w-[92%] snap-center">
+                      <FeaturedMarketCardFull market={market} />
+                    </div>
                   ))}
                 </div>
+
+                {/* dots */}
+                {featuredMarkets.length > 1 && (
+                  <div className="flex justify-center gap-2 mt-2">
+                    {featuredMarkets.map((_, index) => (
+                      <button
+                        key={index}
+                        type="button"
+                        onClick={() => scrollMobileTo(index)}
+                        className={`h-2 rounded-full transition-all duration-300 ${
+                          index === currentFeaturedIndex ? "w-8 bg-white" : "w-2 bg-white/30"
+                        }`}
+                        aria-label={`Go to featured market ${index + 1}`}
+                      />
+                    ))}
+                  </div>
+                )}
               </div>
-            ) : (
-              <div className="text-center py-20 text-gray-400">
-                <p>No featured markets available</p>
-              </div>
-            )}
-          </div>
+            </div>
+          ) : (
+            <div className="text-center py-20 text-gray-400">
+              <p>No featured markets available</p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -419,7 +489,6 @@ export default function Home() {
               <p className="text-sm text-gray-500">{statusFiltered.length} markets</p>
             </div>
 
-            {/* ✅ dropdown status like your screen */}
             <StatusFilterDropdown value={statusFilter} onChange={setStatusFilter} />
           </div>
 
@@ -440,23 +509,18 @@ export default function Home() {
           ) : (
             <>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 auto-rows-fr">
-                {displayedMarkets.map((market, index) => {
-                  const ended = isMarketResolved(market);
-
-                  return (
-                    <motion.div
-                      key={market.publicKey}
-                      initial={{ opacity: 0, y: 40 }}
-                      whileInView={{ opacity: 1, y: 0 }}
-                      viewport={{ once: true, margin: "-50px" }}
-                      transition={{ duration: 0.35, delay: index * 0.03 }}
-                      className="h-full"
-                    >
-                      {/* ✅ ended badge via prop (add ended prop in MarketCard) */}
-                      <MarketCard market={market as any} />
-                    </motion.div>
-                  );
-                })}
+                {displayedMarkets.map((market, index) => (
+                  <motion.div
+                    key={market.publicKey}
+                    initial={{ opacity: 0, y: 40 }}
+                    whileInView={{ opacity: 1, y: 0 }}
+                    viewport={{ once: true, margin: "-50px" }}
+                    transition={{ duration: 0.35, delay: index * 0.03 }}
+                    className="h-full"
+                  >
+                    <MarketCard market={market as any} />
+                  </motion.div>
+                ))}
               </div>
 
               {displayedCount < statusFiltered.length && (
@@ -465,6 +529,7 @@ export default function Home() {
                     <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-pump-green" />
                   ) : (
                     <button
+                      type="button"
                       onClick={loadMore}
                       className="px-8 py-3 bg-pump-gray hover:bg-pump-dark border border-gray-700 hover:border-pump-green rounded-lg text-white font-semibold transition"
                     >
@@ -484,10 +549,8 @@ export default function Home() {
         </div>
       </div>
 
-      {/* ✅ Footer like your screen */}
       <Footer />
-
-      {/* ✅ Live buys ticker (20 latest BUY) */}
-  <LiveBuysTicker variant="breaking" />    </>
+      <LiveBuysTicker variant="breaking" />
+    </>
   );
 }
