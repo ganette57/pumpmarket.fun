@@ -39,9 +39,11 @@ export default function MobileTopBar({ showSearch }: { showSearch: boolean }) {
         {/* Row 1 */}
         <div className="px-4 py-3 flex items-center justify-between gap-3">
           <Link href="/" className="flex items-center gap-2 min-w-0">
-            <div className="h-9 w-9 rounded-xl border border-gray-800 flex items-center justify-center shrink-0">
-              <span className="font-extrabold text-white">F</span>
-            </div>
+          <img
+  src="/logo2.png"
+  alt="FunMarket"
+  className="h-12 w-12 shrink-0 object-contain"
+/>
 
             <div className="leading-tight min-w-0">
             <div className="flex items-center gap-2 min-w-0">

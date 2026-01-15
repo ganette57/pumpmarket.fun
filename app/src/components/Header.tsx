@@ -49,28 +49,31 @@ export default function Header() {
   return (
     <>
       {/* HEADER FIXE */}
-      <header className="fixed top-0 left-0 right-0 z-[70] border-b border-pump-border bg-pump-dark/95 backdrop-blur">
+      <header className="fixed top-0 left-0 right-0 z-[70] border-b border-gray-700/40 bg-pump-dark/95 backdrop-blur">
         <div className="mx-auto flex max-w-7xl items-center gap-4 px-4 py-3 sm:px-6 lg:px-8">
           {/* Logo + name -> home */}
-          <Link href="/" className="flex items-center gap-3 shrink-0">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-pump-border bg-black text-sm font-semibold text-white">
-              F
-            </div>
-            <div className="flex items-center gap-2">
-  <span className="text-xl font-bold text-white">FunMarket</span>
-  <span className="px-2 py-0.5 text-[10px] font-bold uppercase rounded-full bg-pump-green text-black">
-    beta
-  </span>
-</div>
-          </Link>
+          <Link href="/" className="flex items-center gap-2 shrink-0">
+  <img
+    src="/logo2.png"
+    alt="FunMarket"
+    className="h-14 w-14 object-contain"
+  />
+
+  <div className="flex items-center gap-2">
+    <span className="text-xl font-bold text-white">FunMarket</span>
+    <span className="px-2 py-0.5 text-[10px] font-bold uppercase rounded-full bg-pump-green text-black">
+      beta
+    </span>
+  </div>
+</Link>
 
           {/* Search bar */}
           <div className="flex-1 min-w-0">
-            <div className="flex items-center rounded-full border border-pump-border bg-black px-4 py-2 text-sm text-gray-300">
+          <div className="flex items-center rounded-lg border border-gray-700/60 bg-black px-4 py-2 text-sm text-gray-300">
               <button
                 type="button"
                 onClick={handleSearchSubmit}
-                className="mr-3 text-gray-500 hover:text-gray-300"
+                className="mr-3 text-gray-600 hover:text-gray-400 transition"
                 aria-label="Search"
               >
                 ⌕
@@ -84,7 +87,7 @@ export default function Header() {
                   if (e.key === 'Enter') handleSearchSubmit();
                 }}
                 placeholder="Search markets, creators, categories..."
-                className="w-full bg-transparent text-sm text-gray-100 placeholder:text-gray-500 focus:outline-none"
+                className="w-full bg-transparent text-sm text-gray-100 placeholder:text-gray-500 focus:outline-none focus:ring-0"
               />
             </div>
           </div>
@@ -116,14 +119,18 @@ export default function Header() {
             {/* Avatar + menu quand wallet connecté */}
             {connected && (
               <div className="relative" ref={menuRef}>
-                <button
-                  type="button"
-                  onClick={() => setMenuOpen((v) => !v)}
-                  className="flex h-9 w-9 items-center justify-center rounded-full border border-pump-border bg-black text-xs font-semibold text-white hover:border-pump-green transition"
-                  aria-label="User menu"
-                >
-                  {avatarLabel}
-                </button>
+<button
+  type="button"
+  onClick={() => setMenuOpen((v) => !v)}
+  className="flex h-9 w-9 items-center justify-center rounded-full
+             border border-gray-700
+             bg-gray-900
+             text-xs font-semibold text-gray-200
+             hover:border-gray-400 hover:text-white
+             transition"
+>
+  {avatarLabel}
+</button>
 
                 {menuOpen && (
                   <div className="absolute right-0 mt-2 w-44 rounded-xl border border-pump-border bg-pump-gray shadow-lg py-1 text-sm text-gray-100">

@@ -25,8 +25,8 @@ interface CategoryFiltersProps {
 export default function CategoryFilters({ selectedCategory, onSelectCategory }: CategoryFiltersProps) {
   return (
     <div className="py-4">
-      <div className="flex gap-2 overflow-x-auto no-scrollbar">
-        {CATEGORIES.map((cat) => {
+<div className="mt-4 flex items-center gap-3 overflow-x-auto">
+          {CATEGORIES.map((cat) => {
           const active = selectedCategory === cat.id;
 
           return (
