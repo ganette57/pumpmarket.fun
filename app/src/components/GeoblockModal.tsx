@@ -78,8 +78,9 @@ export default function GeoblockModal() {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-fadeIn">
-      <div className="bg-pump-gray border-2 border-pump-red rounded-2xl max-w-2xl w-full mx-4 p-8 shadow-2xl animate-slideUp">
+    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm animate-fadeIn overflow-y-auto">
+  <div className="min-h-[100dvh] flex items-center justify-center p-4 pt-[calc(env(safe-area-inset-top)+16px)] pb-[calc(env(safe-area-inset-bottom)+96px)]">
+  <div className="bg-pump-gray border-2 border-pump-red rounded-2xl max-w-2xl w-full p-6 sm:p-8 shadow-2xl animate-slideUp max-h-[calc(100dvh-160px)] overflow-y-auto">
         {/* Header */}
         <div className="flex items-start justify-between mb-6">
           <div className="flex items-center space-x-3">
@@ -139,6 +140,7 @@ export default function GeoblockModal() {
           By proceeding, you acknowledge that you are solely responsible for complying with your
           local laws and regulations.
         </p>
+      </div>
       </div>
 
       <style jsx global>{`

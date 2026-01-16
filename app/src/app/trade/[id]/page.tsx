@@ -648,14 +648,20 @@ export default function TradePage() {
                 </div>
 
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-start justify-between mb-3 gap-3">
-                    <h1 className="text-3xl font-bold text-white flex-1 leading-tight">{market.question}</h1>
-                    <MarketActions
-  marketAddress={market.publicKey}
-  marketDbId={market.dbId ?? null}
-  question={market.question}
-/>
-                  </div>
+                <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 mb-3 min-w-0">
+  <h1 className="text-2xl md:text-3xl font-bold text-white leading-tight break-words min-w-0">
+    {market.question}
+  </h1>
+
+  {/* mobile: actions under title -> never overflow */}
+  <div className="flex justify-end md:justify-start">
+    <MarketActions
+      marketAddress={market.publicKey}
+      marketDbId={market.dbId ?? null}
+      question={market.question}
+    />
+  </div>
+</div>
 
                   {market.socialLinks && (
                     <div className="mb-0">
@@ -672,20 +678,18 @@ export default function TradePage() {
                 <div>{endLabel}</div>
 
                 <div className="ml-auto text-xs text-gray-500 flex items-center gap-2">
-                  <span>{marketType === 1 ? "Multi-choice" : "Binary"}</span>
+  {showProposedBox && (
+    <span className="px-2 py-1 rounded-full border border-pump-green/40 bg-pump-green/10 text-pump-green">
+      Proposed
+    </span>
+  )}
 
-                  {showProposedBox && (
-                    <span className="px-2 py-1 rounded-full border border-pump-green/40 bg-pump-green/10 text-pump-green">
-                      Proposed
-                    </span>
-                  )}
-
-                  {showResolvedProofBox && (
-                    <span className="px-2 py-1 rounded-full border border-gray-600 bg-gray-800/40 text-green-400">
-                      Resolved
-                    </span>
-                  )}
-                </div>
+  {showResolvedProofBox && (
+    <span className="px-2 py-1 rounded-full border border-gray-600 bg-gray-800/40 text-green-400">
+      Resolved
+    </span>
+  )}
+</div>
               </div>
 
               <p className="text-gray-400 mt-4 mb-4">{market.description}</p>
@@ -788,31 +792,36 @@ export default function TradePage() {
 
             {/* Odds history */}
             <div className="card-pump">
-              <div className="flex items-center justify-between gap-4 mb-4">
-                <h2 className="text-xl font-bold text-white">Odds history</h2>
+            <div className="mb-4">
+  <h2 className="text-xl font-bold text-white">Odds history</h2>
+</div>
 
-                <div className="flex items-center gap-2">
-                  {(["24h", "7d", "30d", "all"] as OddsRange[]).map((r) => (
-                    <button
-                      key={r}
-                      onClick={() => setOddsRange(r)}
-                      className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition ${
-                        oddsRange === r ? "bg-pump-green text-black" : "bg-pump-dark/60 text-gray-300 hover:bg-pump-dark"
-                      }`}
-                    >
-                      {r.toUpperCase()}
-                    </button>
-                  ))}
-                </div>
-              </div>
+{filteredOddsPoints.length ? (
+  <>
+    <OddsHistoryChart points={filteredOddsPoints} outcomeNames={names} />
 
-              {filteredOddsPoints.length ? (
-                <OddsHistoryChart points={filteredOddsPoints} outcomeNames={names} />
-              ) : (
-                <div className="text-sm text-gray-400 bg-pump-dark/40 border border-gray-800 rounded-xl p-4">
-                  No history yet (need transactions for this market).
-                </div>
-              )}
+    {/* Range buttons UNDER the chart */}
+    <div className="mt-4 flex items-center justify-center gap-2">
+      {(["24h", "7d", "30d", "all"] as OddsRange[]).map((r) => (
+        <button
+          key={r}
+          onClick={() => setOddsRange(r)}
+          className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition ${
+            oddsRange === r
+              ? "bg-pump-green text-black"
+              : "bg-pump-dark/60 text-gray-300 hover:bg-pump-dark"
+          }`}
+        >
+          {r.toUpperCase()}
+        </button>
+      ))}
+    </div>
+  </>
+) : (
+  <div className="text-sm text-gray-400 bg-pump-dark/40 border border-gray-800 rounded-xl p-4">
+    No history yet (need transactions for this market).
+  </div>
+)}
             </div>
           </div>
 

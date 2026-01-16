@@ -1,16 +1,15 @@
-// app/src/components/MarketActions.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { supabase } from "@/lib/supabaseClient";
-import { Heart, Share2 } from "lucide-react";
+import { Bookmark, Share2 } from "lucide-react";
 
 type Props = {
-  // ✅ compat: ancien prop (parfois c’était l’adresse solana)
+  // compat ancien prop
   marketId?: string;
 
-  // ✅ nouveaux props
+  // nouveaux props
   marketAddress?: string; // adresse solana
   marketDbId?: string | null; // uuid markets.id
 
@@ -26,29 +25,16 @@ export default function MarketActions({
   const { publicKey } = useWallet();
 
   const [busy, setBusy] = useState(false);
-
-  // ✅ On stocke l'id du bookmark (source of truth) -> coeur rempli si non-null
   const [bookmarkRowId, setBookmarkRowId] = useState<string | null>(null);
-
-  // ✅ On stocke le market uuid (markets.id) une seule fois
   const [marketUuid, setMarketUuid] = useState<string | null>(marketDbId ?? null);
 
-  // source of truth: solana address pour share + fallback lookup markets.id
-  const address = useMemo(
-    () => marketAddress || marketId || "",
-    [marketAddress, marketId]
-  );
-
-  const userAddress = useMemo(
-    () => publicKey?.toBase58() ?? null,
-    [publicKey]
-  );
+  const address = useMemo(() => marketAddress || marketId || "", [marketAddress, marketId]);
+  const userAddress = useMemo(() => publicKey?.toBase58() ?? null, [publicKey]);
 
   const bookmarked = !!bookmarkRowId;
 
   async function getMarketUuidFallback(): Promise<string | null> {
     if (!address) return null;
-
     try {
       const { data, error } = await supabase
         .from("markets")
@@ -77,9 +63,6 @@ export default function MarketActions({
     return data?.id ?? null;
   }
 
-  // ✅ AU MOUNT / quand wallet ou market change:
-  // 1) resolve marketUuid
-  // 2) fetch bookmarkRowId
   useEffect(() => {
     let alive = true;
 
@@ -89,13 +72,8 @@ export default function MarketActions({
         return;
       }
 
-      // Resolve market uuid (db id)
       let mid = marketDbId ?? marketUuid ?? null;
-
-      if (!mid) {
-        const fallback = await getMarketUuidFallback();
-        mid = fallback ?? null;
-      }
+      if (!mid) mid = await getMarketUuidFallback();
 
       if (!alive) return;
 
@@ -110,15 +88,13 @@ export default function MarketActions({
         const rowId = await fetchBookmarkRowId({ user: userAddress, mid });
         if (!alive) return;
         setBookmarkRowId(rowId);
-      } catch (e) {
-        console.warn("fetch bookmark failed", e);
+      } catch {
         if (!alive) return;
         setBookmarkRowId(null);
       }
     }
 
     run();
-
     return () => {
       alive = false;
     };
@@ -130,8 +106,6 @@ export default function MarketActions({
     if (!address) return;
 
     setBusy(true);
-
-    // optimistic snapshot
     const prev = bookmarkRowId;
 
     try {
@@ -143,17 +117,14 @@ export default function MarketActions({
         return;
       }
 
-      // ✅ OPTIMISTIC UI
+      // optimistic
       if (prev) setBookmarkRowId(null);
       else setBookmarkRowId("optimistic");
 
       if (prev) {
-        // delete by bookmark row id (no re-fetch)
         const { error } = await supabase.from("bookmarks").delete().eq("id", prev);
         if (error) throw error;
-        // already null
       } else {
-        // insert with ONLY the columns that exist: user_address + market_id
         const { data, error } = await supabase
           .from("bookmarks")
           .insert({ user_address: userAddress, market_id: mid })
@@ -164,8 +135,6 @@ export default function MarketActions({
         setBookmarkRowId(data?.id ?? null);
       }
     } catch (e: any) {
-      console.error("bookmark error", e);
-      // rollback
       setBookmarkRowId(prev);
       alert(e?.message || "Bookmark failed");
     } finally {
@@ -181,7 +150,6 @@ export default function MarketActions({
         ? `${window.location.origin}/trade/${address}`
         : `/trade/${address}`;
 
-    // Try native share
     try {
       if (navigator.share) {
         await navigator.share({
@@ -192,11 +160,9 @@ export default function MarketActions({
         return;
       }
     } catch {
-      // user canceled share -> ignore
-      return;
+      return; // user cancelled
     }
 
-    // Clipboard fallback
     try {
       await navigator.clipboard.writeText(url);
       alert("Link copied ✅");
@@ -206,32 +172,36 @@ export default function MarketActions({
   }
 
   return (
-    <div className="flex items-center gap-2">
-      {/* Bookmark */}
+    <div className="flex items-center gap-3 shrink-0">
+      {/* Bookmark (no circle, clean like Polymarket) */}
       <button
+        type="button"
         disabled={busy}
         onClick={toggleBookmark}
-        className={`w-10 h-10 rounded-full border transition flex items-center justify-center ${
-          bookmarked
-            ? "border-pump-green bg-pump-green/10"
-            : "border-gray-700 hover:border-pump-green"
-        }`}
+        className={[
+          "p-2 rounded-lg transition",
+          "hover:bg-white/5 active:scale-[0.98]",
+          bookmarked ? "text-pump-green" : "text-gray-300",
+          busy ? "opacity-60" : "",
+        ].join(" ")}
         title={bookmarked ? "Bookmarked" : "Bookmark"}
+        aria-label={bookmarked ? "Remove bookmark" : "Bookmark market"}
       >
-        <Heart
-          className={`w-5 h-5 ${
-            bookmarked ? "text-pump-green fill-pump-green" : "text-gray-300"
-          }`}
+        <Bookmark
+          className="w-6 h-6"
+          fill={bookmarked ? "currentColor" : "none"}
         />
       </button>
 
       {/* Share */}
       <button
+        type="button"
         onClick={share}
-        className="w-10 h-10 rounded-full border border-gray-700 hover:border-gray-500 transition flex items-center justify-center"
+        className="p-2 rounded-lg text-gray-300 hover:bg-white/5 active:scale-[0.98] transition"
         title="Share"
+        aria-label="Share market"
       >
-        <Share2 className="w-5 h-5 text-gray-300" />
+        <Share2 className="w-6 h-6" />
       </button>
     </div>
   );

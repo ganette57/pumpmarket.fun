@@ -101,9 +101,7 @@ function Step({
   return (
     <div className="flex items-start gap-3">
       <div className="relative mt-0.5">
-        <div
-          className={`w-9 h-9 rounded-full flex items-center justify-center border ${baseDot}`}
-        >
+        <div className={`w-9 h-9 rounded-full flex items-center justify-center border ${baseDot}`}>
           {done ? "✓" : "•"}
         </div>
 
@@ -117,9 +115,7 @@ function Step({
           <div className="text-white font-semibold">{title}</div>
           {right}
         </div>
-        {subtitle ? (
-          <div className="text-sm text-gray-400 mt-0.5">{subtitle}</div>
-        ) : null}
+        {subtitle ? <div className="text-sm text-gray-400 mt-0.5">{subtitle}</div> : null}
       </div>
     </div>
   );
@@ -193,10 +189,42 @@ export default function ResolutionPanel(props: Props) {
 
   const contestHref = `/contest/${encodeURIComponent(marketAddress)}`;
 
-  // Proof selection
-  const proofImg = isFinal ? resolutionProofImage : proposedProofImage;
-  const proofUrl = isFinal ? resolutionProofUrl : proposedProofUrl;
-  const proofNote = isFinal ? resolutionProofNote : proposedProofNote;
+  // ✅ ONLY CHANGE: if proposed + window ended + 0 disputes => treat as "final" for UI
+  const noDisputes = (contestCount ?? 0) <= 0;
+  const uiFinal = isFinal || (isProposed && !contestOpen && noDisputes);
+
+  function normalizeProofUrl(raw?: string | null): string | null {
+    if (!raw) return null;
+    const s = String(raw).trim();
+    if (!s) return null;
+
+    // already absolute
+    if (s.startsWith("http://") || s.startsWith("https://")) return s;
+
+    // ipfs
+    if (s.startsWith("ipfs://")) return `https://ipfs.io/ipfs/${s.slice("ipfs://".length)}`;
+
+    // protocol-relative
+    if (s.startsWith("//")) return `https:${s}`;
+
+    // absolute path
+    if (s.startsWith("/")) {
+      if (typeof window !== "undefined") return `${window.location.origin}${s}`;
+      return s;
+    }
+
+    // looks like a domain without protocol
+    if (/^[a-z0-9.-]+\.[a-z]{2,}([/?#].*)?$/i.test(s)) return `https://${s}`;
+
+    // fallback: return as-is (better than breaking)
+    return s;
+  }
+
+  // Proof selection (normalized)
+  const proofImg = uiFinal ? resolutionProofImage : proposedProofImage;
+  const proofUrlRaw = uiFinal ? resolutionProofUrl : proposedProofUrl;
+  const proofUrl = normalizeProofUrl(proofUrlRaw);
+  const proofNote = uiFinal ? resolutionProofNote : proposedProofNote;
 
   // Lightbox preview
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -206,9 +234,13 @@ export default function ResolutionPanel(props: Props) {
   if (!shouldShow) return null;
 
   // headline outcome (like your ref screen)
-  const headlineOutcome = isFinal ? winningOutcomeLabel : isProposed ? proposedOutcomeLabel : null;
+  const headlineOutcome = uiFinal
+    ? (winningOutcomeLabel || proposedOutcomeLabel)
+    : isProposed
+    ? proposedOutcomeLabel
+    : null;
 
-  const headerSubline = isFinal
+  const headerSubline = uiFinal
     ? `Finalized${formatDt(resolvedAt) ? ` • ${formatDt(resolvedAt)}` : ""}`
     : isProposed
     ? `Proposed${formatDt(proposedAt) ? ` • ${formatDt(proposedAt)}` : ""}`
@@ -216,22 +248,21 @@ export default function ResolutionPanel(props: Props) {
     ? "Cancelled • funds refundable"
     : isPending
     ? creatorWindowOpen
-? `Creator has ${formatMsToHhMm(creatorRemainingMs)} to propose (48h window)`
+      ? `Creator has ${formatMsToHhMm(creatorRemainingMs)} to propose (48h window)`
       : creatorWindowExpired
       ? "Creator window expired — cancelling / refunding"
       : "Waiting for proposal"
     : null;
 
-  const headerChip =
-    isFinal ? (
-      <Chip label="Final" variant="final" />
-    ) : isProposed ? (
-      <Chip label="Proposed" variant="proposed" />
-    ) : isCancelled ? (
-      <Chip label="Cancelled" variant="cancelled" />
-    ) : (
-      <Chip label="Ended" variant="ended" />
-    );
+  const headerChip = uiFinal ? (
+    <Chip label="Final" variant="final" />
+  ) : isProposed ? (
+    <Chip label="Proposed" variant="proposed" />
+  ) : isCancelled ? (
+    <Chip label="Cancelled" variant="cancelled" />
+  ) : (
+    <Chip label="Ended" variant="ended" />
+  );
 
   return (
     <>
@@ -265,24 +296,20 @@ export default function ResolutionPanel(props: Props) {
 
         {/* Timeline */}
         <div className="mt-5 rounded-2xl border border-white/10 bg-black/20 p-4 space-y-5">
-          <Step
-            done={ended}
-            title="Market ended"
-            subtitle={ended ? "Trading is closed." : "Trading is still open."}
-          />
+          <Step done={ended} title="Market ended" subtitle={ended ? "Trading is closed." : "Trading is still open."} />
 
           <Step
-            done={isProposed || isFinal}
+            done={isProposed || uiFinal}
             title="Outcome proposed"
             subtitle={
-              isProposed || isFinal
+              isProposed || uiFinal
                 ? `Proposed: ${proposedOutcomeLabel || "—"}${proposedAt ? ` • ${formatDt(proposedAt)}` : ""}`
                 : isCancelled
                 ? "No proposal needed (market cancelled)."
                 : creatorWindowOpen
                 ? "Creator must propose within 48h after end."
                 : creatorWindowExpired
-             ? "No proposal in 48h → auto-cancel + refund."
+                ? "No proposal in 48h → auto-cancel + refund."
                 : "No proposal yet."
             }
             right={
@@ -294,9 +321,7 @@ export default function ResolutionPanel(props: Props) {
                 </div>
               ) : isPending ? (
                 creatorWindowOpen ? (
-                  <div className="text-xs text-yellow-200 font-semibold">
-                    {formatMsToHhMm(creatorRemainingMs)} left
-                  </div>
+                  <div className="text-xs text-yellow-200 font-semibold">{formatMsToHhMm(creatorRemainingMs)} left</div>
                 ) : creatorWindowExpired ? (
                   <div className="text-xs text-[#ff5c73] font-semibold">Expired</div>
                 ) : null
@@ -305,42 +330,44 @@ export default function ResolutionPanel(props: Props) {
           />
 
           <Step
-            done={isFinal}
+            done={uiFinal}
             title="Dispute window"
             subtitle={
               isCancelled
                 ? "Disputes not applicable."
                 : isProposed
                 ? "Anyone can dispute during the window."
-                : isFinal
+                : uiFinal
                 ? "No disputes (or resolved after review)."
                 : "Opens after proposal."
             }
             right={
-                isProposed ? (
-                  <Link
-                    href={contestHref}
-                    className={`text-xs font-semibold transition ${
-                      typeof contestCount === "number" && contestCount > 0
-                        ? "text-[#ff5c73] hover:underline"
-                        : "text-gray-400 hover:text-pump-green hover:underline"
-                    }`}
-                    title="Open contest / disputes"
-                  >
-                    {typeof contestCount === "number" && contestCount > 0
-                      ? `${contestCount} disputes`
-                      : "No disputes yet"}
-                  </Link>
-                ) : null
-              }
+              isProposed ? (
+                <Link
+                  href={contestHref}
+                  className={`text-xs font-semibold transition ${
+                    typeof contestCount === "number" && contestCount > 0
+                      ? "text-[#ff5c73] hover:underline"
+                      : "text-gray-400 hover:text-pump-green hover:underline"
+                  }`}
+                  title="Open contest / disputes"
+                >
+                  {typeof contestCount === "number" && contestCount > 0
+                    ? `${contestCount} disputes`
+                    : uiFinal
+                    ? "No disputes"
+                    : "No disputes yet"}
+                </Link>
+              ) : null
+            }
           />
 
           <Step
-            done={isFinal}
+            done={uiFinal}
             title="Final outcome"
             subtitle={
-              isFinal
-                ? `Final: ${winningOutcomeLabel || "—"}`
+              uiFinal
+                ? `Final: ${(winningOutcomeLabel || proposedOutcomeLabel) || "—"}`
                 : isCancelled
                 ? "Cancelled — funds refundable."
                 : "Not finalized yet."
@@ -353,21 +380,14 @@ export default function ResolutionPanel(props: Props) {
         {/* Proof */}
         {(proofNote || proofUrl || proofImg) ? (
           <div className="mt-5">
-            <div className="text-white font-semibold mb-2">
-              {isFinal ? "Final proof" : "Proposed proof"}
-            </div>
+            <div className="text-white font-semibold mb-2">{uiFinal ? "Final proof" : "Proposed proof"}</div>
 
             {proofNote ? <p className="text-sm text-gray-300 mb-2">{proofNote}</p> : null}
 
             {proofUrl ? (
               <p className="text-sm text-gray-300 mb-3">
                 Proof link:{" "}
-                <a
-                  href={proofUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-pump-green underline"
-                >
+                <a href={proofUrl} target="_blank" rel="noreferrer" className="text-pump-green underline">
                   open proof
                 </a>
               </p>
@@ -400,14 +420,11 @@ export default function ResolutionPanel(props: Props) {
                 🚨 Dispute
               </Link>
             ) : (
-              <button
-                className="flex-1 px-4 py-2.5 rounded-xl bg-gray-700 text-gray-300 cursor-not-allowed"
-                disabled
-              >
+              <button className="flex-1 px-4 py-2.5 rounded-xl bg-gray-700 text-gray-300 cursor-not-allowed" disabled>
                 🚨 Dispute (window closed)
               </button>
             )
-          ) : isFinal ? (
+          ) : uiFinal ? (
             <Link
               href="/dashboard"
               className="flex-1 px-4 py-2.5 rounded-xl text-center font-semibold transition bg-pump-green text-black hover:opacity-90"
@@ -422,10 +439,7 @@ export default function ResolutionPanel(props: Props) {
               💸 Refund
             </Link>
           ) : (
-            <button
-              className="flex-1 px-4 py-2.5 rounded-xl bg-gray-700 text-gray-300 cursor-not-allowed"
-              disabled
-            >
+            <button className="flex-1 px-4 py-2.5 rounded-xl bg-gray-700 text-gray-300 cursor-not-allowed" disabled>
               Waiting for proposal
             </button>
           )}

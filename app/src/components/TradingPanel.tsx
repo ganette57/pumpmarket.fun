@@ -426,6 +426,19 @@ export default function TradingPanel({
             ? `Buy ${String(outcomes[selectedIndex] || "SHARES").toUpperCase()}`
             : `Sell ${String(outcomes[selectedIndex] || "SHARES").toUpperCase()}`}
         </button>
+
+        {/* Terms note (desktop + mobile drawer) */}
+        <p className="mt-3 text-center text-xs text-gray-500">
+          By trading, you agree to the{" "}
+          <a
+            href="#"
+            className="text-gray-300 underline underline-offset-4 hover:text-white"
+            onClick={(e) => e.preventDefault()} // TODO: add real link later
+          >
+            Terms of Use
+          </a>
+          .
+        </p>
       </div>
     </div>
   );
