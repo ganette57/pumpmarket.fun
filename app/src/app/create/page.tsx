@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { SystemProgram, Keypair } from "@solana/web3.js";
 import { BN } from "@coral-xyz/anchor";
@@ -78,11 +78,14 @@ function TypeCard({
 
 export default function CreateMarketPage() {
   const { publicKey, connected } = useWallet();
-  const { connection } = useConnection(); // keep
+  const { connection } = useConnection();
   const router = useRouter();
   const program = useProgram();
 
   const [loading, setLoading] = useState(false);
+
+  // Tx guard: prevent double-submit
+  const inFlightRef = useRef<Record<string, boolean>>({});
 
   const [question, setQuestion] = useState("");
   const [description, setDescription] = useState("");
@@ -216,7 +219,12 @@ export default function CreateMarketPage() {
   async function handleCreateMarket() {
     if (!canSubmit || !publicKey || !program) return;
 
+    // Tx guard: prevent double-submit
+    const key = "create_market";
+    if (inFlightRef.current[key]) return;
+    inFlightRef.current[key] = true;
     setLoading(true);
+
     try {
       // Market is `init` without seeds => real Keypair
       const marketKeypair = Keypair.generate();
@@ -225,7 +233,7 @@ export default function CreateMarketPage() {
       // defaults -> on-chain args
       const bLamportsU64 = Math.floor(DEFAULT_B_SOL * 1_000_000_000);
 
-      const tx = await (program as any).methods
+      const txSig = await (program as any).methods
         .createMarket(
           new BN(resolutionTimestamp), // i64
           outcomes, // Vec<String>
@@ -243,7 +251,10 @@ export default function CreateMarketPage() {
         .signers([marketKeypair])
         .rpc();
 
-      console.log("Market created! tx:", tx);
+      console.log("Market created! tx:", txSig);
+
+      // Confirm transaction before proceeding
+      await connection.confirmTransaction(txSig, "confirmed");
 
       // Fetch on-chain truth (recommended)
       let onchainType = Number(marketType) || 0;
@@ -279,14 +290,14 @@ export default function CreateMarketPage() {
         end_date: resolutionDate.toISOString(),
         creator: publicKey.toBase58(),
         social_links: socialLinks,
-      
+
         market_type: onchainType,
         outcome_names: onchainNames,
         outcome_supplies: onchainSupplies,
-      
+
         yes_supply: isBinary ? (onchainSupplies[0] ?? 0) : null,
         no_supply: isBinary ? (onchainSupplies[1] ?? 0) : null,
-      
+
         total_volume: 0,
         resolved: false,
       } as any);
@@ -294,8 +305,24 @@ export default function CreateMarketPage() {
       router.push(`/trade/${marketKeypair.publicKey.toBase58()}`);
     } catch (e: any) {
       console.error("Create market error:", e);
-      alert(e?.message || "Failed to create market");
+      const errMsg = String(e?.message || "");
+
+      // Handle "already been processed" gracefully
+      if (errMsg.toLowerCase().includes("already been processed")) {
+        alert("Transaction already processed. Refreshing…");
+        router.refresh();
+        return;
+      }
+
+      // Handle user rejection
+      if (errMsg.toLowerCase().includes("user rejected")) {
+        alert("Transaction cancelled by user.");
+        return;
+      }
+
+      alert(errMsg || "Failed to create market");
     } finally {
+      inFlightRef.current[key] = false;
       setLoading(false);
     }
   }
@@ -530,11 +557,12 @@ export default function CreateMarketPage() {
         <button
           onClick={handleCreateMarket}
           disabled={!canSubmit || loading}
+          aria-busy={loading}
           className={`w-full py-4 rounded-lg font-bold text-lg transition ${
             canSubmit && !loading ? "btn-pump glow-green" : "bg-gray-700 text-gray-500 cursor-not-allowed"
           }`}
         >
-          {loading ? "Creating..." : "Launch Market 🚀"}
+          {loading ? "Processing..." : "Launch Market 🚀"}
         </button>
       </div>
     </div>

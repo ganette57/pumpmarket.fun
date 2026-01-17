@@ -1,7 +1,7 @@
 // src/app/dashboard/page.tsx
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
@@ -418,6 +418,9 @@ const [refundingMarket, setRefundingMarket] = useState<string | null>(null);
   const [bookmarkIds, setBookmarkIds] = useState<string[]>([]);
   const [bookmarkedMarkets, setBookmarkedMarkets] = useState<DbMarket[]>([]);
 
+  // Tx guard: prevent double-submit
+  const inFlightRef = useRef<Record<string, boolean>>({});
+
   // resolve/propose modal
   const [resolvingMarket, setResolvingMarket] = useState<DbMarket | null>(null);
   const [selectedOutcome, setSelectedOutcome] = useState<number | null>(null);
@@ -470,6 +473,29 @@ const [refundingMarket, setRefundingMarket] = useState<string | null>(null);
 
   /* ---------------- Load base dashboard data ---------------- */
 
+  // Refresh dashboard data function (for use after tx success)
+  async function reloadDashboardData() {
+    if (!connected || !walletBase58) return;
+
+    try {
+      const [markets, txs, bms] = await Promise.all([
+        safeFetchMyCreatedMarkets(walletBase58),
+        safeFetchUserTransactions(walletBase58, 80),
+        safeFetchBookmarks(walletBase58, 200),
+      ]);
+
+      setMyCreatedMarkets(markets || []);
+      setMyTxs(txs || []);
+
+      const ids = Array.from(
+        new Set((bms || []).map((x) => String(x.market_id || "")).filter(Boolean))
+      );
+      setBookmarkIds(ids);
+    } catch (e: any) {
+      console.error("reloadDashboardData error:", e);
+    }
+  }
+
   useEffect(() => {
     if (!connected || !walletBase58) {
       setErrorMsg(null);
@@ -479,7 +505,7 @@ const [refundingMarket, setRefundingMarket] = useState<string | null>(null);
       setBookmarkIds([]);
       setBookmarkedMarkets([]);
       setClaimables([]);
-setRefundables([]);
+      setRefundables([]);
       return;
     }
 
@@ -827,6 +853,11 @@ useEffect(() => {
   async function handleClaim(marketAddress: string) {
     if (!connected || !publicKey || !program) return;
 
+    // Tx guard: prevent double-submit
+    const key = `claim_${marketAddress}`;
+    if (inFlightRef.current[key]) return;
+    inFlightRef.current[key] = true;
+
     try {
       setClaimingMarket(marketAddress);
 
@@ -842,27 +873,56 @@ useEffect(() => {
         })
         .rpc();
 
+      // Confirm transaction before updating UI
+      await connection.confirmTransaction(sig, "confirmed");
+
       alert(
         `Claim success 🎉\n\nTx: ${sig.slice(0, 16)}...\n\nhttps://explorer.solana.com/tx/${sig}?cluster=devnet`
       );
 
       setClaimables((prev) => prev.filter((c) => c.marketAddress !== marketAddress));
+
+      // Refresh dashboard data
+      await reloadDashboardData();
     } catch (e: any) {
-      alert(`Claim failed: ${e?.message || "Unknown error"}`);
+      console.error("handleClaim error:", e);
+      const errMsg = String(e?.message || "");
+
+      // Handle "already been processed" gracefully
+      if (errMsg.toLowerCase().includes("already been processed")) {
+        alert("Transaction already processed. Refreshing…");
+        setClaimables((prev) => prev.filter((c) => c.marketAddress !== marketAddress));
+        await reloadDashboardData();
+        return;
+      }
+
+      // Handle user rejection
+      if (errMsg.toLowerCase().includes("user rejected")) {
+        alert("Transaction cancelled by user.");
+        return;
+      }
+
+      alert(`Claim failed: ${errMsg || "Unknown error"}`);
     } finally {
+      inFlightRef.current[key] = false;
       setClaimingMarket(null);
     }
   }
 
   async function handleRefund(marketAddress: string) {
     if (!connected || !publicKey || !program) return;
-  
+
+    // Tx guard: prevent double-submit
+    const key = `refund_${marketAddress}`;
+    if (inFlightRef.current[key]) return;
+    inFlightRef.current[key] = true;
+
     try {
       setRefundingMarket(marketAddress);
-  
+
       const marketPk = new PublicKey(marketAddress);
       const [posPda] = getUserPositionPDA(marketPk, publicKey);
-  
+
       const sig = await (program as any).methods
         .claimRefund()
         .accounts({
@@ -871,15 +931,39 @@ useEffect(() => {
           user: publicKey,
         })
         .rpc();
-  
+
+      // Confirm transaction before updating UI
+      await connection.confirmTransaction(sig, "confirmed");
+
       alert(
         `Refund success 🎉\n\nTx: ${sig.slice(0, 16)}...\n\nhttps://explorer.solana.com/tx/${sig}?cluster=devnet`
       );
-  
+
       setRefundables((prev) => prev.filter((r) => r.marketAddress !== marketAddress));
+
+      // Refresh dashboard data
+      await reloadDashboardData();
     } catch (e: any) {
-      alert(`Refund failed: ${e?.message || "Unknown error"}`);
+      console.error("handleRefund error:", e);
+      const errMsg = String(e?.message || "");
+
+      // Handle "already been processed" gracefully
+      if (errMsg.toLowerCase().includes("already been processed")) {
+        alert("Transaction already processed. Refreshing…");
+        setRefundables((prev) => prev.filter((r) => r.marketAddress !== marketAddress));
+        await reloadDashboardData();
+        return;
+      }
+
+      // Handle user rejection
+      if (errMsg.toLowerCase().includes("user rejected")) {
+        alert("Transaction cancelled by user.");
+        return;
+      }
+
+      alert(`Refund failed: ${errMsg || "Unknown error"}`);
     } finally {
+      inFlightRef.current[key] = false;
       setRefundingMarket(null);
     }
   }
@@ -888,15 +972,21 @@ useEffect(() => {
     if (resolveLoading) return;
     if (!connected || !publicKey || !program || !resolvingMarket) return;
     if (selectedOutcome === null) return;
-  
+
     const marketAddress = resolvingMarket.market_address;
     if (!marketAddress) return;
-  
+
+    // Tx guard: prevent double-submit
+    const key = `propose_${marketAddress}`;
+    if (inFlightRef.current[key]) return;
+    inFlightRef.current[key] = true;
+
     if (!proofOk) {
+      inFlightRef.current[key] = false;
       alert(proofMode === "link" ? "Please provide a proof URL." : "Please upload a proof image.");
       return;
     }
-  
+
     const parseStatus = (statusRaw: any): "open" | "proposed" | "finalized" | "cancelled" | "unknown" => {
       if (!statusRaw) return "unknown";
       if (typeof statusRaw === "string") {
@@ -911,20 +1001,20 @@ useEffect(() => {
       if (statusRaw.cancelled) return "cancelled";
       return "unknown";
     };
-  
+
     const bnToNum = (x: any) =>
       typeof x?.toNumber === "function" ? x.toNumber() : Number(x ?? 0);
-  
+
     try {
       setResolveLoading(true);
-  
+
       const marketPk = new PublicKey(marketAddress);
-  
+
       // --------------------------
       // 1) Fetch on-chain market + validate
       // --------------------------
       const before = await (program as any).account.market.fetch(marketPk);
-  
+
       const onchainCreator: PublicKey | undefined = before?.creator;
       if (!onchainCreator) throw new Error("On-chain market has no creator");
       if (!onchainCreator.equals(publicKey)) {
@@ -932,26 +1022,26 @@ useEffect(() => {
           `Wrong creator wallet.\nOn-chain creator = ${onchainCreator.toBase58()}\nYou = ${publicKey.toBase58()}`
         );
       }
-  
+
       const statusStr = parseStatus(before?.status);
-  
+
       const nowSec = Math.floor(Date.now() / 1000);
       const resolutionTimeSec = bnToNum(before?.resolutionTime);
-  
+
       if (resolutionTimeSec && nowSec < resolutionTimeSec) {
         throw new Error(`Market not ended on-chain yet. Ends in ${resolutionTimeSec - nowSec}s`);
       }
-  
+
       // Some programs use booleans, some rely purely on status.
       if (before?.resolved) throw new Error("Market already resolved on-chain.");
       if (before?.cancelled) throw new Error("Market cancelled on-chain.");
       if (statusStr === "finalized") throw new Error("Market already finalized on-chain.");
       if (statusStr === "cancelled") throw new Error("Market cancelled on-chain.");
-  
+
       // If already proposed, ensure we're not trying to change outcome off-chain.
       const proposedOutcomeOnChain =
         before?.proposedOutcome != null ? bnToNum(before?.proposedOutcome) : null;
-  
+
       if (statusStr === "proposed" && proposedOutcomeOnChain != null && proposedOutcomeOnChain !== selectedOutcome) {
         throw new Error(
           `Market already proposed on-chain with a different outcome.\n` +
@@ -959,17 +1049,17 @@ useEffect(() => {
             `You must keep the on-chain proposed outcome.`
         );
       }
-  
+
       if (statusStr !== "open" && statusStr !== "proposed") {
         throw new Error(`Invalid on-chain status: ${statusStr}. (Needs: open/proposed)`);
       }
-  
+
       // --------------------------
       // 2) Prepare proof (only after validations)
       // --------------------------
       let proposedProofUrl: string | null = null;
       let proposedProofImage: string | null = null;
-  
+
       if (proofMode === "link") {
         proposedProofUrl = proofUrl.trim();
         proposedProofImage = null;
@@ -978,14 +1068,14 @@ useEffect(() => {
         proposedProofImage = await uploadResolutionProofImage(proofFile, marketAddress);
         proposedProofUrl = null;
       }
-  
+
       const note = proofNote.trim() || null;
-  
+
       // --------------------------
       // 3) On-chain propose ONLY if status is OPEN
       // --------------------------
       let sig: string | null = null;
-  
+
       if (statusStr === "open") {
         sig = await (program as any).methods
           .proposeResolution(selectedOutcome)
@@ -994,47 +1084,55 @@ useEffect(() => {
             creator: publicKey,
           })
           .rpc();
-  
+
         console.log("✅ proposeResolution on-chain tx =", sig);
+
+        // Confirm transaction before proceeding
+        await connection.confirmTransaction(sig, "confirmed");
       } else {
         console.log("ℹ️ Market already proposed on-chain, skipping propose tx");
       }
-  
+
       // --------------------------
       // 4) Read contest deadline + proposedAt from chain (source of truth)
       // --------------------------
       const after = await (program as any).account.market.fetch(marketPk);
-  
+
       const contestDeadlineSec = bnToNum(after?.contestDeadline);
       const proposedAtSec = bnToNum(after?.proposedAt);
-  
+
       const deadlineIso =
         contestDeadlineSec && Number.isFinite(contestDeadlineSec) && contestDeadlineSec > 0
           ? new Date(contestDeadlineSec * 1000).toISOString()
           : new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-  
+
       const proposedAtIso =
         proposedAtSec && Number.isFinite(proposedAtSec) && proposedAtSec > 0
           ? new Date(proposedAtSec * 1000).toISOString()
           : new Date().toISOString();
-  
+
       // If already proposed, keep the chain outcome as truth
       const finalProposedOutcome =
         after?.proposedOutcome != null ? bnToNum(after?.proposedOutcome) : selectedOutcome;
-  
+
       // --------------------------
       // 5) DB commit (proof + UI fields)
       // --------------------------
-      await proposeResolutionDb({
-        market_address: marketAddress,
-        proposed_winning_outcome: finalProposedOutcome,
-        contest_deadline_iso: deadlineIso,
-        proposed_proof_url: proposedProofUrl,
-        proposed_proof_image: proposedProofImage,
-        proposed_proof_note: note,
-        tx_sig: sig, // can be null when already proposed
-      } as any);
-  
+      try {
+        await proposeResolutionDb({
+          market_address: marketAddress,
+          proposed_winning_outcome: finalProposedOutcome,
+          contest_deadline_iso: deadlineIso,
+          proposed_proof_url: proposedProofUrl,
+          proposed_proof_image: proposedProofImage,
+          proposed_proof_note: note,
+          tx_sig: sig, // can be null when already proposed
+        } as any);
+      } catch (dbErr) {
+        console.error("DB commit error (tx still succeeded):", dbErr);
+        // Continue even if DB commit fails - on-chain is source of truth
+      }
+
       // --------------------------
       // 6) Optimistic UI update + close
       // --------------------------
@@ -1056,10 +1154,13 @@ useEffect(() => {
             : m
         )
       );
-  
+
       const labels = resolvingMarket.outcome_names || ["YES", "NO"];
       resetResolveModal();
-  
+
+      // Refresh dashboard data
+      await reloadDashboardData();
+
       alert(
         "Resolution proposed ✅\n\n" +
           "Outcome: " +
@@ -1069,8 +1170,25 @@ useEffect(() => {
       );
     } catch (e: any) {
       console.error("PROPOSE FAILED", e);
-      alert("Propose failed: " + (e?.message || "Unknown error"));
+      const errMsg = String(e?.message || "");
+
+      // Handle "already been processed" gracefully
+      if (errMsg.toLowerCase().includes("already been processed")) {
+        alert("Transaction already processed. Refreshing…");
+        resetResolveModal();
+        await reloadDashboardData();
+        return;
+      }
+
+      // Handle user rejection
+      if (errMsg.toLowerCase().includes("user rejected")) {
+        alert("Transaction cancelled by user.");
+        return;
+      }
+
+      alert("Propose failed: " + (errMsg || "Unknown error"));
     } finally {
+      inFlightRef.current[key] = false;
       setResolveLoading(false);
     }
   }
@@ -1196,6 +1314,7 @@ useEffect(() => {
                 <button
                   onClick={() => handleClaim(c.marketAddress)}
                   disabled={claimingMarket === c.marketAddress}
+                  aria-busy={claimingMarket === c.marketAddress}
                   className={[
                     "px-5 py-2 rounded-lg font-semibold transition",
                     claimingMarket === c.marketAddress
@@ -1203,7 +1322,7 @@ useEffect(() => {
                       : "bg-pump-green text-black hover:opacity-90",
                   ].join(" ")}
                 >
-                  {claimingMarket === c.marketAddress ? "Claiming…" : "💰 Claim"}
+                  {claimingMarket === c.marketAddress ? "Processing…" : "💰 Claim"}
                 </button>
               </div>
             ))}
@@ -1249,6 +1368,7 @@ useEffect(() => {
           <button
             onClick={() => handleRefund(r.marketAddress)}
             disabled={refundingMarket === r.marketAddress}
+            aria-busy={refundingMarket === r.marketAddress}
             className={[
               "px-5 py-2 rounded-lg font-semibold transition",
               refundingMarket === r.marketAddress
@@ -1256,7 +1376,7 @@ useEffect(() => {
                 : "bg-[#ff5c73] text-black hover:opacity-90",
             ].join(" ")}
           >
-            {refundingMarket === r.marketAddress ? "Refunding…" : "💸 Refund"}
+            {refundingMarket === r.marketAddress ? "Processing…" : "💸 Refund"}
           </button>
         </div>
       ))}
@@ -1645,6 +1765,7 @@ useEffect(() => {
               <button
                 onClick={handleProposeResolution}
                 disabled={selectedOutcome === null || resolveLoading || !proofOk}
+                aria-busy={resolveLoading}
                 className={[
                   "flex-1 px-4 py-2 rounded-lg font-semibold transition",
                   selectedOutcome === null || resolveLoading || !proofOk
@@ -1652,7 +1773,7 @@ useEffect(() => {
                     : "bg-yellow-500 text-black hover:bg-yellow-400",
                 ].join(" ")}
               >
-                {resolveLoading ? "Proposing…" : "Confirm proposal"}
+                {resolveLoading ? "Processing…" : "Confirm proposal"}
               </button>
             </div>
 

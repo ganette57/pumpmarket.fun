@@ -1,7 +1,7 @@
 // app/src/app/admin/overview/page.tsx
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { PublicKey } from "@solana/web3.js";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
@@ -199,6 +199,9 @@ export default function AdminOverviewPage() {
   const [busy, setBusy] = useState<Record<string, "approve" | "cancel" | null>>({});
   const [msg, setMsg] = useState<Record<string, { tone: "ok" | "err" | "info"; text: string } | null>>({});
 
+  // Tx guard: prevent double-submit
+  const inFlightRef = useRef<Record<string, boolean>>({});
+
   const disputes = data?.disputed_markets || [];
   const k = data?.kpi;
 
@@ -325,6 +328,10 @@ export default function AdminOverviewPage() {
     if (!wallet.publicKey) return showInfo(marketAddr, "err", "Connect admin wallet");
     if (!isAdminWallet) return showInfo(marketAddr, "err", `Wrong wallet. Must be ${ADMIN_PUBKEY.toBase58()}`);
 
+    // Tx guard: prevent double-submit
+    const key = `admin_approve_${marketAddr}`;
+    if (inFlightRef.current[key]) return;
+
     const oc = onchain[marketAddr];
     if (!oc) return showInfo(marketAddr, "err", "Cannot read on-chain market (fetch failed).");
 
@@ -339,6 +346,7 @@ export default function AdminOverviewPage() {
       );
     }
 
+    inFlightRef.current[key] = true;
     setBusy((p) => ({ ...p, [marketAddr]: "approve" }));
     showInfo(marketAddr, "info", "Preparing…");
 
@@ -383,18 +391,40 @@ export default function AdminOverviewPage() {
 
       showInfo(marketAddr, "info", "Committing DB…");
 
-      // 3) DB commit
-      await postJSON("/api/admin/market/approve/commit", {
-        market: marketAddr,
-        winning_outcome: wo,
-        tx_sig: txSig,
-      });
+      // 3) DB commit (non-fatal if fails)
+      try {
+        await postJSON("/api/admin/market/approve/commit", {
+          market: marketAddr,
+          winning_outcome: wo,
+          tx_sig: txSig,
+        });
+      } catch (dbErr) {
+        console.error("DB commit error (tx still succeeded):", dbErr);
+        // Continue - on-chain is source of truth
+      }
 
       showInfo(marketAddr, "ok", `Approved ✅ tx=${shortAddr(txSig)}`);
       await load();
     } catch (e: any) {
+      console.error("approveMarket error:", e);
+      const errMsg = String(e?.message || "");
+
+      // Handle "already been processed" gracefully
+      if (errMsg.toLowerCase().includes("already been processed")) {
+        showInfo(marketAddr, "info", "Transaction already processed. Refreshing…");
+        await load();
+        return;
+      }
+
+      // Handle user rejection
+      if (errMsg.toLowerCase().includes("user rejected")) {
+        showInfo(marketAddr, "err", "Transaction cancelled by user.");
+        return;
+      }
+
       showInfo(marketAddr, "err", explainError(e));
     } finally {
+      inFlightRef.current[key] = false;
       setBusy((p) => ({ ...p, [marketAddr]: null }));
     }
   }
@@ -403,6 +433,10 @@ export default function AdminOverviewPage() {
     if (!program) return showInfo(marketAddr, "err", "Program not ready");
     if (!wallet.publicKey) return showInfo(marketAddr, "err", "Connect admin wallet");
     if (!isAdminWallet) return showInfo(marketAddr, "err", `Wrong wallet. Must be ${ADMIN_PUBKEY.toBase58()}`);
+
+    // Tx guard: prevent double-submit
+    const key = `admin_cancel_${marketAddr}`;
+    if (inFlightRef.current[key]) return;
 
     const oc = onchain[marketAddr];
     if (!oc) return showInfo(marketAddr, "err", "Cannot read on-chain market (fetch failed).");
@@ -422,6 +456,7 @@ export default function AdminOverviewPage() {
       return showInfo(marketAddr, "err", "No on-chain disputes => admin_cancel not allowed (disputeCount=0).");
     }
 
+    inFlightRef.current[key] = true;
     setBusy((p) => ({ ...p, [marketAddr]: "cancel" }));
     showInfo(marketAddr, "info", "Preparing…");
 
@@ -442,17 +477,39 @@ export default function AdminOverviewPage() {
 
       showInfo(marketAddr, "info", "Committing DB…");
 
-      // 3) DB commit
-      await postJSON("/api/admin/market/cancel/commit", {
-        market: marketAddr,
-        tx_sig: txSig,
-      });
+      // 3) DB commit (non-fatal if fails)
+      try {
+        await postJSON("/api/admin/market/cancel/commit", {
+          market: marketAddr,
+          tx_sig: txSig,
+        });
+      } catch (dbErr) {
+        console.error("DB commit error (tx still succeeded):", dbErr);
+        // Continue - on-chain is source of truth
+      }
 
       showInfo(marketAddr, "ok", `Cancelled ✅ tx=${shortAddr(txSig)}`);
       await load();
     } catch (e: any) {
+      console.error("cancelMarket error:", e);
+      const errMsg = String(e?.message || "");
+
+      // Handle "already been processed" gracefully
+      if (errMsg.toLowerCase().includes("already been processed")) {
+        showInfo(marketAddr, "info", "Transaction already processed. Refreshing…");
+        await load();
+        return;
+      }
+
+      // Handle user rejection
+      if (errMsg.toLowerCase().includes("user rejected")) {
+        showInfo(marketAddr, "err", "Transaction cancelled by user.");
+        return;
+      }
+
       showInfo(marketAddr, "err", explainError(e));
     } finally {
+      inFlightRef.current[key] = false;
       setBusy((p) => ({ ...p, [marketAddr]: null }));
     }
   }
@@ -623,6 +680,7 @@ export default function AdminOverviewPage() {
                         <div className="flex items-center gap-2">
                           <button
                             disabled={cancelDisabled}
+                            aria-busy={actionBusy === "cancel"}
                             onClick={() => {
                               if (!confirm("Cancel this market on-chain? (Refund flow)")) return;
                               void cancelMarket(m.market_address);
@@ -634,11 +692,12 @@ export default function AdminOverviewPage() {
                                 : "bg-black/30 border-[#ff5c73]/40 text-[#ff5c73] hover:bg-[#ff5c73]/10",
                             ].join(" ")}
                           >
-                            {actionBusy === "cancel" ? "Cancelling…" : "Cancel"}
+                            {actionBusy === "cancel" ? "Processing…" : "Cancel"}
                           </button>
 
                           <button
                             disabled={approveDisabled}
+                            aria-busy={actionBusy === "approve"}
                             onClick={() => {
                               if (!confirm("Approve this market on-chain? (Finalize)")) return;
                               void approveMarket(m.market_address);
@@ -650,7 +709,7 @@ export default function AdminOverviewPage() {
                                 : "bg-pump-green text-black hover:opacity-90",
                             ].join(" ")}
                           >
-                            {actionBusy === "approve" ? "Approving…" : "Approve"}
+                            {actionBusy === "approve" ? "Processing…" : "Approve"}
                           </button>
                         </div>
 

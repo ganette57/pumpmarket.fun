@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import Image from "next/image";
 
@@ -203,6 +203,9 @@ export default function TradePage() {
   const [market, setMarket] = useState<UiMarket | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+
+  // Tx guard: prevent double-submit
+  const inFlightRef = useRef<Record<string, boolean>>({});
 
   const [positionShares, setPositionShares] = useState<number[] | null>(null);
   const [marketBalanceLamports, setMarketBalanceLamports] = useState<number | null>(null);
@@ -457,6 +460,11 @@ export default function TradePage() {
     }
     if (!market || !id || !derived) return;
 
+    // Tx guard: prevent double-submit (per side)
+    const key = side; // "buy" or "sell"
+    if (inFlightRef.current[key]) return;
+    inFlightRef.current[key] = true;
+
     const safeShares = Math.max(1, Math.floor(shares));
     const safeOutcome = clampInt(outcomeIndex, 0, derived.names.length - 1);
 
@@ -513,35 +521,49 @@ export default function TradePage() {
           .rpc();
       }
 
+      // Confirm transaction before proceeding
+      await connection.confirmTransaction(txSig, "confirmed");
+
       const name = derived.names[safeOutcome] || `Outcome #${safeOutcome + 1}`;
       const safeCostSol = typeof costSol === "number" && Number.isFinite(costSol) ? costSol : null;
 
-      if (market.dbId) {
-        await recordTransaction({
-          market_id: market.dbId,
-          market_address: market.publicKey,
-          user_address: publicKey.toBase58(),
-          tx_signature: txSig,
-          is_buy: side === "buy",
-          is_yes: derived.names.length === 2 ? safeOutcome === 0 : null,
-          amount: safeShares,
-          shares: safeShares,
-          cost: safeCostSol,
-          outcome_index: safeOutcome,
-          outcome_name: name,
-        } as any);
+      // Record transaction in DB (non-blocking error)
+      try {
+        if (market.dbId) {
+          await recordTransaction({
+            market_id: market.dbId,
+            market_address: market.publicKey,
+            user_address: publicKey.toBase58(),
+            tx_signature: txSig,
+            is_buy: side === "buy",
+            is_yes: derived.names.length === 2 ? safeOutcome === 0 : null,
+            amount: safeShares,
+            shares: safeShares,
+            cost: safeCostSol,
+            outcome_index: safeOutcome,
+            outcome_name: name,
+          } as any);
+        }
+      } catch (dbErr) {
+        console.error("DB recordTransaction error (non-fatal):", dbErr);
       }
 
       const deltaVolLamports = side === "buy" && safeCostSol != null ? solToLamports(safeCostSol) : 0;
 
-      await applyTradeToMarketInSupabase({
-        market_address: market.publicKey,
-        market_type: market.marketType,
-        outcome_index: safeOutcome,
-        delta_shares: side === "buy" ? safeShares : -safeShares,
-        delta_volume_lamports: deltaVolLamports,
-      });
+      // Update market supplies in DB (non-blocking error)
+      try {
+        await applyTradeToMarketInSupabase({
+          market_address: market.publicKey,
+          market_type: market.marketType,
+          outcome_index: safeOutcome,
+          delta_shares: side === "buy" ? safeShares : -safeShares,
+          delta_volume_lamports: deltaVolLamports,
+        });
+      } catch (dbErr) {
+        console.error("DB applyTradeToMarketInSupabase error (non-fatal):", dbErr);
+      }
 
+      // Always refresh UI state
       await loadMarket(id);
 
       // close drawer on success (mobile)
@@ -552,9 +574,29 @@ export default function TradePage() {
       );
     } catch (error: any) {
       console.error(`${side.toUpperCase()} shares error:`, error);
+      const errMsg = String(error?.message || "");
+
+      // Handle "already been processed" gracefully
+      if (errMsg.toLowerCase().includes("already been processed")) {
+        alert("Transaction already processed. Refreshing…");
+        await loadMarket(id);
+        if (isMobile) setMobileTradeOpen(false);
+        return;
+      }
+
+      // Handle user rejection
+      if (errMsg.toLowerCase().includes("user rejected")) {
+        // Revert optimistic UI
+        await loadMarket(id);
+        alert("Transaction cancelled by user.");
+        return;
+      }
+
+      // Revert optimistic UI on any error
       await loadMarket(id);
-      alert(`Error: ${error?.message || `Failed to ${side}`}`);
+      alert(`Error: ${errMsg || `Failed to ${side}`}`);
     } finally {
+      inFlightRef.current[key] = false;
       setSubmitting(false);
     }
   }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
@@ -99,6 +99,9 @@ export default function ContestPage() {
   const [proofUrl, setProofUrl] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+
+  // Tx guard: prevent double-submit
+  const inFlightRef = useRef<Record<string, boolean>>({});
 
   // --- derived ---
   const deadlineMs = useMemo(() => parseDateMs(market?.contest_deadline), [market?.contest_deadline]);
@@ -217,6 +220,10 @@ export default function ContestPage() {
     if (!id || !market) return;
     setMsg(null);
 
+    // Tx guard: prevent double-submit
+    const key = "contest_submit";
+    if (inFlightRef.current[key]) return;
+
     if (!connected || !publicKey || !walletBase58) {
       setMsg("Connect your wallet to submit a dispute.");
       return;
@@ -237,6 +244,7 @@ export default function ContestPage() {
       return;
     }
 
+    inFlightRef.current[key] = true;
     setSubmitting(true);
     try {
       const program = getAnchorProgram();
@@ -258,25 +266,31 @@ export default function ContestPage() {
       console.log("✅ dispute tx:", txSig);
 
       // 2) OFF-CHAIN (DB record)
-      const res = await fetch("/api/markets/contest", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          market_address: id,
-          disputor: walletBase58,
-          note: cleanNote || null,
-          proof_url: cleanUrl || null,
-          tx_sig: txSig, // if your API ignores it, no problem; add column later if you want
-        }),
-      });
+      try {
+        const res = await fetch("/api/markets/contest", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            market_address: id,
+            disputor: walletBase58,
+            note: cleanNote || null,
+            proof_url: cleanUrl || null,
+            tx_sig: txSig,
+          }),
+        });
 
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        const emsg = json?.error || json?.message || "Failed to submit dispute";
-        if (String(emsg).toLowerCase().includes("duplicate") || String(emsg).toLowerCase().includes("unique")) {
-          throw new Error("You already disputed this market with this wallet.");
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const emsg = json?.error || json?.message || "Failed to submit dispute";
+          if (String(emsg).toLowerCase().includes("duplicate") || String(emsg).toLowerCase().includes("unique")) {
+            console.warn("DB duplicate dispute (tx still succeeded)");
+          } else {
+            console.error("DB commit error (tx still succeeded):", emsg);
+          }
         }
-        throw new Error(emsg);
+      } catch (dbErr) {
+        console.error("DB commit error (tx still succeeded):", dbErr);
+        // Continue - on-chain is source of truth
       }
 
       setNote("");
@@ -286,8 +300,24 @@ export default function ContestPage() {
       await loadAll(id);
     } catch (e: any) {
       console.error("submitDispute error:", e);
-      setMsg(e?.message || "Dispute failed.");
+      const errMsg = String(e?.message || "");
+
+      // Handle "already been processed" gracefully
+      if (errMsg.toLowerCase().includes("already been processed")) {
+        setMsg("Transaction already processed. Refreshing…");
+        await loadAll(id);
+        return;
+      }
+
+      // Handle user rejection
+      if (errMsg.toLowerCase().includes("user rejected")) {
+        setMsg("Transaction cancelled by user.");
+        return;
+      }
+
+      setMsg(errMsg || "Dispute failed.");
     } finally {
+      inFlightRef.current[key] = false;
       setSubmitting(false);
     }
   }, [
@@ -473,6 +503,7 @@ export default function ContestPage() {
             <button
               onClick={submitDispute}
               disabled={!contestOpen || !connected || submitting || alreadyDisputedByMe}
+              aria-busy={submitting}
               className={`mt-4 w-full px-4 py-3 rounded-xl font-semibold transition ${
                 !contestOpen || !connected || submitting || alreadyDisputedByMe
                   ? "bg-gray-700 text-gray-300 cursor-not-allowed"
@@ -480,7 +511,7 @@ export default function ContestPage() {
               }`}
               type="button"
             >
-              {submitting ? "Submitting…" : "🚨 Submit dispute (on-chain)"}
+              {submitting ? "Processing…" : "🚨 Submit dispute (on-chain)"}
             </button>
           </div>
         </div>
