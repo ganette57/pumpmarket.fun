@@ -28,7 +28,7 @@ type MarketRow = {
   proposed_winning_outcome: number | null;
 };
 
-function jsonError(message: string, status: number, extra?: Record<string, any>) {
+function jsonError(message: string, status: number, extra?: Record<string, unknown>) {
   return NextResponse.json({ ok: false, error: message, ...(extra || {}) }, { status });
 }
 
@@ -87,8 +87,8 @@ export async function POST(req: Request) {
         contest_deadline: market.contest_deadline,
       },
     });
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error("admin approve route error:", e);
-    return jsonError(e?.message || "Failed", 500);
+    return jsonError((e as { message?: string })?.message || "Failed", 500);
   }
 }

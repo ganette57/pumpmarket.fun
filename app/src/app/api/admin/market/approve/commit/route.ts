@@ -17,7 +17,7 @@ function supabaseAdmin() {
   });
 }
 
-function jsonError(message: string, status: number, extra?: Record<string, any>) {
+function jsonError(message: string, status: number, extra?: Record<string, unknown>) {
   return NextResponse.json({ ok: false, error: message, ...(extra || {}) }, { status });
 }
 
@@ -74,8 +74,8 @@ export async function POST(req: Request) {
     if (error) return jsonError("DB update failed", 500);
 
     return NextResponse.json({ ok: true, market, winning_outcome: winningOutcome, tx_sig: txSig });
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error("approve commit route error:", e);
-    return jsonError(e?.message || "Failed", 500);
+    return jsonError((e as { message?: string })?.message || "Failed", 500);
   }
 }

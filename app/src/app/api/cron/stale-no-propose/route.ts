@@ -7,6 +7,12 @@ import idl from "@/idl/funmarket_pump.json";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// ========================================
+// CRON DISABLED: Admin now controls 48h cancellation manually via /admin/overview
+// Set ENABLE_CRON_STALE=true to re-enable (not recommended)
+// ========================================
+const CRON_ENABLED = process.env.ENABLE_CRON_STALE === "true";
+
 /* ----------------------------- small helpers ----------------------------- */
 
 function env(name: string) {
@@ -124,6 +130,15 @@ function parseStatus(statusObj: any): "open" | "proposed" | "finalized" | "cance
 /* -------------------------------------------------------------------------- */
 
 export async function GET(req: Request) {
+  // Early exit if cron is disabled (admin controls 48h cancellation manually)
+  if (!CRON_ENABLED) {
+    return NextResponse.json({
+      ok: true,
+      disabled: true,
+      message: "Cron stale-no-propose is disabled. Admin controls 48h cancellation via /admin/overview.",
+    });
+  }
+
   let step = "init";
 
   try {

@@ -7,6 +7,12 @@ import idl from "@/idl/funmarket_pump.json";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// ========================================
+// CRON DISABLED: Admin now controls finalization manually via /admin/overview
+// Set ENABLE_CRON_FINALIZE=true to re-enable (not recommended)
+// ========================================
+const CRON_ENABLED = process.env.ENABLE_CRON_FINALIZE === "true";
+
 function env(name: string) {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env: ${name}`);
@@ -104,6 +110,15 @@ function getProgram() {
 }
 
 export async function GET(req: Request) {
+  // Early exit if cron is disabled (admin controls resolution manually)
+  if (!CRON_ENABLED) {
+    return NextResponse.json({
+      ok: true,
+      disabled: true,
+      message: "Cron finalize-no-disputes is disabled. Admin controls resolution via /admin/overview.",
+    });
+  }
+
   let step = "init";
 
   try {

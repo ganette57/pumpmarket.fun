@@ -14,15 +14,22 @@ function toNumber(x: any) {
   return Number.isFinite(n) ? n : 0;
 }
 
-type MarketRow = {
+// Types for admin overview
+type ActionableMarket = {
   market_address: string;
   question: string | null;
   contest_deadline: string | null;
   contest_count: number;
+  end_date: string | null;
+  proposed_winning_outcome: number | null;
+  // Computed fields
+  type: "proposed_no_dispute" | "proposed_disputed" | "no_proposal_48h";
+  is_actionable: boolean;
+  due_date: string | null; // contest_deadline for proposed, end_date for 48h
 };
 
 export async function GET(req: Request) {
-  // ✅ protect route with your admin cookie/session
+  // protect route with your admin cookie/session
   const ok = await isAdminRequest(req);
   if (!ok) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
@@ -37,13 +44,14 @@ export async function GET(req: Request) {
     const { data: markets, error: mErr } = await supabase
       .from("markets")
       .select(
-        "id, resolved, resolution_status, end_date, total_volume, contest_count, contested, contest_deadline, question, market_address"
+        "id, resolved, resolution_status, end_date, total_volume, contest_count, contested, contest_deadline, question, market_address, proposed_winning_outcome, cancelled"
       )
       .limit(5000);
 
     if (mErr) throw mErr;
 
     const now = Date.now();
+    const cutoff48h = now - 48 * 60 * 60 * 1000;
 
     let markets_total = 0;
     let markets_open = 0;
@@ -54,57 +62,79 @@ export async function GET(req: Request) {
 
     let volume_sol_total = 0;
 
-    const proposed_markets: MarketRow[] = [];
-    const disputed_markets: MarketRow[] = [];
+    // Unified actionable_markets list
+    const actionable_markets: ActionableMarket[] = [];
 
     for (const mk of markets || []) {
       markets_total += 1;
 
       const status = String(mk.resolution_status || "open").toLowerCase();
       const resolved = !!mk.resolved;
+      const cancelled = !!mk.cancelled;
 
       const endMs = mk.end_date ? new Date(mk.end_date).getTime() : NaN;
       const ended = Number.isFinite(endMs) ? endMs <= now : false;
 
       volume_sol_total += toNumber(mk.total_volume) / 1e9; // assuming total_volume is lamports
 
-      if (status === "cancelled") markets_cancelled += 1;
+      if (status === "cancelled" || cancelled) markets_cancelled += 1;
       if (status === "finalized" || resolved) markets_finalized += 1;
 
-      if (status === "proposed") {
+      // Case A/B: Proposed markets (with or without disputes)
+      if (status === "proposed" && !resolved && !cancelled) {
         markets_proposed += 1;
 
-        const row: MarketRow = {
+        const contestCount = Number(mk.contest_count || 0) || 0;
+        const deadlineMs = mk.contest_deadline ? new Date(mk.contest_deadline).getTime() : NaN;
+        const isActionable = Number.isFinite(deadlineMs) && now >= deadlineMs;
+
+        actionable_markets.push({
           market_address: String(mk.market_address || ""),
           question: mk.question ?? null,
           contest_deadline: mk.contest_deadline ?? null,
-          contest_count: Number(mk.contest_count || 0) || 0,
-        };
+          contest_count: contestCount,
+          end_date: mk.end_date ?? null,
+          proposed_winning_outcome: mk.proposed_winning_outcome ?? null,
+          type: contestCount > 0 ? "proposed_disputed" : "proposed_no_dispute",
+          is_actionable: isActionable,
+          due_date: mk.contest_deadline ?? null,
+        });
+      }
 
-        proposed_markets.push(row);
-        if (row.contest_count > 0) disputed_markets.push(row);
+      // Case C: No proposal > 48h (open, ended, > 48h since end, not resolved/cancelled)
+      if (status === "open" && !resolved && !cancelled && ended) {
+        const is48hPassed = Number.isFinite(endMs) && endMs <= cutoff48h;
+        if (is48hPassed) {
+          actionable_markets.push({
+            market_address: String(mk.market_address || ""),
+            question: mk.question ?? null,
+            contest_deadline: null,
+            contest_count: 0,
+            end_date: mk.end_date ?? null,
+            proposed_winning_outcome: null,
+            type: "no_proposal_48h",
+            is_actionable: true, // always actionable once 48h passed
+            due_date: mk.end_date ?? null,
+          });
+        }
       }
 
       // "open" = not resolved, not proposed, not cancelled, not ended
-      const closed = resolved || status === "proposed" || status === "cancelled" || ended;
+      const closed = resolved || cancelled || status === "proposed" || status === "cancelled" || ended;
       if (!closed) markets_open += 1;
       if (ended) markets_ended += 1;
     }
 
-    // sort proposed by contest_deadline soonest first (or most disputed)
-    proposed_markets.sort((a, b) => {
-      const ad = a.contest_deadline ? new Date(a.contest_deadline).getTime() : Infinity;
-      const bd = b.contest_deadline ? new Date(b.contest_deadline).getTime() : Infinity;
+    // Sort: actionable first, then by due_date soonest, then by dispute count
+    actionable_markets.sort((a, b) => {
+      // Actionable first
+      if (a.is_actionable !== b.is_actionable) return a.is_actionable ? -1 : 1;
+      // Then by due_date soonest
+      const ad = a.due_date ? new Date(a.due_date).getTime() : Infinity;
+      const bd = b.due_date ? new Date(b.due_date).getTime() : Infinity;
       if (ad !== bd) return ad - bd;
+      // Then by dispute count (more disputes first)
       return (b.contest_count || 0) - (a.contest_count || 0);
-    });
-
-    // disputes: hottest first
-    disputed_markets.sort((a, b) => {
-      if (a.contest_count !== b.contest_count) return b.contest_count - a.contest_count;
-      const ad = a.contest_deadline ? new Date(a.contest_deadline).getTime() : Infinity;
-      const bd = b.contest_deadline ? new Date(b.contest_deadline).getTime() : Infinity;
-      return ad - bd;
     });
 
     // ---- TRANSACTIONS KPIs ----
@@ -114,7 +144,6 @@ export async function GET(req: Request) {
     if (txErr) throw txErr;
 
     // unique traders (fetch distinct user_address)
-    // If your table is big, you can optimize later with an RPC.
     const { data: traders, error: trErr } = await supabase.from("transactions").select("user_address").limit(5000);
     if (trErr) throw trErr;
 
@@ -123,7 +152,6 @@ export async function GET(req: Request) {
     ).size;
 
     // ---- DISPUTES KPIs ----
-    // If you track disputes via contested/contest_count on markets:
     let disputes_total = 0;
     let disputes_open = 0;
 
@@ -154,8 +182,7 @@ export async function GET(req: Request) {
         disputes_open,
         disputes_total,
       },
-      proposed_markets: proposed_markets.slice(0, 30),
-      disputed_markets: disputed_markets.slice(0, 30),
+      actionable_markets: actionable_markets.slice(0, 50),
     });
   } catch (e: any) {
     console.error("admin overview error", e);
