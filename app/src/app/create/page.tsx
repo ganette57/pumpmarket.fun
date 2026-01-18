@@ -17,6 +17,7 @@ import CategoryImagePlaceholder from "@/components/CategoryImagePlaceholder";
 
 import { useProgram } from "@/hooks/useProgram";
 import { indexMarket } from "@/lib/markets";
+import { sendSignedTx } from "@/lib/solanaSend";
 
 // ---------- helpers ----------
 function parseOutcomes(text: string) {
@@ -77,7 +78,7 @@ function TypeCard({
 }
 
 export default function CreateMarketPage() {
-  const { publicKey, connected } = useWallet();
+  const { publicKey, connected, signTransaction } = useWallet();
   const { connection } = useConnection();
   const router = useRouter();
   const program = useProgram();
@@ -218,6 +219,10 @@ export default function CreateMarketPage() {
 
   async function handleCreateMarket() {
     if (!canSubmit || !publicKey || !program) return;
+    if (!signTransaction) {
+      alert("Wallet cannot sign transactions (signTransaction missing).");
+      return;
+    }
 
     // Tx guard: prevent double-submit
     const key = "create_market";
@@ -233,28 +238,33 @@ export default function CreateMarketPage() {
       // defaults -> on-chain args
       const bLamportsU64 = Math.floor(DEFAULT_B_SOL * 1_000_000_000);
 
-      const txSig = await (program as any).methods
-        .createMarket(
-          new BN(resolutionTimestamp), // i64
-          outcomes, // Vec<String>
-          marketType, // u8
-          new BN(bLamportsU64), // u64
-          DEFAULT_MAX_POSITION_BPS, // u16
-          new BN(DEFAULT_MAX_TRADE_SHARES), // u64
-          new BN(DEFAULT_COOLDOWN_SECONDS) // i64
-        )
-        .accounts({
-          market: marketKeypair.publicKey,
-          creator: publicKey,
-          systemProgram: SystemProgram.programId,
-        })
-        .signers([marketKeypair])
-        .rpc();
+      const tx = await (program as any).methods
+      .createMarket(
+        new BN(resolutionTimestamp), // i64
+        outcomes, // Vec<String>
+        marketType, // u8
+        new BN(bLamportsU64), // u64
+        DEFAULT_MAX_POSITION_BPS, // u16
+        new BN(DEFAULT_MAX_TRADE_SHARES), // u64
+        new BN(DEFAULT_COOLDOWN_SECONDS) // i64
+      )
+      .accounts({
+        market: marketKeypair.publicKey,
+        creator: publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .transaction();
 
-      console.log("Market created! tx:", txSig);
+    // Send via centralized helper (sets blockhash + confirms)
+    const txSig = await sendSignedTx({
+      connection,
+      tx,
+      feePayer: publicKey,
+      signTx: signTransaction,
+      beforeSign: (t) => t.partialSign(marketKeypair), // signer for init account
+    });
 
-      // Confirm transaction before proceeding
-      await connection.confirmTransaction(txSig, "confirmed");
+    console.log("Market created! tx:", txSig);
 
       // Fetch on-chain truth (recommended)
       let onchainType = Number(marketType) || 0;

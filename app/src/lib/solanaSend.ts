@@ -2,12 +2,13 @@ import type { Connection, PublicKey, Transaction } from "@solana/web3.js";
 import bs58 from "bs58";
 
 type SendSignedTxArgs = {
-  connection: Connection;
-  tx: Transaction;
-  signTx: (tx: Transaction) => Promise<Transaction>;
-  feePayer: PublicKey;
-  commitment?: "processed" | "confirmed" | "finalized";
-};
+    connection: Connection;
+    tx: Transaction;
+    signTx: (tx: Transaction) => Promise<Transaction>;
+    feePayer: PublicKey;
+    commitment?: "processed" | "confirmed" | "finalized";
+    beforeSign?: (tx: Transaction) => void | Promise<void>; // optional hook (ex: partialSign)
+  };
 
 function getSigFromSignedTx(signed: Transaction): string | null {
   // For legacy Transaction: signatures = [{ publicKey, signature: Uint8Array | null }]
@@ -20,18 +21,23 @@ function getSigFromSignedTx(signed: Transaction): string | null {
 }
 
 export async function sendSignedTx({
-  connection,
-  tx,
-  signTx,
-  feePayer,
-  commitment = "confirmed",
-}: SendSignedTxArgs): Promise<string> {
+    connection,
+    tx,
+    signTx,
+    feePayer,
+    commitment = "confirmed",
+    beforeSign,
+  }: SendSignedTxArgs): Promise<string> {
   if (!feePayer) throw new Error("Missing feePayer");
 
+  // Always set fee payer + fresh blockhash BEFORE signing
   // Always set fee payer + fresh blockhash BEFORE signing
   const latest = await connection.getLatestBlockhash(commitment);
   tx.feePayer = feePayer;
   tx.recentBlockhash = latest.blockhash;
+
+  // optional hook (ex: partialSign) AFTER blockhash is set
+  if (beforeSign) await beforeSign(tx);
 
   const signed = await signTx(tx);
 
