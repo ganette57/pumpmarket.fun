@@ -12,6 +12,7 @@ import { useConnection, useWallet, useAnchorWallet } from "@solana/wallet-adapte
 import idl from "@/idl/funmarket_pump.json";
 import { getProvider, PROGRAM_ID } from "@/utils/solana";
 import { supabase } from "@/lib/supabaseClient";
+import { sendSignedTx } from "@/lib/solanaSend";
 
 type DbMarket = {
   market_address: string;
@@ -252,17 +253,23 @@ export default function ContestPage() {
 
       const marketPk = new PublicKey(id);
 
-      // 1) ON-CHAIN
-      const txSig = await program.methods
+      // 1) ON-CHAIN (centralized send + already processed safe)
+      const tx = await program.methods
         .dispute()
         .accounts({
           market: marketPk,
           user: publicKey,
         })
-        .rpc();
+        .transaction();
 
-      // confirm on-chain so user sees a solid success state
-      await connection.confirmTransaction(txSig, "confirmed");
+      const txSig = await sendSignedTx({
+        connection,
+        tx,
+        signTx: anchorWallet!.signTransaction,
+        feePayer: publicKey,
+        commitment: "confirmed",
+      });
+
       console.log("✅ dispute tx:", txSig);
 
       // 2) OFF-CHAIN (DB record)

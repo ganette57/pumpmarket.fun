@@ -3,7 +3,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useWallet, useConnection } from "@solana/wallet-adapter-react";
+import { useWallet, useConnection, useAnchorWallet } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
 import { supabase } from "@/lib/supabaseClient";
 import { useProgram } from "@/hooks/useProgram";
@@ -444,7 +444,8 @@ function TabButton({
 /* -------------------------------------------------------------------------- */
 
 export default function DashboardPage() {
-  const { publicKey, connected, signTransaction } = useWallet();
+  const { publicKey, connected } = useWallet();
+  const anchorWallet = useAnchorWallet();
   const walletBase58 = publicKey?.toBase58() || "";
   const { connection } = useConnection();
   const program = useProgram();
@@ -928,17 +929,22 @@ useEffect(() => {
       const marketPk = new PublicKey(marketAddress);
       const [posPda] = getUserPositionPDA(marketPk, publicKey);
 
-      const sig = await (program as any).methods
+      const tx = await (program as any).methods
         .claimWinnings()
         .accounts({
           market: marketPk,
           userPosition: posPda,
           user: publicKey,
         })
-        .rpc();
+        .transaction();
 
-      // Confirm transaction before updating UI
-      await connection.confirmTransaction(sig, "confirmed");
+      const sig = await sendSignedTx({
+        connection,
+        tx,
+        signTx: anchorWallet!.signTransaction,
+        feePayer: publicKey,
+        commitment: "confirmed",
+      });
 
       alert(
         `Claim success 🎉\n\nTx: ${sig.slice(0, 16)}...\n\nhttps://explorer.solana.com/tx/${sig}?cluster=devnet`
@@ -987,17 +993,22 @@ useEffect(() => {
       const marketPk = new PublicKey(marketAddress);
       const [posPda] = getUserPositionPDA(marketPk, publicKey);
 
-      const sig = await (program as any).methods
+      const tx = await (program as any).methods
         .claimRefund()
         .accounts({
           market: marketPk,
           userPosition: posPda,
           user: publicKey,
         })
-        .rpc();
+        .transaction();
 
-      // Confirm transaction before updating UI
-      await connection.confirmTransaction(sig, "confirmed");
+      const sig = await sendSignedTx({
+        connection,
+        tx,
+        signTx: anchorWallet!.signTransaction,
+                feePayer: publicKey,
+        commitment: "confirmed",
+      });
 
       alert(
         `Refund success 🎉\n\nTx: ${sig.slice(0, 16)}...\n\nhttps://explorer.solana.com/tx/${sig}?cluster=devnet`
@@ -1036,8 +1047,8 @@ useEffect(() => {
     if (resolveLoading) return;
     if (!connected || !publicKey || !program || !resolvingMarket) return;
     if (selectedOutcome === null) return;
-    if (!signTransaction) {
-      alert("Wallet not ready (missing signTransaction). Reconnect your wallet.");
+    if (!anchorWallet?.signTransaction) {
+      alert("Wallet not ready. Reconnect your wallet.");
       return;
     }
 
@@ -1161,8 +1172,8 @@ if (statusStr === "open") {
     sig = await sendSignedTx({
       connection,
       tx,
-      signTx: signTransaction,
-      feePayer: publicKey,
+      signTx: anchorWallet!.signTransaction,
+            feePayer: publicKey,
     });
 
     console.log("✅ proposeResolution on-chain tx =", sig);

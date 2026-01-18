@@ -6,6 +6,7 @@ import Link from "next/link";
 import { PublicKey } from "@solana/web3.js";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { useProgram } from "@/hooks/useProgram";
+import { sendSignedTx } from "@/lib/solanaSend";
 
 /* ========= Types ========= */
 
@@ -180,7 +181,7 @@ function explainError(e: unknown): string {
 
 export default function AdminOverviewPage() {
   const { connection } = useConnection();
-  const wallet = useWallet();
+  const { publicKey, signTransaction } = useWallet();
   const program = useProgram();
 
   const [data, setData] = useState<Overview | null>(null);
@@ -208,9 +209,9 @@ export default function AdminOverviewPage() {
   const k = data?.kpi;
 
   const isAdminWallet = useMemo(() => {
-    if (!wallet.publicKey) return false;
-    return wallet.publicKey.equals(ADMIN_PUBKEY);
-  }, [wallet.publicKey]);
+    if (!publicKey) return false;
+    return publicKey.equals(ADMIN_PUBKEY);
+  }, [publicKey]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -391,7 +392,7 @@ export default function AdminOverviewPage() {
   async function doApprove() {
     if (!drawerMarket) return;
     if (!program) return setFlowError("Program not ready");
-    if (!wallet.publicKey) return setFlowError("Connect wallet");
+    if (!publicKey || !signTransaction) return setFlowError("Connect wallet");
     if (!isAdminWallet) return setFlowError(`Wrong wallet. Must be ${ADMIN_PUBKEY.toBase58()}`);
 
     const marketAddr = drawerMarket.market_address;
@@ -428,23 +429,36 @@ export default function AdminOverviewPage() {
         // Disputed: use adminFinalize(wo)
         if (wo == null) throw new Error("No winning outcome for disputed market");
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        txSig = await (program as any).methods
-          .adminFinalize(wo)
-          .accounts({ market: marketPk, admin: wallet.publicKey })
-          .rpc();
+        const tx = await (program as any).methods
+        .adminFinalize(wo)
+        .accounts({ market: marketPk, admin: publicKey })
+        .transaction();
+      
+      txSig = await sendSignedTx({
+        connection,
+        tx,
+        signTx: signTransaction!,
+        feePayer: publicKey,
+      });
       } else {
         // No disputes: use finalizeIfNoDisputes()
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        txSig = await (program as any).methods
-          .finalizeIfNoDisputes()
-          .accounts({ market: marketPk, user: wallet.publicKey })
-          .rpc();
+        const tx = await (program as any).methods
+        .finalizeIfNoDisputes()
+        .accounts({ market: marketPk, user: publicKey })
+        .transaction();
+      
+      txSig = await sendSignedTx({
+        connection,
+        tx,
+        signTx: signTransaction!,
+        feePayer: publicKey,
+      });
       }
 
       setFlowStep("confirming");
       setFlowMsg(`Confirming tx ${shortAddr(txSig)}...`);
 
-      await connection.confirmTransaction(txSig, "confirmed");
 
       setFlowStep("committing");
       setFlowMsg("Committing to DB...");
@@ -475,7 +489,7 @@ export default function AdminOverviewPage() {
   async function doCancel() {
     if (!drawerMarket) return;
     if (!program) return setFlowError("Program not ready");
-    if (!wallet.publicKey) return setFlowError("Connect wallet");
+    if (!publicKey || !signTransaction) return setFlowError("Connect wallet");
     if (!isAdminWallet) return setFlowError(`Wrong wallet. Must be ${ADMIN_PUBKEY.toBase58()}`);
 
     const marketAddr = drawerMarket.market_address;
@@ -499,15 +513,21 @@ export default function AdminOverviewPage() {
 
       const marketPk = new PublicKey(marketAddr);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const txSig = await (program as any).methods
-        .adminCancel()
-        .accounts({ market: marketPk, admin: wallet.publicKey })
-        .rpc();
+      const tx = await (program as any).methods
+      .adminCancel()
+      .accounts({ market: marketPk, admin: publicKey })
+      .transaction();
+    
+    const txSig = await sendSignedTx({
+      connection,
+      tx,
+      signTx: signTransaction!,
+      feePayer: publicKey,
+    });
 
       setFlowStep("confirming");
       setFlowMsg(`Confirming tx ${shortAddr(txSig)}...`);
 
-      await connection.confirmTransaction(txSig, "confirmed");
 
       setFlowStep("committing");
       setFlowMsg("Committing to DB...");
@@ -534,7 +554,7 @@ export default function AdminOverviewPage() {
   async function doCancel48h() {
     if (!drawerMarket) return;
     if (!program) return setFlowError("Program not ready");
-    if (!wallet.publicKey) return setFlowError("Connect wallet");
+    if (!publicKey || !signTransaction) return setFlowError("Connect wallet");
     // Note: cancelIfNoProposal does NOT require admin, any user can call it
 
     const marketAddr = drawerMarket.market_address;
@@ -555,15 +575,21 @@ export default function AdminOverviewPage() {
 
       const marketPk = new PublicKey(marketAddr);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const txSig = await (program as any).methods
-        .cancelIfNoProposal()
-        .accounts({ market: marketPk, user: wallet.publicKey })
-        .rpc();
+      const tx = await (program as any).methods
+      .adminCancel()
+      .accounts({ market: marketPk, admin: publicKey })
+      .transaction();
+    
+    const txSig = await sendSignedTx({
+      connection,
+      tx,
+      signTx: signTransaction!,
+      feePayer: publicKey,
+    });
 
       setFlowStep("confirming");
       setFlowMsg(`Confirming tx ${shortAddr(txSig)}...`);
 
-      await connection.confirmTransaction(txSig, "confirmed");
 
       setFlowStep("committing");
       setFlowMsg("Committing to DB...");
