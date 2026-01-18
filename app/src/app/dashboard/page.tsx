@@ -1088,8 +1088,9 @@ useEffect(() => {
         console.log("✅ proposeResolution on-chain tx =", sig);
 
         // Confirm transaction before proceeding
-        await connection.confirmTransaction(sig, "confirmed");
-      } else {
+        if (sig) {
+          await connection.confirmTransaction(sig, "confirmed");
+        }      } else {
         console.log("ℹ️ Market already proposed on-chain, skipping propose tx");
       }
 
