@@ -26,6 +26,8 @@ import { getMarketByAddress, recordTransaction, applyTradeToMarketInSupabase } f
 import { lamportsToSol, solToLamports, getUserPositionPDA, PLATFORM_WALLET } from "@/utils/solana";
 
 import type { SocialLinks } from "@/components/SocialLinksForm";
+import { useCallback } from "react";
+import { sendSignedTx } from "@/lib/solanaSend";
 
 type SupabaseMarket = any;
 
@@ -194,7 +196,7 @@ export default function TradePage() {
   const params = useParams();
   const id = safeParamId((params as any)?.id);
 
-  const { publicKey, connected } = useWallet();
+  const { publicKey, connected, signTransaction } = useWallet();
   const { connection } = useConnection();
   const program = useProgram();
 
@@ -225,82 +227,80 @@ export default function TradePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  async function loadMarket(marketAddress: string) {
-    setLoading(true);
-    try {
-      const supabaseMarket: SupabaseMarket = await getMarketByAddress(marketAddress);
-      if (!supabaseMarket) {
-        setMarket(null);
-        return;
+  const loadMarket = useCallback(
+    async (marketAddress: string) => {
+      setLoading(true);
+      try {
+        const supabaseMarket: SupabaseMarket = await getMarketByAddress(marketAddress);
+        if (!supabaseMarket) {
+          setMarket(null);
+          return;
+        }
+  
+        const mt = (typeof supabaseMarket.market_type === "number" ? supabaseMarket.market_type : 0) as 0 | 1;
+  
+        const names = toStringArray(supabaseMarket.outcome_names) ?? [];
+        const supplies = toNumberArray(supabaseMarket.outcome_supplies) ?? [];
+  
+        const endMs = parseEndDateMs(supabaseMarket?.end_date);
+        const resolutionTime = Number.isFinite(endMs) ? Math.floor(endMs / 1000) : 0;
+        const creatorResolveDeadline = addHoursIso(endMs, 48);
+  
+        const transformed: UiMarket = {
+          dbId: supabaseMarket.id,
+          publicKey: supabaseMarket.market_address,
+          question: supabaseMarket.question || "",
+          description: supabaseMarket.description || "",
+          category: supabaseMarket.category || "other",
+          imageUrl: supabaseMarket.image_url || undefined,
+          creator: String(supabaseMarket.creator || ""),
+          creatorResolveDeadline,
+          totalVolume: Number(supabaseMarket.total_volume) || 0,
+          resolutionTime,
+          resolved: !!supabaseMarket.resolved,
+  
+          winningOutcome:
+            supabaseMarket.winning_outcome === null || supabaseMarket.winning_outcome === undefined
+              ? null
+              : Number(supabaseMarket.winning_outcome),
+          resolvedAt: supabaseMarket.resolved_at ?? null,
+  
+          resolutionProofUrl: supabaseMarket.resolution_proof_url ?? null,
+          resolutionProofImage: supabaseMarket.resolution_proof_image ?? null,
+          resolutionProofNote: supabaseMarket.resolution_proof_note ?? null,
+  
+          resolutionStatus: toResolutionStatus(supabaseMarket.resolution_status),
+          proposedOutcome:
+            supabaseMarket.proposed_winning_outcome === null || supabaseMarket.proposed_winning_outcome === undefined
+              ? null
+              : Number(supabaseMarket.proposed_winning_outcome),
+          proposedAt: supabaseMarket.resolution_proposed_at ?? null,
+          contestDeadline: supabaseMarket.contest_deadline ?? null,
+          contested: !!supabaseMarket.contested,
+          contestCount:
+            supabaseMarket.contest_count === null || supabaseMarket.contest_count === undefined
+              ? 0
+              : Number(supabaseMarket.contest_count) || 0,
+  
+          proposedProofUrl: supabaseMarket.proposed_proof_url ?? null,
+          proposedProofImage: supabaseMarket.proposed_proof_image ?? null,
+          proposedProofNote: supabaseMarket.proposed_proof_note ?? null,
+  
+          socialLinks: supabaseMarket.social_links || undefined,
+  
+          marketType: mt,
+          outcomeNames: names.slice(0, 10),
+          outcomeSupplies: supplies.slice(0, 10),
+  
+          yesSupply: Number(supabaseMarket.yes_supply) || 0,
+          noSupply: Number(supabaseMarket.no_supply) || 0,
+        };
+  
+        setMarket(transformed);
+      } finally {
+        setLoading(false);
       }
-
-      const mt = (typeof supabaseMarket.market_type === "number" ? supabaseMarket.market_type : 0) as 0 | 1;
-
-      const names = toStringArray(supabaseMarket.outcome_names) ?? [];
-      const supplies = toNumberArray(supabaseMarket.outcome_supplies) ?? [];
-
-      const endMs = parseEndDateMs(supabaseMarket?.end_date);
-      const resolutionTime = Number.isFinite(endMs) ? Math.floor(endMs / 1000) : 0;
-      const creatorResolveDeadline = addHoursIso(endMs, 48);
-
-      const transformed: UiMarket = {
-        dbId: supabaseMarket.id,
-        publicKey: supabaseMarket.market_address,
-        question: supabaseMarket.question || "",
-        description: supabaseMarket.description || "",
-        category: supabaseMarket.category || "other",
-        imageUrl: supabaseMarket.image_url || undefined,
-        creator: String(supabaseMarket.creator || ""),
-        creatorResolveDeadline,
-        totalVolume: Number(supabaseMarket.total_volume) || 0,
-        resolutionTime,
-        resolved: !!supabaseMarket.resolved,
-
-        winningOutcome:
-          supabaseMarket.winning_outcome === null || supabaseMarket.winning_outcome === undefined
-            ? null
-            : Number(supabaseMarket.winning_outcome),
-        resolvedAt: supabaseMarket.resolved_at ?? null,
-
-        resolutionProofUrl: supabaseMarket.resolution_proof_url ?? null,
-        resolutionProofImage: supabaseMarket.resolution_proof_image ?? null,
-        resolutionProofNote: supabaseMarket.resolution_proof_note ?? null,
-
-        resolutionStatus: toResolutionStatus(supabaseMarket.resolution_status),
-        proposedOutcome:
-          supabaseMarket.proposed_winning_outcome === null || supabaseMarket.proposed_winning_outcome === undefined
-            ? null
-            : Number(supabaseMarket.proposed_winning_outcome),
-        proposedAt: supabaseMarket.resolution_proposed_at ?? null,
-        contestDeadline: supabaseMarket.contest_deadline ?? null,
-        contested: !!supabaseMarket.contested,
-        contestCount:
-          supabaseMarket.contest_count === null || supabaseMarket.contest_count === undefined
-            ? 0
-            : Number(supabaseMarket.contest_count) || 0,
-
-        proposedProofUrl: supabaseMarket.proposed_proof_url ?? null,
-        proposedProofImage: supabaseMarket.proposed_proof_image ?? null,
-        proposedProofNote: supabaseMarket.proposed_proof_note ?? null,
-
-        socialLinks: supabaseMarket.social_links || undefined,
-
-        marketType: mt,
-        outcomeNames: names.slice(0, 10),
-        outcomeSupplies: supplies.slice(0, 10),
-
-        yesSupply: Number(supabaseMarket.yes_supply) || 0,
-        noSupply: Number(supabaseMarket.no_supply) || 0,
-      };
-
-      setMarket(transformed);
-    } catch (err) {
-      console.error("Error loading market:", err);
-      setMarket(null);
-    } finally {
-      setLoading(false);
-    }
-  }
+    }, []);
 
   const derived: Derived | null = useMemo(() => {
     if (!market) return null;
@@ -371,16 +371,29 @@ export default function TradePage() {
     return arr;
   }, [oddsPoints, oddsRange]);
 
-  // Poll ONLY when proposed (so countdown / dispute state updates)
-  useEffect(() => {
-    if (!id) return;
-    if (!market) return;
-    const status = market.resolutionStatus ?? "open";
-    if (status !== "proposed") return;
+// Poll ONLY when proposed (so countdown / dispute state updates)
+useEffect(() => {
+  if (!id) return;
+  const status = market?.resolutionStatus ?? "open";
+  if (status !== "proposed") return;
 
-    const t = setInterval(() => void loadMarket(id), 25000);
-    return () => clearInterval(t);
-  }, [id, market]);
+  let cancelled = false;
+
+  const tick = async () => {
+    if (cancelled) return;
+    if (document.visibilityState !== "visible") return;
+    if (submitting) return;
+    await loadMarket(id);
+  };
+
+  void tick();
+  const t = window.setInterval(() => void tick(), 25000);
+
+  return () => {
+    cancelled = true;
+    window.clearInterval(t);
+  };
+}, [id, market?.resolutionStatus, submitting, loadMarket]);
 
   // Market balance
   useEffect(() => {
@@ -461,7 +474,7 @@ export default function TradePage() {
     if (!market || !id || !derived) return;
 
     // Tx guard: prevent double-submit (per side)
-    const key = side; // "buy" or "sell"
+    const key = "trade";
     if (inFlightRef.current[key]) return;
     inFlightRef.current[key] = true;
 
@@ -487,6 +500,11 @@ export default function TradePage() {
       };
     });
 
+    if (!signTransaction) {
+      alert("Wallet cannot sign transactions");
+      return;
+    }
+
     try {
       const marketPubkey = new PublicKey(id);
       const [positionPDA] = getUserPositionPDA(marketPubkey, publicKey);
@@ -495,8 +513,9 @@ export default function TradePage() {
       const amountBn = new BN(safeShares);
 
       let txSig: string;
+
       if (side === "buy") {
-        txSig = await (program as any).methods
+        const tx = await (program as any).methods
           .buyShares(amountBn, safeOutcome)
           .accounts({
             market: marketPubkey,
@@ -506,9 +525,16 @@ export default function TradePage() {
             trader: publicKey,
             systemProgram: SystemProgram.programId,
           })
-          .rpc();
+          .transaction();
+      
+          txSig = await sendSignedTx({
+            connection,
+            tx,
+            signTx: signTransaction,
+            feePayer: publicKey,
+          });
       } else {
-        txSig = await (program as any).methods
+        const tx = await (program as any).methods
           .sellShares(amountBn, safeOutcome)
           .accounts({
             market: marketPubkey,
@@ -518,11 +544,15 @@ export default function TradePage() {
             trader: publicKey,
             systemProgram: SystemProgram.programId,
           })
-          .rpc();
+          .transaction();
+      
+          txSig = await sendSignedTx({
+            connection,
+            tx,
+            signTx: signTransaction,
+            feePayer: publicKey,
+          });
       }
-
-      // Confirm transaction before proceeding
-      await connection.confirmTransaction(txSig, "confirmed");
 
       const name = derived.names[safeOutcome] || `Outcome #${safeOutcome + 1}`;
       const safeCostSol = typeof costSol === "number" && Number.isFinite(costSol) ? costSol : null;
@@ -578,9 +608,9 @@ export default function TradePage() {
 
       // Handle "already been processed" gracefully
       if (errMsg.toLowerCase().includes("already been processed")) {
-        alert("Transaction already processed. Refreshing…");
-        await loadMarket(id);
+        // treat as success-ish
         if (isMobile) setMobileTradeOpen(false);
+        await loadMarket(id);
         return;
       }
 
