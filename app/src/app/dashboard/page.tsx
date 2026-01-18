@@ -11,6 +11,7 @@ import { lamportsToSol, getUserPositionPDA } from "@/utils/solana";
 import { outcomeLabelFromMarket } from "@/utils/outcomes";
 import { uploadResolutionProofImage } from "@/lib/proofs";
 import { proposeResolution as proposeResolutionDb } from "@/lib/markets";
+import { sendSignedTx } from "@/lib/solanaSend";
 
 /* -------------------------------------------------------------------------- */
 /* Helpers                                                                    */
@@ -337,6 +338,55 @@ async function safeFetchMarketsByIds(ids: string[]): Promise<DbMarket[]> {
   return [];
 }
 
+async function safeFetchMarketsByAddresses(addrs: string[]): Promise<DbMarket[]> {
+  const uniq = Array.from(new Set(addrs.map(String).filter(Boolean))).slice(0, 200);
+  if (!uniq.length) return [];
+
+  const trySelects = [
+    [
+      "id",
+      "market_address",
+      "creator",
+      "question",
+      "total_volume",
+      "end_date",
+      "resolved",
+      "outcome_names",
+      "winning_outcome",
+      "resolved_at",
+      "resolution_proof_url",
+      "resolution_proof_image",
+      "resolution_proof_note",
+      "resolution_status",
+      "proposed_winning_outcome",
+      "resolution_proposed_at",
+      "contest_deadline",
+      "contested",
+      "contest_count",
+      "proposed_proof_url",
+      "proposed_proof_image",
+      "proposed_proof_note",
+      "cancelled_at",
+      "cancel_reason",
+    ].join(","),
+    "id,market_address,question,total_volume,end_date,resolved,outcome_names,resolution_status,contest_deadline,contest_count,contested",
+    "id,market_address,question,total_volume,end_date,resolved,outcome_names",
+  ];
+
+  for (const sel of trySelects) {
+    const { data, error } = await supabase.from("markets").select(sel).in("market_address", uniq);
+    if (!error) return (((data as any[]) || []) as DbMarket[]) || [];
+
+    const msg = String((error as any)?.message || "");
+    if (!msg.includes("does not exist") && !msg.includes("column")) {
+      console.error("safeFetchMarketsByAddresses error:", error);
+      return [];
+    }
+  }
+
+  return [];
+}
+
 async function safeFetchBookmarks(walletAddress: string, limit = 200): Promise<BookmarkRow[]> {
   const tryTables = ["bookmarks", "market_bookmarks"];
 
@@ -394,7 +444,7 @@ function TabButton({
 /* -------------------------------------------------------------------------- */
 
 export default function DashboardPage() {
-  const { publicKey, connected } = useWallet();
+  const { publicKey, connected, signTransaction } = useWallet();
   const walletBase58 = publicKey?.toBase58() || "";
   const { connection } = useConnection();
   const program = useProgram();
@@ -417,6 +467,7 @@ const [refundingMarket, setRefundingMarket] = useState<string | null>(null);
 
   const [bookmarkIds, setBookmarkIds] = useState<string[]>([]);
   const [bookmarkedMarkets, setBookmarkedMarkets] = useState<DbMarket[]>([]);
+  const [txMarkets, setTxMarkets] = useState<DbMarket[]>([]);
 
   // Tx guard: prevent double-submit
   const inFlightRef = useRef<Record<string, boolean>>({});
@@ -465,11 +516,11 @@ const [refundingMarket, setRefundingMarket] = useState<string | null>(null);
   // derived map
   const marketsByAddress = useMemo(() => {
     const m = new Map<string, DbMarket>();
-    for (const mk of [...myCreatedMarkets, ...bookmarkedMarkets]) {
+    for (const mk of [...myCreatedMarkets, ...bookmarkedMarkets, ...txMarkets]) {
       if (mk.market_address) m.set(mk.market_address, mk);
     }
     return m;
-  }, [myCreatedMarkets, bookmarkedMarkets]);
+  }, [myCreatedMarkets, bookmarkedMarkets, txMarkets]);
 
   /* ---------------- Load base dashboard data ---------------- */
 
@@ -486,6 +537,12 @@ const [refundingMarket, setRefundingMarket] = useState<string | null>(null);
 
       setMyCreatedMarkets(markets || []);
       setMyTxs(txs || []);
+
+      const txAddrs = Array.from(
+        new Set((txs || []).map((t) => String(t.market_address || "")).filter(Boolean))
+      );
+      const related = await safeFetchMarketsByAddresses(txAddrs);
+      setTxMarkets(related || []);
 
       const ids = Array.from(
         new Set((bms || []).map((x) => String(x.market_id || "")).filter(Boolean))
@@ -506,6 +563,7 @@ const [refundingMarket, setRefundingMarket] = useState<string | null>(null);
       setBookmarkedMarkets([]);
       setClaimables([]);
       setRefundables([]);
+      setTxMarkets([]);
       return;
     }
 
@@ -528,6 +586,12 @@ const [refundingMarket, setRefundingMarket] = useState<string | null>(null);
 
         setMyCreatedMarkets(markets || []);
         setMyTxs(txs || []);
+
+        const txAddrs = Array.from(
+          new Set((txs || []).map((t) => String(t.market_address || "")).filter(Boolean))
+        );
+        const related = await safeFetchMarketsByAddresses(txAddrs);
+        if (!cancelled) setTxMarkets(related || []);
 
         const ids = Array.from(
           new Set((bms || []).map((x) => String(x.market_id || "")).filter(Boolean))
@@ -972,6 +1036,10 @@ useEffect(() => {
     if (resolveLoading) return;
     if (!connected || !publicKey || !program || !resolvingMarket) return;
     if (selectedOutcome === null) return;
+    if (!signTransaction) {
+      alert("Wallet not ready (missing signTransaction). Reconnect your wallet.");
+      return;
+    }
 
     const marketAddress = resolvingMarket.market_address;
     if (!marketAddress) return;
@@ -1038,17 +1106,21 @@ useEffect(() => {
       if (statusStr === "finalized") throw new Error("Market already finalized on-chain.");
       if (statusStr === "cancelled") throw new Error("Market cancelled on-chain.");
 
-      // If already proposed, ensure we're not trying to change outcome off-chain.
-      const proposedOutcomeOnChain =
-        before?.proposedOutcome != null ? bnToNum(before?.proposedOutcome) : null;
+// If already proposed on-chain, we must use the on-chain proposed outcome (source of truth).
+const proposedOutcomeOnChain =
+  before?.proposedOutcome != null ? bnToNum(before?.proposedOutcome) : null;
 
-      if (statusStr === "proposed" && proposedOutcomeOnChain != null && proposedOutcomeOnChain !== selectedOutcome) {
-        throw new Error(
-          `Market already proposed on-chain with a different outcome.\n` +
-            `On-chain: ${proposedOutcomeOnChain} • You selected: ${selectedOutcome}\n` +
-            `You must keep the on-chain proposed outcome.`
-        );
-      }
+let effectiveSelectedOutcome = selectedOutcome;
+
+if (statusStr === "proposed" && proposedOutcomeOnChain != null) {
+  // Force UI/DB to align with chain
+  effectiveSelectedOutcome = proposedOutcomeOnChain;
+
+  // (Optional UX) keep modal selection aligned
+  if (selectedOutcome !== proposedOutcomeOnChain) {
+    setSelectedOutcome(proposedOutcomeOnChain);
+  }
+}
 
       if (statusStr !== "open" && statusStr !== "proposed") {
         throw new Error(`Invalid on-chain status: ${statusStr}. (Needs: open/proposed)`);
@@ -1072,27 +1144,42 @@ useEffect(() => {
       const note = proofNote.trim() || null;
 
       // --------------------------
-      // 3) On-chain propose ONLY if status is OPEN
-      // --------------------------
-      let sig: string | null = null;
+// 3) On-chain propose ONLY if status is OPEN
+// --------------------------
+let sig: string | null = null;
 
-      if (statusStr === "open") {
-        sig = await (program as any).methods
-          .proposeResolution(selectedOutcome)
-          .accounts({
-            market: marketPk,
-            creator: publicKey,
-          })
-          .rpc();
+if (statusStr === "open") {
+  const tx = await (program as any).methods
+    .proposeResolution(effectiveSelectedOutcome)
+    .accounts({
+      market: marketPk,
+      creator: publicKey,
+    })
+    .transaction();
 
-        console.log("✅ proposeResolution on-chain tx =", sig);
+  try {
+    sig = await sendSignedTx({
+      connection,
+      tx,
+      signTx: signTransaction,
+      feePayer: publicKey,
+    });
 
-        // Confirm transaction before proceeding
-        if (sig) {
-          await connection.confirmTransaction(sig, "confirmed");
-        }      } else {
-        console.log("ℹ️ Market already proposed on-chain, skipping propose tx");
-      }
+    console.log("✅ proposeResolution on-chain tx =", sig);
+  } catch (e: any) {
+    const msg = String(e?.message || "").toLowerCase();
+
+    // if it was already processed, treat as success and continue (we will refetch chain)
+    if (msg.includes("already been processed")) {
+      console.info("ℹ️ proposeResolution already processed, resyncing from chain");
+      sig = null;
+    } else {
+      throw e;
+    }
+  }
+} else {
+  console.log("ℹ️ Market already proposed on-chain, skipping propose tx");
+}
 
       // --------------------------
       // 4) Read contest deadline + proposedAt from chain (source of truth)
@@ -1114,11 +1201,29 @@ useEffect(() => {
 
       // If already proposed, keep the chain outcome as truth
       const finalProposedOutcome =
-        after?.proposedOutcome != null ? bnToNum(after?.proposedOutcome) : selectedOutcome;
+      after?.proposedOutcome != null ? bnToNum(after?.proposedOutcome) : effectiveSelectedOutcome;
 
       // --------------------------
       // 5) DB commit (proof + UI fields)
       // --------------------------
+
+      try {
+        await fetch("/api/admin/market/approve/commit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            market_address: marketAddress,
+            proposed_outcome: finalProposedOutcome,
+            proof_url: proposedProofUrl,
+            proof_image: proposedProofImage,
+            proof_note: note,
+            tx_sig: sig, // ⚠️ peut être null → OK
+          }),
+        });
+      } catch (dbErr) {
+        console.error("DB commit failed (on-chain is source of truth)", dbErr);
+      }
+
       try {
         await proposeResolutionDb({
           market_address: marketAddress,
