@@ -1,3 +1,4 @@
+
 // app/src/app/admin/overview/page.tsx
 "use client";
 
@@ -52,6 +53,21 @@ type OnchainInfo = {
 type DrawerMode = "approve_only" | "approve_cancel" | "cancel_only_48h" | null;
 
 type FlowStep = "idle" | "checking" | "signing" | "confirming" | "committing" | "done" | "error";
+
+type ResolvedAction = "approved" | "cancelled";
+
+type ResolvedRow = {
+  market_address: string;
+  question: string | null;
+  resolved_action: ResolvedAction;
+  winning_outcome: number | null;
+  tx_sig: string | null;
+  resolved_at: string | null;
+
+  market_type?: number | null;
+  outcome_names?: any;
+};
+
 
 /* ========= Config ========= */
 
@@ -123,6 +139,22 @@ function StatCard({
   );
 }
 
+function formatWinningOutcomeLabel(row: { market_type?: number | null; outcome_names?: any; winning_outcome?: number | null }) {
+  const idx = row.winning_outcome;
+  if (idx == null) return "—";
+
+  const mt = Number(row.market_type ?? 0);
+
+  // market_type 0 = binary (YES/NO)
+  if (mt === 0) return idx === 0 ? "YES" : idx === 1 ? "NO" : String(idx);
+
+  // multi-choice: outcome_names is jsonb (likely array)
+  const names = row.outcome_names;
+  if (Array.isArray(names) && names[idx] != null) return String(names[idx]);
+
+  return String(idx);
+}
+
 /* ========= Fetch helpers ========= */
 
 async function postJSON<T>(url: string, body: object): Promise<T> {
@@ -191,7 +223,7 @@ export default function AdminOverviewPage() {
   const [now, setNow] = useState(() => Date.now());
 
   // Filters
-  const [filter, setFilter] = useState<"inbox" | "all">("inbox");
+  const [filter, setFilter] = useState<"inbox" | "resolved" | "all">("inbox");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [search, setSearch] = useState("");
 
@@ -204,9 +236,24 @@ export default function AdminOverviewPage() {
   const [flowStep, setFlowStep] = useState<FlowStep>("idle");
   const [flowMsg, setFlowMsg] = useState<string>("");
   const [flowError, setFlowError] = useState<string>("");
+  const [resolvedRows, setResolvedRows] = useState<ResolvedRow[]>([]);
+const [resolvedLoading, setResolvedLoading] = useState(false);
+const [resolvedErr, setResolvedErr] = useState<string | null>(null);
 
-  const markets = data?.actionable_markets || [];
-  const k = data?.kpi;
+const resolvedSorted = useMemo(() => {
+  const list = [...resolvedRows];
+
+  list.sort((a, b) => {
+    const ad = a.resolved_at ? new Date(a.resolved_at).getTime() : 0;
+    const bd = b.resolved_at ? new Date(b.resolved_at).getTime() : 0;
+    return sortDir === "asc" ? ad - bd : bd - ad;
+  });
+
+  return list;
+}, [resolvedRows, sortDir]);
+
+const markets = data?.actionable_markets || [];
+const k = data?.kpi;
 
   const isAdminWallet = useMemo(() => {
     if (!publicKey) return false;
@@ -232,6 +279,30 @@ export default function AdminOverviewPage() {
   }, []);
 
   useEffect(() => void load(), [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+  
+    async function fetchResolved() {
+      if (filter !== "resolved") return;
+      setResolvedLoading(true);
+      setResolvedErr(null);
+  
+      try {
+        const r = await fetch("/api/admin/resolved", { credentials: "include", cache: "no-store" });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j?.error || j?.message || `HTTP ${r.status}`);
+        if (!cancelled) setResolvedRows((j?.resolved || []) as ResolvedRow[]);
+      } catch (e: any) {
+        if (!cancelled) setResolvedErr(e?.message || "Failed to load resolved");
+      } finally {
+        if (!cancelled) setResolvedLoading(false);
+      }
+    }
+  
+    void fetchResolved();
+    return () => { cancelled = true; };
+  }, [filter]);
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -315,14 +386,22 @@ export default function AdminOverviewPage() {
     };
   }, [program, markets]);
 
+  function isResolved(m: ActionableMarket) {
+    const oc = onchain[m.market_address];
+    return oc?.status === "finalized" || oc?.status === "cancelled";
+  }
+
   // Filter and sort markets
   const filteredMarkets = useMemo(() => {
     let list = [...markets];
 
-    // Filter by inbox (actionable only)
-    if (filter === "inbox") {
-      list = list.filter((m) => m.is_actionable);
-    }
+// Filter
+if (filter === "inbox") {
+  list = list.filter((m) => m.is_actionable && !isResolved(m));
+} else if (filter === "resolved") {
+  list = list.filter((m) => isResolved(m));
+}
+// filter === "all" => no-op
 
     // Search
     if (search.trim()) {
@@ -346,6 +425,9 @@ export default function AdminOverviewPage() {
 
   // Get type badge
   function getTypeBadge(m: ActionableMarket) {
+    if (isResolved(m)) {
+      return <Pill tone="ok">Resolved</Pill>;
+    }
     if (m.type === "no_proposal_48h") {
       return <Pill tone="warn">No proposal 48h</Pill>;
     }
@@ -514,9 +596,9 @@ export default function AdminOverviewPage() {
       const marketPk = new PublicKey(marketAddr);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const tx = await (program as any).methods
-      .adminCancel()
-      .accounts({ market: marketPk, admin: publicKey })
-      .transaction();
+  .cancelIfNoProposal()
+  .accounts({ market: marketPk, user: publicKey })
+  .transaction();
     
     const txSig = await sendSignedTx({
       connection,
@@ -663,28 +745,34 @@ export default function AdminOverviewPage() {
 
             {/* Filter Row */}
             <div className="flex flex-wrap items-center gap-3 mb-4">
-              <div className="flex items-center gap-1 bg-pump-dark-lighter rounded-lg p-1">
-                <button
-                  onClick={() => setFilter("inbox")}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
-                    filter === "inbox"
-                      ? "bg-white/10 text-white"
-                      : "text-gray-400 hover:text-white"
-                  }`}
-                >
-                  Inbox (actionable)
-                </button>
-                <button
-                  onClick={() => setFilter("all")}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
-                    filter === "all"
-                      ? "bg-white/10 text-white"
-                      : "text-gray-400 hover:text-white"
-                  }`}
-                >
-                  All
-                </button>
-              </div>
+            <div className="flex items-center gap-1 bg-pump-dark-lighter rounded-lg p-1">
+  <button
+    onClick={() => setFilter("inbox")}
+    className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
+      filter === "inbox" ? "bg-white/10 text-white" : "text-gray-400 hover:text-white"
+    }`}
+  >
+    Inbox (actionable)
+  </button>
+
+  <button
+    onClick={() => setFilter("resolved")}
+    className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
+      filter === "resolved" ? "bg-white/10 text-white" : "text-gray-400 hover:text-white"
+    }`}
+  >
+    Resolved
+  </button>
+
+  <button
+    onClick={() => setFilter("all")}
+    className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
+      filter === "all" ? "bg-white/10 text-white" : "text-gray-400 hover:text-white"
+    }`}
+  >
+    All
+  </button>
+</div>
 
               <button
                 onClick={() => setSortDir(sortDir === "asc" ? "desc" : "asc")}
@@ -723,64 +811,138 @@ export default function AdminOverviewPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredMarkets.length === 0 ? (
-                    <tr>
-                      <td colSpan={4} className="px-4 py-8 text-center text-gray-500">
-                        No markets to display.
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredMarkets.map((m) => (
-                      <tr
-                        key={m.market_address}
-                        className="border-b border-white/5 hover:bg-white/2 transition"
-                      >
-                        <td className="px-4 py-3">
-                          <div className="text-white font-medium truncate max-w-xs">
-                            {m.question || "(Untitled)"}
-                          </div>
-                          <div className="text-xs text-gray-500 font-mono">
-                            {shortAddr(m.market_address)}
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          {getTypeBadge(m)}
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2">
-                            {getActionStatus(m)}
-                            <span className="text-sm text-gray-400">
-                              {formatDate(m.due_date)}
-                            </span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          <div className="flex items-center justify-end gap-2">
-                          <Link
-  href={`/trade/${m.market_address}`}
-  target="_blank"
-  rel="noopener noreferrer"
-  className="px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-gray-300 text-sm font-medium hover:bg-white/10 transition"
->
-  View
-</Link>
-                            <button
-                              onClick={() => openDrawer(m)}
-                              disabled={!m.is_actionable}
-                              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
-                                m.is_actionable
-                                  ? "bg-pump-green text-black hover:opacity-90"
-                                  : "bg-gray-700 text-gray-500 cursor-not-allowed"
-                              }`}
-                            >
-                              Open
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
+  {filter === "resolved" ? (
+    resolvedLoading ? (
+      <tr>
+        <td colSpan={4} className="px-4 py-8 text-center text-gray-500">
+          Loading resolved...
+        </td>
+      </tr>
+    ) : resolvedErr ? (
+      <tr>
+        <td colSpan={4} className="px-4 py-8 text-center text-red-300">
+          {resolvedErr}
+        </td>
+      </tr>
+    ) : resolvedRows.length === 0 ? (
+      <tr>
+        <td colSpan={4} className="px-4 py-8 text-center text-gray-500">
+          No resolved markets yet.
+        </td>
+      </tr>
+    ) : (
+      resolvedSorted.map((m) => (
+        <tr
+          key={m.market_address}
+          className="border-b border-white/5 hover:bg-white/2 transition"
+        >
+          <td className="px-4 py-3">
+            <div className="text-white font-medium truncate max-w-xs">
+              {m.question || "(Untitled)"}
+            </div>
+            <div className="text-xs text-gray-500 font-mono break-all">
+  {m.market_address}
+</div>
+          </td>
+
+          <td className="px-4 py-3">
+            <div className="flex flex-wrap gap-2 items-center">
+              <Pill tone={m.resolved_action === "approved" ? "ok" : "pink"}>
+                {m.resolved_action === "approved" ? "Approved" : "Cancelled"}
+              </Pill>
+
+              {m.resolved_action === "approved" ? (
+                <Pill tone="neutral">Outcome: {formatWinningOutcomeLabel(m as any)}</Pill>
+              ) : (
+                <Pill tone="neutral">Refund</Pill>
+              )}
+            </div>
+
+            {m.tx_sig ? (
+            <div className="text-xs text-gray-500 mt-1 font-mono break-all">
+            tx: {m.tx_sig}
+          </div>
+            ) : null}
+          </td>
+
+          <td className="px-4 py-3">
+            <span className="text-sm text-gray-400">{formatDate(m.resolved_at)}</span>
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <div className="flex items-center justify-end gap-2">
+              <Link
+                href={`/trade/${m.market_address}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-gray-300 text-sm font-medium hover:bg-white/10 transition"
+              >
+                View
+              </Link>
+            </div>
+          </td>
+        </tr>
+      ))
+    )
+  ) : (
+    filteredMarkets.length === 0 ? (
+      <tr>
+        <td colSpan={4} className="px-4 py-8 text-center text-gray-500">
+          No markets to display.
+        </td>
+      </tr>
+    ) : (
+      filteredMarkets.map((m) => (
+        <tr
+          key={m.market_address}
+          className="border-b border-white/5 hover:bg-white/2 transition"
+        >
+          <td className="px-4 py-3">
+            <div className="text-white font-medium truncate max-w-xs">
+              {m.question || "(Untitled)"}
+            </div>
+            <div className="text-xs text-gray-500 font-mono">
+              {shortAddr(m.market_address)}
+            </div>
+          </td>
+
+          <td className="px-4 py-3">{getTypeBadge(m)}</td>
+
+          <td className="px-4 py-3">
+            <div className="flex items-center gap-2">
+              {getActionStatus(m)}
+              <span className="text-sm text-gray-400">{formatDate(m.due_date)}</span>
+            </div>
+          </td>
+
+          <td className="px-4 py-3 text-right">
+            <div className="flex items-center justify-end gap-2">
+              <Link
+                href={`/trade/${m.market_address}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-gray-300 text-sm font-medium hover:bg-white/10 transition"
+              >
+                View
+              </Link>
+              <button
+                onClick={() => openDrawer(m)}
+                disabled={!m.is_actionable}
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
+                  m.is_actionable
+                    ? "bg-pump-green text-black hover:opacity-90"
+                    : "bg-gray-700 text-gray-500 cursor-not-allowed"
+                }`}
+              >
+                Open
+              </button>
+            </div>
+          </td>
+        </tr>
+      ))
+    )
+  )}
+</tbody>
               </table>
             </div>
           </>
@@ -911,3 +1073,4 @@ export default function AdminOverviewPage() {
     </div>
   );
 }
+
