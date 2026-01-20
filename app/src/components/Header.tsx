@@ -93,75 +93,118 @@ export default function Header() {
           </div>
 
           {/* Right side */}
-          <div className="flex items-center gap-3 shrink-0">
-            {/* How it works */}
+<div className="flex items-center gap-3 shrink-0">
+  {/* How it works */}
+  <button
+    type="button"
+    onClick={() => setIsHowItWorksOpen(true)}
+    className="hidden text-sm text-gray-300 hover:text-white md:inline-block"
+  >
+    How it works
+  </button>
+
+  {/* Create */}
+  <Link
+    href="/create"
+    className="inline-flex h-11 items-center justify-center rounded-full bg-pump-green px-6 text-sm font-semibold text-black hover:bg-pump-green/90 transition"
+  >
+    Create
+  </Link>
+
+  {/* Avatar/Menu (always visible) */}
+  <div className="relative" ref={menuRef}>
+    <button
+      type="button"
+      onClick={() => setMenuOpen((v) => !v)}
+      className="flex h-11 w-11 items-center justify-center rounded-full
+                 border border-gray-700
+                 bg-gray-900
+                 text-l font-semibold text-gray-200
+                 hover:border-gray-400 hover:text-white
+                 transition"
+      aria-label="Open menu"
+    >
+      {connected ? avatarLabel : "☰"}
+    </button>
+
+    {menuOpen && (
+      <div className="absolute right-0 mt-2 w-64 rounded-xl border border-pump-border bg-pump-gray shadow-lg py-2 text-sm text-gray-100">
+        {/* Wallet connect/disconnect (top) */}
+        <div className="px-3 pb-2">
+          <WalletMultiButton className="!h-10 !w-full !justify-center !rounded-lg !bg-pump-green !text-black hover:!opacity-90 !font-semibold" />
+        </div>
+
+        <div className="h-px bg-gray-700/50 my-1" />
+
+        {/* Connected-only */}
+        {connected && (
+          <Link
+            href="/dashboard"
+            className="block px-4 py-2 hover:bg-pump-dark"
+            onClick={() => setMenuOpen(false)}
+          >
+            Dashboard
+          </Link>
+        )}
+
+        {/* Public pages */}
+        <Link
+          href="/leaderboard"
+          className="block px-4 py-2 hover:bg-pump-dark"
+          onClick={() => setMenuOpen(false)}
+        >
+          🏆 Leaderboard
+        </Link>
+
+        <Link
+          href="/affiliate"
+          className="block px-4 py-2 hover:bg-pump-dark"
+          onClick={() => setMenuOpen(false)}
+        >
+          💸 Affiliate
+        </Link>
+
+        <Link
+          href="/documentation"
+          className="block px-4 py-2 hover:bg-pump-dark"
+          onClick={() => setMenuOpen(false)}
+        >
+          📚 Documentation
+        </Link>
+
+        <Link
+          href="/terms"
+          className="block px-4 py-2 hover:bg-pump-dark"
+          onClick={() => setMenuOpen(false)}
+        >
+          📜 Terms of Use
+        </Link>
+
+        {/* Disconnect */}
+        {connected && (
+          <>
+            <div className="h-px bg-gray-700/50 my-1" />
             <button
               type="button"
-              onClick={() => setIsHowItWorksOpen(true)}
-              className="hidden text-sm text-gray-300 hover:text-white md:inline-block"
+              className="block w-full px-4 py-2 text-left text-red-400 hover:bg-pump-dark hover:text-red-300"
+              onClick={async () => {
+                setMenuOpen(false);
+                try {
+                  await disconnect();
+                } catch {
+                  // ignore
+                }
+              }}
             >
-              How it works
+              Disconnect
             </button>
-
-            {/* Create */}
-            <Link
-              href="/create"
-              className="inline-flex h-11 items-center justify-center rounded-full bg-pump-green px-6 text-sm font-semibold text-black hover:bg-pump-green/90 transition"
-            >
-              Create
-            </Link>
-
-            {/* Wallet button */}
-            <div className="flex items-center">
-              <WalletMultiButton className="!h-11 !rounded-full !bg-pump-green !text-black hover:!opacity-90 !font-semibold" />
-            </div>
-
-            {/* Avatar + menu quand wallet connecté */}
-            {connected && (
-              <div className="relative" ref={menuRef}>
-<button
-  type="button"
-  onClick={() => setMenuOpen((v) => !v)}
-  className="flex h-9 w-9 items-center justify-center rounded-full
-             border border-gray-700
-             bg-gray-900
-             text-xs font-semibold text-gray-200
-             hover:border-gray-400 hover:text-white
-             transition"
->
-  {avatarLabel}
-</button>
-
-                {menuOpen && (
-                  <div className="absolute right-0 mt-2 w-44 rounded-xl border border-pump-border bg-pump-gray shadow-lg py-1 text-sm text-gray-100">
-                    <Link
-                      href="/dashboard"
-                      className="block px-4 py-2 hover:bg-pump-dark"
-                      onClick={() => setMenuOpen(false)}
-                    >
-                      Dashboard
-                    </Link>
-
-                    <button
-                      type="button"
-                      className="block w-full px-4 py-2 text-left text-red-400 hover:bg-pump-dark hover:text-red-300"
-                      onClick={async () => {
-                        setMenuOpen(false);
-                        try {
-                          await disconnect();
-                        } catch {
-                          // ignore
-                        }
-                      }}
-                    >
-                      Disconnect
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
+          </>
+        )}
+      </div>
+    )}
+  </div>
+</div>
+</div>
       </header>
 
       {/* SPACER : évite que le contenu passe sous le header fixe */}

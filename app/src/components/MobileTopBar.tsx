@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import { useWallet } from "@solana/wallet-adapter-react";
 
 export default function MobileTopBar({ showSearch }: { showSearch: boolean }) {
   const router = useRouter();
@@ -12,6 +13,23 @@ export default function MobileTopBar({ showSearch }: { showSearch: boolean }) {
 
   const initialQ = useMemo(() => sp.get("q") || "", [sp]);
   const [q, setQ] = useState(initialQ);
+  const { connected, publicKey, disconnect } = useWallet();
+const [menuOpen, setMenuOpen] = useState(false);
+const menuRef = useRef<HTMLDivElement | null>(null);
+
+useEffect(() => {
+  function onDown(e: MouseEvent) {
+    if (!menuRef.current) return;
+    if (!menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+  }
+  document.addEventListener("mousedown", onDown);
+  return () => document.removeEventListener("mousedown", onDown);
+}, []);
+
+const avatarLabel = useMemo(() => {
+  const s = publicKey?.toBase58();
+  return s ? s.slice(0, 2).toUpperCase() : "☰";
+}, [publicKey]);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -54,17 +72,65 @@ export default function MobileTopBar({ showSearch }: { showSearch: boolean }) {
             </div>
           </Link>
 
-          {/* Wallet – ultra compact */}
-          <div className="shrink-0">
-            <WalletMultiButton
-              className={[
-                "!h-8 !rounded-lg !bg-pump-green !text-black",
-                "!px-2 !text-xs !font-semibold",
-                "!min-w-0 !max-w-[96px]",
-                "truncate",
-              ].join(" ")}
-            />
-          </div>
+         {/* Menu button */}
+<div className="shrink-0 relative" ref={menuRef}>
+  <button
+    type="button"
+    onClick={() => setMenuOpen((v) => !v)}
+    className="h-9 w-9 rounded-full border border-gray-800 bg-black/40 text-white text-xs font-semibold flex items-center justify-center"
+    aria-label="Open menu"
+  >
+    {connected ? avatarLabel : "☰"}
+  </button>
+
+  {menuOpen && (
+    <div className="absolute right-0 mt-2 w-72 rounded-2xl border border-gray-800 bg-black/90 backdrop-blur shadow-xl overflow-hidden">
+      <div className="p-3">
+        <WalletMultiButton className="!h-10 !w-full !justify-center !rounded-xl !bg-pump-green !text-black hover:!opacity-90 !font-semibold" />
+      </div>
+
+      <div className="h-px bg-gray-800" />
+
+      {connected && (
+        <Link href="/dashboard" onClick={() => setMenuOpen(false)} className="block px-4 py-3 text-white/90 hover:bg-white/5">
+          Dashboard
+        </Link>
+      )}
+
+      <Link href="/leaderboard" onClick={() => setMenuOpen(false)} className="block px-4 py-3 text-white/90 hover:bg-white/5">
+        🏆 Leaderboard
+      </Link>
+
+      <Link href="/affiliate" onClick={() => setMenuOpen(false)} className="block px-4 py-3 text-white/90 hover:bg-white/5">
+        💸 Affiliate
+      </Link>
+
+      <Link href="/documentation" onClick={() => setMenuOpen(false)} className="block px-4 py-3 text-white/90 hover:bg-white/5">
+        📚 Documentation
+      </Link>
+
+      <Link href="/terms" onClick={() => setMenuOpen(false)} className="block px-4 py-3 text-white/90 hover:bg-white/5">
+        📜 Terms of Use
+      </Link>
+
+      {connected && (
+        <>
+          <div className="h-px bg-gray-800" />
+          <button
+            type="button"
+            onClick={async () => {
+              setMenuOpen(false);
+              try { await disconnect(); } catch {}
+            }}
+            className="w-full text-left px-4 py-3 text-red-400 hover:bg-white/5"
+          >
+            Disconnect
+          </button>
+        </>
+      )}
+    </div>
+  )}
+</div>
         </div>
 
         {/* Search */}
