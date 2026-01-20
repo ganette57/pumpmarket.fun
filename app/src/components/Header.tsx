@@ -54,7 +54,7 @@ export default function Header() {
           {/* Logo + name -> home */}
           <Link href="/" className="flex items-center gap-2 shrink-0">
   <img
-    src="/logo2.png"
+    src="/logo4.png"
     alt="FunMarket"
     className="h-14 w-14 object-contain"
   />

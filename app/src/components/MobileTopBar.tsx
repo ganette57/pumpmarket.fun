@@ -56,7 +56,7 @@ const avatarLabel = useMemo(() => {
           {/* Brand */}
           <Link href="/" className="flex items-center gap-2 flex-1 min-w-0">
             <img
-              src="/logo2.png"
+              src="/logo4.png"
               alt="FunMarket"
               className="h-12 w-12 shrink-0 object-contain"
             />
