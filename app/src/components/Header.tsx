@@ -30,6 +30,10 @@ export default function Header() {
 
   const menuRef = useRef<HTMLDivElement>(null);
   useClickOutside(menuRef, () => setMenuOpen(false));
+  const DOCS_URL = "https://funmarket.gitbook.io/funmarket/";
+const TERMS_URL = "https://funmarket.gitbook.io/funmarket/terms-of-use";
+const PRIVACY_URL = "https://funmarket.gitbook.io/funmarket/privacy-policy";
+// (optionnel) une page affiliate/leaderboard si tu la gardes sur le site
 
   // pré-remplir search si on est sur /search?q=
   useEffect(() => {
@@ -50,13 +54,13 @@ export default function Header() {
     <>
       {/* HEADER FIXE */}
       <header className="fixed top-0 left-0 right-0 z-[70] border-b border-gray-700/40 bg-pump-dark/95 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center gap-4 px-4 py-3 sm:px-6 lg:px-8">
+      <div className="mx-auto flex max-w-7xl items-center gap-4 py-4 pl-3 pr-4 sm:pl-4 sm:pr-6 lg:pl-4 lg:pr-8">
           {/* Logo + name -> home */}
           <Link href="/" className="flex items-center gap-2 shrink-0">
   <img
     src="/logo4.png"
     alt="FunMarket"
-    className="h-14 w-14 object-contain"
+    className="h-16 w-16 object-contain"
   />
 
   <div className="flex items-center gap-2">
@@ -164,21 +168,35 @@ export default function Header() {
           💸 Affiliate
         </Link>
 
-        <Link
-          href="/documentation"
-          className="block px-4 py-2 hover:bg-pump-dark"
-          onClick={() => setMenuOpen(false)}
-        >
-          📚 Documentation
-        </Link>
+        <a
+  href={DOCS_URL}
+  target="_blank"
+  rel="noopener noreferrer"
+  className="block px-4 py-2 hover:bg-pump-dark"
+  onClick={() => setMenuOpen(false)}
+>
+  📚 Documentation
+</a>
 
-        <Link
-          href="/terms"
-          className="block px-4 py-2 hover:bg-pump-dark"
-          onClick={() => setMenuOpen(false)}
-        >
-          📜 Terms of Use
-        </Link>
+<a
+  href={TERMS_URL}
+  target="_blank"
+  rel="noopener noreferrer"
+  className="block px-4 py-2 hover:bg-pump-dark"
+  onClick={() => setMenuOpen(false)}
+>
+  📜 Terms of Use
+</a>
+
+<a
+  href={PRIVACY_URL}
+  target="_blank"
+  rel="noopener noreferrer"
+  className="block px-4 py-2 hover:bg-pump-dark"
+  onClick={() => setMenuOpen(false)}
+>
+  🔒 Privacy Policy
+</a>
 
         {/* Disconnect */}
         {connected && (

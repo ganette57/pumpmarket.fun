@@ -16,6 +16,10 @@ export default function MobileTopBar({ showSearch }: { showSearch: boolean }) {
   const { connected, publicKey, disconnect } = useWallet();
 const [menuOpen, setMenuOpen] = useState(false);
 const menuRef = useRef<HTMLDivElement | null>(null);
+const DOCS_URL = "https://funmarket.gitbook.io/funmarket/";
+const TERMS_URL = "https://funmarket.gitbook.io/funmarket/terms-of-use";
+const PRIVACY_URL = "https://funmarket.gitbook.io/funmarket/privacy-policy";
+// (optionnel) une page affiliate/leaderboard si tu la gardes sur le site
 
 useEffect(() => {
   function onDown(e: MouseEvent) {
@@ -52,25 +56,24 @@ const avatarLabel = useMemo(() => {
     <>
       <div className="fixed top-0 left-0 right-0 z-[70] border-b border-gray-800 bg-black/80 backdrop-blur">
         {/* Row 1 */}
-        <div className="px-4 py-2 flex items-center gap-3">
+        <div className="pl-1 pr-4 h-14 flex items-center gap-3">
           {/* Brand */}
-          <Link href="/" className="flex items-center gap-2 flex-1 min-w-0">
-            <img
-              src="/logo4.png"
-              alt="FunMarket"
-              className="h-12 w-12 shrink-0 object-contain"
-            />
+          <Link href="/" className="flex items-center flex-1 min-w-0 -ml-1">
+  <div className="h-24 w-24 shrink-0">
+    <img
+      src="/logo4.png"
+      alt="FunMarket"
+      className="h-full w-full object-contain"
+    />
+  </div>
 
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="font-semibold text-white truncate">
-                FunMarket
-              </span>
-
-              <span className="shrink-0 px-2 py-0.5 text-[9px] font-bold uppercase rounded-full bg-pump-green text-black">
-                beta
-              </span>
-            </div>
-          </Link>
+  <div className="flex items-center gap-2 min-w-0">
+    <span className="font-semibold text-white truncate">FunMarket</span>
+    <span className="shrink-0 px-2 py-0.5 text-[9px] font-bold uppercase rounded-full bg-pump-green text-black">
+      beta
+    </span>
+  </div>
+</Link>
 
          {/* Menu button */}
 <div className="shrink-0 relative" ref={menuRef}>
@@ -105,13 +108,35 @@ const avatarLabel = useMemo(() => {
         💸 Affiliate
       </Link>
 
-      <Link href="/documentation" onClick={() => setMenuOpen(false)} className="block px-4 py-3 text-white/90 hover:bg-white/5">
-        📚 Documentation
-      </Link>
+      <a
+  href={DOCS_URL}
+  target="_blank"
+  rel="noopener noreferrer"
+  onClick={() => setMenuOpen(false)}
+  className="block px-4 py-3 text-white/90 hover:bg-white/5"
+>
+  📚 Documentation
+</a>
 
-      <Link href="/terms" onClick={() => setMenuOpen(false)} className="block px-4 py-3 text-white/90 hover:bg-white/5">
-        📜 Terms of Use
-      </Link>
+<a
+  href={TERMS_URL}
+  target="_blank"
+  rel="noopener noreferrer"
+  onClick={() => setMenuOpen(false)}
+  className="block px-4 py-3 text-white/90 hover:bg-white/5"
+>
+  📜 Terms of Use
+</a>
+
+<a
+  href={PRIVACY_URL}
+  target="_blank"
+  rel="noopener noreferrer"
+  onClick={() => setMenuOpen(false)}
+  className="block px-4 py-3 text-white/90 hover:bg-white/5"
+>
+  🔒 Privacy Policy
+</a>
 
       {connected && (
         <>
