@@ -596,9 +596,9 @@ if (filter === "inbox") {
       const marketPk = new PublicKey(marketAddr);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const tx = await (program as any).methods
-  .cancelIfNoProposal()
-  .accounts({ market: marketPk, user: publicKey })
-  .transaction();
+      .adminCancel()
+      .accounts({ market: marketPk, admin: publicKey })
+      .transaction();
     
     const txSig = await sendSignedTx({
       connection,
@@ -658,8 +658,8 @@ if (filter === "inbox") {
       const marketPk = new PublicKey(marketAddr);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const tx = await (program as any).methods
-      .adminCancel()
-      .accounts({ market: marketPk, admin: publicKey })
+      .cancelIfNoProposal()
+      .accounts({ market: marketPk, user: publicKey })
       .transaction();
     
     const txSig = await sendSignedTx({

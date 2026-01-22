@@ -24,8 +24,8 @@ interface CategoryFiltersProps {
 
 export default function CategoryFilters({ selectedCategory, onSelectCategory }: CategoryFiltersProps) {
   return (
-    <div className="py-4">
-<div className="mt-4 flex items-center gap-3 overflow-x-auto">
+    <div className="pt-2 pb-3 md:py-4">
+  <div className="flex items-center gap-3 overflow-x-auto md:mt-4">
           {CATEGORIES.map((cat) => {
           const active = selectedCategory === cat.id;
 

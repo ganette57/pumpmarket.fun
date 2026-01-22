@@ -54,12 +54,12 @@ const avatarLabel = useMemo(() => {
 
   return (
     <>
-      <div className="fixed top-0 left-0 right-0 z-[70] border-b border-gray-800 bg-black/80 backdrop-blur">
+      <div className={`fixed top-0 left-0 right-0 z-[70] border-b border-gray-800 bg-black/80 backdrop-blur ${showSearch ? "h-[116px]" : "h-16"}`}>
         {/* Row 1 */}
-        <div className="pl-1 pr-4 h-14 flex items-center gap-3">
-          {/* Brand */}
-          <Link href="/" className="flex items-center flex-1 min-w-0 -ml-1">
-  <div className="h-24 w-24 shrink-0">
+        <div className="pl-2 pr-4 h-16 flex items-center gap-3">
+                    {/* Brand */}
+                    <Link href="/" className="flex items-center flex-1 min-w-0">
+  <div className="h-16 w-16 shrink-0">
     <img
       src="/logo4.png"
       alt="FunMarket"
@@ -184,7 +184,7 @@ const avatarLabel = useMemo(() => {
       </div>
 
       {/* Spacer */}
-      <div className={showSearch ? "h-[112px]" : "h-[52px]"} />
-    </>
+      <div className={showSearch ? "h-[116px]" : "h-16"} />
+          </>
   );
 }

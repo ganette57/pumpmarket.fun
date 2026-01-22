@@ -58,6 +58,8 @@ function InfoTip({ text }: { text: string }) {
   );
 }
 
+const TERMS_URL = "https://funmarket.gitbook.io/funmarket/terms-of-use";
+
 export default function TradingPanel({
   market,
   connected,
@@ -431,12 +433,13 @@ export default function TradingPanel({
         <p className="mt-3 text-center text-xs text-gray-500">
           By trading, you agree to the{" "}
           <a
-            href="#"
-            className="text-gray-300 underline underline-offset-4 hover:text-white"
-            onClick={(e) => e.preventDefault()} // TODO: add real link later
-          >
-            Terms of Use
-          </a>
+  href={TERMS_URL}
+  target="_blank"
+  rel="noopener noreferrer"
+  className="text-gray-300 underline underline-offset-4 hover:text-white"
+>
+  Terms of Use
+</a>
           .
         </p>
       </div>

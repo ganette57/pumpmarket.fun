@@ -53,9 +53,9 @@ const PRIVACY_URL = "https://funmarket.gitbook.io/funmarket/privacy-policy";
   return (
     <>
       {/* HEADER FIXE */}
-      <header className="fixed top-0 left-0 right-0 z-[70] border-b border-gray-700/40 bg-pump-dark/95 backdrop-blur">
-      <div className="mx-auto flex max-w-7xl items-center gap-4 py-4 pl-3 pr-4 sm:pl-4 sm:pr-6 lg:pl-4 lg:pr-8">
-          {/* Logo + name -> home */}
+      <header className="fixed top-0 left-0 right-0 z-[70] h-20 border-b border-gray-700/40 bg-pump-dark/95 backdrop-blur"> 
+      <div className="mx-auto flex h-20 max-w-7xl items-center gap-4 pl-3 pr-4 sm:pl-4 sm:pr-6 lg:pl-4 lg:pr-8">
+                  {/* Logo + name -> home */}
           <Link href="/" className="flex items-center gap-2 shrink-0">
   <img
     src="/logo4.png"
@@ -110,7 +110,7 @@ const PRIVACY_URL = "https://funmarket.gitbook.io/funmarket/privacy-policy";
   {/* Create */}
   <Link
     href="/create"
-    className="inline-flex h-11 items-center justify-center rounded-full bg-pump-green px-6 text-sm font-semibold text-black hover:bg-pump-green/90 transition"
+    className="inline-flex h-8 items-center justify-center rounded-full bg-pump-green px-6 text-sm font-semibold text-black hover:bg-pump-green/90 transition"
   >
     Create
   </Link>
@@ -120,7 +120,7 @@ const PRIVACY_URL = "https://funmarket.gitbook.io/funmarket/privacy-policy";
     <button
       type="button"
       onClick={() => setMenuOpen((v) => !v)}
-      className="flex h-11 w-11 items-center justify-center rounded-full
+      className="flex h-8 w-8 items-center justify-center rounded-full
                  border border-gray-700
                  bg-gray-900
                  text-l font-semibold text-gray-200
