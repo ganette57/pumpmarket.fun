@@ -421,20 +421,10 @@ useEffect(() => {
 
   // Market balance
   useEffect(() => {
-    if (!id) return;
-    (async () => {
-      try {
-        const marketPk = new PublicKey(id);
-        const bal = await connection.getBalance(marketPk);
-        setMarketBalanceLamports(bal);
-      } catch {
-        setMarketBalanceLamports(null);
-      }
-    })();
-  }, [id, connection]);
-
-  useEffect(() => {
     if (!market?.publicKey) return;
+  
+    const marketPk = market.publicKey;
+    const marketCat = String(market.category || "other");
   
     let cancelled = false;
   
@@ -447,17 +437,17 @@ useEffect(() => {
         let q = supabase.from("markets").select(baseSelect).limit(3);
   
         if (relatedTab === "related") {
-          const cat = String(market.category || "other");
-          q = q.eq("category", cat).neq("market_address", market.publicKey).order("total_volume", { ascending: false });
+          q = q
+            .eq("category", marketCat)
+            .neq("market_address", marketPk)
+            .order("total_volume", { ascending: false });
         }
   
         if (relatedTab === "trending") {
-          // Trending = plus gros volume (simple et fiable)
           q = q.order("total_volume", { ascending: false });
         }
   
         if (relatedTab === "popular") {
-          // Popular = marchés qui finissent bientôt (end_date asc) ou récemment créés si tu avais created_at
           q = q.order("end_date", { ascending: true });
         }
   
@@ -474,6 +464,7 @@ useEffect(() => {
     }
   
     void loadRelatedBlock();
+  
     return () => {
       cancelled = true;
     };
