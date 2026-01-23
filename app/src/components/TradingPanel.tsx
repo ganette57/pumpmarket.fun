@@ -228,9 +228,9 @@ export default function TradingPanel({
   if (marketClosed) return null;
 
   const rootClass =
-    mode === "drawer"
-      ? "w-full"
-      : "card-pump sticky top-20";
+  mode === "drawer"
+    ? "card-pump pt-0"
+    : "card-pump"; // 🚫 pas de sticky / top / z-index sur desktop
 
   return (
     <div className={rootClass}>
