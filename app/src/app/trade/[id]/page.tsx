@@ -150,7 +150,7 @@ function marketTopPct(m: any): number {
       ? m.outcome_supplies.map((x: any) => Number(x) || 0)
       : [Number(m.yes_supply) || 0, Number(m.no_supply) || 0];
 
-  const total = supplies.reduce((a, b) => a + b, 0);
+      const total = supplies.reduce((a: number, b: number) => a + b, 0);
   if (!total) return 0;
 
   const top = Math.max(...supplies);
