@@ -113,7 +113,7 @@ export default function CreateMarketPage() {
   const [descriptionError, setDescriptionError] = useState<string | null>(null);
 
   // ✅ On-chain defaults (hidden from user)
-  const DEFAULT_B_SOL = 10; // must be > 0
+  const DEFAULT_B_SOL = 0.01; // must be > 0
   const DEFAULT_MAX_POSITION_BPS = 10_000; // 10_000 = disabled
   const DEFAULT_MAX_TRADE_SHARES = 5_000_000; // allowed max
   const DEFAULT_COOLDOWN_SECONDS = 0; // disabled

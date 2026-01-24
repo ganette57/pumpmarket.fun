@@ -4,8 +4,6 @@ use anchor_lang::solana_program::{program::invoke, system_instruction};
 
 declare_id!("A2EqnLDYW1WAi8mhR12ncGVvt92G3jisJqCe46YoV7SJ");
 
-pub mod math;
-
 /* ============================== CONSTANTS ============================== */
 
 pub const MAX_OUTCOMES: usize = 10;
@@ -14,23 +12,23 @@ pub const MAX_NAME_LEN: usize = 40;
 // Fees (bps)
 pub const PLATFORM_FEE_BPS: u64 = 100; // 1%
 pub const CREATOR_FEE_BPS: u64 = 200;  // 2%
-pub const TOTAL_FEE_BPS: u64 = 300;    // 3% informational
 
-// Windows
-pub const CREATOR_PROPOSE_WINDOW: i64 = 48 * 3600; // 48h
-pub const DISPUTE_WINDOW: i64 = 24 * 3600;         // 24h
+// Windows (UPDATED)
+pub const CREATOR_PROPOSE_WINDOW: i64 = 24 * 3600; // 24h (was 48h)
+pub const DISPUTE_WINDOW: i64 = 4 * 3600;          // 4h (was 24h)
 
 // Anti-manip limits
 pub const MAX_TRADE_SHARES_HARD: u64 = 5_000_000;
 
-// ✅ Put your real values here (mainnet later).
-// For now you can keep them as defaults and pass in as accounts, but having constants reduces footguns.
-use anchor_lang::prelude::pubkey;
+// Pricing (linear curve)  ✅ coherent target: 1 share starts at 0.01 SOL
+pub const BASE_PRICE_LAMPORTS: u64 = 10_000_000; // 0.01 SOL
+pub const SLOPE_LAMPORTS_PER_SUPPLY: u64 = 1_000; // +0.000001 SOL per share supply
 
+use anchor_lang::prelude::pubkey;
 pub const PLATFORM_WALLET: Pubkey =
     pubkey!("6szhvTU23WtiKXqPs8vuX5G7JXu2TcUdVJNByNwVGYMV");
 
-// ✅ Admin key (your wallet) for dispute resolution (ONLY used if disputes > 0)
+// Admin key (ONLY used if disputes > 0)
 pub const ADMIN_AUTHORITY: Pubkey =
     pubkey!("2FuGyidfE3N1tAf6vWFFystFcEVRp4WydHTmFr71pA9Y");
 
@@ -47,7 +45,7 @@ pub mod funmarket_pump {
         resolution_time: i64,
         outcome_names: Vec<String>,
         market_type: u8, // 0=binary, 1=multi
-        b_lamports: u64,
+        b_lamports: u64, // kept for backwards compat (UI + stored), not used by linear pricing
 
         // anti-manip config
         max_position_bps: u16, // 500..9000, 10_000 disables
@@ -74,7 +72,7 @@ pub mod funmarket_pump {
         let now = Clock::get()?.unix_timestamp;
         require!(resolution_time > now, ErrorCode::InvalidResolutionTime);
 
-        // b
+        // keep the param for compatibility; must still be > 0
         require!(b_lamports > 0, ErrorCode::InvalidB);
 
         // anti-manip config
@@ -100,7 +98,7 @@ pub mod funmarket_pump {
         market.outcome_count = outcome_names.len() as u8;
         market.outcome_names = outcome_names;
 
-        market.b_lamports = b_lamports;
+        market.b_lamports = b_lamports; // stored (compat)
         market.q = [0u64; MAX_OUTCOMES];
 
         // lifecycle
@@ -142,73 +140,67 @@ pub mod funmarket_pump {
         trade_inner(ctx, shares, outcome_index, false)
     }
 
-/* ---------- PROPOSE (creator) ---------- */
+    /* ---------- PROPOSE (creator) ---------- */
 
-pub fn propose_resolution(
-    ctx: Context<ProposeResolution>,
-    proposed_outcome: u8,
-) -> Result<()> {
-    let market = &mut ctx.accounts.market;
-    let now = Clock::get()?.unix_timestamp;
+    pub fn propose_resolution(ctx: Context<ProposeResolution>, proposed_outcome: u8) -> Result<()> {
+        let market = &mut ctx.accounts.market;
+        let now = Clock::get()?.unix_timestamp;
 
-    require!(market.status == MarketStatus::Open, ErrorCode::InvalidState);
-    require!(!market.cancelled, ErrorCode::InvalidState);
-    require!(!market.resolved, ErrorCode::MarketResolved);
+        require!(market.status == MarketStatus::Open, ErrorCode::InvalidState);
+        require!(!market.cancelled, ErrorCode::InvalidState);
+        require!(!market.resolved, ErrorCode::MarketResolved);
 
-    require!(now >= market.resolution_time, ErrorCode::MarketNotEnded);
+        require!(now >= market.resolution_time, ErrorCode::MarketNotEnded);
 
-    // 48h window to propose after end
-    let cutoff = market
-        .resolution_time
-        .checked_add(CREATOR_PROPOSE_WINDOW)
-        .ok_or(ErrorCode::Overflow)?;
-    require!(now <= cutoff, ErrorCode::TooLateToPropose);
+        // 24h window to propose after end
+        let cutoff = market
+            .resolution_time
+            .checked_add(CREATOR_PROPOSE_WINDOW)
+            .ok_or(ErrorCode::Overflow)?;
+        require!(now <= cutoff, ErrorCode::TooLateToPropose);
 
-    let idx = proposed_outcome as usize;
-    require!(idx < market.outcome_count as usize, ErrorCode::InvalidOutcomeIndex);
+        let idx = proposed_outcome as usize;
+        require!(idx < market.outcome_count as usize, ErrorCode::InvalidOutcomeIndex);
 
-    market.status = MarketStatus::Proposed;
-    market.proposed_outcome = Some(proposed_outcome);
-    market.proposed_at = Some(now);
-    market.contest_deadline = Some(now.checked_add(DISPUTE_WINDOW).ok_or(ErrorCode::Overflow)?);
-    market.dispute_count = 0;
+        market.status = MarketStatus::Proposed;
+        market.proposed_outcome = Some(proposed_outcome);
+        market.proposed_at = Some(now);
+        market.contest_deadline = Some(now.checked_add(DISPUTE_WINDOW).ok_or(ErrorCode::Overflow)?);
+        market.dispute_count = 0;
 
-    emit!(ResolutionProposed {
-        market: market.key(),
-        proposed_outcome,
-        proposed_at: now,
-        contest_deadline: market.contest_deadline.unwrap(),
-    });
+        emit!(ResolutionProposed {
+            market: market.key(),
+            proposed_outcome,
+            proposed_at: now,
+            contest_deadline: market.contest_deadline.unwrap(),
+        });
 
-    Ok(())
-}
+        Ok(())
+    }
 
-/* ---------- DISPUTE (any user during contest window) ---------- */
+    /* ---------- DISPUTE (any user during contest window) ---------- */
 
-pub fn dispute(ctx: Context<Dispute>) -> Result<()> {
-    let market = &mut ctx.accounts.market;
-    let now = Clock::get()?.unix_timestamp;
+    pub fn dispute(ctx: Context<Dispute>) -> Result<()> {
+        let market = &mut ctx.accounts.market;
+        let now = Clock::get()?.unix_timestamp;
 
-    // Must be proposed
-    require!(market.status == MarketStatus::Proposed, ErrorCode::InvalidState);
-    require!(!market.cancelled, ErrorCode::InvalidState);
-    require!(!market.resolved, ErrorCode::MarketResolved);
+        require!(market.status == MarketStatus::Proposed, ErrorCode::InvalidState);
+        require!(!market.cancelled, ErrorCode::InvalidState);
+        require!(!market.resolved, ErrorCode::MarketResolved);
 
-    // Must be within contest window
-    let deadline = market.contest_deadline.ok_or(ErrorCode::InvalidState)?;
-    require!(now < deadline, ErrorCode::DisputeWindowClosed);
+        let deadline = market.contest_deadline.ok_or(ErrorCode::InvalidState)?;
+        require!(now < deadline, ErrorCode::DisputeWindowClosed);
 
-    // Increment counter
-    market.dispute_count = market.dispute_count.saturating_add(1);
+        market.dispute_count = market.dispute_count.saturating_add(1);
 
-    emit!(Disputed {
-        market: market.key(),
-        by: ctx.accounts.user.key(),
-        dispute_count: market.dispute_count,
-    });
+        emit!(Disputed {
+            market: market.key(),
+            by: ctx.accounts.user.key(),
+            dispute_count: market.dispute_count,
+        });
 
-    Ok(())
-}
+        Ok(())
+    }
 
     /* ---------- FINALIZE (permissionless if 0 disputes) ---------- */
 
@@ -300,7 +292,7 @@ pub fn dispute(ctx: Context<Dispute>) -> Result<()> {
         Ok(())
     }
 
-    /* ---------- AUTO CANCEL (48h after end, permissionless) ---------- */
+    /* ---------- AUTO CANCEL (24h after end, permissionless) ---------- */
 
     pub fn cancel_if_no_proposal(ctx: Context<CancelNoProposal>) -> Result<()> {
         let market = &mut ctx.accounts.market;
@@ -324,7 +316,7 @@ pub fn dispute(ctx: Context<Dispute>) -> Result<()> {
         emit!(Cancelled {
             market: market.key(),
             by: ctx.accounts.user.key(),
-            reason: CancelReason::NoProposal48h,
+            reason: CancelReason::NoProposal24h,
         });
 
         Ok(())
@@ -345,7 +337,6 @@ pub fn dispute(ctx: Context<Dispute>) -> Result<()> {
 
         require!(!pos.claimed, ErrorCode::AlreadyClaimed);
 
-        // verify ownership
         require!(pos.market == market.key(), ErrorCode::InvalidUserPosition);
         require!(pos.user == ctx.accounts.user.key(), ErrorCode::InvalidUserPosition);
 
@@ -384,6 +375,7 @@ pub fn dispute(ctx: Context<Dispute>) -> Result<()> {
     }
 
     /* ---------- CLAIM REFUND (cancelled) ---------- */
+
     pub fn claim_refund(ctx: Context<ClaimRefund>) -> Result<()> {
         let market_ai = ctx.accounts.market.to_account_info();
         let user_ai = ctx.accounts.user.to_account_info();
@@ -397,16 +389,13 @@ pub fn dispute(ctx: Context<Dispute>) -> Result<()> {
 
         require!(!pos.claimed, ErrorCode::AlreadyClaimed);
 
-        // verify ownership
         require!(pos.market == market.key(), ErrorCode::InvalidUserPosition);
         require!(pos.user == ctx.accounts.user.key(), ErrorCode::InvalidUserPosition);
 
-        // refund is the user "net cost" (excluding fees), clamped to >= 0
         let nc = pos.net_cost_lamports;
         require!(nc > 0, ErrorCode::NothingToRefund);
 
         let refund_u64: u64 = u64::try_from(nc).map_err(|_| error!(ErrorCode::Overflow))?;
-
         require!(market_ai.lamports() >= refund_u64, ErrorCode::InsufficientMarketBalance);
 
         **market_ai.try_borrow_mut_lamports()? = market_ai.lamports().saturating_sub(refund_u64);
@@ -423,6 +412,38 @@ pub fn dispute(ctx: Context<Dispute>) -> Result<()> {
 
         Ok(())
     }
+}
+
+/* ============================== PRICING HELPERS ============================== */
+
+// Sum_{k=0..(shares-1)} [ BASE + (start_supply + k) * SLOPE ]
+fn linear_cost_lamports(start_supply: u64, shares: u64) -> Result<u64> {
+    require!(shares > 0, ErrorCode::InvalidShares);
+
+    let base = BASE_PRICE_LAMPORTS as u128;
+    let slope = SLOPE_LAMPORTS_PER_SUPPLY as u128;
+
+    let s = shares as u128;
+    let q0 = start_supply as u128;
+
+    // shares * BASE
+    let base_part = s.checked_mul(base).ok_or(ErrorCode::Overflow)?;
+
+    // slope * ( shares*(2*q0 + shares - 1)/2 )
+    let two_q0 = q0.checked_mul(2).ok_or(ErrorCode::Overflow)?;
+    let inside = two_q0
+        .checked_add(s.checked_sub(1).ok_or(ErrorCode::Overflow)?)
+        .ok_or(ErrorCode::Overflow)?;
+    let series = s
+        .checked_mul(inside)
+        .ok_or(ErrorCode::Overflow)?
+        .checked_div(2)
+        .ok_or(ErrorCode::Overflow)?;
+
+    let slope_part = slope.checked_mul(series).ok_or(ErrorCode::Overflow)?;
+
+    let total = base_part.checked_add(slope_part).ok_or(ErrorCode::Overflow)?;
+    Ok(u64::try_from(total).map_err(|_| error!(ErrorCode::Overflow))?)
 }
 
 /* ============================== TRADE INNER ============================== */
@@ -478,8 +499,8 @@ fn trade_inner(ctx: Context<Trade>, shares: u64, outcome_index: u8, is_buy: bool
     require!(idx < market.outcome_count as usize, ErrorCode::InvalidOutcomeIndex);
 
     if is_buy {
-        // LMSR cost excluding fees
-        let cost = lmsr_buy_cost_lamports(&market.q, idx, shares, market.b_lamports, market.outcome_count)?;
+        let start_supply = market.q[idx];
+        let cost = linear_cost_lamports(start_supply, shares)?;
         require!(cost > 0, ErrorCode::InvalidCost);
 
         let platform_fee = cost.saturating_mul(PLATFORM_FEE_BPS) / 10_000;
@@ -532,9 +553,10 @@ fn trade_inner(ctx: Context<Trade>, shares: u64, outcome_index: u8, is_buy: bool
         Ok(())
     } else {
         require!(pos.shares[idx] >= shares, ErrorCode::NotEnoughShares);
+        require!(market.q[idx] >= shares, ErrorCode::InsufficientShares);
 
-        // LMSR refund excluding fees
-        let refund = lmsr_sell_refund_lamports(&market.q, idx, shares, market.b_lamports, market.outcome_count)?;
+        let start_supply = market.q[idx].checked_sub(shares).ok_or(ErrorCode::Overflow)?;
+        let refund = linear_cost_lamports(start_supply, shares)?;
         require!(refund > 0, ErrorCode::InvalidCost);
 
         let platform_fee = refund.saturating_mul(PLATFORM_FEE_BPS) / 10_000;
@@ -571,7 +593,6 @@ fn trade_inner(ctx: Context<Trade>, shares: u64, outcome_index: u8, is_buy: bool
             .checked_sub(refund as i128)
             .ok_or(ErrorCode::Overflow)?;
 
-        // don't allow negative refundable principal
         if pos.net_cost_lamports < 0 {
             pos.net_cost_lamports = 0;
         }
@@ -592,14 +613,10 @@ fn trade_inner(ctx: Context<Trade>, shares: u64, outcome_index: u8, is_buy: bool
 }
 
 /* ============================== ANTI-MANIP ============================== */
-/**
-Cap per wallet on an outcome, computed from TOTAL market supply (sum(q)).
-We skip enforcement until market has some depth (bootstrap).
-*/
+
 fn enforce_position_cap(market: &Market, pos: &UserPosition, idx: usize) -> Result<()> {
     let max_bps = market.max_position_bps as u64;
 
-    // disabled
     if max_bps >= 10_000 {
         return Ok(());
     }
@@ -628,41 +645,11 @@ fn enforce_position_cap(market: &Market, pos: &UserPosition, idx: usize) -> Resu
     Ok(())
 }
 
-/* ============================== LMSR WRAPPERS ============================== */
-
-fn lmsr_buy_cost_lamports(
-    q: &[u64; MAX_OUTCOMES],
-    outcome_index: usize,
-    amount: u64,
-    b_lamports: u64,
-    outcome_count: u8,
-) -> Result<u64> {
-    require!(outcome_index < outcome_count as usize, ErrorCode::InvalidOutcomeIndex);
-    math::lmsr_buy_cost(q, b_lamports, outcome_index as u8, amount, outcome_count)
-        .map_err(|_| error!(ErrorCode::MathOverflow))
-}
-
-fn lmsr_sell_refund_lamports(
-    q: &[u64; MAX_OUTCOMES],
-    outcome_index: usize,
-    amount: u64,
-    b_lamports: u64,
-    outcome_count: u8,
-) -> Result<u64> {
-    require!(outcome_index < outcome_count as usize, ErrorCode::InvalidOutcomeIndex);
-    math::lmsr_sell_refund(q, b_lamports, outcome_index as u8, amount, outcome_count)
-        .map_err(|_| error!(ErrorCode::MathOverflow))
-}
-
 /* ============================== ACCOUNTS ============================== */
 
 #[derive(Accounts)]
 pub struct CreateMarket<'info> {
-    #[account(
-        init,
-        payer = creator,
-        space = Market::SPACE
-    )]
+    #[account(init, payer = creator, space = Market::SPACE)]
     pub market: Account<'info, Market>,
 
     #[account(mut)]
@@ -710,7 +697,6 @@ pub struct ProposeResolution<'info> {
 pub struct Dispute<'info> {
     #[account(mut)]
     pub market: Account<'info, Market>,
-
     pub user: Signer<'info>,
 }
 
@@ -718,7 +704,6 @@ pub struct Dispute<'info> {
 pub struct FinalizeNoDisputes<'info> {
     #[account(mut)]
     pub market: Account<'info, Market>,
-
     pub user: Signer<'info>,
 }
 
@@ -735,7 +720,6 @@ pub struct AdminResolve<'info> {
 pub struct CancelNoProposal<'info> {
     #[account(mut)]
     pub market: Account<'info, Market>,
-
     pub user: Signer<'info>,
 }
 
@@ -789,9 +773,9 @@ pub struct Market {
     pub market_type: u8,   // 0=binary, 1=multi
     pub outcome_count: u8, // 2..10
 
-    // LMSR
-    pub b_lamports: u64,
-    pub q: [u64; MAX_OUTCOMES],
+    // curve params (compat + state)
+    pub b_lamports: u64,              // kept for compatibility (not used by linear pricing)
+    pub q: [u64; MAX_OUTCOMES],       // supplies
 
     // lifecycle
     pub status: MarketStatus,
@@ -846,7 +830,7 @@ pub struct UserPosition {
     pub claimed: bool,
     pub last_trade_ts: i64,
 
-    // ✅ refundable principal (cost/refund excluding fees)
+    // refundable principal (cost/refund excluding fees)
     pub net_cost_lamports: i128,
 }
 
@@ -909,7 +893,7 @@ pub struct Finalized {
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
 pub enum CancelReason {
-    NoProposal48h,
+    NoProposal24h,
     Admin,
 }
 
@@ -979,6 +963,8 @@ pub enum ErrorCode {
     NotEnoughShares,
     #[msg("Invalid cost or refund")]
     InvalidCost,
+    #[msg("Insufficient shares")]
+    InsufficientShares,
 
     // ----- Claiming -----
     #[msg("Invalid payout")]
@@ -1009,16 +995,6 @@ pub enum ErrorCode {
     InsufficientMarketBalance,
     #[msg("Invalid user position account")]
     InvalidUserPosition,
-
-    // ----- Math.rs specific -----
-    #[msg("Math overflow")]
-    MathOverflow,
-    #[msg("Invalid liquidity parameter")]
-    InvalidLiquidityParameter,
-    #[msg("Invalid outcome count")]
-    InvalidOutcomeCount,
-    #[msg("Insufficient shares")]
-    InsufficientShares,
 
     // ----- Generic -----
     #[msg("Overflow")]

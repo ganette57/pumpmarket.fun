@@ -1,6 +1,9 @@
 // programs/funmarket-pump/src/math.rs
 //
-// Robust LMSR fixed-point math (1e9 scale)
+// Legacy LMSR fixed-point math (1e9 scale).
+// NOTE: If you switched the contract pricing to a linear curve in lib.rs,
+// this module is kept for compatibility / future use and is not called anymore.
+//
 // - log-sum-exp to avoid overflow
 // - supports negative exponent inputs via reciprocal
 // - rounds COST up (ceil) so buy cost doesn't truncate to 0 lamport
@@ -65,8 +68,8 @@ pub fn ln_fixed(x: u128) -> Result<u128> {
         .checked_mul(z).ok_or(MainErrorCode::MathOverflow)?
         .checked_div(SCALE).ok_or(MainErrorCode::MathOverflow)?;
 
-    let mut term = z;     // z^(2n+1)
-    let mut sum = term;   // z
+    let mut term = z;   // z^(2n+1)
+    let mut sum = term; // z
 
     for n in 1..=MAX_ITERATIONS {
         term = term
@@ -86,7 +89,9 @@ pub fn ln_fixed(x: u128) -> Result<u128> {
     }
 
     let ln_v = sum.checked_mul(2).ok_or(MainErrorCode::MathOverflow)?;
-    let k_ln2 = (k as u128).checked_mul(LN2_SCALED).ok_or(MainErrorCode::MathOverflow)?;
+    let k_ln2 = (k as u128)
+        .checked_mul(LN2_SCALED)
+        .ok_or(MainErrorCode::MathOverflow)?;
 
     ln_v.checked_add(k_ln2).ok_or(MainErrorCode::MathOverflow.into())
 }
@@ -131,6 +136,7 @@ pub fn exp_fixed_signed(x: i128) -> Result<u128> {
     if x >= 0 {
         return exp_fixed_pos(u128::try_from(x).map_err(|_| MainErrorCode::MathOverflow)?);
     }
+
     let y: u128 = u128::try_from(-x).map_err(|_| MainErrorCode::MathOverflow)?;
     require!(y <= MAX_EXP_INPUT, MainErrorCode::MathOverflow);
 
@@ -179,14 +185,14 @@ pub fn lmsr_cost(q: &[u64; 10], b: u64, outcome_count: u8) -> Result<u64> {
         exp_sum = exp_sum.checked_add(exp_val).ok_or(MainErrorCode::MathOverflow)?;
     }
 
-    // exp_sum is scaled, and >= SCALE (because at least one diff==0 => exp(0)=SCALE)
     require!(exp_sum >= SCALE, MainErrorCode::MathOverflow);
 
-    let ln_small = ln_fixed(exp_sum)?;          // ln(sum exp(diff)) scaled
-    let ln_total = max_r.checked_add(ln_small).ok_or(MainErrorCode::MathOverflow)?; // scaled
+    let ln_small = ln_fixed(exp_sum)?; // ln(sum exp(diff)) scaled
+    let ln_total = max_r
+        .checked_add(ln_small)
+        .ok_or(MainErrorCode::MathOverflow)?; // scaled
 
-    // cost = b * ln_total / SCALE
-    // IMPORTANT: ceil so we don't truncate tiny positive costs to 0 lamport
+    // cost = b * ln_total / SCALE, ceil
     let cost_u128 = b_u128.checked_mul(ln_total).ok_or(MainErrorCode::MathOverflow)?;
     let cost_u128 = div_ceil_u128(cost_u128, SCALE)?;
 
@@ -201,7 +207,10 @@ pub fn lmsr_buy_cost(
     amount: u64,
     outcome_count: u8,
 ) -> Result<u64> {
-    require!((outcome_index as usize) < (outcome_count as usize), MainErrorCode::InvalidOutcomeCount);
+    require!(
+        (outcome_index as usize) < (outcome_count as usize),
+        MainErrorCode::InvalidOutcomeCount
+    );
     require!(amount > 0, MainErrorCode::InvalidShares);
 
     let cost_before = lmsr_cost(q, b, outcome_count)?;
@@ -213,8 +222,10 @@ pub fn lmsr_buy_cost(
 
     let cost_after = lmsr_cost(&q_after, b, outcome_count)?;
 
-    let delta = cost_after.checked_sub(cost_before).ok_or(MainErrorCode::MathOverflow)?;
-    // With ceil, delta should almost never be 0, but keep it safe.
+    let delta = cost_after
+        .checked_sub(cost_before)
+        .ok_or(MainErrorCode::MathOverflow)?;
+
     Ok(delta.max(1))
 }
 
@@ -226,9 +237,15 @@ pub fn lmsr_sell_refund(
     amount: u64,
     outcome_count: u8,
 ) -> Result<u64> {
-    require!((outcome_index as usize) < (outcome_count as usize), MainErrorCode::InvalidOutcomeCount);
+    require!(
+        (outcome_index as usize) < (outcome_count as usize),
+        MainErrorCode::InvalidOutcomeCount
+    );
     require!(amount > 0, MainErrorCode::InvalidShares);
-    require!(q[outcome_index as usize] >= amount, MainErrorCode::InsufficientShares);
+    require!(
+        q[outcome_index as usize] >= amount,
+        MainErrorCode::InsufficientShares
+    );
 
     let cost_before = lmsr_cost(q, b, outcome_count)?;
 
@@ -239,19 +256,19 @@ pub fn lmsr_sell_refund(
 
     let cost_after = lmsr_cost(&q_after, b, outcome_count)?;
 
-    Ok(cost_before.checked_sub(cost_after).ok_or(MainErrorCode::MathOverflow)?)
+    Ok(cost_before
+        .checked_sub(cost_after)
+        .ok_or(MainErrorCode::MathOverflow)?)
 }
 
 /// Price p_i = exp(q_i/b) / sum_j exp(q_j/b), scaled by SCALE (1e9)
-pub fn lmsr_price(
-    q: &[u64; 10],
-    b: u64,
-    outcome_index: u8,
-    outcome_count: u8,
-) -> Result<u64> {
+pub fn lmsr_price(q: &[u64; 10], b: u64, outcome_index: u8, outcome_count: u8) -> Result<u64> {
     require!(b > 0, MainErrorCode::InvalidLiquidityParameter);
     require!((2..=10).contains(&outcome_count), MainErrorCode::InvalidOutcomeCount);
-    require!((outcome_index as usize) < (outcome_count as usize), MainErrorCode::InvalidOutcomeCount);
+    require!(
+        (outcome_index as usize) < (outcome_count as usize),
+        MainErrorCode::InvalidOutcomeCount
+    );
 
     let b_u128 = b as u128;
 

@@ -41,6 +41,7 @@ type UiMarket = {
   category?: string;
   imageUrl?: string;
   creator: string;
+  bLamports?: number; // ✅ LMSR b in lamports
 
   totalVolume: number;
   resolutionTime: number;
@@ -209,6 +210,27 @@ function parseEndDateMs(raw: any): number {
   return Number.isFinite(t) ? t : NaN;
 }
 
+function parseBLamports(m: any): number | null {
+  const direct =
+    m?.b_lamports ??
+    m?.bLamports ??
+    m?.liquidity_lamports ??
+    m?.liquidity_param_lamports;
+
+  if (direct != null && Number(direct) > 0) return Math.floor(Number(direct));
+
+  const sol =
+    m?.b_sol ??
+    m?.bSol ??
+    m?.liquidity_sol ??
+    m?.liquidity_param_sol;
+
+  if (sol != null && Number(sol) > 0) return solToLamports(Number(sol));
+
+  // fallback: ton default 0.01 SOL
+  return solToLamports(0.01);
+}
+
 export default function TradePage() {
   const params = useParams();
   const id = safeParamId((params as any)?.id);
@@ -278,6 +300,7 @@ const [relatedMarkets, setRelatedMarkets] = useState<any[]>([]);
           category: supabaseMarket.category || "other",
           imageUrl: supabaseMarket.image_url || undefined,
           creator: String(supabaseMarket.creator || ""),
+          bLamports: parseBLamports(supabaseMarket) || undefined,
           creatorResolveDeadline,
           totalVolume: Number(supabaseMarket.total_volume) || 0,
           resolutionTime,
@@ -1067,6 +1090,7 @@ useEffect(() => {
                       marketType: market.marketType,
                       outcomeNames: names,
                       outcomeSupplies: supplies,
+                      bLamports: market.bLamports,
                       yesSupply:
                         names.length >= 2 ? supplies[0] || 0 : market.yesSupply || 0,
                       noSupply:
@@ -1209,6 +1233,7 @@ useEffect(() => {
                   marketType: market.marketType,
                   outcomeNames: names,
                   outcomeSupplies: supplies,
+                  bLamports: market.bLamports,
                   yesSupply:
                     names.length >= 2 ? supplies[0] || 0 : market.yesSupply || 0,
                   noSupply:

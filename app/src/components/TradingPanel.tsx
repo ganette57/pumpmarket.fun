@@ -5,7 +5,7 @@ import { lamportsToSol } from "@/utils/solana";
 
 type MarketForTrade = {
   resolved: boolean;
-
+  bLamports?: number; // ✅ LMSR b in lamports
   yesSupply?: number;
   noSupply?: number;
 
@@ -33,16 +33,43 @@ interface TradingPanelProps {
   title?: string;
 }
 
-// UI-only linear estimate (NOT LMSR)
-const BASE_PRICE_LAMPORTS = 10_000_000; // 0.01 SOL
-const SLOPE_LAMPORTS_PER_SUPPLY = 1_000; // +0.000001 SOL per share supply
+// Fees (match on-chain): 1% platform + 2% creator = 3%
+const PLATFORM_FEE_BPS = 100; // 1%
+const CREATOR_FEE_BPS = 200;  // 2%
 
-function feeLamports3pct(costLamports: number) {
-  return Math.floor((costLamports * 3) / 100);
+function feeBreakdownLamports(amountLamports: number) {
+  const platform = Math.floor((amountLamports * PLATFORM_FEE_BPS) / 10_000);
+  const creator = Math.floor((amountLamports * CREATOR_FEE_BPS) / 10_000);
+  return { platform, creator, total: platform + creator };
 }
+// UI pricing model (matches on-chain behavior you’re seeing):
+// pricePerShare = base + supply * slope
+const DEFAULT_BASE_PRICE_LAMPORTS = 10_000_000; // 0.01 SOL
+const DEFAULT_SLOPE_LAMPORTS_PER_SUPPLY = 1_000; // +0.000001 SOL per existing supply
 
 function clampInt(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, Math.floor(n)));
+}
+
+function lmsrCostLamports(q: number[], bLamports: number, outcomeCount: number): number {
+  const n = Math.max(2, Math.min(10, outcomeCount));
+  if (bLamports <= 0) return 0;
+
+  let maxR = -Infinity;
+  const r: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const ri = (Number(q[i] || 0)) / bLamports;
+    r.push(ri);
+    if (ri > maxR) maxR = ri;
+  }
+
+  let sum = 0;
+  for (let i = 0; i < n; i++) sum += Math.exp(r[i] - maxR);
+
+  const ln = maxR + Math.log(sum);
+  const cost = bLamports * ln;
+
+  return Math.max(1, Math.ceil(cost));
 }
 
 function InfoTip({ text }: { text: string }) {
@@ -88,15 +115,24 @@ export default function TradingPanel({
     return Array(outcomes.length).fill(0);
   }, [market.outcomeSupplies, market.yesSupply, market.noSupply, outcomes]);
 
-  const totalSupply = useMemo(() => supplies.reduce((sum, x) => sum + (x || 0), 0), [supplies]);
+// base price per share (lamports). You already set DEFAULT_B_SOL=0.01 in create,
+// so if you store bLamports on the market, we reuse it as the base price.
+const basePriceLamports = useMemo(() => {
+  const v = Number(market.bLamports);
+  return Number.isFinite(v) && v > 0 ? Math.floor(v) : DEFAULT_BASE_PRICE_LAMPORTS;
+}, [market.bLamports]);
 
-  const probs = useMemo(
-    () =>
-      supplies.map((s) =>
-        totalSupply > 0 ? (s / totalSupply) * 100 : 100 / (supplies.length || 1)
-      ),
-    [supplies, totalSupply]
-  );
+const slopeLamportsPerSupply = DEFAULT_SLOPE_LAMPORTS_PER_SUPPLY;
+
+const totalSupply = useMemo(() => supplies.reduce((sum, x) => sum + (x || 0), 0), [supplies]);
+
+const probs = useMemo(
+  () =>
+    supplies.map((s) =>
+      totalSupply > 0 ? (Number(s || 0) / totalSupply) * 100 : 100 / (supplies.length || 1)
+    ),
+  [supplies, totalSupply]
+);
 
   const oddsX = useMemo(
     () =>
@@ -157,29 +193,33 @@ export default function TradingPanel({
   const mainAccentAmountClass = isRedBuy ? "text-[#ff5c73]" : "text-pump-green";
 
   const buyCostLamports = useMemo(() => {
-    const pricePerUnit = BASE_PRICE_LAMPORTS + currentSupply * SLOPE_LAMPORTS_PER_SUPPLY;
+    const pricePerUnit = basePriceLamports + currentSupply * slopeLamportsPerSupply;
     const cost = safeShares * pricePerUnit;
-    const fees = feeLamports3pct(cost);
-    const totalPay = cost + fees;
-    return { pricePerUnit, cost, fees, totalPay };
-  }, [currentSupply, safeShares]);
+    const fees = feeBreakdownLamports(cost);
+    const totalPay = cost + fees.total;
+    const avgInclFees = totalPay / safeShares;
+    return { pricePerUnit, cost, fees, totalPay, avgInclFees };
+  }, [basePriceLamports, currentSupply, slopeLamportsPerSupply, safeShares]);
 
   const sellRefundLamports = useMemo(() => {
+    // sell moves supply backward
     const startSupply = Math.max(0, currentSupply - safeShares);
-    const pricePerUnit = BASE_PRICE_LAMPORTS + startSupply * SLOPE_LAMPORTS_PER_SUPPLY;
+    const pricePerUnit = basePriceLamports + startSupply * slopeLamportsPerSupply;
     const refund = safeShares * pricePerUnit;
-    const fees = feeLamports3pct(refund);
-    const netReceive = Math.max(0, refund - fees);
-    return { pricePerUnit, refund, fees, netReceive, startSupply };
-  }, [currentSupply, safeShares]);
+    const fees = feeBreakdownLamports(refund);
+    const netReceive = Math.max(0, refund - fees.total);
+    const avgInclFees = netReceive / safeShares;
+    return { pricePerUnit, refund, fees, netReceive, startSupply, avgInclFees };
+  }, [basePriceLamports, currentSupply, slopeLamportsPerSupply, safeShares]);
 
   const payOrReceiveLamports = side === "buy" ? buyCostLamports.totalPay : sellRefundLamports.netReceive;
-  const feeLamports = side === "buy" ? buyCostLamports.fees : sellRefundLamports.fees;
+  const feeLamports = side === "buy" ? buyCostLamports.fees.total : sellRefundLamports.fees.total;
 
   const avgPriceSol = useMemo(() => {
-    const v = lamportsToSol(payOrReceiveLamports);
-    return safeShares > 0 ? v / safeShares : 0;
-  }, [payOrReceiveLamports, safeShares]);
+    const avgLamports =
+      side === "buy" ? buyCostLamports.avgInclFees : sellRefundLamports.avgInclFees;
+    return lamportsToSol(avgLamports);
+  }, [side, buyCostLamports.avgInclFees, sellRefundLamports.avgInclFees]);
 
   const selectedOddsX = oddsX[selectedIndex] || 1;
 
@@ -327,8 +367,8 @@ export default function TradingPanel({
           <div className="flex items-center justify-between">
             <label className="text-xs text-gray-400 mb-1 block">Amount (shares)</label>
             <div className="text-xs text-gray-500">
-              avg {avgPriceSol.toFixed(6)}
-              <InfoTip text="Average UI estimate per share (includes 3% fees). Not LMSR." />
+            avg {avgPriceSol.toFixed(9)}
+            <InfoTip text="Average estimate per share (base + supply*slope, includes 1% platform + 2% creator fees). Matches on-chain." />
             </div>
           </div>
 
@@ -367,10 +407,10 @@ export default function TradingPanel({
           <div className="flex items-center justify-between">
             <div className="text-sm text-gray-400">
               {side === "buy" ? "You pay" : "You receive"}
-              <InfoTip text={`Includes a 3% fee. Fee right now: ${lamportsToSol(feeLamports).toFixed(6)} SOL.`} />
+              <InfoTip text={`Fees (platform 1% + creator 2%): ${lamportsToSol(feeLamports).toFixed(6)} SOL.`} />
             </div>
             <div className={`text-2xl font-extrabold ${mainAccentAmountClass}`}>
-              {lamportsToSol(payOrReceiveLamports).toFixed(6)} SOL
+            {lamportsToSol(payOrReceiveLamports).toFixed(9)} SOL
             </div>
           </div>
 
