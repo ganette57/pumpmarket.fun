@@ -87,15 +87,18 @@ export default function OddsHistoryChart({ points, outcomeNames, height = 200 }:
 
           {/* Tooltip sobre dark */}
           <Tooltip
-            contentStyle={{
-              backgroundColor: "#020617",
-              borderRadius: 8,
-              border: "1px solid #1f2937",
-              fontSize: 11,
-            }}
-            labelStyle={{ color: "#9ca3af" }}
-            formatter={(value: any) => [`${value}%`, "Odds"]}
-          />
+  contentStyle={{
+    backgroundColor: "#020617",
+    borderRadius: 8,
+    border: "1px solid #1f2937",
+    fontSize: 11,
+  }}
+  labelStyle={{ color: "#9ca3af" }}
+  formatter={(value: any, name: any) => [
+    `${Number(value).toFixed(2)}%`,
+    name,
+  ]}
+/>
 
           {/* Légende mini, en haut à droite */}
           <Legend
