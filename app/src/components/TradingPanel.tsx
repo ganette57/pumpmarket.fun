@@ -276,12 +276,12 @@ const probs = useMemo(
     <div className={rootClass}>
       {/* Header (drawer) */}
       {mode === "drawer" && (
-  <div className="sticky top-0 z-30 flex items-center justify-between px-4 pt-[calc(env(safe-area-inset-top)+12px)] pb-3 bg-pump-dark/80 backdrop-blur">
+  <div className="sticky top-0 z-30 flex items-center justify-between px-4 py-3 bg-pump-dark/95 backdrop-blur border-b border-gray-800">
     <div className="text-white font-bold text-lg">{title}</div>
     {onClose && (
       <button
         onClick={onClose}
-        className="h-9 w-9 rounded-full border border-gray-800 bg-black/40 text-gray-200"
+        className="h-9 w-9 rounded-full border border-gray-800 bg-pump-dark/60 text-gray-200"
         aria-label="Close"
       >
         ✕
