@@ -549,6 +549,25 @@ useEffect(() => {
     })();
   }, [market?.dbId, derived?.names?.length]);
 
+  useEffect(() => {
+    if (!isMobile) return;
+  
+    const prevOverflow = document.body.style.overflow;
+    const prevTouchAction = (document.body.style as any).touchAction;
+  
+    if (mobileTradeOpen) {
+      document.body.style.overflow = "hidden";
+      (document.body.style as any).touchAction = "none";
+    } else {
+      document.body.style.overflow = prevOverflow || "";
+      (document.body.style as any).touchAction = prevTouchAction || "";
+    }
+  
+    return () => {
+      document.body.style.overflow = prevOverflow || "";
+      (document.body.style as any).touchAction = prevTouchAction || "";
+    };
+  }, [mobileTradeOpen, isMobile]);
 
   async function handleTrade(shares: number, outcomeIndex: number, side: "buy" | "sell", costSol?: number) {
     if (!connected || !publicKey || !program) {
@@ -1213,15 +1232,15 @@ useEffect(() => {
   
       {/* Mobile drawer */}
       {isMobile && mobileTradeOpen && !marketClosed && (
-        <div className="fixed inset-0 z-50">
+        <div className="fixed inset-0 z-[9999]">
           <button
             className="absolute inset-0 bg-black/70"
             onClick={() => setMobileTradeOpen(false)}
             aria-label="Close overlay"
           />
 
-          <div className="absolute left-0 right-0 bottom-0 top-[72px] rounded-t-3xl border border-gray-800 bg-black shadow-2xl overflow-hidden">
-            <div className="h-full overflow-y-auto overscroll-contain pb-[calc(env(safe-area-inset-bottom)+96px)]">
+<div className="absolute inset-0 rounded-t-none border border-gray-800 bg-black shadow-2xl overflow-hidden">
+<div className="h-full overflow-y-auto overscroll-contain touch-pan-y pb-[calc(env(safe-area-inset-bottom)+96px)]">
               <TradingPanel
                 mode="drawer"
                 title="Trade"

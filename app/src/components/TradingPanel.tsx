@@ -269,28 +269,28 @@ const probs = useMemo(
 
   const rootClass =
   mode === "drawer"
-    ? "card-pump pt-0"
+    ? "card-pump pt-0 h-full flex flex-col"
     : "card-pump"; // 🚫 pas de sticky / top / z-index sur desktop
 
   return (
     <div className={rootClass}>
       {/* Header (drawer) */}
       {mode === "drawer" && (
-        <div className="flex items-center justify-between px-4 pt-4">
-          <div className="text-white font-bold text-lg">{title}</div>
-          {onClose && (
-            <button
-              onClick={onClose}
-              className="h-9 w-9 rounded-full border border-gray-800 bg-pump-dark/60 text-gray-200"
-              aria-label="Close"
-            >
-              ✕
-            </button>
-          )}
-        </div>
-      )}
+  <div className="sticky top-0 z-[60] flex items-center justify-between px-4 pt-[calc(env(safe-area-inset-top)+16px)] pb-3 bg-black/90 backdrop-blur">
+    <div className="text-white font-bold text-lg">{title}</div>
+    {onClose && (
+      <button
+        onClick={onClose}
+        className="h-9 w-9 rounded-full border border-gray-800 bg-pump-dark/60 text-gray-200"
+        aria-label="Close"
+      >
+        ✕
+      </button>
+    )}
+  </div>
+)}
 
-      <div className={mode === "drawer" ? "px-4 pb-2 pt-3" : ""}>
+<div className={mode === "drawer" ? "px-4 pb-2 pt-3 flex-1 overflow-y-auto" : ""}>
         {/* Buy / Sell */}
         <div className="grid grid-cols-2 gap-2 mb-4">
           <button
@@ -409,9 +409,9 @@ const probs = useMemo(
               {side === "buy" ? "You pay" : "You receive"}
               <InfoTip text={`Fees (platform 1% + creator 2%): ${lamportsToSol(feeLamports).toFixed(6)} SOL.`} />
             </div>
-            <div className={`text-2xl font-extrabold ${mainAccentAmountClass}`}>
-            {lamportsToSol(payOrReceiveLamports).toFixed(9)} SOL
-            </div>
+            <div className={`text-2xl font-extrabold ${mainAccentAmountClass} whitespace-nowrap`}>
+  {lamportsToSol(payOrReceiveLamports).toFixed(2)} SOL
+</div>
           </div>
 
           {side === "buy" && payoutIfWinSol != null && (
@@ -421,7 +421,9 @@ const probs = useMemo(
                 <InfoTip text="Approx. value if this outcome wins (UI estimate, not LMSR)." />
               </div>
               <div className="flex items-baseline gap-2">
-                <div className="text-xl font-bold text-white">{payoutIfWinSol.toFixed(6)} SOL</div>
+              <div className="text-xl font-bold text-white whitespace-nowrap">
+  {payoutIfWinSol.toFixed(2)} SOL
+</div>
                 <div className={`text-lg font-extrabold ${outcomeAccentText}`}>{selectedOddsX.toFixed(2)}x</div>
               </div>
             </div>
