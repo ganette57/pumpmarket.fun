@@ -269,19 +269,19 @@ const probs = useMemo(
 
   const rootClass =
   mode === "drawer"
-    ? "card-pump pt-0 h-full flex flex-col"
-    : "card-pump"; // 🚫 pas de sticky / top / z-index sur desktop
+    ? "h-full flex flex-col" // ✅ pas de card-pump dans le drawer
+    : "card-pump";
 
   return (
     <div className={rootClass}>
       {/* Header (drawer) */}
       {mode === "drawer" && (
-  <div className="sticky top-0 z-20 flex items-center justify-between px-4 pt-[calc(env(safe-area-inset-top)+12px)] pb-3 bg-pump-dark/95 backdrop-blur border-b border-gray-800">
+  <div className="sticky top-0 z-30 flex items-center justify-between px-4 pt-[calc(env(safe-area-inset-top)+12px)] pb-3 bg-pump-dark/80 backdrop-blur">
     <div className="text-white font-bold text-lg">{title}</div>
     {onClose && (
       <button
         onClick={onClose}
-        className="h-9 w-9 rounded-full border border-gray-800 bg-pump-dark/60 text-gray-200"
+        className="h-9 w-9 rounded-full border border-gray-800 bg-black/40 text-gray-200"
         aria-label="Close"
       >
         ✕
@@ -445,12 +445,12 @@ const probs = useMemo(
 
       {/* CTA (sticky in drawer to be visible without scroll) */}
       <div
-        className={
-          mode === "drawer"
-          ? "sticky bottom-0 z-10 px-4 pb-4 pt-3 bg-gradient-to-t from-pump-dark via-pump-dark/80 to-transparent"
-          : "mt-4"
-        }
-      >
+  className={
+    mode === "drawer"
+      ? "sticky bottom-0 z-20 px-4 pb-4 pt-3 bg-pump-dark/80 backdrop-blur border-t border-gray-800"
+      : "mt-4"
+  }
+>
         <button
           disabled={!!submitting || !connected || market.resolved || (side === "sell" && userCurrent <= 0)}
           onClick={handleTrade}
