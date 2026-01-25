@@ -1230,45 +1230,45 @@ useEffect(() => {
         </div>
       </div>
   
-{/* Mobile drawer */}
-{isMobile && mobileTradeOpen && !marketClosed && (
-  <div className="fixed inset-0 z-[200] pointer-events-none">
-    {/* Backdrop: commence sous le header, et s’arrête au-dessus de la bottom nav */}
-    <button
-      className="absolute left-0 right-0 top-[72px] bottom-[72px] bg-black/60 pointer-events-auto"
-      onClick={() => setMobileTradeOpen(false)}
-      aria-label="Close overlay"
-    />
+      {/* Mobile drawer - FULLSCREEN from top to bottom nav (h-14 = 56px) */}
+      {isMobile && mobileTradeOpen && !marketClosed && (
+        <div className="fixed inset-0 z-[200] pointer-events-none">
+          {/* Backdrop: couvre tout l'écran sauf la bottom nav */}
+          <button
+            className="absolute inset-x-0 top-0 bottom-14 bg-black/60 pointer-events-auto"
+            onClick={() => setMobileTradeOpen(false)}
+            aria-label="Close overlay"
+          />
 
-    {/* Drawer: commence sous le header, et laisse la bottom nav visible */}
-    <div className="absolute left-0 right-0 top-[72px] bottom-[72px] pointer-events-auto">
-      <div className="h-full rounded-t-3xl border border-gray-800 bg-pump-dark shadow-2xl overflow-hidden">
-        <TradingPanel
-          mode="drawer"
-          title="Trade"
-          defaultSide={mobileDefaultSide}
-          defaultOutcomeIndex={mobileOutcomeIndex}
-          onClose={() => setMobileTradeOpen(false)}
-          market={{
-            resolved: market.resolved,
-            marketType: market.marketType,
-            outcomeNames: names,
-            outcomeSupplies: supplies,
-            bLamports: market.bLamports,
-            yesSupply: names.length >= 2 ? supplies[0] || 0 : market.yesSupply || 0,
-            noSupply: names.length >= 2 ? supplies[1] || 0 : market.noSupply || 0,
-          }}
-          connected={connected}
-          submitting={submitting}
-          onTrade={(s, outcomeIndex, side, costSol) => void handleTrade(s, outcomeIndex, side, costSol)}
-          marketBalanceLamports={marketBalanceLamports}
-          userHoldings={userSharesForUi}
-          marketClosed={marketClosed}
-        />
-      </div>
-    </div>
-  </div>
-)}
+          {/* Drawer: du haut de l'écran jusqu'à la bottom nav, sans coins arrondis */}
+          <div className="absolute inset-x-0 top-0 bottom-14 pointer-events-auto">
+            <div className="h-full border-b border-gray-800 bg-pump-dark shadow-2xl overflow-hidden">
+              <TradingPanel
+                mode="drawer"
+                title="Trade"
+                defaultSide={mobileDefaultSide}
+                defaultOutcomeIndex={mobileOutcomeIndex}
+                onClose={() => setMobileTradeOpen(false)}
+                market={{
+                  resolved: market.resolved,
+                  marketType: market.marketType,
+                  outcomeNames: names,
+                  outcomeSupplies: supplies,
+                  bLamports: market.bLamports,
+                  yesSupply: names.length >= 2 ? supplies[0] || 0 : market.yesSupply || 0,
+                  noSupply: names.length >= 2 ? supplies[1] || 0 : market.noSupply || 0,
+                }}
+                connected={connected}
+                submitting={submitting}
+                onTrade={(s, outcomeIndex, side, costSol) => void handleTrade(s, outcomeIndex, side, costSol)}
+                marketBalanceLamports={marketBalanceLamports}
+                userHoldings={userSharesForUi}
+                marketClosed={marketClosed}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
