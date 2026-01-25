@@ -276,7 +276,7 @@ const probs = useMemo(
     <div className={rootClass}>
       {/* Header (drawer) */}
       {mode === "drawer" && (
-  <div className="sticky top-0 z-[60] flex items-center justify-between px-4 pt-[calc(env(safe-area-inset-top)+16px)] pb-3 bg-black/90 backdrop-blur">
+  <div className="sticky top-0 z-20 flex items-center justify-between px-4 pt-[calc(env(safe-area-inset-top)+12px)] pb-3 bg-pump-dark/95 backdrop-blur border-b border-gray-800">
     <div className="text-white font-bold text-lg">{title}</div>
     {onClose && (
       <button
@@ -330,13 +330,13 @@ const probs = useMemo(
                 <button
                   key={i}
                   onClick={() => setSelectedIndex(i)}
-                  className={`flex flex-col items-center justify-center py-4 rounded-xl font-bold transition-all ${
+                  className={`flex flex-col items-center justify-center py-3 md:py-4 rounded-xl font-bold transition-all ${
                     selected ? activeClass : baseClass
                   }`}
                 >
                   <span className="text-sm mb-1">{outcomes[i]}</span>
-                  <span className="text-2xl">{(probs[i] ?? 0).toFixed(0)}¢</span>
-                  <span className={`mt-1 font-extrabold ${selected ? "text-black" : isRed ? "text-[#ff5c73]" : "text-pump-green"} text-lg`}>
+                  <span className="text-xl md:text-2xl">{(probs[i] ?? 0).toFixed(0)}¢</span>
+                  <span className={`mt-1 font-extrabold ${selected ? "text-black" : isRed ? "text-[#ff5c73]" : "text-pump-green"} text-base md:text-lg`}>
                     {oddsX[i].toFixed(2)}x
                   </span>
                 </button>
@@ -447,8 +447,8 @@ const probs = useMemo(
       <div
         className={
           mode === "drawer"
-            ? "sticky bottom-0 z-10 bg-gradient-to-t from-black/90 via-black/70 to-transparent px-4 pb-4 pt-3"
-            : "mt-4"
+          ? "sticky bottom-0 z-10 px-4 pb-4 pt-3 bg-gradient-to-t from-pump-dark via-pump-dark/80 to-transparent"
+          : "mt-4"
         }
       >
         <button
