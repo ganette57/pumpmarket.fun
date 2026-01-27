@@ -267,12 +267,6 @@ const [relatedMarkets, setRelatedMarkets] = useState<any[]>([]);
 
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    if (!id) return;
-    void loadMarket(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
-
   const loadMarket = useCallback(
     async (marketAddress: string) => {
       setLoading(true);
@@ -282,15 +276,38 @@ const [relatedMarkets, setRelatedMarkets] = useState<any[]>([]);
           setMarket(null);
           return;
         }
+
+        // ✅ fallback DB
+const endMs = parseEndDateMs(supabaseMarket?.end_date);
+let resolutionTime = Number.isFinite(endMs) ? Math.floor(endMs / 1000) : 0;
+
+// ✅ override on-chain (resolutionTime + resolved)
+let resolvedOnChain: boolean | null = null;
+
+try {
+  if (program) {
+    const marketPk = new PublicKey(marketAddress);
+    const acc = await (program as any).account.market.fetch(marketPk);
+
+    const rt =
+      typeof acc?.resolutionTime?.toNumber === "function"
+        ? acc.resolutionTime.toNumber()
+        : Number(acc?.resolutionTime || 0);
+
+    if (rt > 0) resolutionTime = rt;
+
+    resolvedOnChain = !!acc?.resolved;
+  }
+} catch (e) {
+  console.warn("on-chain fetch failed, using DB", e);
+}
   
         const mt = (typeof supabaseMarket.market_type === "number" ? supabaseMarket.market_type : 0) as 0 | 1;
   
         const names = toStringArray(supabaseMarket.outcome_names) ?? [];
         const supplies = toNumberArray(supabaseMarket.outcome_supplies) ?? [];
-  
-        const endMs = parseEndDateMs(supabaseMarket?.end_date);
-        const resolutionTime = Number.isFinite(endMs) ? Math.floor(endMs / 1000) : 0;
-        const creatorResolveDeadline = addHoursIso(endMs, 48);
+
+        const creatorResolveDeadline = addHoursIso(endMs, 24);
   
         const transformed: UiMarket = {
           dbId: supabaseMarket.id,
@@ -304,7 +321,7 @@ const [relatedMarkets, setRelatedMarkets] = useState<any[]>([]);
           creatorResolveDeadline,
           totalVolume: Number(supabaseMarket.total_volume) || 0,
           resolutionTime,
-          resolved: !!supabaseMarket.resolved,
+          resolved: resolvedOnChain ?? !!supabaseMarket.resolved,
   
           winningOutcome:
             supabaseMarket.winning_outcome === null || supabaseMarket.winning_outcome === undefined
@@ -347,7 +364,21 @@ const [relatedMarkets, setRelatedMarkets] = useState<any[]>([]);
       } finally {
         setLoading(false);
       }
-    }, []);
+    }, [program]);
+
+    useEffect(() => {
+      if (!id) return;
+      void loadMarket(id);
+    }, [id, program, loadMarket]);
+
+    useEffect(() => {
+      if (!id) return;
+      setMarket(null);
+      setLoading(true);
+      setPositionShares(null);
+      setOddsPoints([]);
+      setMobileTradeOpen(false);
+    }, [id]);
 
   const derived: Derived | null = useMemo(() => {
     if (!market) return null;
@@ -907,6 +938,9 @@ useEffect(() => {
                     </div>
                     <div className="text-xs text-gray-300 mt-1">
                       Trading is locked while the resolution is contestable.
+                      <p className="mt-1 text-xs text-gray-300">
+  Once the dispute window ends, an admin will validate the final outcome and trigger payouts. This may take some time.
+</p>
                       {contestOpen && Number.isFinite(contestRemainingMs) ? (
                         <>
                           {" "}

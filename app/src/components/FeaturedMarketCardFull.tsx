@@ -10,31 +10,21 @@ import { lamportsToSol } from '@/utils/solana';
 import OddsHistoryFromTrades from '@/components/OddsHistoryFromTrades';
 
 interface FeaturedMarket {
-  // market_address (pour /trade/:id)
   id: string;
-
-  // Supabase UUID (pour fetch trades/odds)
   dbId?: string;
-
   question: string;
   category: string;
   imageUrl?: string;
-
-  volume: number; // lamports
+  volume: number;
   daysLeft: number;
-
   creator?: string;
   socialLinks?: {
     twitter?: string;
     telegram?: string;
     website?: string;
   };
-
-  // binary legacy
   yesSupply: number;
   noSupply: number;
-
-  // multi
   marketType?: number;
   outcomeNames?: string[];
   outcomeSupplies?: number[];
@@ -69,20 +59,28 @@ export default function FeaturedMarketCardFull({ market }: FeaturedMarketCardFul
   return (
     <div className="w-full">
       <Link href={`/trade/${market.id}`}>
-        <div className="bg-pump-gray border border-gray-800 hover:border-pump-green/80 rounded-2xl transition-all duration-300 hover:shadow-[0_0_40px_rgba(16,185,129,0.25)] cursor-pointer overflow-hidden">
+        {/* Single clean card - no extra borders */}
+        <div className="bg-[#0a0b0d] border border-gray-800 hover:border-pump-green/60 rounded-2xl transition-all duration-300 hover:shadow-[0_0_40px_rgba(16,185,129,0.15)] cursor-pointer overflow-hidden">
+          
           {/* DESKTOP */}
-          <div className="hidden md:flex h-[500px]">
-            {/* LEFT */}
-            <div className="w-1/2 p-8 flex flex-col">
-              <div className="flex gap-6 flex-1">
-                {/* Image */}
-                <div className="flex-shrink-0 w-32 h-32 rounded-xl overflow-hidden bg-black">
+          <div className="hidden md:flex min-h-[400px]">
+            
+            {/* LEFT SIDE - Content */}
+            <div className="w-[45%] p-8 flex flex-col">
+              {/* Category pill */}
+              <div className="inline-flex items-center px-3 py-1 rounded-full bg-white/5 border border-gray-700 text-[11px] uppercase tracking-wide text-gray-300 mb-5 w-fit">
+                {market.category}
+              </div>
+
+              {/* Image + Title row */}
+              <div className="flex gap-5 mb-6">
+                <div className="flex-shrink-0 w-24 h-24 rounded-xl overflow-hidden bg-black/50">
                   {market.imageUrl && !imageError ? (
                     <Image
                       src={market.imageUrl}
                       alt={market.question}
-                      width={128}
-                      height={128}
+                      width={96}
+                      height={96}
                       className="object-cover w-full h-full"
                       onError={() => setImageError(true)}
                     />
@@ -96,97 +94,83 @@ export default function FeaturedMarketCardFull({ market }: FeaturedMarketCardFul
                   )}
                 </div>
 
-                {/* Content */}
-                <div className="flex-1 flex flex-col">
-                  {/* Category pill en haut à gauche sur fond noir */}
-                  <div className="inline-flex items-center px-3 py-1 rounded-full bg-black/70 border border-gray-700 text-[11px] uppercase tracking-wide text-gray-200 mb-3 w-fit">
-                    {market.category}
-                  </div>
-
-                  {/* Titre remonté, très visible */}
-                  <h2 className="text-3xl font-bold text-white mb-3 leading-tight hover:text-pump-green transition">
+                <div className="flex-1">
+                  <h2 className="text-2xl font-bold text-white leading-tight hover:text-pump-green transition line-clamp-3">
                     {market.question}
                   </h2>
-
+                  
                   {market.creator && (
-                    <div className="mb-4">
-                      <p className="text-sm text-gray-400">
-                        Created by{' '}
-                        <span className="text-white font-semibold">
-                          {market.creator.length > 12
-                            ? `${market.creator.slice(0, 10)}…`
-                            : market.creator}
-                        </span>
-                      </p>
-                    </div>
+                    <p className="text-sm text-gray-500 mt-2">
+                      Created by{' '}
+                      <span className="text-gray-300">
+                        {market.creator.length > 12
+                          ? `${market.creator.slice(0, 10)}…`
+                          : market.creator}
+                      </span>
+                    </p>
                   )}
-
-                  {/* Volume + time left */}
-                  <div className="flex items-center gap-6 text-sm text-gray-400 mb-5">
-                    <div className="flex items-center gap-2">
-                      <TrendingUp className="w-4 h-4 text-pump-green" />
-                      <span className="font-semibold text-white">{volLabel} SOL Vol</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Clock className="w-4 h-4" />
-                      <span>{market.daysLeft}d left</span>
-                    </div>
-                  </div>
-
-                  {/* Outcomes YES / NO (vert / rouge) */}
-                  <div className="space-y-3 mt-auto pb-2">
-                    {outcomes.slice(0, 2).map((outcome, index) => {
-                      const isYes = index === 0;
-                      const label =
-                        outcome.length > 16 ? outcome.slice(0, 16) + '…' : outcome;
-
-                      return (
-                        <div key={index} className="flex items-center gap-4">
-                          <span
-                            className={`text-xs font-semibold uppercase w-32 text-left ${
-                              isYes ? 'text-pump-green' : 'text-red-400'
-                            }`}
-                          >
-                            {label}
-                          </span>
-
-                          <div
-                            className={`flex-1 flex items-center justify-between p-3 rounded-lg border ${
-                              isYes
-                                ? 'bg-pump-green/5 border-pump-green/40'
-                                : 'bg-red-500/5 border-red-500/40'
-                            }`}
-                          >
-                            <span
-                              className={`text-3xl font-extrabold ${
-                                isYes ? 'text-pump-green' : 'text-red-400'
-                              }`}
-                            >
-                              {percentages[index]?.toFixed(0)}%
-                            </span>
-                            <span className="text-xs text-gray-500">
-                              {(supplies[index] || 0).toLocaleString()} shares
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
-
-                    {outcomes.length > 2 && (
-                      <div className="text-xs text-gray-500 text-left">
-                        +{outcomes.length - 2} more outcomes
-                      </div>
-                    )}
-                  </div>
                 </div>
+              </div>
+
+              {/* Volume + time left */}
+              <div className="flex items-center gap-5 text-sm text-gray-400 mb-8">
+                <div className="flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4 text-pump-green" />
+                  <span className="font-semibold text-white">{volLabel} SOL</span>
+                  <span className="text-gray-500">Vol</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-gray-500" />
+                  <span>{market.daysLeft}d left</span>
+                </div>
+              </div>
+
+              {/* Outcomes - Clean single-line layout */}
+              <div className="mt-auto space-y-4">
+                {outcomes.slice(0, 2).map((outcome, index) => {
+                  const isYes = index === 0;
+
+                  return (
+                    <div key={index} className="flex items-center gap-4">
+                      {/* Label - truncated, single line */}
+                      <span
+                        className={`text-sm font-semibold uppercase w-24 truncate flex-shrink-0 ${
+                          isYes ? 'text-pump-green' : 'text-red-400'
+                        }`}
+                        title={outcome}
+                      >
+                        {outcome}
+                      </span>
+
+                      {/* Percentage - big and bold */}
+                      <span
+                        className={`text-3xl font-bold w-20 flex-shrink-0 ${
+                          isYes ? 'text-pump-green' : 'text-red-400'
+                        }`}
+                      >
+                        {percentages[index]?.toFixed(0)}%
+                      </span>
+
+                      {/* Shares - subtle */}
+                      <span className="text-sm text-gray-500 flex-shrink-0">
+                        {(supplies[index] || 0).toLocaleString()} shares
+                      </span>
+                    </div>
+                  );
+                })}
+
+                {outcomes.length > 2 && (
+                  <div className="text-xs text-gray-500 pl-28">
+                    +{outcomes.length - 2} more outcomes
+                  </div>
+                )}
               </div>
             </div>
 
-            {/* RIGHT – chart, sans bordures */}
-            <div className="w-1/2 bg-[#050608] p-6 flex items-center">
-              <div className="w-full">
-                {/* Plus de label “Odds history” ici, juste le chart clean */}
-                <div className="rounded-xl bg-black/40 px-4 py-3 shadow-inner">
+            {/* RIGHT SIDE - Chart */}
+            <div className="w-[55%] p-6 pl-2 flex flex-col justify-center">
+              <div className="h-full flex items-center">
+                <div className="w-full h-[300px]">
                   <OddsHistoryFromTrades
                     marketId={market.dbId}
                     marketAddress={market.id}
@@ -194,7 +178,7 @@ export default function FeaturedMarketCardFull({ market }: FeaturedMarketCardFul
                     outcomeSupplies={supplies}
                     outcomesCount={outcomes.length}
                     hours={24}
-                    height={200}
+                    height={300}
                   />
                 </div>
               </div>
@@ -204,15 +188,20 @@ export default function FeaturedMarketCardFull({ market }: FeaturedMarketCardFul
           {/* MOBILE */}
           <div className="md:hidden">
             <div className="p-5 space-y-4">
+              {/* Category */}
+              <div className="inline-flex items-center px-2.5 py-1 rounded-full bg-white/5 border border-gray-700 text-[10px] uppercase tracking-wide text-gray-300">
+                {market.category}
+              </div>
+
               {/* Header */}
               <div className="flex gap-4">
-                <div className="flex-shrink-0 w-24 h-24 rounded-xl overflow-hidden bg-black">
+                <div className="flex-shrink-0 w-20 h-20 rounded-xl overflow-hidden bg-black/50">
                   {market.imageUrl && !imageError ? (
                     <Image
                       src={market.imageUrl}
                       alt={market.question}
-                      width={96}
-                      height={96}
+                      width={80}
+                      height={80}
                       className="object-cover w-full h-full"
                       onError={() => setImageError(true)}
                     />
@@ -227,65 +216,60 @@ export default function FeaturedMarketCardFull({ market }: FeaturedMarketCardFul
                 </div>
 
                 <div className="flex-1">
-                  <div className="inline-flex items-center px-2.5 py-1 rounded-full bg-black/70 border border-gray-700 text-[10px] uppercase tracking-wide text-gray-200 mb-2">
-                    {market.category}
-                  </div>
-
                   <h2 className="text-lg font-bold text-white leading-tight line-clamp-2">
                     {market.question}
                   </h2>
 
                   <div className="mt-2 text-xs text-gray-400 flex items-center gap-3">
-                    <span>{volLabel} SOL Vol</span>
-                    <span>•</span>
+                    <span className="text-white font-medium">{volLabel} SOL</span>
+                    <span className="text-gray-600">•</span>
                     <span>{market.daysLeft}d left</span>
                   </div>
                 </div>
               </div>
 
-              {/* Outcomes */}
-              <div className="space-y-2">
+              {/* Outcomes - Clean mobile layout, single line */}
+              <div className="space-y-3 pt-2">
                 {outcomes.slice(0, 2).map((outcome, index) => {
                   const isYes = index === 0;
-                  const label =
-                    outcome.length > 12 ? outcome.slice(0, 12) + '…' : outcome;
 
                   return (
                     <div key={index} className="flex items-center gap-3">
+                      {/* Label - truncated */}
                       <span
-                        className={`text-[11px] font-semibold uppercase w-20 text-left ${
+                        className={`text-xs font-semibold uppercase w-16 truncate flex-shrink-0 ${
+                          isYes ? 'text-pump-green' : 'text-red-400'
+                        }`}
+                        title={outcome}
+                      >
+                        {outcome}
+                      </span>
+
+                      {/* Percentage */}
+                      <span
+                        className={`text-2xl font-bold w-16 flex-shrink-0 ${
                           isYes ? 'text-pump-green' : 'text-red-400'
                         }`}
                       >
-                        {label}
+                        {percentages[index]?.toFixed(0)}%
                       </span>
-                      <div
-                        className={`flex-1 flex items-center justify-between px-3 py-2 rounded-lg border ${
-                          isYes
-                            ? 'bg-pump-green/5 border-pump-green/40'
-                            : 'bg-red-500/5 border-red-500/40'
-                        }`}
-                      >
-                        <span
-                          className={`text-2xl font-bold ${
-                            isYes ? 'text-pump-green' : 'text-red-400'
-                          }`}
-                        >
-                          {percentages[index]?.toFixed(0)}%
-                        </span>
-                      </div>
+
+                      {/* Shares */}
+                      <span className="text-xs text-gray-500 flex-shrink-0">
+                        {(supplies[index] || 0).toLocaleString()} shares
+                      </span>
                     </div>
                   );
                 })}
                 {outcomes.length > 2 && (
-                  <div className="text-[11px] text-gray-500">
+                  <div className="text-[11px] text-gray-500 pl-20">
                     +{outcomes.length - 2} more outcomes
                   </div>
                 )}
               </div>
 
-              {/* Mobile chart, sans bordures */}
-              <div className="rounded-xl bg-black/40 px-3 py-3 shadow-inner">
+              {/* Mobile chart */}
+              <div className="pt-2">
                 <OddsHistoryFromTrades
                   marketId={market.dbId}
                   marketAddress={market.id}
@@ -293,7 +277,7 @@ export default function FeaturedMarketCardFull({ market }: FeaturedMarketCardFul
                   outcomeSupplies={supplies}
                   outcomesCount={outcomes.length}
                   hours={24}
-                  height={180}
+                  height={160}
                 />
               </div>
             </div>

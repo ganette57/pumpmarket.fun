@@ -1,11 +1,56 @@
+"use client";
+
+import Image from "next/image";
+
 export default function AffiliatePage() {
   return (
-    <main className="mx-auto max-w-5xl px-4 py-10 text-white">
-      <h1 className="text-3xl font-bold">Affiliate</h1>
-      <p className="mt-2 text-gray-400">Coming soon.</p>
-      <div className="mt-8 rounded-2xl border border-gray-800 bg-black/40 p-6">
-        <div className="text-sm text-gray-400">We’re building this page.</div>
+    <div className="min-h-[70vh] px-4 py-10 flex items-center justify-center">
+      <div className="w-full max-w-md text-center">
+        {/* Pulsing Image */}
+        <div className="mx-auto mb-6 w-24 h-24 rounded-3xl border border-pump-green/30 bg-pump-green/10 flex items-center justify-center shadow-[0_0_40px_rgba(97,255,154,0.18)] animate-[pulseGlow_1.4s_ease-in-out_infinite] overflow-hidden">
+          <Image
+            src="/affiliate.png"
+            alt="Affiliate"
+            width={64}
+            height={64}
+            className="object-contain"
+            priority
+          />
+        </div>
+
+        {/* Title */}
+        <h1 className="text-2xl font-extrabold text-white tracking-tight">
+          Affiliate Program
+        </h1>
+
+        {/* Subtitle */}
+        <p className="mt-2 text-sm text-gray-400">
+          Coming soon.
+        </p>
+
+        {/* Hint */}
+        <div className="mt-4 text-sm text-gray-200 font-semibold">
+          Invite friends. Earn fees. Grow the market.
+        </div>
+
+        {/* Animation */}
+        <style jsx>{`
+          @keyframes pulseGlow {
+            0% {
+              transform: translateY(0) scale(1);
+              box-shadow: 0 0 0 rgba(97, 255, 154, 0);
+            }
+            50% {
+              transform: translateY(-1px) scale(1.03);
+              box-shadow: 0 0 28px rgba(97, 255, 154, 0.28);
+            }
+            100% {
+              transform: translateY(0) scale(1);
+              box-shadow: 0 0 0 rgba(97, 255, 154, 0);
+            }
+          }
+        `}</style>
       </div>
-    </main>
+    </div>
   );
 }

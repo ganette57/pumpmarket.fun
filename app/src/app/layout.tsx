@@ -10,9 +10,9 @@ import LiveBuysTicker from "@/components/LiveBuysTicker";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Funmarket.pump - Degen Prediction Markets",
-  description:
-    "Polymarket meets PumpFun on Solana - Create and trade prediction markets with bonding curves",
+  title: "FunMarket — Predict. Earn. Repeat.",
+description:
+  "Turn opinions into markets. Create and trade prediction markets on Solana with multi-outcome pricing.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

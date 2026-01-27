@@ -14,6 +14,12 @@ import { proposeResolution as proposeResolutionDb } from "@/lib/markets";
 import { sendSignedTx } from "@/lib/solanaSend";
 
 /* -------------------------------------------------------------------------- */
+/* Constants                                                                  */
+/* -------------------------------------------------------------------------- */
+
+const PLATFORM_WALLET = "6szhvTU23WtiKXqPs8vuX5G7JXu2TcUdVJNByNwVGYMV";
+
+/* -------------------------------------------------------------------------- */
 /* Helpers                                                                    */
 /* -------------------------------------------------------------------------- */
 
@@ -79,7 +85,7 @@ function decodeMarketStatus(status: any): ResolutionStatus {
     if ("finalized" in status) return "finalized";
     if ("cancelled" in status) return "cancelled";
   }
-  // Sometimes it’s a string
+  // Sometimes it's a string
   const s = String(status || "").toLowerCase();
   if (s.includes("proposed")) return "proposed";
   if (s.includes("final")) return "finalized";
@@ -428,7 +434,7 @@ function TabButton({
       type="button"
       onClick={onClick}
       className={[
-        "px-4 py-2 rounded-xl text-sm font-semibold transition border",
+        "px-3 md:px-4 py-2 rounded-xl text-xs md:text-sm font-semibold transition border",
         active
           ? "bg-pump-green text-black border-pump-green"
           : "bg-black/30 text-gray-300 border-white/10 hover:border-white/20",
@@ -464,7 +470,7 @@ export default function DashboardPage() {
   const [claimables, setClaimables] = useState<Claimable[]>([]);
   const [claimingMarket, setClaimingMarket] = useState<string | null>(null);
   const [refundables, setRefundables] = useState<Refundable[]>([]);
-const [refundingMarket, setRefundingMarket] = useState<string | null>(null);
+  const [refundingMarket, setRefundingMarket] = useState<string | null>(null);
 
   const [bookmarkIds, setBookmarkIds] = useState<string[]>([]);
   const [bookmarkedMarkets, setBookmarkedMarkets] = useState<DbMarket[]>([]);
@@ -854,7 +860,7 @@ useEffect(() => {
     const created = myCreatedMarkets.length;
     const volLamports = myCreatedMarkets.reduce((sum, m) => sum + toNum(m.total_volume), 0);
     const volSol = lamportsToSol(volLamports);
-    const creatorFeesSol = volSol * 0.01;
+    const creatorFeesSol = volSol * 0.02; // 2% creator fees
     return { created, volSol, creatorFeesSol };
   }, [myCreatedMarkets]);
 
@@ -1006,7 +1012,7 @@ useEffect(() => {
         connection,
         tx,
         signTx: anchorWallet!.signTransaction,
-                feePayer: publicKey,
+        feePayer: publicKey,
         commitment: "confirmed",
       });
 
@@ -1173,7 +1179,7 @@ if (statusStr === "open") {
       connection,
       tx,
       signTx: anchorWallet!.signTransaction,
-            feePayer: publicKey,
+      feePayer: publicKey,
     });
 
     console.log("✅ proposeResolution on-chain tx =", sig);
@@ -1203,7 +1209,7 @@ if (statusStr === "open") {
       const deadlineIso =
         contestDeadlineSec && Number.isFinite(contestDeadlineSec) && contestDeadlineSec > 0
           ? new Date(contestDeadlineSec * 1000).toISOString()
-          : new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+          : new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString();
 
       const proposedAtIso =
         proposedAtSec && Number.isFinite(proposedAtSec) && proposedAtSec > 0
@@ -1328,19 +1334,21 @@ if (statusStr === "open") {
   return (
     <div className="max-w-6xl mx-auto px-4 py-8 md:py-10">
       {/* Header */}
-      <div className="flex items-start md:items-center justify-between gap-6 mb-5">
-        <div>
-          <h1 className="text-3xl md:text-4xl font-bold text-white">Balance</h1>
+      <div className="mb-6">
+        <h1 className="text-3xl md:text-4xl font-bold text-white">Balance</h1>
 
-          <div className="text-xs md:text-sm text-gray-400 mt-1 flex items-center gap-2 flex-wrap">
-            <span>
-              Wallet: <span className="font-mono text-white/80">{walletLabel}</span>
-            </span>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 mt-2">
+          <span className="text-sm text-gray-400">
+            Wallet: <span className="font-mono text-white/80">{walletLabel}</span>
+          </span>
 
-            <span className="text-gray-600">•</span>
+          <span className="hidden sm:inline text-gray-600">•</span>
 
-            <span className="inline-flex items-center gap-2">
-              Profit <span className="font-semibold text-pump-green">+{gainsSol.toFixed(2)} SOL</span>
+          {/* Profit - BIGGER and more visible */}
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-400">Profit</span>
+            <span className="text-2xl md:text-3xl font-bold text-pump-green">
+              +{gainsSol.toFixed(2)} SOL
             </span>
           </div>
         </div>
@@ -1352,43 +1360,38 @@ if (statusStr === "open") {
         </div>
       )}
 
-      {/* Summary cards */}
-      <div className="mt-4 mb-6">
-        <div className="hidden md:grid grid-cols-3 gap-4">
-          <div className="card-pump p-4">
-            <div className="text-xs text-gray-500 uppercase tracking-wide">Positions</div>
-            <div className="text-2xl font-bold text-white mt-1">{portfolioStats.positions}</div>
-            <div className="text-xs text-gray-500 mt-1">Markets traded</div>
+      {/* Summary cards - Mobile: horizontal scroll, Desktop: grid */}
+      <div className="mb-6">
+        <div className="grid grid-cols-3 gap-3 md:gap-4">
+          <div className="card-pump p-3 md:p-4">
+            <div className="text-[10px] md:text-xs text-gray-500 uppercase tracking-wide">Positions</div>
+            <div className="text-xl md:text-2xl font-bold text-white mt-1">{portfolioStats.positions}</div>
+            <div className="text-[10px] md:text-xs text-gray-500 mt-1 hidden sm:block">Markets traded</div>
           </div>
 
-          <div className="card-pump p-4">
-            <div className="text-xs text-gray-500 uppercase tracking-wide">Traded</div>
-            <div className="text-2xl font-bold text-white mt-1">{portfolioStats.tradedVolumeSol.toFixed(2)} SOL</div>
-            <div className="text-xs text-gray-500 mt-1">Based on your fills</div>
+          <div className="card-pump p-3 md:p-4">
+            <div className="text-[10px] md:text-xs text-gray-500 uppercase tracking-wide">Traded</div>
+            <div className="text-xl md:text-2xl font-bold text-white mt-1">{portfolioStats.tradedVolumeSol.toFixed(2)} <span className="text-sm">SOL</span></div>
+            <div className="text-[10px] md:text-xs text-gray-500 mt-1 hidden sm:block">Based on your fills</div>
           </div>
 
-          <div className="card-pump p-4">
-            <div className="text-xs text-gray-500 uppercase tracking-wide">Created</div>
-            <div className="text-2xl font-bold text-white mt-1">{stats.created}</div>
-            <div className="text-xs text-gray-500 mt-1">Fees ~{stats.creatorFeesSol.toFixed(3)} SOL</div>
-          </div>
-        </div>
-
-        <div className="md:hidden flex gap-3 overflow-x-auto pb-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <div className="card-pump p-4 min-w-[220px]">
-            <div className="text-xs text-gray-500 uppercase tracking-wide">Positions</div>
-            <div className="text-2xl font-bold text-white mt-1">{portfolioStats.positions}</div>
-            <div className="text-xs text-gray-500 mt-1">Markets traded</div>
-          </div>
-          <div className="card-pump p-4 min-w-[220px]">
-            <div className="text-xs text-gray-500 uppercase tracking-wide">Traded</div>
-            <div className="text-2xl font-bold text-white mt-1">{portfolioStats.tradedVolumeSol.toFixed(2)} SOL</div>
-            <div className="text-xs text-gray-500 mt-1">Based on your fills</div>
-          </div>
-          <div className="card-pump p-4 min-w-[220px]">
-            <div className="text-xs text-gray-500 uppercase tracking-wide">Created</div>
-            <div className="text-2xl font-bold text-white mt-1">{stats.created}</div>
-            <div className="text-xs text-gray-500 mt-1">Fees ~{stats.creatorFeesSol.toFixed(3)} SOL</div>
+          <div className="card-pump p-3 md:p-4">
+            <div className="text-[10px] md:text-xs text-gray-500 uppercase tracking-wide">Created</div>
+            <div className="text-xl md:text-2xl font-bold text-white mt-1">{stats.created}</div>
+            <div className="text-[10px] md:text-xs text-gray-500 mt-1 hidden sm:block">
+              Fees ~{stats.creatorFeesSol.toFixed(3)} SOL
+            </div>
+            {/* Creator wallet explorer link */}
+            {stats.created > 0 && (
+              <a
+                href={`https://explorer.solana.com/address/${walletBase58}?cluster=devnet`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-[10px] text-pump-green hover:underline mt-1 hidden sm:inline-block"
+              >
+                Verify on Explorer ↗
+              </a>
+            )}
           </div>
         </div>
       </div>
@@ -1396,7 +1399,7 @@ if (statusStr === "open") {
       {/* Claimables */}
       <div className="card-pump mb-6">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg md:text-xl font-bold text-white">🏆 Claimable winnings</h2>
+          <h2 className="text-base md:text-xl font-bold text-white">🏆 Claimable winnings</h2>
           <span className="hidden md:inline text-xs text-gray-500">
             Resolved on-chain markets where you hold winning shares
           </span>
@@ -1411,10 +1414,10 @@ if (statusStr === "open") {
             {claimables.map((c) => (
               <div
                 key={c.marketAddress}
-                className="rounded-xl border border-pump-green/40 bg-pump-green/5 p-4 flex items-center justify-between gap-4"
+                className="rounded-xl border border-pump-green/40 bg-pump-green/5 p-3 md:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
               >
-                <div className="min-w-0">
-                  <div className="text-white font-semibold truncate">{c.marketQuestion}</div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-white font-semibold text-sm md:text-base truncate">{c.marketQuestion}</div>
                   <div className="text-xs text-gray-500 mt-1 truncate">
                     {shortAddr(c.marketAddress)}
                     {typeof c.estPayoutLamports === "number" && (
@@ -1433,13 +1436,13 @@ if (statusStr === "open") {
                   disabled={claimingMarket === c.marketAddress}
                   aria-busy={claimingMarket === c.marketAddress}
                   className={[
-                    "px-5 py-2 rounded-lg font-semibold transition",
+                    "px-5 py-2 rounded-lg font-semibold transition w-full sm:w-auto",
                     claimingMarket === c.marketAddress
                       ? "bg-gray-700 text-gray-300 cursor-not-allowed"
                       : "bg-pump-green text-black hover:opacity-90",
                   ].join(" ")}
                 >
-                  {claimingMarket === c.marketAddress ? "Processing…" : "💰 Claim"}
+                  {claimingMarket === c.marketAddress ? "Processing…" : "Claim"}
                 </button>
               </div>
             ))}
@@ -1447,59 +1450,59 @@ if (statusStr === "open") {
         )}
       </div>
 
-{/* Refundables */}
-<div className="card-pump mb-6">
-  <div className="flex items-center justify-between mb-3">
-    <h2 className="text-lg md:text-xl font-bold text-white">💸 Refundable funds</h2>
-    <span className="hidden md:inline text-xs text-gray-500">
-      Cancelled on-chain markets where you can claim a refund
-    </span>
-  </div>
-
-  {loadingClaimables ? (
-    <p className="text-gray-400 text-sm">Checking refunds…</p>
-  ) : refundables.length === 0 ? (
-    <p className="text-gray-500 text-sm">No refundable markets.</p>
-  ) : (
-    <div className="space-y-3">
-      {refundables.map((r) => (
-        <div
-          key={r.marketAddress}
-          className="rounded-xl border border-[#ff5c73]/40 bg-[#ff5c73]/5 p-4 flex items-center justify-between gap-4"
-        >
-          <div className="min-w-0">
-            <div className="text-white font-semibold truncate">{r.marketQuestion}</div>
-            <div className="text-xs text-gray-500 mt-1 truncate">
-              {shortAddr(r.marketAddress)}
-              {typeof r.estRefundLamports === "number" && (
-                <>
-                  {" • "}
-                  <span className="text-[#ff5c73] font-semibold">
-                    ~{lamportsToSol(r.estRefundLamports).toFixed(4)} SOL
-                  </span>
-                </>
-              )}
-            </div>
-          </div>
-
-          <button
-            onClick={() => handleRefund(r.marketAddress)}
-            disabled={refundingMarket === r.marketAddress}
-            aria-busy={refundingMarket === r.marketAddress}
-            className={[
-              "px-5 py-2 rounded-lg font-semibold transition",
-              refundingMarket === r.marketAddress
-                ? "bg-gray-700 text-gray-300 cursor-not-allowed"
-                : "bg-[#ff5c73] text-black hover:opacity-90",
-            ].join(" ")}
-          >
-            {refundingMarket === r.marketAddress ? "Processing…" : "💸 Refund"}
-          </button>
+      {/* Refundables */}
+      <div className="card-pump mb-6">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-base md:text-xl font-bold text-white">💸 Refundable funds</h2>
+          <span className="hidden md:inline text-xs text-gray-500">
+            Cancelled on-chain markets where you can claim a refund
+          </span>
         </div>
-      ))}
-    </div>
-  )}
-</div>
+
+        {loadingClaimables ? (
+          <p className="text-gray-400 text-sm">Checking refunds…</p>
+        ) : refundables.length === 0 ? (
+          <p className="text-gray-500 text-sm">No refundable markets.</p>
+        ) : (
+          <div className="space-y-3">
+            {refundables.map((r) => (
+              <div
+                key={r.marketAddress}
+                className="rounded-xl border border-[#ff5c73]/40 bg-[#ff5c73]/5 p-3 md:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="text-white font-semibold text-sm md:text-base truncate">{r.marketQuestion}</div>
+                  <div className="text-xs text-gray-500 mt-1 truncate">
+                    {shortAddr(r.marketAddress)}
+                    {typeof r.estRefundLamports === "number" && (
+                      <>
+                        {" • "}
+                        <span className="text-[#ff5c73] font-semibold">
+                          ~{lamportsToSol(r.estRefundLamports).toFixed(4)} SOL
+                        </span>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => handleRefund(r.marketAddress)}
+                  disabled={refundingMarket === r.marketAddress}
+                  aria-busy={refundingMarket === r.marketAddress}
+                  className={[
+                    "px-5 py-2 rounded-lg font-semibold transition w-full sm:w-auto",
+                    refundingMarket === r.marketAddress
+                      ? "bg-gray-700 text-gray-300 cursor-not-allowed"
+                      : "bg-[#ff5c73] text-black hover:opacity-90",
+                  ].join(" ")}
+                >
+                  {refundingMarket === r.marketAddress ? "Processing…" : "Refund"}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Tabs */}
       <div className="flex items-center gap-2 mb-4">
@@ -1533,47 +1536,47 @@ if (statusStr === "open") {
                 {txRows.map((r) => (
                   <div
                     key={r.id}
-                    className="rounded-xl border border-white/10 bg-pump-dark/40 p-4 flex items-start sm:items-center justify-between gap-4"
+                    className="rounded-xl border border-white/10 bg-pump-dark/40 p-3 md:p-4"
                   >
-                    <div className="min-w-0">
-                      <div className="text-white font-medium text-sm md:text-base">{r.title}</div>
-                      <div className="text-xs text-gray-400 mt-1 truncate">
-                        {r.marketQuestion || shortAddr(r.marketAddress)}
-                      </div>
-
-                      <div className="text-[11px] text-gray-500 mt-1 flex flex-wrap items-center gap-2">
-                        <span>{r.createdAt ? r.createdAt.toLocaleString("fr-FR") : ""}</span>
-                        {r.sig && (
-                          <>
-                            <span className="opacity-40">•</span>
-                            <a
-                              href={`https://explorer.solana.com/tx/${r.sig}?cluster=devnet`}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-pump-green hover:underline"
-                            >
-                              tx: {shortSig(r.sig)}
-                            </a>
-                          </>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-3 flex-shrink-0">
-                      <div className="text-right">
-                        <div className="text-pump-green font-bold text-sm md:text-base">
-                          {r.costSol > 0 ? `${r.costSol.toFixed(4)} SOL` : "0.0000 SOL"}
+                    {/* Mobile: Stack layout */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-white font-medium text-sm">{r.title}</div>
+                        <div className="text-xs text-gray-400 mt-1 truncate">
+                          {r.marketQuestion || shortAddr(r.marketAddress)}
+                        </div>
+                        <div className="text-[10px] text-gray-500 mt-1 flex flex-wrap items-center gap-1 md:gap-2">
+                          <span>{r.createdAt ? r.createdAt.toLocaleString("fr-FR") : ""}</span>
+                          {r.sig && (
+                            <>
+                              <span className="opacity-40">•</span>
+                              <a
+                                href={`https://explorer.solana.com/tx/${r.sig}?cluster=devnet`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-pump-green hover:underline"
+                              >
+                                tx: {shortSig(r.sig)}
+                              </a>
+                            </>
+                          )}
                         </div>
                       </div>
 
-                      {r.marketAddress && (
-                        <Link
-                          href={`/trade/${r.marketAddress}`}
-                          className="px-4 py-2 rounded-lg bg-pump-green text-black text-sm font-semibold hover:opacity-90 transition"
-                        >
-                          View
-                        </Link>
-                      )}
+                      <div className="flex items-center justify-between sm:justify-end gap-3">
+                        <div className="text-pump-green font-bold text-sm">
+                          {r.costSol > 0 ? `${r.costSol.toFixed(4)} SOL` : "0.0000 SOL"}
+                        </div>
+
+                        {r.marketAddress && (
+                          <Link
+                            href={`/trade/${r.marketAddress}`}
+                            className="px-3 py-1.5 rounded-lg bg-pump-green text-black text-xs font-semibold hover:opacity-90 transition"
+                          >
+                            View
+                          </Link>
+                        )}
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -1607,7 +1610,18 @@ if (statusStr === "open") {
                   const deadlineMs = m.contest_deadline ? new Date(m.contest_deadline).getTime() : NaN;
                   const remainingMs = Number.isFinite(deadlineMs) ? deadlineMs - Date.now() : NaN;
 
-                  const canPropose = ended && !isResolvedFinal && !isProposed && !isCancelled;
+                  const endMs = m.end_date ? new Date(m.end_date).getTime() : NaN;
+                  const proposeCutoffMs = Number.isFinite(endMs)
+                    ? endMs + 24 * 60 * 60 * 1000
+                    : NaN;
+
+                  const withinProposeWindow = Number.isFinite(proposeCutoffMs)
+                    ? Date.now() <= proposeCutoffMs
+                    : false;
+
+                  const canPropose =
+                    ended && withinProposeWindow && !isResolvedFinal && !isProposed && !isCancelled;
+
 
                   const boxCls = isResolvedFinal
                     ? "border-gray-600 bg-gray-800/30"
@@ -1622,74 +1636,79 @@ if (statusStr === "open") {
                   return (
                     <div
                       key={String(m.id || addr || idx)}
-                      className={`rounded-xl border p-4 flex items-start sm:items-center justify-between gap-4 ${boxCls}`}
+                      className={`rounded-xl border p-3 md:p-4 ${boxCls}`}
                     >
-                      <div className="min-w-0">
-                        <div className="text-white font-semibold truncate">{q}</div>
-                        <div className="text-[11px] text-gray-500 mt-1 flex flex-wrap items-center gap-2">
-                          <span>{addr ? shortAddr(addr) : ""}</span>
-                          <span className="opacity-40">•</span>
+                      {/* Mobile: Stack layout */}
+                      <div className="flex flex-col gap-3">
+                        <div className="min-w-0">
+                          <div className="text-white font-semibold text-sm truncate">{q}</div>
+                          <div className="text-[10px] text-gray-500 mt-1 flex flex-wrap items-center gap-1 md:gap-2">
+                            <span>{addr ? shortAddr(addr) : ""}</span>
+                            <span className="opacity-40">•</span>
 
-                          {isResolvedFinal ? (
-                            <span className="text-green-400">✓ Finalized</span>
-                          ) : isCancelled ? (
-                            <span className="text-[#ff5c73]">Cancelled • refundable</span>
-                          ) : isProposed ? (
-                            <span className="text-pump-green">
-                              Proposed
-                              {Number.isFinite(remainingMs)
-                                ? ` (${formatMsToHhMm(Math.max(0, remainingMs))} left)`
-                                : ""}
-                            </span>
-                          ) : (
-                            <span className={ended ? "text-yellow-400" : "text-gray-400"}>{timeStatus}</span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-3 flex-shrink-0">
-                        <div className="text-right">
-                          <div className="text-white font-semibold">{volSol.toFixed(2)} SOL</div>
-                          <div className="text-[11px] text-gray-500">volume</div>
+                            {isResolvedFinal ? (
+                              <span className="text-green-400">✓ Finalized</span>
+                            ) : isCancelled ? (
+                              <span className="text-[#ff5c73]">Cancelled</span>
+                            ) : isProposed ? (
+                              <span className="text-pump-green">
+                                Proposed
+                                {Number.isFinite(remainingMs)
+                                  ? ` (${formatMsToHhMm(Math.max(0, remainingMs))} left)`
+                                  : ""}
+                              </span>
+                            ) : (
+                              <span className={ended ? "text-yellow-400" : "text-gray-400"}>{timeStatus}</span>
+                            )}
+                          </div>
                         </div>
 
-                        {canPropose && (
-                          <button
-                            onClick={() => {
-                              setResolvingMarket(m);
-                              setSelectedOutcome(null);
-                              setMode("upload");
-                              setProofNote("");
-                            }}
-                            className="px-4 py-2 rounded-lg bg-yellow-500 text-black text-sm font-semibold hover:bg-yellow-400 transition"
-                          >
-                            ⚖️ Propose
-                          </button>
-                        )}
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <div className="text-white font-semibold text-sm">{volSol.toFixed(2)} SOL</div>
+                            <div className="text-[10px] text-gray-500">volume</div>
+                          </div>
 
-                        {toResolutionStatus(m.resolution_status) === "proposed" && addr && (
-                          <Link
-                            href={`/contest/${addr}`}
-                            className={[
-                              "px-4 py-2 rounded-lg text-sm font-semibold transition border",
-                              Number(m.contest_count || 0) > 0
-                                ? "bg-[#ff5c73]/15 border-[#ff5c73]/40 text-[#ff5c73] hover:bg-[#ff5c73]/20"
-                                : "bg-black/30 border-white/10 text-gray-300 hover:border-white/20",
-                            ].join(" ")}
-                            title="Open contest / disputes"
-                          >
-                            Disputes{Number(m.contest_count || 0) > 0 ? ` (${Number(m.contest_count)})` : ""}
-                          </Link>
-                        )}
+                          <div className="flex items-center gap-2 flex-wrap justify-end">
+                            {canPropose && (
+                              <button
+                                onClick={() => {
+                                  setResolvingMarket(m);
+                                  setSelectedOutcome(null);
+                                  setMode("upload");
+                                  setProofNote("");
+                                }}
+                                className="px-3 py-1.5 rounded-lg bg-yellow-500 text-black text-xs font-semibold hover:bg-yellow-400 transition"
+                              >
+                                ⚖️ Propose
+                              </button>
+                            )}
 
-                        {addr && (
-                          <Link
-                            href={`/trade/${addr}`}
-                            className="px-4 py-2 rounded-lg bg-pump-green text-black text-sm font-semibold hover:opacity-90 transition"
-                          >
-                            View
-                          </Link>
-                        )}
+                            {toResolutionStatus(m.resolution_status) === "proposed" && addr && (
+                              <Link
+                                href={`/contest/${addr}`}
+                                className={[
+                                  "px-3 py-1.5 rounded-lg text-xs font-semibold transition border",
+                                  Number(m.contest_count || 0) > 0
+                                    ? "bg-[#ff5c73]/15 border-[#ff5c73]/40 text-[#ff5c73] hover:bg-[#ff5c73]/20"
+                                    : "bg-black/30 border-white/10 text-gray-300 hover:border-white/20",
+                                ].join(" ")}
+                                title="Open contest / disputes"
+                              >
+                                Disputes{Number(m.contest_count || 0) > 0 ? ` (${Number(m.contest_count)})` : ""}
+                              </Link>
+                            )}
+
+                            {addr && (
+                              <Link
+                                href={`/trade/${addr}`}
+                                className="px-3 py-1.5 rounded-lg bg-pump-green text-black text-xs font-semibold hover:opacity-90 transition"
+                              >
+                                View
+                              </Link>
+                            )}
+                          </div>
+                        </div>
                       </div>
                     </div>
                   );
@@ -1717,31 +1736,33 @@ if (statusStr === "open") {
                   return (
                     <div
                       key={String(m.id || addr || idx)}
-                      className="rounded-xl border border-white/10 bg-pump-dark/40 p-4 flex items-start sm:items-center justify-between gap-4"
+                      className="rounded-xl border border-white/10 bg-pump-dark/40 p-3 md:p-4"
                     >
-                      <div className="min-w-0">
-                        <div className="text-white font-semibold truncate">{q}</div>
-                        <div className="text-[11px] text-gray-500 mt-1 flex flex-wrap items-center gap-2">
-                          <span>{shortAddr(addr)}</span>
-                          <span className="opacity-40">•</span>
-                          <span className="text-gray-400">{status}</span>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-3 flex-shrink-0">
-                        <div className="text-right">
-                          <div className="text-white font-semibold">{volSol.toFixed(2)} SOL</div>
-                          <div className="text-[11px] text-gray-500">volume</div>
+                      <div className="flex flex-col gap-3">
+                        <div className="min-w-0">
+                          <div className="text-white font-semibold text-sm truncate">{q}</div>
+                          <div className="text-[10px] text-gray-500 mt-1 flex flex-wrap items-center gap-1 md:gap-2">
+                            <span>{shortAddr(addr)}</span>
+                            <span className="opacity-40">•</span>
+                            <span className="text-gray-400">{status}</span>
+                          </div>
                         </div>
 
-                        {addr && (
-                          <Link
-                            href={`/trade/${addr}`}
-                            className="px-4 py-2 rounded-lg bg-pump-green text-black text-sm font-semibold hover:opacity-90 transition"
-                          >
-                            View
-                          </Link>
-                        )}
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <div className="text-white font-semibold text-sm">{volSol.toFixed(2)} SOL</div>
+                            <div className="text-[10px] text-gray-500">volume</div>
+                          </div>
+
+                          {addr && (
+                            <Link
+                              href={`/trade/${addr}`}
+                              className="px-3 py-1.5 rounded-lg bg-pump-green text-black text-xs font-semibold hover:opacity-90 transition"
+                            >
+                              View
+                            </Link>
+                          )}
+                        </div>
                       </div>
                     </div>
                   );
@@ -1754,8 +1775,8 @@ if (statusStr === "open") {
 
       {/* Resolve Modal */}
       {resolvingMarket && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
-          <div className="bg-pump-dark border border-white/20 rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="bg-pump-dark border border-white/20 rounded-2xl p-5 md:p-6 max-w-md w-full shadow-2xl max-h-[90vh] overflow-y-auto">
             <h3 className="text-xl font-bold text-white mb-2">Propose resolution</h3>
             <p className="text-gray-400 text-sm mb-1 truncate">{resolvingMarket.question}</p>
             <p className="text-[11px] text-gray-500 mb-4">

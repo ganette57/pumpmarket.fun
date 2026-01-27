@@ -9,10 +9,10 @@ import { useRouter, useSearchParams } from "next/navigation";
 import MarketCard from "@/components/MarketCard";
 import FeaturedMarketCardFull from "@/components/FeaturedMarketCardFull";
 import CategoryFilters from "@/components/CategoryFilters";
+import type { SelectedCategory } from "@/components/CategoryFilters";
 import GeoblockModal from "@/components/GeoblockModal";
-import Footer from "@/components/SiteFooter";
 import { SkeletonCard, SkeletonFeaturedCard } from "@/components/SkeletonCard";
-import type { CategoryId } from "@/components/CategoryFilters";
+import { isSportSubcategory } from "@/utils/categories";
 import { supabase } from "@/lib/supabaseClient";
 
 type Market = {
@@ -100,13 +100,13 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  const [selectedCategory, setSelectedCategory] = useState<CategoryId>("all");
+  const [selectedCategory, setSelectedCategory] = useState<SelectedCategory>("all");
   const [statusFilter, setStatusFilter] = useState<MarketStatusFilter>("open");
 
   const [currentFeaturedIndex, setCurrentFeaturedIndex] = useState(0);
   const [displayedCount, setDisplayedCount] = useState(12);
   const router = useRouter();
-const sp = useSearchParams();
+  const sp = useSearchParams();
 
   const observerTarget = useRef<HTMLDivElement>(null);
 
@@ -203,17 +203,37 @@ const sp = useSearchParams();
       setLoading(false);
     }
   }
-// ✅ read status from URL (keeps last selected when coming back)
-useEffect(() => {
-  const s = (sp.get("status") || "open") as MarketStatusFilter;
-  if (s === "all" || s === "open" || s === "resolved") {
-    setStatusFilter(s);
-  }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [sp]);
+
+  // ✅ read status from URL (keeps last selected when coming back)
+  useEffect(() => {
+    const s = (sp.get("status") || "open") as MarketStatusFilter;
+    if (s === "all" || s === "open" || s === "resolved") {
+      setStatusFilter(s);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sp]);
+
   // ------- FILTERS -------
   const categoryFiltered = useMemo(() => {
-    return markets.filter((m) => selectedCategory === "all" || m.category === selectedCategory);
+    // "all" = no filter
+    if (selectedCategory === "all") return markets;
+
+    // "sports" = all sport subcategories + markets with category "sports"
+    if (selectedCategory === "sports") {
+      return markets.filter((m) => {
+        const cat = m.category?.toLowerCase();
+        // Match "sports" or any sport subcategory
+        return cat === "sports" || isSportSubcategory(cat);
+      });
+    }
+
+    // Sport subcategory (football, basketball, etc.)
+    if (isSportSubcategory(selectedCategory)) {
+      return markets.filter((m) => m.category?.toLowerCase() === selectedCategory);
+    }
+
+    // Regular category
+    return markets.filter((m) => m.category === selectedCategory);
   }, [markets, selectedCategory]);
 
   const statusFiltered = useMemo(() => {
@@ -296,20 +316,14 @@ useEffect(() => {
   useEffect(() => {
     setDisplayedCount(12);
   }, [selectedCategory, statusFilter]);
-// ✅ persist status in URL
-useEffect(() => {
-  const params = new URLSearchParams(sp.toString());
-  params.set("status", statusFilter);
-  router.replace(`/?${params.toString()}`, { scroll: false });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [statusFilter]);
-  // persist status filter in URL (?status=open|resolved|all)
-useEffect(() => {
-  const params = new URLSearchParams(sp.toString());
-  params.set("status", statusFilter);
-  router.replace(`/?${params.toString()}`, { scroll: false });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [statusFilter]);
+
+  // ✅ persist status in URL
+  useEffect(() => {
+    const params = new URLSearchParams(sp.toString());
+    params.set("status", statusFilter);
+    router.replace(`/?${params.toString()}`, { scroll: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFilter]);
 
   // ------- DESKTOP BUTTONS -------
   const handlePrevFeatured = () => {
@@ -403,8 +417,8 @@ useEffect(() => {
             <SkeletonFeaturedCard />
           ) : featuredMarkets.length > 0 ? (
             <div className="relative">
-              {/* DESKTOP: your existing slider */}
-              <div className="hidden md:block relative overflow-hidden rounded-2xl border border-white/20 bg-black">
+              {/* DESKTOP: slider - NO extra border wrapper */}
+              <div className="hidden md:block relative overflow-hidden">
                 <div
                   className="flex transition-transform duration-500 ease-out"
                   style={{ transform: `translateX(-${currentFeaturedIndex * 100}%)` }}
@@ -416,9 +430,9 @@ useEffect(() => {
                   ))}
                 </div>
 
-                {/* dots */}
+                {/* dots - outside the cards */}
                 {featuredMarkets.length > 1 && (
-                  <div className="flex justify-center gap-2 mt-4 pb-4">
+                  <div className="flex justify-center gap-2 mt-4">
                     {featuredMarkets.map((_, index) => (
                       <button
                         key={index}
@@ -547,8 +561,6 @@ useEffect(() => {
           )}
         </div>
       </div>
-
-      <Footer />
     </>
   );
 }

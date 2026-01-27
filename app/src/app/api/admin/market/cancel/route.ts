@@ -41,7 +41,7 @@ export async function POST(req: Request) {
     const marketAddress = String(body?.market || body?.market_address || "").trim();
     if (!marketAddress) return jsonError("Missing market", 400);
 
-    // Action can be "admin_cancel" (default) or "cancel_if_no_proposal" (for 48h stale markets)
+    // Action can be "admin_cancel" (default) or "cancel_if_no_proposal" (for 24h stale markets)
     const action = String(body?.action || "admin_cancel");
 
     const supabase = supabaseAdmin();
@@ -92,7 +92,7 @@ export async function POST(req: Request) {
       });
     }
 
-    // === CASE 2: cancel_if_no_proposal (for 48h stale markets) ===
+    // === CASE 2: cancel_if_no_proposal (for 24h stale markets) ===
     if (action === "cancel_if_no_proposal") {
       // Must be in "open" status (no proposal made)
       if (status !== "open") {
@@ -111,12 +111,12 @@ export async function POST(req: Request) {
         return jsonError("Market has not ended yet.", 409, { code: "NOT_ENDED", end_date: market.end_date });
       }
 
-      // Must be >48h since end
-      const cutoff48h = now - 48 * 60 * 60 * 1000;
-      if (endMs > cutoff48h) {
-        const hoursRemaining = Math.ceil((endMs + 48 * 60 * 60 * 1000 - now) / (60 * 60 * 1000));
-        return jsonError(`48h window not reached. Wait ${hoursRemaining}h more.`, 409, {
-          code: "NOT_48H",
+      // Must be >24h since end (changed from 48h)
+      const cutoff24h = now - 24 * 60 * 60 * 1000;
+      if (endMs > cutoff24h) {
+        const hoursRemaining = Math.ceil((endMs + 24 * 60 * 60 * 1000 - now) / (60 * 60 * 1000));
+        return jsonError(`24h window not reached. Wait ${hoursRemaining}h more.`, 409, {
+          code: "NOT_24H",
           end_date: market.end_date,
           hours_remaining: hoursRemaining,
         });

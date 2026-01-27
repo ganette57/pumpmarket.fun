@@ -11,13 +11,16 @@ import { Calendar, Upload, X, Plus, Trash2 } from "lucide-react";
 import Image from "next/image";
 
 import { validateMarketQuestion, validateMarketDescription } from "@/utils/bannedWords";
-import { CATEGORIES, CategoryId } from "@/utils/categories";
+import { CATEGORIES, SPORT_SUBCATEGORIES, CategoryId, SportSubcategoryId } from "@/utils/categories";
 import SocialLinksForm, { SocialLinks } from "@/components/SocialLinksForm";
 import CategoryImagePlaceholder from "@/components/CategoryImagePlaceholder";
 
 import { useProgram } from "@/hooks/useProgram";
 import { indexMarket } from "@/lib/markets";
 import { sendSignedTx } from "@/lib/solanaSend";
+
+// Combined category type for create page
+type CreateCategoryId = CategoryId | SportSubcategoryId;
 
 // ---------- helpers ----------
 function parseOutcomes(text: string) {
@@ -90,7 +93,7 @@ export default function CreateMarketPage() {
 
   const [question, setQuestion] = useState("");
   const [description, setDescription] = useState("");
-  const [category, setCategory] = useState<CategoryId>("crypto");
+  const [category, setCategory] = useState<CreateCategoryId>("crypto");
 
   const [marketType, setMarketType] = useState<0 | 1>(0); // 0=binary, 1=multi
   const [outcomesText, setOutcomesText] = useState("YES\nNO");
@@ -337,6 +340,34 @@ export default function CreateMarketPage() {
     }
   }
 
+  // Build category options for select (with Sports subcategories grouped)
+  const categoryOptions = useMemo(() => {
+    const options: { value: string; label: string; isGroup?: boolean; indent?: boolean }[] = [];
+    
+    for (const cat of CATEGORIES) {
+      // Skip "all" and "trending" for create page
+      if (cat.id === "all" || cat.id === "trending") continue;
+      
+      if (cat.id === "sports") {
+        // Add "Sports" as a group header (not selectable directly for create)
+        options.push({ value: "sports", label: "🏆 Sports (General)", isGroup: false });
+        
+        // Add sport subcategories
+        for (const sport of SPORT_SUBCATEGORIES) {
+          options.push({ 
+            value: sport.id, 
+            label: `    ${sport.label}`, 
+            indent: true 
+          });
+        }
+      } else {
+        options.push({ value: cat.id, label: cat.label });
+      }
+    }
+    
+    return options;
+  }, []);
+
   return (
     <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-12">
       <div className="mb-7 sm:mb-8">
@@ -469,20 +500,30 @@ export default function CreateMarketPage() {
           <textarea value={outcomesText} readOnly className="hidden" />
         </div>
 
-        {/* Category */}
+        {/* Category - Updated with Sports subcategories */}
         <div className="mb-6">
           <label className="block text-white font-semibold mb-2">Category *</label>
           <select
             value={category}
-            onChange={(e) => setCategory(e.target.value as CategoryId)}
+            onChange={(e) => setCategory(e.target.value as CreateCategoryId)}
             className="input-pump w-full"
           >
-            {CATEGORIES.map((cat) => (
-              <option key={cat.id} value={cat.id}>
-                {cat.icon} {cat.label}
+            {categoryOptions.map((opt) => (
+              <option 
+                key={opt.value} 
+                value={opt.value}
+                className={opt.indent ? "pl-4" : ""}
+              >
+                {opt.label}
               </option>
             ))}
           </select>
+          <p className="text-xs text-gray-500 mt-2">
+            {SPORT_SUBCATEGORIES.some(s => s.id === category) 
+              ? "This market will appear under Sports → " + SPORT_SUBCATEGORIES.find(s => s.id === category)?.label
+              : null
+            }
+          </p>
         </div>
 
         {/* Image */}

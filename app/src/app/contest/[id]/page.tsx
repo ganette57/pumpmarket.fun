@@ -136,16 +136,12 @@ export default function ContestPage() {
   const proposedProofUrl = market?.proposed_proof_url || "";
   const proposedProofNote = market?.proposed_proof_note || "";
 
-  const proofIsLikelyAboveFold = true; // change to false if you know it's usually below fold
+  const proofIsLikelyAboveFold = true;
 
   // --- anchor program ---
   const getAnchorProgram = useCallback((): Program<Idl> | null => {
     if (!anchorWallet) return null;
     const provider = getProvider(anchorWallet, connection);
-
-    // Anchor recent: new Program(idl, provider)
-    // If your idl doesn't include `address`, Program uses it from the IDL.
-    // If you ever need to force the program id: ensure PROGRAM_ID matches idl.address.
     return new Program(idl as unknown as Idl, provider);
   }, [anchorWallet, connection]);
 
@@ -221,7 +217,6 @@ export default function ContestPage() {
     if (!id || !market) return;
     setMsg(null);
 
-    // Tx guard: prevent double-submit
     const key = "contest_submit";
     if (inFlightRef.current[key]) return;
 
@@ -239,11 +234,13 @@ export default function ContestPage() {
     }
 
     const cleanNote = note.trim();
-    const cleanUrl = proofUrl.trim();
-    if (!cleanNote && !cleanUrl) {
-      setMsg("Add a note and/or a proof link.");
-      return;
-    }
+const cleanUrl = proofUrl.trim();
+
+// ✅ NOTE obligatoire (proof link optionnel)
+if (!cleanNote) {
+  setMsg("Add a note (required) to explain why the proposed outcome is wrong.");
+  return;
+}
 
     inFlightRef.current[key] = true;
     setSubmitting(true);
@@ -253,7 +250,6 @@ export default function ContestPage() {
 
       const marketPk = new PublicKey(id);
 
-      // 1) ON-CHAIN (centralized send + already processed safe)
       const tx = await program.methods
         .dispute()
         .accounts({
@@ -272,7 +268,6 @@ export default function ContestPage() {
 
       console.log("✅ dispute tx:", txSig);
 
-      // 2) OFF-CHAIN (DB record)
       try {
         const res = await fetch("/api/markets/contest", {
           method: "POST",
@@ -297,7 +292,6 @@ export default function ContestPage() {
         }
       } catch (dbErr) {
         console.error("DB commit error (tx still succeeded):", dbErr);
-        // Continue - on-chain is source of truth
       }
 
       setNote("");
@@ -309,14 +303,12 @@ export default function ContestPage() {
       console.error("submitDispute error:", e);
       const errMsg = String(e?.message || "");
 
-      // Handle "already been processed" gracefully
       if (errMsg.toLowerCase().includes("already been processed")) {
         setMsg("Transaction already processed. Refreshing…");
         await loadAll(id);
         return;
       }
 
-      // Handle user rejection
       if (errMsg.toLowerCase().includes("user rejected")) {
         setMsg("Transaction cancelled by user.");
         return;
@@ -339,6 +331,7 @@ export default function ContestPage() {
     proofUrl,
     getAnchorProgram,
     connection,
+    anchorWallet,
     loadAll,
   ]);
 
@@ -372,6 +365,9 @@ export default function ContestPage() {
       </div>
     );
   }
+
+  // Normalize the proof URL for display
+  const normalizedProofUrl = normalizeUrl(proposedProofUrl);
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-10 space-y-6">
@@ -441,10 +437,10 @@ export default function ContestPage() {
 
           {proposedProofNote && <p className="text-sm text-gray-300 mb-3">{proposedProofNote}</p>}
 
-          {proposedProofUrl && (
+          {proposedProofUrl && normalizedProofUrl && (
             <p className="text-sm text-gray-300 mb-3">
               Link:{" "}
-              <a href={proposedProofUrl} target="_blank" rel="noreferrer" className="text-pump-green underline">
+              <a href={normalizedProofUrl} target="_blank" rel="noreferrer" className="text-pump-green underline">
                 open proof
               </a>
             </p>
@@ -484,7 +480,7 @@ export default function ContestPage() {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>
-            <label className="text-xs text-gray-400">Note (optional)</label>
+          <label className="text-xs text-gray-400">Note (required)</label>
             <textarea
               value={note}
               onChange={(e) => setNote(e.target.value)}
@@ -509,7 +505,7 @@ export default function ContestPage() {
 
             <button
               onClick={submitDispute}
-              disabled={!contestOpen || !connected || submitting || alreadyDisputedByMe}
+              disabled={!contestOpen || !connected || submitting || alreadyDisputedByMe || !note.trim()}
               aria-busy={submitting}
               className={`mt-4 w-full px-4 py-3 rounded-xl font-semibold transition ${
                 !contestOpen || !connected || submitting || alreadyDisputedByMe

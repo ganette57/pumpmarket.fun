@@ -1,4 +1,3 @@
-// app/src/app/api/admin/overview/route.ts
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { isAdminRequest } from "@/lib/admin";
@@ -14,7 +13,6 @@ function toNumber(x: any) {
   return Number.isFinite(n) ? n : 0;
 }
 
-// Types for admin overview
 type ActionableMarket = {
   market_address: string;
   question: string | null;
@@ -22,25 +20,20 @@ type ActionableMarket = {
   contest_count: number;
   end_date: string | null;
   proposed_winning_outcome: number | null;
-  // Computed fields
-  type: "proposed_no_dispute" | "proposed_disputed" | "no_proposal_48h";
+  type: "proposed_no_dispute" | "proposed_disputed" | "no_proposal_24h";
   is_actionable: boolean;
-  due_date: string | null; // contest_deadline for proposed, end_date for 48h
+  due_date: string | null;
 };
 
 export async function GET(req: Request) {
-  // protect route with your admin cookie/session
   const ok = await isAdminRequest(req);
   if (!ok) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  // Use service role for admin KPIs (server-only env)
   const supabase = createClient(env("SUPABASE_URL"), env("SUPABASE_SERVICE_ROLE_KEY"), {
     auth: { persistSession: false },
   });
 
   try {
-    // ---- MARKETS COUNTS ----
-    // We fetch minimal columns once then compute. (simple + stable)
     const { data: markets, error: mErr } = await supabase
       .from("markets")
       .select(
@@ -51,7 +44,7 @@ export async function GET(req: Request) {
     if (mErr) throw mErr;
 
     const now = Date.now();
-    const cutoff48h = now - 48 * 60 * 60 * 1000;
+    const cutoff24h = now - 24 * 60 * 60 * 1000; // Changed from 48h
 
     let markets_total = 0;
     let markets_open = 0;
@@ -62,7 +55,6 @@ export async function GET(req: Request) {
 
     let volume_sol_total = 0;
 
-    // Unified actionable_markets list
     const actionable_markets: ActionableMarket[] = [];
 
     for (const mk of markets || []) {
@@ -75,7 +67,7 @@ export async function GET(req: Request) {
       const endMs = mk.end_date ? new Date(mk.end_date).getTime() : NaN;
       const ended = Number.isFinite(endMs) ? endMs <= now : false;
 
-      volume_sol_total += toNumber(mk.total_volume) / 1e9; // assuming total_volume is lamports
+      volume_sol_total += toNumber(mk.total_volume) / 1e9;
 
       if (status === "cancelled" || cancelled) markets_cancelled += 1;
       if (status === "finalized" || resolved) markets_finalized += 1;
@@ -101,10 +93,10 @@ export async function GET(req: Request) {
         });
       }
 
-      // Case C: No proposal > 48h (open, ended, > 48h since end, not resolved/cancelled)
+      // Case C: No proposal > 24h (changed from 48h)
       if (status === "open" && !resolved && !cancelled && ended) {
-        const is48hPassed = Number.isFinite(endMs) && endMs <= cutoff48h;
-        if (is48hPassed) {
+        const is24hPassed = Number.isFinite(endMs) && endMs <= cutoff24h;
+        if (is24hPassed) {
           actionable_markets.push({
             market_address: String(mk.market_address || ""),
             question: mk.question ?? null,
@@ -112,38 +104,31 @@ export async function GET(req: Request) {
             contest_count: 0,
             end_date: mk.end_date ?? null,
             proposed_winning_outcome: null,
-            type: "no_proposal_48h",
-            is_actionable: true, // always actionable once 48h passed
+            type: "no_proposal_24h",
+            is_actionable: true,
             due_date: mk.end_date ?? null,
           });
         }
       }
 
-      // "open" = not resolved, not proposed, not cancelled, not ended
       const closed = resolved || cancelled || status === "proposed" || status === "cancelled" || ended;
       if (!closed) markets_open += 1;
       if (ended) markets_ended += 1;
     }
 
-    // Sort: actionable first, then by due_date soonest, then by dispute count
     actionable_markets.sort((a, b) => {
-      // Actionable first
       if (a.is_actionable !== b.is_actionable) return a.is_actionable ? -1 : 1;
-      // Then by due_date soonest
       const ad = a.due_date ? new Date(a.due_date).getTime() : Infinity;
       const bd = b.due_date ? new Date(b.due_date).getTime() : Infinity;
       if (ad !== bd) return ad - bd;
-      // Then by dispute count (more disputes first)
       return (b.contest_count || 0) - (a.contest_count || 0);
     });
 
-    // ---- TRANSACTIONS KPIs ----
     const { count: tx_count, error: txErr } = await supabase
       .from("transactions")
       .select("id", { count: "exact", head: true });
     if (txErr) throw txErr;
 
-    // unique traders (fetch distinct user_address)
     const { data: traders, error: trErr } = await supabase.from("transactions").select("user_address").limit(5000);
     if (trErr) throw trErr;
 
@@ -151,7 +136,6 @@ export async function GET(req: Request) {
       (traders || []).map((t: any) => String(t.user_address || "")).filter(Boolean)
     ).size;
 
-    // ---- DISPUTES KPIs ----
     let disputes_total = 0;
     let disputes_open = 0;
 

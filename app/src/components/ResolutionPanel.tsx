@@ -32,8 +32,8 @@ type Props = {
   // UI helpers
   ended: boolean;
 
-  // ✅ NEW: 48h creator propose deadline (ISO string)
-  // computed in /trade/[id]/page.tsx as end_date + 48h
+  // 24h creator propose deadline (ISO string)
+  // computed in /trade/[id]/page.tsx as end_date + 24h
   creatorResolveDeadline?: string | null;
 };
 
@@ -57,7 +57,7 @@ function Chip({
   variant,
 }: {
   label: string;
-  variant: "final" | "proposed" | "ended" | "cancelled";
+  variant: "final" | "proposed" | "ended" | "cancelled" | "pending";
 }) {
   const cls =
     variant === "final"
@@ -66,6 +66,8 @@ function Chip({
       ? "border-yellow-400/30 bg-yellow-400/10 text-yellow-200"
       : variant === "cancelled"
       ? "border-[#ff5c73]/30 bg-[#ff5c73]/10 text-[#ff5c73]"
+      : variant === "pending"
+      ? "border-blue-400/30 bg-blue-400/10 text-blue-300"
       : "border-white/10 bg-black/20 text-gray-300";
 
   return (
@@ -88,7 +90,7 @@ function Step({
   subtitle?: string;
   right?: React.ReactNode;
   showLine?: boolean;
-  tone?: "default" | "warn" | "danger";
+  tone?: "default" | "warn" | "danger" | "pending";
 }) {
   const baseDot = done
     ? "bg-pump-green text-black border-pump-green/40"
@@ -96,13 +98,15 @@ function Step({
     ? "bg-[#ff5c73]/20 text-[#ff5c73] border-[#ff5c73]/30"
     : tone === "warn"
     ? "bg-yellow-400/10 text-yellow-200 border-yellow-400/30"
+    : tone === "pending"
+    ? "bg-blue-400/20 text-blue-300 border-blue-400/30 animate-pulse"
     : "bg-black/30 text-gray-300 border-white/10";
 
   return (
     <div className="flex items-start gap-3">
       <div className="relative mt-0.5">
         <div className={`w-9 h-9 rounded-full flex items-center justify-center border ${baseDot}`}>
-          {done ? "✓" : "•"}
+          {done ? "✓" : tone === "pending" ? "⏳" : "•"}
         </div>
 
         {showLine ? (
@@ -150,7 +154,6 @@ export default function ResolutionPanel(props: Props) {
   const isCancelled = resolutionStatus === "cancelled";
   const isPending = ended && !isProposed && !isFinal && !isCancelled;
 
-  // tick when we need a countdown
   const [now, setNow] = useState(Date.now());
 
   const contestDeadlineMs = contestDeadline ? new Date(contestDeadline).getTime() : NaN;
@@ -189,51 +192,40 @@ export default function ResolutionPanel(props: Props) {
 
   const contestHref = `/contest/${encodeURIComponent(marketAddress)}`;
 
-  // ✅ ONLY CHANGE: if proposed + window ended + 0 disputes => treat as "final" for UI
   const noDisputes = (contestCount ?? 0) <= 0;
-  const uiFinal = isFinal || (isProposed && !contestOpen && noDisputes);
+  
+  // ✅ Only show as final if actually resolved on-chain
+  const uiFinal = isFinal;
+  
+  // ✅ Awaiting admin validation = proposed + dispute window closed + not finalized yet
+  const isAwaitingAdmin = isProposed && !contestOpen && !isFinal;
 
   function normalizeProofUrl(raw?: string | null): string | null {
     if (!raw) return null;
     const s = String(raw).trim();
     if (!s) return null;
 
-    // already absolute
     if (s.startsWith("http://") || s.startsWith("https://")) return s;
-
-    // ipfs
     if (s.startsWith("ipfs://")) return `https://ipfs.io/ipfs/${s.slice("ipfs://".length)}`;
-
-    // protocol-relative
     if (s.startsWith("//")) return `https:${s}`;
-
-    // absolute path
     if (s.startsWith("/")) {
       if (typeof window !== "undefined") return `${window.location.origin}${s}`;
       return s;
     }
-
-    // looks like a domain without protocol
     if (/^[a-z0-9.-]+\.[a-z]{2,}([/?#].*)?$/i.test(s)) return `https://${s}`;
-
-    // fallback: return as-is (better than breaking)
     return s;
   }
 
-  // Proof selection (normalized)
   const proofImg = uiFinal ? resolutionProofImage : proposedProofImage;
   const proofUrlRaw = uiFinal ? resolutionProofUrl : proposedProofUrl;
   const proofUrl = normalizeProofUrl(proofUrlRaw);
   const proofNote = uiFinal ? resolutionProofNote : proposedProofNote;
 
-  // Lightbox preview
   const [previewOpen, setPreviewOpen] = useState(false);
 
-  // only show when relevant
   const shouldShow = ended || isProposed || isFinal || isCancelled;
   if (!shouldShow) return null;
 
-  // headline outcome (like your ref screen)
   const headlineOutcome = uiFinal
     ? (winningOutcomeLabel || proposedOutcomeLabel)
     : isProposed
@@ -242,13 +234,15 @@ export default function ResolutionPanel(props: Props) {
 
   const headerSubline = uiFinal
     ? `Finalized${formatDt(resolvedAt) ? ` • ${formatDt(resolvedAt)}` : ""}`
+    : isAwaitingAdmin
+    ? "Awaiting admin validation"
     : isProposed
     ? `Proposed${formatDt(proposedAt) ? ` • ${formatDt(proposedAt)}` : ""}`
     : isCancelled
     ? "Cancelled • funds refundable"
     : isPending
     ? creatorWindowOpen
-      ? `Creator has ${formatMsToHhMm(creatorRemainingMs)} to propose (48h window)`
+      ? `Creator has ${formatMsToHhMm(creatorRemainingMs)} to propose (24h window)`
       : creatorWindowExpired
       ? "Creator window expired — cancelling / refunding"
       : "Waiting for proposal"
@@ -256,6 +250,8 @@ export default function ResolutionPanel(props: Props) {
 
   const headerChip = uiFinal ? (
     <Chip label="Final" variant="final" />
+  ) : isAwaitingAdmin ? (
+    <Chip label="Pending" variant="pending" />
   ) : isProposed ? (
     <Chip label="Proposed" variant="proposed" />
   ) : isCancelled ? (
@@ -263,6 +259,23 @@ export default function ResolutionPanel(props: Props) {
   ) : (
     <Chip label="Ended" variant="ended" />
   );
+
+  const ViewProofLink = proofUrl ? (
+    <a
+      href={proofUrl}
+      target="_blank"
+      rel="noreferrer"
+      className="px-4 py-2.5 rounded-xl border border-white/10 text-gray-200 hover:bg-white/5 transition"
+    >
+      View proof
+    </a>
+  ) : null;
+
+  const ProofOpenLink = proofUrl ? (
+    <a href={proofUrl} target="_blank" rel="noreferrer" className="text-pump-green underline">
+      open proof
+    </a>
+  ) : null;
 
   return (
     <>
@@ -281,6 +294,8 @@ export default function ResolutionPanel(props: Props) {
                 className={`text-xs mt-1 ${
                   creatorWindowExpired || isCancelled
                     ? "text-[#ff5c73]"
+                    : isAwaitingAdmin
+                    ? "text-blue-300"
                     : isPending
                     ? "text-yellow-200"
                     : "text-gray-500"
@@ -307,13 +322,13 @@ export default function ResolutionPanel(props: Props) {
                 : isCancelled
                 ? "No proposal needed (market cancelled)."
                 : creatorWindowOpen
-                ? "Creator must propose within 48h after end."
+                ? "Creator must propose within 24h after end."
                 : creatorWindowExpired
-                ? "No proposal in 48h → auto-cancel + refund."
+                ? "No proposal in 24h → auto-cancel + refund."
                 : "No proposal yet."
             }
             right={
-              isProposed ? (
+              isProposed && !isAwaitingAdmin ? (
                 <div className="text-xs text-pump-green font-semibold">
                   {contestOpen && Number.isFinite(contestRemainingMs)
                     ? `${formatMsToHhMm(contestRemainingMs)} left`
@@ -330,13 +345,15 @@ export default function ResolutionPanel(props: Props) {
           />
 
           <Step
-            done={uiFinal}
+            done={!contestOpen && (isProposed || uiFinal)}
             title="Dispute window"
             subtitle={
               isCancelled
                 ? "Disputes not applicable."
+                : isAwaitingAdmin
+                ? `Closed with ${contestCount ?? 0} dispute${(contestCount ?? 0) !== 1 ? "s" : ""}.`
                 : isProposed
-                ? "Anyone can dispute during the window."
+                ? "Anyone can dispute during the 4h window."
                 : uiFinal
                 ? "No disputes (or resolved after review)."
                 : "Opens after proposal."
@@ -354,10 +371,31 @@ export default function ResolutionPanel(props: Props) {
                 >
                   {typeof contestCount === "number" && contestCount > 0
                     ? `${contestCount} disputes`
-                    : uiFinal
+                    : isAwaitingAdmin
                     ? "No disputes"
                     : "No disputes yet"}
                 </Link>
+              ) : null
+            }
+          />
+
+          {/* ✅ NEW STEP: Admin validation pending */}
+          <Step
+            done={uiFinal}
+            title="Admin validation"
+            subtitle={
+              uiFinal
+                ? "Validated by admin."
+                : isAwaitingAdmin
+                ? "Waiting for admin to validate and finalize the outcome."
+                : isCancelled
+                ? "Not applicable."
+                : "Pending after dispute window."
+            }
+            tone={isAwaitingAdmin ? "pending" : "default"}
+            right={
+              isAwaitingAdmin ? (
+                <div className="text-xs text-blue-300 font-semibold">In progress</div>
               ) : null
             }
           />
@@ -386,10 +424,7 @@ export default function ResolutionPanel(props: Props) {
 
             {proofUrl ? (
               <p className="text-sm text-gray-300 mb-3">
-                Proof link:{" "}
-                <a href={proofUrl} target="_blank" rel="noreferrer" className="text-pump-green underline">
-                  open proof
-                </a>
+                Proof link: {ProofOpenLink}
               </p>
             ) : null}
 
@@ -411,7 +446,7 @@ export default function ResolutionPanel(props: Props) {
 
         {/* CTA */}
         <div className="mt-5 flex items-center gap-2">
-          {isProposed ? (
+          {isProposed && !isAwaitingAdmin ? (
             contestOpen ? (
               <Link
                 href={contestHref}
@@ -424,6 +459,10 @@ export default function ResolutionPanel(props: Props) {
                 🚨 Dispute (window closed)
               </button>
             )
+          ) : isAwaitingAdmin ? (
+            <button className="flex-1 px-4 py-2.5 rounded-xl bg-blue-500/20 text-blue-300 border border-blue-500/30 cursor-not-allowed" disabled>
+              ⏳ Awaiting admin validation
+            </button>
           ) : uiFinal ? (
             <Link
               href="/dashboard"
@@ -444,21 +483,12 @@ export default function ResolutionPanel(props: Props) {
             </button>
           )}
 
-          {proofUrl ? (
-            <a
-              href={proofUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="px-4 py-2.5 rounded-xl border border-white/10 text-gray-200 hover:bg-white/5 transition"
-            >
-              View proof
-            </a>
-          ) : null}
+          {ViewProofLink}
         </div>
 
         <p className="mt-3 text-xs text-gray-500">
-          Flow: ended → propose → 24h dispute window → finalize/payout.{" "}
-          {isPending ? "If no proposal in 48h: cancel + refund." : null}
+          Flow: ended → propose → 4h dispute window → admin validation → finalize/payout.{" "}
+          {isPending ? "If no proposal in 24h: cancel + refund." : null}
         </p>
       </div>
 

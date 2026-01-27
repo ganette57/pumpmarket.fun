@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import Header from "@/components/Header";
 import MobileNav from "@/components/MobileNav";
 import MobileTopBar from "@/components/MobileTopBar";
+import SiteFooter from "@/components/SiteFooter";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -33,17 +34,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         {children}
       </main>
 
-      {/* Footer desktop only - hidden on trade pages */}
-      {!isTrade && (
-        <footer className="hidden md:block border-t border-gray-800 mt-20 flex-shrink-0">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-            <div className="text-center text-gray-500 text-sm">
-              <p>Funmarket.pump - Built on Solana Devnet</p>
-              <p className="mt-2">Trade responsibly. Markets for entertainment only.</p>
-            </div>
-          </div>
-        </footer>
-      )}
+     {/* Footer desktop only - hidden on trade pages */}
+{!isTrade && <div className="hidden md:block"><SiteFooter /></div>}
 
       {/* Bottom nav mobile */}
       <MobileNav />
