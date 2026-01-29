@@ -7,11 +7,12 @@ import { BN } from "@coral-xyz/anchor";
 import { useRouter } from "next/navigation";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
-import { Calendar, Upload, X, Plus, Trash2 } from "lucide-react";
+import { Calendar, Upload, X, Plus, Trash2, Info, AlertTriangle, CheckCircle, Loader2 } from "lucide-react";
 import Image from "next/image";
 
 import { validateMarketQuestion, validateMarketDescription } from "@/utils/bannedWords";
-import { CATEGORIES, SPORT_SUBCATEGORIES, CategoryId, SportSubcategoryId } from "@/utils/categories";
+import { CATEGORIES, SPORT_SUBCATEGORIES, isSportSubcategory } from "@/components/CategoryFilters";
+import type { CategoryId, SportSubcategoryId } from "@/components/CategoryFilters";
 import SocialLinksForm, { SocialLinks } from "@/components/SocialLinksForm";
 import CategoryImagePlaceholder from "@/components/CategoryImagePlaceholder";
 
@@ -20,7 +21,19 @@ import { indexMarket } from "@/lib/markets";
 import { sendSignedTx } from "@/lib/solanaSend";
 
 // Combined category type for create page
-type CreateCategoryId = CategoryId | SportSubcategoryId;
+type CreateCategoryId = CategoryId | SportSubcategoryId | "";
+
+// Creation steps
+type CreationStep = "idle" | "signing" | "confirming" | "indexing" | "done" | "error";
+
+// Resolution sources for sports
+const RESOLUTION_SOURCES = [
+  { value: "official_league", label: "Official league website" },
+  { value: "atp_wta", label: "ATP/WTA official scoreboard" },
+  { value: "fifa_uefa", label: "FIFA / UEFA official" },
+  { value: "espn_flashscore", label: "ESPN / Flashscore" },
+  { value: "other", label: "Other (specify in notes)" },
+] as const;
 
 // ---------- helpers ----------
 function parseOutcomes(text: string) {
@@ -80,6 +93,141 @@ function TypeCard({
   );
 }
 
+function InfoBox({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex gap-3 p-4 rounded-xl bg-blue-500/10 border border-blue-500/20">
+      <Info className="w-5 h-5 text-blue-400 flex-shrink-0 mt-0.5" />
+      <div className="text-sm text-blue-200">{children}</div>
+    </div>
+  );
+}
+
+function WarningBox({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex gap-3 p-4 rounded-xl bg-yellow-500/10 border border-yellow-500/20">
+      <AlertTriangle className="w-5 h-5 text-yellow-400 flex-shrink-0 mt-0.5" />
+      <div className="text-sm text-yellow-200">{children}</div>
+    </div>
+  );
+}
+
+// ---------- Creation Modal ----------
+function CreationModal({
+  step,
+  error,
+  onClose,
+}: {
+  step: CreationStep;
+  error: string | null;
+  onClose: () => void;
+}) {
+  if (step === "idle") return null;
+
+  const steps = [
+    { key: "signing", label: "Sign transaction" },
+    { key: "confirming", label: "Confirming on Solana" },
+    { key: "indexing", label: "Indexing market" },
+  ];
+
+  const currentIndex = steps.findIndex((s) => s.key === step);
+  const isDone = step === "done";
+  const isError = step === "error";
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+
+      {/* Modal */}
+      <div className="relative w-full max-w-md bg-[#0a0b0d] border border-gray-800 rounded-2xl p-6 shadow-2xl">
+        {/* Header */}
+        <div className="text-center mb-6">
+          {isDone ? (
+            <>
+              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-pump-green/20 flex items-center justify-center">
+                <CheckCircle className="w-10 h-10 text-pump-green" />
+              </div>
+              <h3 className="text-xl font-bold text-white">Market Created!</h3>
+              <p className="text-gray-400 text-sm mt-1">Redirecting to your market...</p>
+            </>
+          ) : isError ? (
+            <>
+              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-red-500/20 flex items-center justify-center">
+                <X className="w-10 h-10 text-red-500" />
+              </div>
+              <h3 className="text-xl font-bold text-white">Creation Failed</h3>
+              <p className="text-red-400 text-sm mt-2">{error || "Something went wrong"}</p>
+            </>
+          ) : (
+            <>
+              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-pump-green/20 flex items-center justify-center">
+                <Loader2 className="w-10 h-10 text-pump-green animate-spin" />
+              </div>
+              <h3 className="text-xl font-bold text-white">Creating Market...</h3>
+              <p className="text-gray-400 text-sm mt-1">Please wait, don't close this page</p>
+            </>
+          )}
+        </div>
+
+        {/* Steps */}
+        {!isDone && !isError && (
+          <div className="space-y-3 mb-6">
+            {steps.map((s, idx) => {
+              const isActive = s.key === step;
+              const isComplete = idx < currentIndex;
+              const isPending = idx > currentIndex;
+
+              return (
+                <div
+                  key={s.key}
+                  className={`flex items-center gap-3 p-3 rounded-lg transition ${
+                    isActive ? "bg-pump-green/10 border border-pump-green/30" : "bg-white/5"
+                  }`}
+                >
+                  <div
+                    className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${
+                      isComplete
+                        ? "bg-pump-green text-black"
+                        : isActive
+                        ? "bg-pump-green/20 text-pump-green"
+                        : "bg-gray-700 text-gray-500"
+                    }`}
+                  >
+                    {isComplete ? (
+                      <CheckCircle className="w-4 h-4" />
+                    ) : isActive ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <span className="text-xs font-bold">{idx + 1}</span>
+                    )}
+                  </div>
+                  <span
+                    className={`text-sm font-medium ${
+                      isComplete ? "text-pump-green" : isActive ? "text-white" : "text-gray-500"
+                    }`}
+                  >
+                    {s.label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Error close button */}
+        {isError && (
+          <button
+            onClick={onClose}
+            className="w-full py-3 rounded-lg bg-white/10 text-white font-semibold hover:bg-white/20 transition"
+          >
+            Close
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function CreateMarketPage() {
   const { publicKey, connected, signTransaction } = useWallet();
   const { connection } = useConnection();
@@ -87,18 +235,18 @@ export default function CreateMarketPage() {
   const program = useProgram();
 
   const [loading, setLoading] = useState(false);
+  const [creationStep, setCreationStep] = useState<CreationStep>("idle");
+  const [creationError, setCreationError] = useState<string | null>(null);
 
   // Tx guard: prevent double-submit
   const inFlightRef = useRef<Record<string, boolean>>({});
 
   const [question, setQuestion] = useState("");
   const [description, setDescription] = useState("");
-  const [category, setCategory] = useState<CreateCategoryId>("crypto");
+  const [category, setCategory] = useState<CreateCategoryId>("");
 
   const [marketType, setMarketType] = useState<0 | 1>(0); // 0=binary, 1=multi
   const [outcomesText, setOutcomesText] = useState("YES\nNO");
-
-  // ✅ new UI state (but we still keep outcomesText as canonical for existing flow)
   const [outcomeInputs, setOutcomeInputs] = useState<string[]>(["YES", "NO"]);
 
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -115,16 +263,36 @@ export default function CreateMarketPage() {
   const [questionError, setQuestionError] = useState<string | null>(null);
   const [descriptionError, setDescriptionError] = useState<string | null>(null);
 
-  // ✅ On-chain defaults (hidden from user)
-  const DEFAULT_B_SOL = 0.01; // must be > 0
-  const DEFAULT_MAX_POSITION_BPS = 10_000; // 10_000 = disabled
-  const DEFAULT_MAX_TRADE_SHARES = 5_000_000; // allowed max
-  const DEFAULT_COOLDOWN_SECONDS = 0; // disabled
+  // Sports-specific fields
+  const [resolutionSource, setResolutionSource] = useState<string>("official_league");
+  const [proofLink, setProofLink] = useState<string>("");
+
+  // Check if current category is a sport
+  const isSportsMarket = useMemo(() => {
+    return category === "sports" || (category !== "" && isSportSubcategory(category));
+  }, [category]);
+
+  // On-chain defaults (hidden from user)
+  const DEFAULT_B_SOL = 0.01;
+  const DEFAULT_MAX_POSITION_BPS = 10_000;
+  const DEFAULT_MAX_TRADE_SHARES = 5_000_000;
+  const DEFAULT_COOLDOWN_SECONDS = 0;
+
+  // When switching to sports category, set default outcomes for match
+  useEffect(() => {
+    if (isSportsMarket && marketType === 0) {
+      setOutcomeInputs(["Team A", "Team B"]);
+    }
+  }, [isSportsMarket]);
 
   // when switching type: reset/ensure valid outcomes UI
   useEffect(() => {
     if (marketType === 0) {
-      setOutcomeInputs(["YES", "NO"]);
+      if (isSportsMarket) {
+        setOutcomeInputs(["Team A", "Team B"]);
+      } else {
+        setOutcomeInputs(["YES", "NO"]);
+      }
     } else {
       setOutcomeInputs((prev) => {
         const cleaned = (prev || []).map((s) => String(s || "").trim()).filter(Boolean);
@@ -132,14 +300,14 @@ export default function CreateMarketPage() {
         return ["Option 1", "Option 2"];
       });
     }
-  }, [marketType]);
+  }, [marketType, isSportsMarket]);
 
-  // sync: outcomeInputs -> outcomesText (so existing parseOutcomes/outcomes stays same)
+  // sync: outcomeInputs -> outcomesText
   useEffect(() => {
     const txt = outcomesToText(outcomeInputs);
-    setOutcomesText(txt || (marketType === 0 ? "YES\nNO" : "Option 1\nOption 2"));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [outcomeInputs]);
+    const defaultTxt = isSportsMarket ? "Team A\nTeam B" : "YES\nNO";
+    setOutcomesText(txt || (marketType === 0 ? defaultTxt : "Option 1\nOption 2"));
+  }, [outcomeInputs, marketType, isSportsMarket]);
 
   const outcomes = useMemo(() => parseOutcomes(outcomesText), [outcomesText]);
 
@@ -156,7 +324,7 @@ export default function CreateMarketPage() {
     !questionError &&
     !descriptionError &&
     !outcomesError &&
-    !!category &&
+    !!category && // Category is required
     !!resolutionDate &&
     resolutionDate > new Date();
 
@@ -220,6 +388,33 @@ export default function CreateMarketPage() {
     });
   }
 
+  // Build full description with sports metadata
+  function buildFullDescription(): string {
+    let desc = description || "";
+
+    if (isSportsMarket) {
+      const parts: string[] = [];
+
+      const sourceLabel = RESOLUTION_SOURCES.find((s) => s.value === resolutionSource)?.label || resolutionSource;
+      parts.push(`Resolution source: ${sourceLabel}`);
+
+      if (proofLink.trim()) {
+        parts.push(`Proof: ${proofLink.trim()}`);
+      }
+
+      if (parts.length > 0) {
+        desc = desc ? `${desc}\n\n---\n${parts.join("\n")}` : parts.join("\n");
+      }
+    }
+
+    return desc;
+  }
+
+  function closeCreationModal() {
+    setCreationStep("idle");
+    setCreationError(null);
+  }
+
   async function handleCreateMarket() {
     if (!canSubmit || !publicKey || !program) return;
     if (!signTransaction) {
@@ -227,56 +422,55 @@ export default function CreateMarketPage() {
       return;
     }
 
-    // Tx guard: prevent double-submit
     const key = "create_market";
     if (inFlightRef.current[key]) return;
     inFlightRef.current[key] = true;
     setLoading(true);
+    setCreationStep("signing");
+    setCreationError(null);
 
     try {
-      // Market is `init` without seeds => real Keypair
       const marketKeypair = Keypair.generate();
       const resolutionTimestamp = Math.floor(resolutionDate.getTime() / 1000);
-
-      // defaults -> on-chain args
       const bLamportsU64 = Math.floor(DEFAULT_B_SOL * 1_000_000_000);
 
       const tx = await (program as any).methods
-      .createMarket(
-        new BN(resolutionTimestamp), // i64
-        outcomes, // Vec<String>
-        marketType, // u8
-        new BN(bLamportsU64), // u64
-        DEFAULT_MAX_POSITION_BPS, // u16
-        new BN(DEFAULT_MAX_TRADE_SHARES), // u64
-        new BN(DEFAULT_COOLDOWN_SECONDS) // i64
-      )
-      .accounts({
-        market: marketKeypair.publicKey,
-        creator: publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .transaction();
+        .createMarket(
+          new BN(resolutionTimestamp),
+          outcomes,
+          marketType,
+          new BN(bLamportsU64),
+          DEFAULT_MAX_POSITION_BPS,
+          new BN(DEFAULT_MAX_TRADE_SHARES),
+          new BN(DEFAULT_COOLDOWN_SECONDS)
+        )
+        .accounts({
+          market: marketKeypair.publicKey,
+          creator: publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .transaction();
 
-    // Send via centralized helper (sets blockhash + confirms)
-    const txSig = await sendSignedTx({
-      connection,
-      tx,
-      feePayer: publicKey,
-      signTx: signTransaction,
-      beforeSign: (t) => t.partialSign(marketKeypair), // signer for init account
-    });
+      setCreationStep("confirming");
 
-    console.log("Market created! tx:", txSig);
+      const txSig = await sendSignedTx({
+        connection,
+        tx,
+        feePayer: publicKey,
+        signTx: signTransaction,
+        beforeSign: (t) => t.partialSign(marketKeypair),
+      });
 
-      // Fetch on-chain truth (recommended)
+      console.log("Market created! tx:", txSig);
+
+      setCreationStep("indexing");
+
       let onchainType = Number(marketType) || 0;
       let onchainNames = outcomes;
       let onchainSupplies: number[] = new Array(outcomes.length).fill(0);
 
       try {
         const acct: any = await (program as any).account.market.fetch(marketKeypair.publicKey);
-
         onchainType = Number(acct?.marketType ?? acct?.market_type ?? onchainType) || 0;
 
         const namesA = toStringArray(acct?.outcomeNames);
@@ -293,11 +487,12 @@ export default function CreateMarketPage() {
       }
 
       const isBinary = onchainType === 0 && onchainNames.length === 2;
+      const fullDescription = buildFullDescription();
 
       await indexMarket({
         market_address: marketKeypair.publicKey.toBase58(),
         question: question.slice(0, 200),
-        description: description || undefined,
+        description: fullDescription || undefined,
         category: category || "other",
         image_url: imagePreview || undefined,
         end_date: resolutionDate.toISOString(),
@@ -315,71 +510,107 @@ export default function CreateMarketPage() {
         resolved: false,
       } as any);
 
-      router.push(`/trade/${marketKeypair.publicKey.toBase58()}`);
+      setCreationStep("done");
+
+      // Redirect after short delay
+      setTimeout(() => {
+        router.push(`/trade/${marketKeypair.publicKey.toBase58()}`);
+      }, 1500);
     } catch (e: any) {
       console.error("Create market error:", e);
       const errMsg = String(e?.message || "");
 
-      // Handle "already been processed" gracefully
       if (errMsg.toLowerCase().includes("already been processed")) {
-        alert("Transaction already processed. Refreshing…");
-        router.refresh();
-        return;
+        setCreationError("Transaction already processed. Please refresh.");
+      } else if (errMsg.toLowerCase().includes("user rejected")) {
+        setCreationError("Transaction cancelled by user.");
+      } else {
+        setCreationError(errMsg || "Failed to create market");
       }
 
-      // Handle user rejection
-      if (errMsg.toLowerCase().includes("user rejected")) {
-        alert("Transaction cancelled by user.");
-        return;
-      }
-
-      alert(errMsg || "Failed to create market");
+      setCreationStep("error");
     } finally {
       inFlightRef.current[key] = false;
       setLoading(false);
     }
   }
 
-  // Build category options for select (with Sports subcategories grouped)
+  // Build category options
   const categoryOptions = useMemo(() => {
-    const options: { value: string; label: string; isGroup?: boolean; indent?: boolean }[] = [];
-    
+    const options: { value: string; label: string; indent?: boolean; disabled?: boolean }[] = [];
+
+    // Add placeholder option
+    options.push({ value: "", label: "Choose a category...", disabled: true });
+
     for (const cat of CATEGORIES) {
-      // Skip "all" and "trending" for create page
       if (cat.id === "all" || cat.id === "trending") continue;
-      
+
       if (cat.id === "sports") {
-        // Add "Sports" as a group header (not selectable directly for create)
-        options.push({ value: "sports", label: "🏆 Sports (General)", isGroup: false });
-        
-        // Add sport subcategories
+        options.push({ value: "sports", label: "🏆 Sports (General)" });
         for (const sport of SPORT_SUBCATEGORIES) {
-          options.push({ 
-            value: sport.id, 
-            label: `    ${sport.label}`, 
-            indent: true 
+          options.push({
+            value: sport.id,
+            label: `    ${sport.label}`,
+            indent: true,
           });
         }
       } else {
         options.push({ value: cat.id, label: cat.label });
       }
     }
-    
+
     return options;
   }, []);
 
   return (
     <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-12">
+      {/* Creation Progress Modal */}
+      <CreationModal step={creationStep} error={creationError} onClose={closeCreationModal} />
+
       <div className="mb-7 sm:mb-8">
         <h1 className="text-3xl sm:text-4xl font-bold text-white mb-2">Create Market</h1>
         <p className="text-gray-400">Launch a prediction market. Keep it clean - Make it Fun.</p>
       </div>
 
       <div className="card-pump">
-        {/* Question */}
+        {/* Category - First so sports mode activates early */}
+        <div className="mb-6">
+          <label className="block text-white font-semibold mb-2">Category *</label>
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value as CreateCategoryId)}
+            className={`input-pump w-full ${!category ? "text-gray-500" : ""}`}
+          >
+            {categoryOptions.map((opt) => (
+              <option key={opt.value} value={opt.value} disabled={opt.disabled}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+          {isSportSubcategory(category as string) && (
+            <p className="text-xs text-gray-500 mt-2">
+              This market will appear under Sports → {SPORT_SUBCATEGORIES.find((s) => s.id === category)?.label}
+            </p>
+          )}
+        </div>
+
+        {/* Sports Match Info Box */}
+        {isSportsMarket && (
+          <div className="mb-6">
+            <InfoBox>
+              <p className="font-semibold mb-1">⚽ Sports Match Market</p>
+              <p>
+                Trading closes at match start time. After the match ends, you have 24h to propose the outcome. A 4h
+                dispute window may follow.
+              </p>
+            </InfoBox>
+          </div>
+        )}
+
+        {/* Question / Match */}
         <div className="mb-6">
           <label className="block text-white font-semibold mb-2">
-            Question *{" "}
+            {isSportsMarket ? "Match *" : "Question *"}{" "}
             <span className="text-gray-500 font-normal text-sm ml-2">({question.length}/200)</span>
           </label>
           <input
@@ -388,29 +619,69 @@ export default function CreateMarketPage() {
             onChange={(e) => handleQuestionChange(e.target.value)}
             maxLength={200}
             className={`input-pump w-full ${questionError ? "input-error" : ""}`}
-            placeholder={marketType === 0 ? "Will SOL reach $500 in 2025?" : "Which team wins the Super Bowl?"}
+            placeholder={
+              isSportsMarket
+                ? "e.g. Alcaraz vs Zverev - Australian Open Final"
+                : marketType === 0
+                ? "Will SOL reach $500 in 2025?"
+                : "Which team wins the Super Bowl?"
+            }
           />
           {questionError && <p className="text-pump-red text-sm mt-2 font-semibold">❌ {questionError}</p>}
         </div>
 
-        {/* Description */}
+        {/* Description / Notes */}
         <div className="mb-6">
           <label className="block text-white font-semibold mb-2">
-            Description (optional){" "}
+            {isSportsMarket ? "Notes (optional)" : "Description (optional)"}{" "}
             <span className="text-gray-500 font-normal text-sm ml-2">({description.length}/500)</span>
           </label>
           <textarea
             value={description}
             onChange={(e) => handleDescriptionChange(e.target.value)}
             maxLength={500}
-            rows={4}
+            rows={3}
             className={`input-pump w-full ${descriptionError ? "input-error" : ""}`}
-            placeholder="Describe the resolution conditions..."
+            placeholder={isSportsMarket ? "Any additional context about the match..." : "Describe the resolution conditions..."}
           />
           {descriptionError && <p className="text-pump-red text-sm mt-2 font-semibold">❌ {descriptionError}</p>}
         </div>
 
-        {/* Market type (clean cards) */}
+        {/* Sports-specific: Resolution Source */}
+        {isSportsMarket && (
+          <div className="mb-6">
+            <label className="block text-white font-semibold mb-2">Resolution Source *</label>
+            <select
+              value={resolutionSource}
+              onChange={(e) => setResolutionSource(e.target.value)}
+              className="input-pump w-full"
+            >
+              {RESOLUTION_SOURCES.map((src) => (
+                <option key={src.value} value={src.value}>
+                  {src.label}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-500 mt-2">Where will you check the official result?</p>
+          </div>
+        )}
+
+        {/* Sports-specific: Proof Link */}
+        {isSportsMarket && (
+          <div className="mb-6">
+            <label className="block text-white font-semibold mb-2">Proof Link (recommended)</label>
+            <input
+              type="url"
+              value={proofLink}
+              onChange={(e) => setProofLink(e.target.value)}
+              className="input-pump w-full"
+              placeholder="https://www.atptour.com/en/scores/..."
+            />
+            <p className="text-xs text-gray-500 mt-2">Link to the official match page (helps with disputes)</p>
+          </div>
+        )}
+
+        {/* Market type */}
         <div className="mb-6">
           <label className="block text-white font-semibold mb-2">Market type *</label>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -418,25 +689,23 @@ export default function CreateMarketPage() {
               active={marketType === 0}
               onClick={() => setMarketType(0)}
               title="Binary"
-              desc="Exactly 2 outcomes (YES/NO). Clean + fast."
+              desc={isSportsMarket ? "2 players/teams. Head-to-head." : "Exactly 2 outcomes (YES/NO)."}
             />
             <TypeCard
               active={marketType === 1}
               onClick={() => setMarketType(1)}
               title="Multi-choice"
-              desc="2–10 outcomes. Add/remove options easily."
+              desc={isSportsMarket ? "Tournament winner, podium, etc." : "2–10 outcomes."}
             />
           </div>
         </div>
 
-        {/* Outcomes (dynamic inputs) */}
+        {/* Outcomes */}
         <div className="mb-6">
           <div className="flex items-end justify-between gap-3 mb-2">
             <label className="block text-white font-semibold">
-              Outcomes *{" "}
-              <span className="text-gray-500 font-normal text-sm ml-2">
-                ({marketType === 0 ? "must be 2" : "2 to 10"})
-              </span>
+              {isSportsMarket ? "Players / Teams *" : "Outcomes *"}{" "}
+              <span className="text-gray-500 font-normal text-sm ml-2">({marketType === 0 ? "must be 2" : "2 to 10"})</span>
             </label>
 
             {marketType === 1 && (
@@ -464,14 +733,24 @@ export default function CreateMarketPage() {
               return (
                 <div key={idx} className="flex items-center gap-2">
                   <div className="w-12 text-xs text-gray-500 font-mono flex-shrink-0">
-                    {marketType === 0 ? (idx === 0 ? "YES" : "NO") : `#${idx + 1}`}
+                    {marketType === 0 ? (isSportsMarket ? (idx === 0 ? "P1" : "P2") : idx === 0 ? "YES" : "NO") : `#${idx + 1}`}
                   </div>
 
                   <input
                     value={val}
                     onChange={(e) => updateOutcomeAt(idx, e.target.value)}
                     className={`input-pump w-full ${outcomesError ? "input-error" : ""}`}
-                    placeholder={marketType === 0 ? (idx === 0 ? "YES" : "NO") : `Option ${idx + 1}`}
+                    placeholder={
+                      isSportsMarket
+                        ? idx === 0
+                          ? "e.g. Alcaraz"
+                          : "e.g. Zverev"
+                        : marketType === 0
+                        ? idx === 0
+                          ? "YES"
+                          : "NO"
+                        : `Option ${idx + 1}`
+                    }
                   />
 
                   {showRemove ? (
@@ -491,39 +770,7 @@ export default function CreateMarketPage() {
             })}
           </div>
 
-          <div className="text-xs text-gray-500 mt-2">
-            Parsed: {outcomes.length} {outcomes.length ? `(${outcomes.join(", ")})` : ""}
-          </div>
           {outcomesError && <p className="text-pump-red text-sm mt-2 font-semibold">❌ {outcomesError}</p>}
-
-          {/* keep outcomesText (debug + flow safety) */}
-          <textarea value={outcomesText} readOnly className="hidden" />
-        </div>
-
-        {/* Category - Updated with Sports subcategories */}
-        <div className="mb-6">
-          <label className="block text-white font-semibold mb-2">Category *</label>
-          <select
-            value={category}
-            onChange={(e) => setCategory(e.target.value as CreateCategoryId)}
-            className="input-pump w-full"
-          >
-            {categoryOptions.map((opt) => (
-              <option 
-                key={opt.value} 
-                value={opt.value}
-                className={opt.indent ? "pl-4" : ""}
-              >
-                {opt.label}
-              </option>
-            ))}
-          </select>
-          <p className="text-xs text-gray-500 mt-2">
-            {SPORT_SUBCATEGORIES.some(s => s.id === category) 
-              ? "This market will appear under Sports → " + SPORT_SUBCATEGORIES.find(s => s.id === category)?.label
-              : null
-            }
-          </p>
         </div>
 
         {/* Image */}
@@ -545,12 +792,14 @@ export default function CreateMarketPage() {
 
               {imageError && <p className="text-pump-red text-sm mt-2 font-semibold">❌ {imageError}</p>}
 
-              <div className="mt-4">
-                <p className="text-sm text-gray-400 mb-2">Default placeholder for {category}:</p>
-                <div className="relative w-full h-48 rounded-lg overflow-hidden">
-                  <CategoryImagePlaceholder category={category} className="w-full h-full" />
+              {category && (
+                <div className="mt-4">
+                  <p className="text-sm text-gray-400 mb-2">Default placeholder for {category}:</p>
+                  <div className="relative w-full h-48 rounded-lg overflow-hidden">
+                    <CategoryImagePlaceholder category={category} className="w-full h-full" />
+                  </div>
                 </div>
-              </div>
+              )}
             </>
           ) : (
             <>
@@ -580,9 +829,11 @@ export default function CreateMarketPage() {
           )}
         </div>
 
-        {/* End Date */}
-        <div className="mb-8">
-          <label className="block text-white font-semibold mb-2">End Date & Time *</label>
+        {/* End Date / Match Start Time */}
+        <div className="mb-6">
+          <label className="block text-white font-semibold mb-2">
+            {isSportsMarket ? "Match Start Time *" : "End Date & Time *"}
+          </label>
           <div className="relative">
             <DatePicker
               selected={resolutionDate}
@@ -593,16 +844,35 @@ export default function CreateMarketPage() {
               dateFormat="MMMM d, yyyy h:mm aa"
               minDate={new Date()}
               className="input-pump w-full pl-10"
-              placeholderText="Select end date and time"
+              placeholderText={isSportsMarket ? "Select match start time" : "Select end date and time"}
             />
             <Calendar className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-500 pointer-events-none" />
           </div>
+          {isSportsMarket && (
+            <p className="text-xs text-gray-500 mt-2">⚠️ Trading stops at this time. Set the kick-off / first serve time.</p>
+          )}
         </div>
 
         {/* Social */}
-        <div className="mb-8 pb-8 border-b border-gray-800">
+        <div className="mb-6 pb-6 border-b border-gray-800">
           <SocialLinksForm value={socialLinks} onChange={setSocialLinks} />
         </div>
+
+        {/* Cancellation Policy Warning (Sports only) */}
+        {isSportsMarket && (
+          <div className="mb-6">
+            <WarningBox>
+              <p className="font-semibold mb-2">Cancellation Policy</p>
+              <ul className="list-disc list-inside space-y-1 text-yellow-200/80">
+                <li>
+                  If the match is postponed, suspended, or abandoned and no official result is available within 24h, the
+                  market may be cancelled and all bets refunded.
+                </li>
+                <li>If you fail to propose an outcome within 24h after the match, admin may cancel the market.</li>
+              </ul>
+            </WarningBox>
+          </div>
+        )}
 
         {/* Submit */}
         <button
@@ -613,7 +883,7 @@ export default function CreateMarketPage() {
             canSubmit && !loading ? "btn-pump glow-green" : "bg-gray-700 text-gray-500 cursor-not-allowed"
           }`}
         >
-          {loading ? "Processing..." : "Launch Market 🚀"}
+          {loading ? "Processing..." : isSportsMarket ? "Create Sports Market 🏆" : "Launch Market 🚀"}
         </button>
       </div>
     </div>
