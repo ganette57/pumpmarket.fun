@@ -113,6 +113,9 @@ pub mod funmarket_pump {
         market.dispute_count = 0;
         market.cancelled = false;
 
+        // fees escrow (creator only)
+        market.creator_fee_escrow = 0;
+
         // anti-manip
         market.max_position_bps = max_position_bps;
         market.max_trade_shares = max_trade_shares;
@@ -328,6 +331,40 @@ pub mod funmarket_pump {
         Ok(())
     }
 
+    /* ---------- CLAIM CREATOR FEES (escrow) ---------- */
+
+    pub fn claim_creator_fees(ctx: Context<ClaimCreatorFees>) -> Result<()> {
+        let market_ai = ctx.accounts.market.to_account_info();
+        let creator_ai = ctx.accounts.creator.to_account_info();
+
+        let market = &mut ctx.accounts.market;
+
+        // only creator
+        require_keys_eq!(ctx.accounts.creator.key(), market.creator, ErrorCode::Unauthorized);
+
+        // only if finalized (never on cancelled)
+        require!(market.status == MarketStatus::Finalized, ErrorCode::InvalidState);
+        require!(market.resolved, ErrorCode::MarketNotResolved);
+        require!(!market.cancelled, ErrorCode::InvalidState);
+
+        let amount = market.creator_fee_escrow;
+        require!(amount > 0, ErrorCode::NothingToClaim);
+        require!(market_ai.lamports() >= amount, ErrorCode::InsufficientMarketBalance);
+
+        **market_ai.try_borrow_mut_lamports()? = market_ai.lamports().saturating_sub(amount);
+        **creator_ai.try_borrow_mut_lamports()? = creator_ai.lamports().saturating_add(amount);
+
+        market.creator_fee_escrow = 0;
+
+        emit!(CreatorFeesClaimed {
+            market: market.key(),
+            creator: ctx.accounts.creator.key(),
+            amount_lamports: amount,
+        });
+
+        Ok(())
+    }
+
     /* ---------- CLAIM WINNINGS ---------- */
 
     pub fn claim_winnings(ctx: Context<ClaimWinnings>) -> Result<()> {
@@ -459,7 +496,6 @@ fn trade_inner(ctx: Context<Trade>, shares: u64, outcome_index: u8, is_buy: bool
     let market_ai = ctx.accounts.market.to_account_info();
     let system_ai = ctx.accounts.system_program.to_account_info();
     let platform_ai = ctx.accounts.platform_wallet.to_account_info();
-    let creator_ai = ctx.accounts.creator.to_account_info();
 
     let market = &mut ctx.accounts.market;
     let pos = &mut ctx.accounts.user_position;
@@ -513,13 +549,18 @@ fn trade_inner(ctx: Context<Trade>, shares: u64, outcome_index: u8, is_buy: bool
             &[trader_ai.clone(), market_ai.clone(), system_ai],
         )?;
 
+        // platform fee still paid instantly
         if platform_fee > 0 {
             **market_ai.try_borrow_mut_lamports()? = market_ai.lamports().saturating_sub(platform_fee);
             **platform_ai.try_borrow_mut_lamports()? = platform_ai.lamports().saturating_add(platform_fee);
         }
+
+        // creator fee is escrowed in market (no instant payout)
         if creator_fee > 0 {
-            **market_ai.try_borrow_mut_lamports()? = market_ai.lamports().saturating_sub(creator_fee);
-            **creator_ai.try_borrow_mut_lamports()? = creator_ai.lamports().saturating_add(creator_fee);
+            market.creator_fee_escrow = market
+                .creator_fee_escrow
+                .checked_add(creator_fee)
+                .ok_or(ErrorCode::Overflow)?;
         }
 
         market.q[idx] = market.q[idx].checked_add(shares).ok_or(ErrorCode::Overflow)?;
@@ -565,13 +606,18 @@ fn trade_inner(ctx: Context<Trade>, shares: u64, outcome_index: u8, is_buy: bool
         **market_ai.try_borrow_mut_lamports()? = market_ai.lamports().saturating_sub(net_receive);
         **trader_ai.try_borrow_mut_lamports()? = trader_ai.lamports().saturating_add(net_receive);
 
+        // platform fee still paid instantly
         if platform_fee > 0 {
             **market_ai.try_borrow_mut_lamports()? = market_ai.lamports().saturating_sub(platform_fee);
             **platform_ai.try_borrow_mut_lamports()? = platform_ai.lamports().saturating_add(platform_fee);
         }
+
+        // creator fee is escrowed in market
         if creator_fee > 0 {
-            **market_ai.try_borrow_mut_lamports()? = market_ai.lamports().saturating_sub(creator_fee);
-            **creator_ai.try_borrow_mut_lamports()? = creator_ai.lamports().saturating_add(creator_fee);
+            market.creator_fee_escrow = market
+                .creator_fee_escrow
+                .checked_add(creator_fee)
+                .ok_or(ErrorCode::Overflow)?;
         }
 
         market.q[idx] = market.q[idx].checked_sub(shares).ok_or(ErrorCode::Overflow)?;
@@ -699,6 +745,15 @@ pub struct AdminResolve<'info> {
 }
 
 #[derive(Accounts)]
+pub struct ClaimCreatorFees<'info> {
+    #[account(mut, has_one = creator)]
+    pub market: Account<'info, Market>,
+
+    #[account(mut)]
+    pub creator: Signer<'info>,
+}
+
+#[derive(Accounts)]
 pub struct ClaimWinnings<'info> {
     #[account(mut)]
     pub market: Account<'info, Market>,
@@ -765,6 +820,9 @@ pub struct Market {
     pub max_trade_shares: u64,
     pub cooldown_seconds: i64,
 
+    // NEW: escrowed creator fees (lamports)
+    pub creator_fee_escrow: u64,
+
     pub outcome_names: Vec<String>,
 }
 
@@ -788,6 +846,7 @@ impl Market {
         2 +
         8 +
         8 +
+        8 + // NEW creator_fee_escrow
         4 +
         (MAX_OUTCOMES * (4 + MAX_NAME_LEN));
 }
@@ -835,6 +894,13 @@ pub struct TradeExecuted {
     pub amount_lamports: u64,
     pub platform_fee_lamports: u64,
     pub creator_fee_lamports: u64,
+}
+
+#[event]
+pub struct CreatorFeesClaimed {
+    pub market: Pubkey,
+    pub creator: Pubkey,
+    pub amount_lamports: u64,
 }
 
 #[event]
@@ -941,6 +1007,9 @@ pub enum ErrorCode {
     AlreadyClaimed,
     #[msg("Nothing to refund")]
     NothingToRefund,
+
+    #[msg("Nothing to claim")]
+    NothingToClaim,
 
     #[msg("Dispute window closed")]
     DisputeWindowClosed,

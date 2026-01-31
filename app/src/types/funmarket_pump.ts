@@ -1,14 +1,20 @@
-{
+/**
+ * Program IDL in camelCase format in order to be used in JS/TS.
+ *
+ * Note that this is only a type helper and is not the actual IDL. The original
+ * IDL can be found at `target/idl/funmarket_pump.json`.
+ */
+export type FunmarketPump = {
   "address": "A2EqnLDYW1WAi8mhR12ncGVvt92G3jisJqCe46YoV7SJ",
   "metadata": {
-    "name": "funmarket_pump",
+    "name": "funmarketPump",
     "version": "0.1.0",
     "spec": "0.1.0",
     "description": "Funmarket.pump - Prediction markets with bonding curves on Solana"
   },
   "instructions": [
     {
-      "name": "admin_cancel",
+      "name": "adminCancel",
       "discriminator": [
         34,
         225,
@@ -34,7 +40,7 @@
       "args": []
     },
     {
-      "name": "admin_cancel_no_proposal",
+      "name": "adminCancelNoProposal",
       "discriminator": [
         182,
         132,
@@ -60,7 +66,7 @@
       "args": []
     },
     {
-      "name": "admin_finalize",
+      "name": "adminFinalize",
       "discriminator": [
         3,
         58,
@@ -85,13 +91,13 @@
       ],
       "args": [
         {
-          "name": "winning_outcome",
+          "name": "winningOutcome",
           "type": "u8"
         }
       ]
     },
     {
-      "name": "admin_finalize_no_disputes",
+      "name": "adminFinalizeNoDisputes",
       "discriminator": [
         45,
         107,
@@ -117,7 +123,7 @@
       "args": []
     },
     {
-      "name": "buy_shares",
+      "name": "buyShares",
       "discriminator": [
         40,
         239,
@@ -134,7 +140,7 @@
           "writable": true
         },
         {
-          "name": "user_position",
+          "name": "userPosition",
           "writable": true,
           "pda": {
             "seeds": [
@@ -168,7 +174,7 @@
           }
         },
         {
-          "name": "platform_wallet",
+          "name": "platformWallet",
           "writable": true,
           "address": "6szhvTU23WtiKXqPs8vuX5G7JXu2TcUdVJNByNwVGYMV"
         },
@@ -182,7 +188,7 @@
           "signer": true
         },
         {
-          "name": "system_program",
+          "name": "systemProgram",
           "address": "11111111111111111111111111111111"
         }
       ],
@@ -192,13 +198,13 @@
           "type": "u64"
         },
         {
-          "name": "outcome_index",
+          "name": "outcomeIndex",
           "type": "u8"
         }
       ]
     },
     {
-      "name": "claim_creator_fees",
+      "name": "claimCreatorFees",
       "discriminator": [
         0,
         23,
@@ -226,7 +232,7 @@
       "args": []
     },
     {
-      "name": "claim_refund",
+      "name": "claimRefund",
       "discriminator": [
         15,
         16,
@@ -243,7 +249,7 @@
           "writable": true
         },
         {
-          "name": "user_position",
+          "name": "userPosition",
           "writable": true,
           "pda": {
             "seeds": [
@@ -285,7 +291,7 @@
       "args": []
     },
     {
-      "name": "claim_winnings",
+      "name": "claimWinnings",
       "discriminator": [
         161,
         215,
@@ -302,7 +308,7 @@
           "writable": true
         },
         {
-          "name": "user_position",
+          "name": "userPosition",
           "writable": true,
           "pda": {
             "seeds": [
@@ -344,7 +350,7 @@
       "args": []
     },
     {
-      "name": "create_market",
+      "name": "createMarket",
       "discriminator": [
         103,
         226,
@@ -367,39 +373,39 @@
           "signer": true
         },
         {
-          "name": "system_program",
+          "name": "systemProgram",
           "address": "11111111111111111111111111111111"
         }
       ],
       "args": [
         {
-          "name": "resolution_time",
+          "name": "resolutionTime",
           "type": "i64"
         },
         {
-          "name": "outcome_names",
+          "name": "outcomeNames",
           "type": {
             "vec": "string"
           }
         },
         {
-          "name": "market_type",
+          "name": "marketType",
           "type": "u8"
         },
         {
-          "name": "b_lamports",
+          "name": "bLamports",
           "type": "u64"
         },
         {
-          "name": "max_position_bps",
+          "name": "maxPositionBps",
           "type": "u16"
         },
         {
-          "name": "max_trade_shares",
+          "name": "maxTradeShares",
           "type": "u64"
         },
         {
-          "name": "cooldown_seconds",
+          "name": "cooldownSeconds",
           "type": "i64"
         }
       ]
@@ -429,7 +435,7 @@
       "args": []
     },
     {
-      "name": "propose_resolution",
+      "name": "proposeResolution",
       "discriminator": [
         19,
         68,
@@ -455,13 +461,13 @@
       ],
       "args": [
         {
-          "name": "proposed_outcome",
+          "name": "proposedOutcome",
           "type": "u8"
         }
       ]
     },
     {
-      "name": "sell_shares",
+      "name": "sellShares",
       "discriminator": [
         184,
         164,
@@ -478,7 +484,7 @@
           "writable": true
         },
         {
-          "name": "user_position",
+          "name": "userPosition",
           "writable": true,
           "pda": {
             "seeds": [
@@ -512,7 +518,7 @@
           }
         },
         {
-          "name": "platform_wallet",
+          "name": "platformWallet",
           "writable": true,
           "address": "6szhvTU23WtiKXqPs8vuX5G7JXu2TcUdVJNByNwVGYMV"
         },
@@ -526,7 +532,7 @@
           "signer": true
         },
         {
-          "name": "system_program",
+          "name": "systemProgram",
           "address": "11111111111111111111111111111111"
         }
       ],
@@ -536,7 +542,7 @@
           "type": "u64"
         },
         {
-          "name": "outcome_index",
+          "name": "outcomeIndex",
           "type": "u8"
         }
       ]
@@ -544,7 +550,7 @@
   ],
   "accounts": [
     {
-      "name": "Market",
+      "name": "market",
       "discriminator": [
         219,
         190,
@@ -557,7 +563,7 @@
       ]
     },
     {
-      "name": "UserPosition",
+      "name": "userPosition",
       "discriminator": [
         251,
         248,
@@ -572,7 +578,7 @@
   ],
   "events": [
     {
-      "name": "Cancelled",
+      "name": "cancelled",
       "discriminator": [
         136,
         23,
@@ -585,7 +591,7 @@
       ]
     },
     {
-      "name": "Claimed",
+      "name": "claimed",
       "discriminator": [
         217,
         192,
@@ -598,7 +604,7 @@
       ]
     },
     {
-      "name": "CreatorFeesClaimed",
+      "name": "creatorFeesClaimed",
       "discriminator": [
         189,
         178,
@@ -611,7 +617,7 @@
       ]
     },
     {
-      "name": "Disputed",
+      "name": "disputed",
       "discriminator": [
         186,
         235,
@@ -624,7 +630,7 @@
       ]
     },
     {
-      "name": "Finalized",
+      "name": "finalized",
       "discriminator": [
         4,
         77,
@@ -637,7 +643,7 @@
       ]
     },
     {
-      "name": "MarketCreated",
+      "name": "marketCreated",
       "discriminator": [
         88,
         184,
@@ -650,7 +656,7 @@
       ]
     },
     {
-      "name": "ResolutionProposed",
+      "name": "resolutionProposed",
       "discriminator": [
         209,
         21,
@@ -663,7 +669,7 @@
       ]
     },
     {
-      "name": "TradeExecuted",
+      "name": "tradeExecuted",
       "discriminator": [
         41,
         110,
@@ -679,187 +685,187 @@
   "errors": [
     {
       "code": 6000,
-      "name": "InvalidOutcomes",
+      "name": "invalidOutcomes",
       "msg": "Invalid outcomes"
     },
     {
       "code": 6001,
-      "name": "InvalidResolutionTime",
+      "name": "invalidResolutionTime",
       "msg": "Invalid resolution time"
     },
     {
       "code": 6002,
-      "name": "InvalidB",
+      "name": "invalidB",
       "msg": "Invalid liquidity parameter b"
     },
     {
       "code": 6003,
-      "name": "InvalidAntiManip",
+      "name": "invalidAntiManip",
       "msg": "Invalid anti-manip config"
     },
     {
       "code": 6004,
-      "name": "MarketClosed",
+      "name": "marketClosed",
       "msg": "Market is closed (past end time)"
     },
     {
       "code": 6005,
-      "name": "MarketResolved",
+      "name": "marketResolved",
       "msg": "Market already resolved"
     },
     {
       "code": 6006,
-      "name": "MarketNotEnded",
+      "name": "marketNotEnded",
       "msg": "Market not ended yet"
     },
     {
       "code": 6007,
-      "name": "MarketNotResolved",
+      "name": "marketNotResolved",
       "msg": "Market not resolved"
     },
     {
       "code": 6008,
-      "name": "InvalidState",
+      "name": "invalidState",
       "msg": "Invalid state"
     },
     {
       "code": 6009,
-      "name": "TooEarly",
+      "name": "tooEarly",
       "msg": "Too early"
     },
     {
       "code": 6010,
-      "name": "TooLateToPropose",
+      "name": "tooLateToPropose",
       "msg": "Too late to propose"
     },
     {
       "code": 6011,
-      "name": "InvalidShares",
+      "name": "invalidShares",
       "msg": "Invalid shares"
     },
     {
       "code": 6012,
-      "name": "InvalidOutcomeIndex",
+      "name": "invalidOutcomeIndex",
       "msg": "Invalid outcome index"
     },
     {
       "code": 6013,
-      "name": "TradeTooLarge",
+      "name": "tradeTooLarge",
       "msg": "Trade too large"
     },
     {
       "code": 6014,
-      "name": "CooldownActive",
+      "name": "cooldownActive",
       "msg": "Cooldown active: wait before trading again"
     },
     {
       "code": 6015,
-      "name": "PositionCapExceeded",
+      "name": "positionCapExceeded",
       "msg": "Position cap exceeded for this outcome"
     },
     {
       "code": 6016,
-      "name": "NotEnoughShares",
+      "name": "notEnoughShares",
       "msg": "Not enough shares to sell"
     },
     {
       "code": 6017,
-      "name": "InvalidCost",
+      "name": "invalidCost",
       "msg": "Invalid cost or refund"
     },
     {
       "code": 6018,
-      "name": "InsufficientShares",
+      "name": "insufficientShares",
       "msg": "Insufficient shares"
     },
     {
       "code": 6019,
-      "name": "InvalidPayout",
+      "name": "invalidPayout",
       "msg": "Invalid payout"
     },
     {
       "code": 6020,
-      "name": "NoWinningShares",
+      "name": "noWinningShares",
       "msg": "No winning shares to claim"
     },
     {
       "code": 6021,
-      "name": "InvalidSupply",
+      "name": "invalidSupply",
       "msg": "Invalid supply"
     },
     {
       "code": 6022,
-      "name": "AlreadyClaimed",
+      "name": "alreadyClaimed",
       "msg": "Already claimed"
     },
     {
       "code": 6023,
-      "name": "NothingToRefund",
+      "name": "nothingToRefund",
       "msg": "Nothing to refund"
     },
     {
       "code": 6024,
-      "name": "NothingToClaim",
+      "name": "nothingToClaim",
       "msg": "Nothing to claim"
     },
     {
       "code": 6025,
-      "name": "DisputeWindowClosed",
+      "name": "disputeWindowClosed",
       "msg": "Dispute window closed"
     },
     {
       "code": 6026,
-      "name": "HasDisputes",
+      "name": "hasDisputes",
       "msg": "Has disputes; requires admin_finalize"
     },
     {
       "code": 6027,
-      "name": "NoDispute",
+      "name": "noDispute",
       "msg": "No dispute"
     },
     {
       "code": 6028,
-      "name": "Unauthorized",
-      "msg": "Unauthorized"
+      "name": "unauthorized",
+      "msg": "unauthorized"
     },
     {
       "code": 6029,
-      "name": "NotCancelled",
+      "name": "notCancelled",
       "msg": "Market not cancelled"
     },
     {
       "code": 6030,
-      "name": "InsufficientMarketBalance",
+      "name": "insufficientMarketBalance",
       "msg": "Insufficient market balance"
     },
     {
       "code": 6031,
-      "name": "InvalidUserPosition",
+      "name": "invalidUserPosition",
       "msg": "Invalid user position account"
     },
     {
       "code": 6032,
-      "name": "Overflow",
-      "msg": "Overflow"
+      "name": "overflow",
+      "msg": "overflow"
     }
   ],
   "types": [
     {
-      "name": "CancelReason",
+      "name": "cancelReason",
       "type": {
         "kind": "enum",
         "variants": [
           {
-            "name": "NoProposal24h"
+            "name": "noProposal24h"
           },
           {
-            "name": "Admin"
+            "name": "admin"
           }
         ]
       }
     },
     {
-      "name": "Cancelled",
+      "name": "cancelled",
       "type": {
         "kind": "struct",
         "fields": [
@@ -875,7 +881,7 @@
             "name": "reason",
             "type": {
               "defined": {
-                "name": "CancelReason"
+                "name": "cancelReason"
               }
             }
           }
@@ -883,21 +889,21 @@
       }
     },
     {
-      "name": "ClaimKind",
+      "name": "claimKind",
       "type": {
         "kind": "enum",
         "variants": [
           {
-            "name": "Winnings"
+            "name": "winnings"
           },
           {
-            "name": "Refund"
+            "name": "refund"
           }
         ]
       }
     },
     {
-      "name": "Claimed",
+      "name": "claimed",
       "type": {
         "kind": "struct",
         "fields": [
@@ -913,19 +919,19 @@
             "name": "kind",
             "type": {
               "defined": {
-                "name": "ClaimKind"
+                "name": "claimKind"
               }
             }
           },
           {
-            "name": "amount_lamports",
+            "name": "amountLamports",
             "type": "u64"
           }
         ]
       }
     },
     {
-      "name": "CreatorFeesClaimed",
+      "name": "creatorFeesClaimed",
       "type": {
         "kind": "struct",
         "fields": [
@@ -938,14 +944,14 @@
             "type": "pubkey"
           },
           {
-            "name": "amount_lamports",
+            "name": "amountLamports",
             "type": "u64"
           }
         ]
       }
     },
     {
-      "name": "Disputed",
+      "name": "disputed",
       "type": {
         "kind": "struct",
         "fields": [
@@ -958,14 +964,14 @@
             "type": "pubkey"
           },
           {
-            "name": "dispute_count",
+            "name": "disputeCount",
             "type": "u32"
           }
         ]
       }
     },
     {
-      "name": "Finalized",
+      "name": "finalized",
       "type": {
         "kind": "struct",
         "fields": [
@@ -974,7 +980,7 @@
             "type": "pubkey"
           },
           {
-            "name": "winning_outcome",
+            "name": "winningOutcome",
             "type": "u8"
           },
           {
@@ -985,7 +991,7 @@
       }
     },
     {
-      "name": "Market",
+      "name": "market",
       "type": {
         "kind": "struct",
         "fields": [
@@ -994,19 +1000,19 @@
             "type": "pubkey"
           },
           {
-            "name": "resolution_time",
+            "name": "resolutionTime",
             "type": "i64"
           },
           {
-            "name": "market_type",
+            "name": "marketType",
             "type": "u8"
           },
           {
-            "name": "outcome_count",
+            "name": "outcomeCount",
             "type": "u8"
           },
           {
-            "name": "b_lamports",
+            "name": "bLamports",
             "type": "u64"
           },
           {
@@ -1022,7 +1028,7 @@
             "name": "status",
             "type": {
               "defined": {
-                "name": "MarketStatus"
+                "name": "marketStatus"
               }
             }
           },
@@ -1035,51 +1041,51 @@
             "type": "bool"
           },
           {
-            "name": "winning_outcome",
+            "name": "winningOutcome",
             "type": {
               "option": "u8"
             }
           },
           {
-            "name": "proposed_outcome",
+            "name": "proposedOutcome",
             "type": {
               "option": "u8"
             }
           },
           {
-            "name": "proposed_at",
+            "name": "proposedAt",
             "type": {
               "option": "i64"
             }
           },
           {
-            "name": "contest_deadline",
+            "name": "contestDeadline",
             "type": {
               "option": "i64"
             }
           },
           {
-            "name": "dispute_count",
+            "name": "disputeCount",
             "type": "u32"
           },
           {
-            "name": "max_position_bps",
+            "name": "maxPositionBps",
             "type": "u16"
           },
           {
-            "name": "max_trade_shares",
+            "name": "maxTradeShares",
             "type": "u64"
           },
           {
-            "name": "cooldown_seconds",
+            "name": "cooldownSeconds",
             "type": "i64"
           },
           {
-            "name": "creator_fee_escrow",
+            "name": "creatorFeeEscrow",
             "type": "u64"
           },
           {
-            "name": "outcome_names",
+            "name": "outcomeNames",
             "type": {
               "vec": "string"
             }
@@ -1088,7 +1094,7 @@
       }
     },
     {
-      "name": "MarketCreated",
+      "name": "marketCreated",
       "type": {
         "kind": "struct",
         "fields": [
@@ -1101,46 +1107,46 @@
             "type": "pubkey"
           },
           {
-            "name": "resolution_time",
+            "name": "resolutionTime",
             "type": "i64"
           },
           {
-            "name": "market_type",
+            "name": "marketType",
             "type": "u8"
           },
           {
-            "name": "outcome_count",
+            "name": "outcomeCount",
             "type": "u8"
           },
           {
-            "name": "b_lamports",
+            "name": "bLamports",
             "type": "u64"
           }
         ]
       }
     },
     {
-      "name": "MarketStatus",
+      "name": "marketStatus",
       "type": {
         "kind": "enum",
         "variants": [
           {
-            "name": "Open"
+            "name": "open"
           },
           {
-            "name": "Proposed"
+            "name": "proposed"
           },
           {
-            "name": "Finalized"
+            "name": "finalized"
           },
           {
-            "name": "Cancelled"
+            "name": "cancelled"
           }
         ]
       }
     },
     {
-      "name": "ResolutionProposed",
+      "name": "resolutionProposed",
       "type": {
         "kind": "struct",
         "fields": [
@@ -1149,22 +1155,22 @@
             "type": "pubkey"
           },
           {
-            "name": "proposed_outcome",
+            "name": "proposedOutcome",
             "type": "u8"
           },
           {
-            "name": "proposed_at",
+            "name": "proposedAt",
             "type": "i64"
           },
           {
-            "name": "contest_deadline",
+            "name": "contestDeadline",
             "type": "i64"
           }
         ]
       }
     },
     {
-      "name": "TradeExecuted",
+      "name": "tradeExecuted",
       "type": {
         "kind": "struct",
         "fields": [
@@ -1177,11 +1183,11 @@
             "type": "pubkey"
           },
           {
-            "name": "is_buy",
+            "name": "isBuy",
             "type": "bool"
           },
           {
-            "name": "outcome_index",
+            "name": "outcomeIndex",
             "type": "u8"
           },
           {
@@ -1189,22 +1195,22 @@
             "type": "u64"
           },
           {
-            "name": "amount_lamports",
+            "name": "amountLamports",
             "type": "u64"
           },
           {
-            "name": "platform_fee_lamports",
+            "name": "platformFeeLamports",
             "type": "u64"
           },
           {
-            "name": "creator_fee_lamports",
+            "name": "creatorFeeLamports",
             "type": "u64"
           }
         ]
       }
     },
     {
-      "name": "UserPosition",
+      "name": "userPosition",
       "type": {
         "kind": "struct",
         "fields": [
@@ -1230,15 +1236,15 @@
             "type": "bool"
           },
           {
-            "name": "last_trade_ts",
+            "name": "lastTradeTs",
             "type": "i64"
           },
           {
-            "name": "net_cost_lamports",
+            "name": "netCostLamports",
             "type": "i128"
           }
         ]
       }
     }
   ]
-}
+};

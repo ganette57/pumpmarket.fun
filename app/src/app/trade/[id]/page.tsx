@@ -90,6 +90,21 @@ type BottomTab = "discussion" | "activity";
 
 type RelatedTab = "related" | "trending" | "popular";
 
+/* ══════════════════════════════════════════════════════════════
+   TRADE MODAL TYPES
+   ══════════════════════════════════════════════════════════════ */
+type TradeStep = "idle" | "signing" | "confirming" | "updating" | "done" | "error";
+
+type TradeResult = {
+  success: boolean;
+  side: "buy" | "sell";
+  shares: number;
+  outcomeName: string;
+  costSol: number | null;
+  txSig: string | null;
+  error?: string;
+} | null;
+
 function useIsMobile(breakpointPx = 1024) {
   const [isMobile, setIsMobile] = useState(false);
   useEffect(() => {
@@ -231,6 +246,209 @@ function parseBLamports(m: any): number | null {
   return solToLamports(0.01);
 }
 
+function shortTxSig(sig: string | null): string {
+  if (!sig) return "";
+  if (sig.length <= 16) return sig;
+  return `${sig.slice(0, 8)}...${sig.slice(-8)}`;
+}
+
+function chunk<T>(arr: T[], size: number) {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+async function getMultipleAccountsInfoBatched(
+  connection: any,
+  keys: PublicKey[],
+  batchSize = 80
+) {
+  const res = new Map<string, any>();
+  for (const part of chunk(keys, batchSize)) {
+    const infos = await connection.getMultipleAccountsInfo(part);
+    infos.forEach((info: any, idx: number) => {
+      const k = part[idx]!.toBase58();
+      res.set(k, info);
+    });
+  }
+  return res;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   TRADE PROGRESS MODAL COMPONENT
+   ══════════════════════════════════════════════════════════════ */
+function TradeProgressModal({
+  step,
+  result,
+  onClose,
+}: {
+  step: TradeStep;
+  result: TradeResult;
+  onClose: () => void;
+}) {
+  if (step === "idle" && !result) return null;
+
+  const isProcessing = step !== "idle" && step !== "done" && step !== "error";
+
+  return (
+    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+      <div className="bg-pump-dark border border-white/20 rounded-2xl p-6 max-w-sm w-full shadow-2xl">
+        
+        {/* Processing steps */}
+        {isProcessing && (
+          <>
+            <h3 className="text-xl font-bold text-white mb-4 text-center">Processing trade...</h3>
+            
+            <div className="space-y-3">
+              {/* Step 1: Signing */}
+              <div className={`flex items-center gap-3 p-3 rounded-xl border ${
+                step === "signing" 
+                  ? "border-pump-green/40 bg-pump-green/10" 
+                  : step === "confirming" || step === "updating"
+                    ? "border-pump-green/40 bg-pump-green/5"
+                    : "border-white/10 bg-white/5"
+              }`}>
+                <div className="w-6 h-6 flex items-center justify-center">
+                  {step === "signing" ? (
+                    <div className="w-5 h-5 border-2 border-pump-green border-t-transparent rounded-full animate-spin" />
+                  ) : step === "confirming" || step === "updating" ? (
+                    <span className="text-pump-green">✓</span>
+                  ) : (
+                    <span className="text-gray-500">○</span>
+                  )}
+                </div>
+                <span className={step === "signing" ? "text-white font-medium" : "text-gray-400"}>
+                  Sign transaction
+                </span>
+              </div>
+
+              {/* Step 2: Confirming */}
+              <div className={`flex items-center gap-3 p-3 rounded-xl border ${
+                step === "confirming" 
+                  ? "border-pump-green/40 bg-pump-green/10" 
+                  : step === "updating"
+                    ? "border-pump-green/40 bg-pump-green/5"
+                    : "border-white/10 bg-white/5"
+              }`}>
+                <div className="w-6 h-6 flex items-center justify-center">
+                  {step === "confirming" ? (
+                    <div className="w-5 h-5 border-2 border-pump-green border-t-transparent rounded-full animate-spin" />
+                  ) : step === "updating" ? (
+                    <span className="text-pump-green">✓</span>
+                  ) : (
+                    <span className="text-gray-500">○</span>
+                  )}
+                </div>
+                <span className={step === "confirming" ? "text-white font-medium" : "text-gray-400"}>
+                  Confirming on Solana
+                </span>
+              </div>
+
+              {/* Step 3: Updating */}
+              <div className={`flex items-center gap-3 p-3 rounded-xl border ${
+                step === "updating" 
+                  ? "border-pump-green/40 bg-pump-green/10" 
+                  : "border-white/10 bg-white/5"
+              }`}>
+                <div className="w-6 h-6 flex items-center justify-center">
+                  {step === "updating" ? (
+                    <div className="w-5 h-5 border-2 border-pump-green border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <span className="text-gray-500">○</span>
+                  )}
+                </div>
+                <span className={step === "updating" ? "text-white font-medium" : "text-gray-400"}>
+                  Updating position
+                </span>
+              </div>
+            </div>
+
+            <p className="text-xs text-gray-500 text-center mt-4">
+              Please don't close this window...
+            </p>
+          </>
+        )}
+
+        {/* Success */}
+        {step === "done" && result?.success && (
+          <>
+            <div className="text-center mb-4">
+              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-pump-green/20 flex items-center justify-center">
+                <span className="text-4xl">✓</span>
+              </div>
+              <h3 className="text-xl font-bold text-white">Trade successful!</h3>
+            </div>
+
+            <div className="bg-black/30 rounded-xl p-4 space-y-2 mb-4">
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-400">Action</span>
+                <span className="text-white font-semibold uppercase">{result.side}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-400">Shares</span>
+                <span className="text-white font-semibold">{result.shares}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-400">Outcome</span>
+                <span className="text-white font-semibold">{result.outcomeName}</span>
+              </div>
+              {result.costSol != null && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-400">{result.side === "buy" ? "Cost" : "Received"}</span>
+                  <span className="text-pump-green font-semibold">{result.costSol.toFixed(4)} SOL</span>
+                </div>
+              )}
+              {result.txSig && (
+                <div className="flex justify-between text-sm items-center">
+                  <span className="text-gray-400">Tx</span>
+                  <a
+                    href={`https://explorer.solana.com/tx/${result.txSig}?cluster=devnet`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-pump-green hover:underline font-mono text-xs"
+                  >
+                    {shortTxSig(result.txSig)} ↗
+                  </a>
+                </div>
+              )}
+            </div>
+
+            <button
+              onClick={onClose}
+              className="w-full py-3 rounded-xl bg-pump-green text-black font-semibold hover:bg-pump-green/90 transition"
+            >
+              Close
+            </button>
+          </>
+        )}
+
+        {/* Error */}
+        {step === "error" && (
+          <>
+            <div className="text-center mb-4">
+              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-red-500/20 flex items-center justify-center">
+                <span className="text-4xl">✕</span>
+              </div>
+              <h3 className="text-xl font-bold text-white">Trade failed</h3>
+            </div>
+
+            <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 mb-4">
+              <p className="text-sm text-red-200">{result?.error || "Unknown error"}</p>
+            </div>
+
+            <button
+              onClick={onClose}
+              className="w-full py-3 rounded-xl bg-white/10 text-white font-semibold hover:bg-white/20 transition"
+            >
+              Close
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function TradePage() {
   const params = useParams();
   const id = safeParamId((params as any)?.id);
@@ -255,6 +473,46 @@ export default function TradePage() {
   const [oddsPoints, setOddsPoints] = useState<{ t: number; pct: number[] }[]>([]);
   const [bottomTab, setBottomTab] = useState<BottomTab>("discussion");
 
+  // Trade modal state
+  const [tradeStep, setTradeStep] = useState<TradeStep>("idle");
+  const [tradeResult, setTradeResult] = useState<TradeResult>(null);
+  const loadOnchainSnapshot = useCallback(
+    async (marketAddress: string) => {
+      if (!program) return { marketAcc: null as any, posAcc: null as any, marketLamports: null as number | null };
+      try {
+        const marketPk = new PublicKey(marketAddress);
+  
+        // position pda only if wallet connected
+        const posPda =
+          publicKey && connected
+            ? getUserPositionPDA(marketPk, publicKey)[0]
+            : null;
+  
+        const keys: PublicKey[] = posPda ? [marketPk, posPda] : [marketPk];
+  
+        const infos = await getMultipleAccountsInfoBatched(connection, keys, 80);
+  
+        const coder = (program as any).coder;
+  
+        const mi = infos.get(marketPk.toBase58());
+        const marketAcc = mi?.data ? coder.accounts.decode("market", mi.data) : null;
+        const marketLamports = mi?.lamports != null ? Number(mi.lamports) : null;
+  
+        let posAcc: any = null;
+        if (posPda) {
+          const pi = infos.get(posPda.toBase58());
+          posAcc = pi?.data ? coder.accounts.decode("userPosition", pi.data) : null;
+        }
+  
+        return { marketAcc, posAcc, marketLamports };
+      } catch (e) {
+        console.warn("loadOnchainSnapshot failed:", e);
+        return { marketAcc: null, posAcc: null, marketLamports: null };
+      }
+    },
+    [program, connection, publicKey, connected]
+  );
+
 // Related block (RIGHT column under TradingPanel)
 const [relatedTab, setRelatedTab] = useState<RelatedTab>("related");
 const [relatedLoading, setRelatedLoading] = useState(false);
@@ -271,7 +529,10 @@ const [relatedMarkets, setRelatedMarkets] = useState<any[]>([]);
     async (marketAddress: string) => {
       setLoading(true);
       try {
-        const supabaseMarket: SupabaseMarket = await getMarketByAddress(marketAddress);
+        const [supabaseMarket, snap] = await Promise.all([
+          getMarketByAddress(marketAddress),
+          loadOnchainSnapshot(marketAddress),
+        ]);
         if (!supabaseMarket) {
           setMarket(null);
           return;
@@ -281,26 +542,6 @@ const [relatedMarkets, setRelatedMarkets] = useState<any[]>([]);
 const endMs = parseEndDateMs(supabaseMarket?.end_date);
 let resolutionTime = Number.isFinite(endMs) ? Math.floor(endMs / 1000) : 0;
 
-// ✅ override on-chain (resolutionTime + resolved)
-let resolvedOnChain: boolean | null = null;
-
-try {
-  if (program) {
-    const marketPk = new PublicKey(marketAddress);
-    const acc = await (program as any).account.market.fetch(marketPk);
-
-    const rt =
-      typeof acc?.resolutionTime?.toNumber === "function"
-        ? acc.resolutionTime.toNumber()
-        : Number(acc?.resolutionTime || 0);
-
-    if (rt > 0) resolutionTime = rt;
-
-    resolvedOnChain = !!acc?.resolved;
-  }
-} catch (e) {
-  console.warn("on-chain fetch failed, using DB", e);
-}
   
         const mt = (typeof supabaseMarket.market_type === "number" ? supabaseMarket.market_type : 0) as 0 | 1;
   
@@ -321,7 +562,7 @@ try {
           creatorResolveDeadline,
           totalVolume: Number(supabaseMarket.total_volume) || 0,
           resolutionTime,
-          resolved: resolvedOnChain ?? !!supabaseMarket.resolved,
+          resolved: !!supabaseMarket.resolved || !!snap?.marketAcc?.resolved,
   
           winningOutcome:
             supabaseMarket.winning_outcome === null || supabaseMarket.winning_outcome === undefined
@@ -360,6 +601,19 @@ try {
           noSupply: Number(supabaseMarket.no_supply) || 0,
         };
   
+// --- On-chain snapshot merge (fast)
+if (snap?.marketLamports != null) setMarketBalanceLamports(snap.marketLamports);
+
+if (snap?.posAcc?.shares) {
+  const sharesArr = Array.isArray(snap.posAcc.shares)
+    ? snap.posAcc.shares.map((x: any) => Number(x) || 0)
+    : [];
+  setPositionShares(sharesArr);
+} else {
+  // if no position account yet
+  setPositionShares(null);
+}
+
         setMarket(transformed);
       } finally {
         setLoading(false);
@@ -473,7 +727,7 @@ useEffect(() => {
   };
 }, [id, market?.resolutionStatus, submitting, loadMarket]);
 
-  // Market balance
+  // Related block
   useEffect(() => {
     if (!market?.publicKey) return;
   
@@ -524,26 +778,6 @@ useEffect(() => {
     };
   }, [market?.publicKey, market?.category, relatedTab]);
 
-  // User positions
-  useEffect(() => {
-    if (!id || !publicKey || !connected || !program) {
-      setPositionShares(null);
-      return;
-    }
-
-    (async () => {
-      try {
-        const marketPk = new PublicKey(id);
-        const [pda] = getUserPositionPDA(marketPk, publicKey);
-        const acc = await (program as any).account.userPosition.fetch(pda);
-        const sharesArr = Array.isArray(acc?.shares) ? acc.shares.map((x: any) => Number(x) || 0) : [];
-        setPositionShares(sharesArr);
-      } catch {
-        setPositionShares(null);
-      }
-    })();
-  }, [id, publicKey, connected, program]);
-
   // Odds history
   useEffect(() => {
     if (!market?.dbId) {
@@ -562,7 +796,8 @@ useEffect(() => {
           .from("transactions")
           .select("created_at,is_buy,amount,outcome_index,is_yes,shares")
           .eq("market_id", market.dbId)
-          .order("created_at", { ascending: true });
+          .order("created_at", { ascending: true })
+.limit(2000);
 
         if (error) {
           console.error("transactions fetch error:", error);
@@ -600,6 +835,12 @@ useEffect(() => {
     };
   }, [mobileTradeOpen, isMobile]);
 
+  // Close trade modal
+  function closeTradeModal() {
+    setTradeStep("idle");
+    setTradeResult(null);
+  }
+
   async function handleTrade(shares: number, outcomeIndex: number, side: "buy" | "sell", costSol?: number) {
     if (!connected || !publicKey || !program) {
       if (!publicKey) alert("Please connect your wallet");
@@ -615,8 +856,11 @@ useEffect(() => {
 
     const safeShares = Math.max(1, Math.floor(shares));
     const safeOutcome = clampInt(outcomeIndex, 0, derived.names.length - 1);
+    const name = derived.names[safeOutcome] || `Outcome #${safeOutcome + 1}`;
 
     setSubmitting(true);
+    setTradeStep("signing");
+    setTradeResult(null);
 
     // optimistic UI
     setMarket((prev) => {
@@ -636,7 +880,18 @@ useEffect(() => {
     });
 
     if (!signTransaction) {
-      alert("Wallet cannot sign transactions");
+      setTradeStep("error");
+      setTradeResult({
+        success: false,
+        side,
+        shares: safeShares,
+        outcomeName: name,
+        costSol: costSol ?? null,
+        txSig: null,
+        error: "Wallet cannot sign transactions",
+      });
+      setSubmitting(false);
+      inFlightRef.current[key] = false;
       return;
     }
 
@@ -662,12 +917,14 @@ useEffect(() => {
           })
           .transaction();
       
-          txSig = await sendSignedTx({
-            connection,
-            tx,
-            signTx: signTransaction,
-            feePayer: publicKey,
-          });
+        setTradeStep("confirming");
+      
+        txSig = await sendSignedTx({
+          connection,
+          tx,
+          signTx: signTransaction,
+          feePayer: publicKey,
+        });
       } else {
         const tx = await (program as any).methods
           .sellShares(amountBn, safeOutcome)
@@ -681,15 +938,18 @@ useEffect(() => {
           })
           .transaction();
       
-          txSig = await sendSignedTx({
-            connection,
-            tx,
-            signTx: signTransaction,
-            feePayer: publicKey,
-          });
+        setTradeStep("confirming");
+      
+        txSig = await sendSignedTx({
+          connection,
+          tx,
+          signTx: signTransaction,
+          feePayer: publicKey,
+        });
       }
 
-      const name = derived.names[safeOutcome] || `Outcome #${safeOutcome + 1}`;
+      setTradeStep("updating");
+
       const safeCostSol = typeof costSol === "number" && Number.isFinite(costSol) ? costSol : null;
 
       // Record transaction in DB (non-blocking error)
@@ -729,14 +989,29 @@ useEffect(() => {
       }
 
       // Always refresh UI state
-      await loadMarket(id);
+      // Refresh fast on-chain first (instant UI), then DB (eventual consistency)
+const snap = await loadOnchainSnapshot(id);
+if (snap?.marketLamports != null) setMarketBalanceLamports(snap.marketLamports);
+if (snap?.posAcc?.shares) {
+  const sharesArr = Array.isArray(snap.posAcc.shares) ? snap.posAcc.shares.map((x: any) => Number(x) || 0) : [];
+  setPositionShares(sharesArr);
+}
+await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
 
       // close drawer on success (mobile)
       if (isMobile) setMobileTradeOpen(false);
 
-      alert(
-        `Success! 🎉\n\n${side === "buy" ? "Bought" : "Sold"} ${safeShares} shares of "${name}"\n\nTx: ${txSig.slice(0, 16)}...\n\nhttps://explorer.solana.com/tx/${txSig}?cluster=devnet`
-      );
+      // Show success modal
+      setTradeStep("done");
+      setTradeResult({
+        success: true,
+        side,
+        shares: safeShares,
+        outcomeName: name,
+        costSol: safeCostSol,
+        txSig,
+      });
+
     } catch (error: any) {
       console.error(`${side.toUpperCase()} shares error:`, error);
       const errMsg = String(error?.message || "");
@@ -746,6 +1021,8 @@ useEffect(() => {
         // treat as success-ish
         if (isMobile) setMobileTradeOpen(false);
         await loadMarket(id);
+        setTradeStep("idle");
+        setTradeResult(null);
         return;
       }
 
@@ -753,13 +1030,24 @@ useEffect(() => {
       if (errMsg.toLowerCase().includes("user rejected")) {
         // Revert optimistic UI
         await loadMarket(id);
-        alert("Transaction cancelled by user.");
+        setTradeStep("idle");
+        setTradeResult(null);
         return;
       }
 
       // Revert optimistic UI on any error
       await loadMarket(id);
-      alert(`Error: ${errMsg || `Failed to ${side}`}`);
+      
+      setTradeStep("error");
+      setTradeResult({
+        success: false,
+        side,
+        shares: safeShares,
+        outcomeName: name,
+        costSol: costSol ?? null,
+        txSig: null,
+        error: errMsg || `Failed to ${side}`,
+      });
     } finally {
       inFlightRef.current[key] = false;
       setSubmitting(false);
@@ -840,6 +1128,13 @@ useEffect(() => {
 
   return (
     <>
+      {/* Trade Progress Modal */}
+      <TradeProgressModal
+        step={tradeStep}
+        result={tradeResult}
+        onClose={closeTradeModal}
+      />
+
       {/* 
         SCROLL CONTAINER - Un seul conteneur scrollable qui englobe tout.
         La colonne droite est sticky à l'intérieur.

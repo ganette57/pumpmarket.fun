@@ -7,11 +7,11 @@ import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
 import "@solana/wallet-adapter-react-ui/styles.css";
 
 function getEndpoint() {
-  const env = process.env.NEXT_PUBLIC_SOLANA_RPC;
+  const env = process.env.NEXT_PUBLIC_SOLANA_RPC_URL;
 
   // ✅ In prod: no silent fallback
   if (process.env.NODE_ENV === "production" && !env) {
-    throw new Error("Missing NEXT_PUBLIC_SOLANA_RPC in production");
+    throw new Error("Missing NEXT_PUBLIC_SOLANA_RPC_URL in production");
   }
 
   // ✅ Dev fallback

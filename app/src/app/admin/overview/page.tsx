@@ -443,6 +443,32 @@ export default function AdminOverviewPage() {
     setFlowError("");
   }
 
+  // ========= Helper: Fresh fetch on-chain state =========
+  async function fetchFreshOnchainState(marketAddr: string): Promise<{
+    status: string;
+    disputeCount: number;
+    proposedOutcome: number | null;
+  }> {
+    if (!program) throw new Error("Program not ready");
+    
+    const marketPk = new PublicKey(marketAddr);
+    const acct: any = await (program as any).account.market.fetch(marketPk);
+    
+    const status = parseAnchorEnum(acct?.status);
+    const disputeCount =
+      (bnToNumberOrNull(acct?.disputeCount) ??
+        bnToNumberOrNull(acct?.dispute_count) ??
+        0) || 0;
+    const proposedOutcome =
+      bnToNumberOrNull(acct?.proposedOutcome) ??
+      bnToNumberOrNull(acct?.proposed_outcome) ??
+      null;
+
+    console.log(`[fetchFreshOnchainState] ${marketAddr}: status=${status}, disputeCount=${disputeCount}, proposedOutcome=${proposedOutcome}`);
+    
+    return { status, disputeCount, proposedOutcome };
+  }
+
   // ========= APPROVE FLOW =========
   async function doApprove() {
     if (!drawerMarket) return;
@@ -451,13 +477,44 @@ export default function AdminOverviewPage() {
     if (!isAdminWallet) return setFlowError(`Wrong wallet. Must be ${ADMIN_PUBKEY.toBase58()}`);
 
     const marketAddr = drawerMarket.market_address;
-    const oc = onchain[marketAddr];
+    const marketPk = new PublicKey(marketAddr);
 
     setFlowStep("checking");
-    setFlowMsg("Checking server...");
+    setFlowMsg("Checking on-chain state...");
     setFlowError("");
 
     try {
+      // ✅ FRESH FETCH: Re-read on-chain state at the moment of click
+      let onchainState: { status: string; disputeCount: number; proposedOutcome: number | null };
+      
+      try {
+        onchainState = await fetchFreshOnchainState(marketAddr);
+      } catch (fetchErr) {
+        console.warn("[doApprove] Could not fetch on-chain state:", fetchErr);
+        // Fallback to cached state
+        const oc = onchain[marketAddr];
+        onchainState = {
+          status: oc?.status ?? "unknown",
+          disputeCount: oc?.disputeCount ?? 0,
+          proposedOutcome: oc?.proposedOutcome ?? null,
+        };
+      }
+
+      // Check if already resolved
+      if (onchainState.status === "finalized") {
+        setFlowStep("done");
+        setFlowMsg("Market already finalized on-chain!");
+        setTimeout(() => { closeDrawer(); load(); }, 2000);
+        return;
+      }
+
+      if (onchainState.status === "cancelled") {
+        setFlowStep("error");
+        setFlowError("Market already cancelled on-chain. Cannot approve.");
+        return;
+      }
+
+      setFlowMsg("Checking server...");
       const prep = await postJSON<{
         ok: boolean;
         market: { market_address: string; proposed_winning_outcome: number | null; contest_count: number };
@@ -465,9 +522,9 @@ export default function AdminOverviewPage() {
 
       if (!prep.ok) throw new Error("Server check failed");
 
-      const onchainDisputes = oc?.disputeCount ?? 0;
+      const onchainDisputes = onchainState.disputeCount;
       const wo =
-        (Number.isFinite(Number(oc?.proposedOutcome)) ? Number(oc?.proposedOutcome) : null) ??
+        (Number.isFinite(Number(onchainState.proposedOutcome)) ? Number(onchainState.proposedOutcome) : null) ??
         (Number.isFinite(Number(prep?.market?.proposed_winning_outcome))
           ? Number(prep.market.proposed_winning_outcome)
           : null);
@@ -475,7 +532,6 @@ export default function AdminOverviewPage() {
       setFlowStep("signing");
       setFlowMsg("Signing on-chain tx...");
 
-      const marketPk = new PublicKey(marketAddr);
       let txSig: string;
 
       if (onchainDisputes > 0) {
@@ -513,7 +569,7 @@ export default function AdminOverviewPage() {
       setFlowStep("committing");
       setFlowMsg("Committing to DB...");
 
-      const finalWo = wo ?? (oc?.proposedOutcome ?? drawerMarket.proposed_winning_outcome ?? 0);
+      const finalWo = wo ?? (onchainState.proposedOutcome ?? drawerMarket.proposed_winning_outcome ?? 0);
       await postJSON("/api/admin/market/approve/commit", {
         market: marketAddr,
         winning_outcome: finalWo,
@@ -541,23 +597,68 @@ export default function AdminOverviewPage() {
     if (!isAdminWallet) return setFlowError(`Wrong wallet. Must be ${ADMIN_PUBKEY.toBase58()}`);
 
     const marketAddr = drawerMarket.market_address;
-    const oc = onchain[marketAddr];
-
-    if ((oc?.disputeCount ?? 0) <= 0) {
-      return setFlowError("No disputes on-chain. Cannot use admin_cancel.");
-    }
+    const marketPk = new PublicKey(marketAddr);
 
     setFlowStep("checking");
-    setFlowMsg("Checking server...");
+    setFlowMsg("Checking on-chain state...");
     setFlowError("");
 
     try {
+      // ✅ FRESH FETCH: Re-read on-chain state at the moment of click
+      let onchainState: { status: string; disputeCount: number; proposedOutcome: number | null };
+
+      try {
+        onchainState = await fetchFreshOnchainState(marketAddr);
+      } catch (fetchErr) {
+        console.warn("[doCancel] Could not fetch on-chain state:", fetchErr);
+        // Try to continue with cached state as fallback
+        const oc = onchain[marketAddr];
+        onchainState = {
+          status: oc?.status ?? "unknown",
+          disputeCount: oc?.disputeCount ?? 0,
+          proposedOutcome: oc?.proposedOutcome ?? null,
+        };
+      }
+
+      // ✅ Check if already resolved on-chain
+      if (onchainState.status === "cancelled") {
+        setFlowStep("committing");
+        setFlowMsg("Market already cancelled on-chain. Syncing DB...");
+
+        await postJSON("/api/admin/market/cancel/commit", {
+          market: marketAddr,
+          tx_sig: "already_cancelled_onchain",
+        });
+
+        setFlowStep("done");
+        setFlowMsg("DB synced with on-chain state!");
+
+        setTimeout(() => {
+          closeDrawer();
+          load();
+        }, 2000);
+        return;
+      }
+
+      if (onchainState.status === "finalized") {
+        setFlowStep("error");
+        setFlowError("Market already finalized on-chain. Cannot cancel.");
+        return;
+      }
+
+      // ✅ Check disputes
+      if (onchainState.disputeCount <= 0) {
+        setFlowStep("error");
+        setFlowError(`No disputes on-chain (found ${onchainState.disputeCount}). Cannot use admin_cancel.`);
+        return;
+      }
+
+      setFlowMsg(`Found ${onchainState.disputeCount} dispute(s). Checking server...`);
       await postJSON("/api/admin/market/cancel", { market: marketAddr });
 
       setFlowStep("signing");
       setFlowMsg("Signing cancel tx...");
 
-      const marketPk = new PublicKey(marketAddr);
       const tx = await (program as any).methods
         .adminCancel()
         .accounts({ market: marketPk, admin: publicKey })
@@ -602,35 +703,32 @@ export default function AdminOverviewPage() {
     if (!isAdminWallet) return setFlowError(`Wrong wallet. Must be ${ADMIN_PUBKEY.toBase58()}`);
   
     const marketAddr = drawerMarket.market_address;
-  
+    const marketPk = new PublicKey(marketAddr);
+
     setFlowStep("checking");
     setFlowMsg("Checking on-chain state...");
     setFlowError("");
   
     try {
-      // ✅ STEP 1: Check on-chain state FIRST
-      const marketPk = new PublicKey(marketAddr);
+      // ✅ FRESH FETCH: Re-read on-chain state at the moment of click
       let onchainStatus = "unknown";
       
       try {
-        const acct: any = await (program as any).account.market.fetch(marketPk);
-        onchainStatus = parseAnchorEnum(acct?.status);
-        console.log(`[doCancel24h] On-chain status: ${onchainStatus}`);
+        const state = await fetchFreshOnchainState(marketAddr);
+        onchainStatus = state.status;
       } catch (fetchErr) {
         console.warn("[doCancel24h] Could not fetch on-chain state:", fetchErr);
         // Continue anyway - might be a network issue
       }
   
-      // ✅ STEP 2: If already cancelled on-chain, skip tx and just commit DB
+      // ✅ If already cancelled on-chain, skip tx and just commit DB
       if (onchainStatus === "cancelled") {
         setFlowStep("committing");
         setFlowMsg("Market already cancelled on-chain. Syncing DB...");
   
-        // Try to commit to DB without a new tx
-        // We don't have the original tx_sig, so use a placeholder or fetch from explorer
         await postJSON("/api/admin/market/cancel/commit", {
           market: marketAddr,
-          tx_sig: "already_cancelled_onchain", // placeholder
+          tx_sig: "already_cancelled_onchain",
           reason: "no_proposal_24h",
         });
   
@@ -644,14 +742,14 @@ export default function AdminOverviewPage() {
         return;
       }
   
-      // ✅ STEP 3: If already finalized on-chain, cannot cancel
+      // ✅ If already finalized on-chain, cannot cancel
       if (onchainStatus === "finalized") {
         setFlowStep("error");
         setFlowError("Market already finalized on-chain. Cannot cancel.");
         return;
       }
   
-      // ✅ STEP 4: Normal flow - check server
+      // ✅ Normal flow - check server
       setFlowMsg("Checking server...");
   
       await postJSON("/api/admin/market/cancel", {
@@ -699,6 +797,7 @@ export default function AdminOverviewPage() {
       setFlowError(explainError(e));
     }
   }
+
   // ========= RENDER =========
 
   const isBusy = flowStep !== "idle" && flowStep !== "done" && flowStep !== "error";
@@ -744,7 +843,7 @@ export default function AdminOverviewPage() {
                 value={`${k.disputes_total}`}
                 hint={`open ${k.disputes_open}`}
               />
-              {/* NEW: Platform Fees KPI */}
+              {/* Platform Fees KPI */}
               <StatCard
                 label="Platform Fees"
                 value={`${platformFeesSol.toFixed(4)} SOL`}
@@ -853,7 +952,7 @@ export default function AdminOverviewPage() {
                               {m.question || "(Untitled)"}
                             </div>
                             <div className="text-[10px] md:text-xs text-gray-500 font-mono break-all">
-                              {shortAddr(m.market_address)}
+                              {m.market_address}
                             </div>
                           </td>
                           <td className="px-3 md:px-4 py-3">
@@ -869,7 +968,7 @@ export default function AdminOverviewPage() {
                             </div>
                             {m.tx_sig ? (
                               <div className="text-[10px] text-gray-500 mt-1 font-mono truncate max-w-[150px]">
-                                tx: {shortAddr(m.tx_sig)}
+                                tx: {m.tx_sig}
                               </div>
                             ) : null}
                           </td>
@@ -909,7 +1008,7 @@ export default function AdminOverviewPage() {
                               {m.question || "(Untitled)"}
                             </div>
                             <div className="text-[10px] md:text-xs text-gray-500 font-mono">
-                              {shortAddr(m.market_address)}
+                              {m.market_address}
                             </div>
                           </td>
                           <td className="px-3 md:px-4 py-3">{getTypeBadge(m)}</td>

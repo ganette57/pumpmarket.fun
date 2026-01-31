@@ -14,8 +14,7 @@ export const PROGRAM_ID = new PublicKey(
 );
 
 export const NETWORK =
-  process.env.NEXT_PUBLIC_SOLANA_RPC ?? "https://api.devnet.solana.com";
-
+process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? "https://api.devnet.solana.com";
 export const PLATFORM_WALLET = new PublicKey(
   process.env.NEXT_PUBLIC_PLATFORM_WALLET ??
     "6szhvTU23WtiKXqPs8vuX5G7JXu2TcUdVJNByNwVGYMV"
