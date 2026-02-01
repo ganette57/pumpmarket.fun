@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useMemo } from 'react';
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { useWallet } from '@solana/wallet-adapter-react';
 import HowItWorksModal from '@/components/HowItWorksModal';
@@ -21,6 +21,7 @@ function useClickOutside(ref: React.RefObject<HTMLDivElement>, onClose: () => vo
 
 export default function Header() {
   const router = useRouter();
+  const pathname = usePathname();
   const sp = useSearchParams();
   const { connected, publicKey, disconnect } = useWallet();
 
@@ -35,6 +36,9 @@ export default function Header() {
   const TERMS_URL = "https://funmarket.gitbook.io/funmarket/terms-of-use";
   const PRIVACY_URL = "https://funmarket.gitbook.io/funmarket/privacy-policy";
 
+  // Check if we're on search page
+  const isOnSearchPage = pathname === '/search';
+
   // pré-remplir search si on est sur /search?q=
   useEffect(() => {
     const q = sp.get('q') || '';
@@ -44,6 +48,13 @@ export default function Header() {
   const avatarLabel = useMemo(() => {
     return publicKey ? publicKey.toBase58().slice(0, 2).toUpperCase() : '??';
   }, [publicKey]);
+
+  // Navigate to search page on focus (if not already there)
+  const handleSearchFocus = () => {
+    if (!isOnSearchPage) {
+      router.push('/search');
+    }
+  };
 
   const handleSearchSubmit = () => {
     const q = search.trim();
@@ -70,8 +81,8 @@ export default function Header() {
             </div>
           </Link>
 
-          {/* Search bar */}
-          <div className="flex-1 min-w-0">
+          {/* Search bar - hidden on mobile, visible on md+ */}
+          <div className="flex-1 min-w-0 hidden md:block">
             <div className="flex items-center rounded-lg border border-gray-700/60 bg-black px-4 py-2 text-sm text-gray-300">
               <button
                 type="button"
@@ -86,6 +97,7 @@ export default function Header() {
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
+                onFocus={handleSearchFocus}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') handleSearchSubmit();
                 }}
