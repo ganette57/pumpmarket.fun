@@ -12,7 +12,7 @@ import { outcomeLabelFromMarket } from "@/utils/outcomes";
 import { uploadResolutionProofImage } from "@/lib/proofs";
 import { proposeResolution as proposeResolutionDb } from "@/lib/markets";
 import { sendSignedTx } from "@/lib/solanaSend";
-import { Coins } from "lucide-react";
+import { Coins, X, CheckCircle, AlertCircle, Loader2 } from "lucide-react";
 
 /* -------------------------------------------------------------------------- */
 /* Constants                                                                  */
@@ -237,6 +237,16 @@ type BookmarkRow = {
   created_at?: string;
 };
 
+type ModalState = {
+  type: "claim" | "refund" | "claim_fees" | null;
+  marketAddress: string;
+  marketQuestion: string;
+  amount: number;
+  step: "confirm" | "processing" | "success" | "error";
+  txSignature?: string;
+  errorMessage?: string;
+};
+
 /* -------------------------------------------------------------------------- */
 /* Data fetch                                                                 */
 /* -------------------------------------------------------------------------- */
@@ -414,6 +424,151 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
 }
 
 /* -------------------------------------------------------------------------- */
+/* UI: Action Modal                                                           */
+/* -------------------------------------------------------------------------- */
+
+function ActionModal({
+  modal,
+  onClose,
+  onConfirm,
+}: {
+  modal: ModalState;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  if (!modal.type) return null;
+
+  const config = {
+    claim: {
+      title: "Claim Winnings",
+      icon: "🏆",
+      color: "pump-green",
+      buttonText: "Claim Winnings",
+      successText: "Winnings claimed!",
+    },
+    refund: {
+      title: "Claim Refund",
+      icon: "💸",
+      color: "[#ff5c73]",
+      buttonText: "Claim Refund",
+      successText: "Refund claimed!",
+    },
+    claim_fees: {
+      title: "Claim Creator Fees",
+      icon: "💰",
+      color: "amber-500",
+      buttonText: "Claim Fees",
+      successText: "Creator fees claimed!",
+    },
+  }[modal.type];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+      <div className="bg-pump-dark border border-white/20 rounded-2xl p-5 md:p-6 max-w-md w-full shadow-2xl">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-xl font-bold text-white flex items-center gap-2">
+            <span>{config.icon}</span>
+            {config.title}
+          </h3>
+          {modal.step === "confirm" && (
+            <button onClick={onClose} className="text-gray-400 hover:text-white transition">
+              <X className="w-5 h-5" />
+            </button>
+          )}
+        </div>
+
+        {/* Confirm Step */}
+        {modal.step === "confirm" && (
+          <>
+            <div className="mb-6">
+              <div className="text-gray-400 text-sm mb-2">Market</div>
+              <div className="text-white font-medium truncate">{modal.marketQuestion}</div>
+              <div className="text-xs text-gray-500 mt-1">{shortAddr(modal.marketAddress)}</div>
+            </div>
+
+            <div className={`mb-6 p-4 rounded-xl bg-${config.color}/10 border border-${config.color}/30`}>
+              <div className="text-gray-400 text-sm mb-1">Amount to receive</div>
+              <div className={`text-2xl font-bold text-${config.color}`}>
+                {modal.amount.toFixed(4)} SOL
+              </div>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={onClose}
+                className="flex-1 px-4 py-3 rounded-xl border border-white/20 text-gray-300 hover:bg-white/10 transition font-semibold"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={onConfirm}
+                className={`flex-1 px-4 py-3 rounded-xl bg-${config.color} text-black font-semibold hover:opacity-90 transition`}
+              >
+                {config.buttonText}
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* Processing Step */}
+        {modal.step === "processing" && (
+          <div className="py-8 text-center">
+            <Loader2 className={`w-12 h-12 text-${config.color} animate-spin mx-auto mb-4`} />
+            <div className="text-white font-semibold mb-2">Processing transaction...</div>
+            <div className="text-gray-400 text-sm">Please confirm in your wallet</div>
+          </div>
+        )}
+
+        {/* Success Step */}
+        {modal.step === "success" && (
+          <div className="py-6 text-center">
+            <CheckCircle className={`w-16 h-16 text-${config.color} mx-auto mb-4`} />
+            <div className="text-white font-bold text-xl mb-2">{config.successText}</div>
+            <div className={`text-${config.color} text-2xl font-bold mb-4`}>
+              +{modal.amount.toFixed(4)} SOL
+            </div>
+            {modal.txSignature && (
+              <a
+                href={`https://explorer.solana.com/tx/${modal.txSignature}?cluster=devnet`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-pump-green text-sm hover:underline"
+              >
+                View transaction ↗
+              </a>
+            )}
+            <button
+              onClick={onClose}
+              className="w-full mt-6 px-4 py-3 rounded-xl bg-white/10 text-white font-semibold hover:bg-white/20 transition"
+            >
+              Close
+            </button>
+          </div>
+        )}
+
+        {/* Error Step */}
+        {modal.step === "error" && (
+          <div className="py-6 text-center">
+            <AlertCircle className="w-16 h-16 text-[#ff5c73] mx-auto mb-4" />
+            <div className="text-white font-bold text-xl mb-2">Transaction Failed</div>
+            <div className="text-gray-400 text-sm mb-4 break-words">
+              {modal.errorMessage || "An error occurred"}
+            </div>
+            <button
+              onClick={onClose}
+              className="w-full px-4 py-3 rounded-xl bg-white/10 text-white font-semibold hover:bg-white/20 transition"
+            >
+              Close
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /* Component                                                                  */
 /* -------------------------------------------------------------------------- */
 
@@ -437,17 +592,23 @@ export default function DashboardPage() {
   const [myCreatedMarkets, setMyCreatedMarkets] = useState<DbMarket[]>([]);
   const [myTxs, setMyTxs] = useState<DbTx[]>([]);
   const [claimables, setClaimables] = useState<Claimable[]>([]);
-  const [claimingMarket, setClaimingMarket] = useState<string | null>(null);
   const [refundables, setRefundables] = useState<Refundable[]>([]);
-  const [refundingMarket, setRefundingMarket] = useState<string | null>(null);
   const [creatorFeeClaimables, setCreatorFeeClaimables] = useState<CreatorFeeClaimable[]>([]);
-  const [claimingFeeMarket, setClaimingFeeMarket] = useState<string | null>(null);
   const [claimHistory, setClaimHistory] = useState<ClaimHistoryRow[]>([]);
   const [bookmarkIds, setBookmarkIds] = useState<string[]>([]);
   const [bookmarkedMarkets, setBookmarkedMarkets] = useState<DbMarket[]>([]);
   const [txMarkets, setTxMarkets] = useState<DbMarket[]>([]);
 
   const inFlightRef = useRef<Record<string, boolean>>({});
+
+  // Modal states
+  const [actionModal, setActionModal] = useState<ModalState>({
+    type: null,
+    marketAddress: "",
+    marketQuestion: "",
+    amount: 0,
+    step: "confirm",
+  });
 
   const [resolvingMarket, setResolvingMarket] = useState<DbMarket | null>(null);
   const [selectedOutcome, setSelectedOutcome] = useState<number | null>(null);
@@ -479,6 +640,46 @@ export default function DashboardPage() {
     if (proofPreview) URL.revokeObjectURL(proofPreview);
     setProofPreview("");
     setProofNote("");
+  }
+
+  function closeActionModal() {
+    setActionModal({
+      type: null,
+      marketAddress: "",
+      marketQuestion: "",
+      amount: 0,
+      step: "confirm",
+    });
+  }
+
+  function openClaimModal(c: Claimable) {
+    setActionModal({
+      type: "claim",
+      marketAddress: c.marketAddress,
+      marketQuestion: c.marketQuestion,
+      amount: lamportsToSol(c.estPayoutLamports || 0),
+      step: "confirm",
+    });
+  }
+
+  function openRefundModal(r: Refundable) {
+    setActionModal({
+      type: "refund",
+      marketAddress: r.marketAddress,
+      marketQuestion: r.marketQuestion,
+      amount: lamportsToSol(r.estRefundLamports || 0),
+      step: "confirm",
+    });
+  }
+
+  function openClaimFeesModal(c: CreatorFeeClaimable) {
+    setActionModal({
+      type: "claim_fees",
+      marketAddress: c.marketAddress,
+      marketQuestion: c.marketQuestion,
+      amount: lamportsToSol(c.feeLamports),
+      step: "confirm",
+    });
   }
 
   useEffect(() => {
@@ -585,212 +786,203 @@ export default function DashboardPage() {
   }, [connected, walletBase58, bookmarkIds]);
 
   /* ---------------- On-chain scan (claimables + refunds + creator fees) ---------------- */
-useEffect(() => {
-  if (!connected || !publicKey || !program) {
-    setClaimables([]);
-    setRefundables([]);
-    setCreatorFeeClaimables([]);
-    return;
-  }
+  useEffect(() => {
+    if (!connected || !publicKey || !program) {
+      setClaimables([]);
+      setRefundables([]);
+      setCreatorFeeClaimables([]);
+      return;
+    }
 
-  let cancelled = false;
+    let cancelled = false;
 
-  (async () => {
-    setLoadingClaimables(true);
-    setLoadingCreatorFees(true);
+    (async () => {
+      setLoadingClaimables(true);
+      setLoadingCreatorFees(true);
 
-    try {
-      // 1) Build unique address list (limit to keep it fast)
-      const addresses: string[] = [];
-      for (const m of myCreatedMarkets) if (m.market_address) addresses.push(String(m.market_address));
-      for (const m of bookmarkedMarkets) if (m.market_address) addresses.push(String(m.market_address));
-      for (const t of myTxs) if (t.market_address) addresses.push(String(t.market_address));
+      try {
+        const addresses: string[] = [];
+        for (const m of myCreatedMarkets) if (m.market_address) addresses.push(String(m.market_address));
+        for (const m of bookmarkedMarkets) if (m.market_address) addresses.push(String(m.market_address));
+        for (const t of myTxs) if (t.market_address) addresses.push(String(t.market_address));
 
-      const unique = Array.from(new Set(addresses)).slice(0, 25); // 👈 tune 25/40 later
-      const marketPks: PublicKey[] = [];
-      const addrByPk = new Map<string, string>();
+        const unique = Array.from(new Set(addresses)).slice(0, 25);
+        const marketPks: PublicKey[] = [];
+        const addrByPk = new Map<string, string>();
 
-      for (const addr of unique) {
-        try {
-          const pk = new PublicKey(addr);
-          marketPks.push(pk);
-          addrByPk.set(pk.toBase58(), addr);
-        } catch {}
-      }
+        for (const addr of unique) {
+          try {
+            const pk = new PublicKey(addr);
+            marketPks.push(pk);
+            addrByPk.set(pk.toBase58(), addr);
+          } catch {}
+        }
 
-      if (!marketPks.length) {
+        if (!marketPks.length) {
+          if (!cancelled) {
+            setClaimables([]);
+            setRefundables([]);
+            setCreatorFeeClaimables([]);
+          }
+          return;
+        }
+
+        const marketInfos = await getMultipleAccountsInfoBatched(connection, marketPks, 80);
+        if (cancelled) return;
+
+        const coder = (program as any).coder;
+        const decodedMarkets = new Map<string, { acc: any; lamports: number }>();
+
+        for (const pk of marketPks) {
+          const info = marketInfos.get(pk.toBase58());
+          if (!info?.data) continue;
+          try {
+            const m = coder.accounts.decode("market", info.data);
+            decodedMarkets.set(pk.toBase58(), { acc: m, lamports: info.lamports ?? 0 });
+          } catch {}
+        }
+
+        const posPdas: PublicKey[] = [];
+        const posByMarket = new Map<string, PublicKey>();
+
+        for (const pk of marketPks) {
+          const [posPda] = getUserPositionPDA(pk, publicKey);
+          posPdas.push(posPda);
+          posByMarket.set(pk.toBase58(), posPda);
+        }
+
+        const posInfos = await getMultipleAccountsInfoBatched(connection, posPdas, 80);
+        if (cancelled) return;
+
+        const decodedPos = new Map<string, any>();
+        for (const pda of posPdas) {
+          const info = posInfos.get(pda.toBase58());
+          if (!info?.data) continue;
+          try {
+            const p = coder.accounts.decode("userPosition", info.data);
+            decodedPos.set(pda.toBase58(), p);
+          } catch {}
+        }
+
+        const outClaimables: Claimable[] = [];
+        const outRefundables: Refundable[] = [];
+        const outFees: CreatorFeeClaimable[] = [];
+
+        for (const pk of marketPks) {
+          if (cancelled) return;
+
+          const mkKey = pk.toBase58();
+          const marketWrap = decodedMarkets.get(mkKey);
+          if (!marketWrap) continue;
+
+          const marketAcc = marketWrap.acc;
+          const marketLamports = marketWrap.lamports ?? 0;
+
+          const posPda = posByMarket.get(mkKey);
+          const posAcc = posPda ? decodedPos.get(posPda.toBase58()) : null;
+
+          const addr = addrByPk.get(mkKey) || mkKey;
+          const mkDb =
+            marketsByAddress.get(addr) ||
+            myCreatedMarkets.find((x) => x.market_address === addr) ||
+            null;
+          const marketQuestion = mkDb?.question || "(Market)";
+
+          const resolved = !!marketAcc?.resolved;
+          const winningIndex =
+            marketAcc?.winningOutcome != null ? bnToNumber(marketAcc.winningOutcome) : null;
+
+          if (resolved && winningIndex != null && posAcc && !posAcc.claimed) {
+            const sharesArr = Array.isArray(posAcc?.shares)
+              ? posAcc.shares.map((x: any) => bnToNumber(x))
+              : [];
+
+            const winningShares = Math.floor(Number(sharesArr[winningIndex] || 0));
+            if (winningShares > 0) {
+              const qArr = Array.isArray(marketAcc?.q)
+                ? marketAcc.q.map((x: any) => bnToNumber(x))
+                : [];
+
+              const totalWinningSupply = Number(qArr[winningIndex] || 0);
+              if (totalWinningSupply > 0 && marketLamports > 0) {
+                const payout =
+                  (BigInt(winningShares) * BigInt(marketLamports)) /
+                  BigInt(Math.floor(totalWinningSupply));
+
+                outClaimables.push({
+                  marketAddress: addr,
+                  marketQuestion,
+                  estPayoutLamports: Number(payout),
+                  winningIndex,
+                });
+              }
+            }
+          }
+
+          const isCancelledOnChain =
+            !!marketAcc?.cancelled || decodeMarketStatus(marketAcc?.status) === "cancelled";
+
+          if (isCancelledOnChain && posAcc && !posAcc.claimed) {
+            const netCost = toBigIntI128(posAcc?.netCostLamports ?? posAcc?.net_cost_lamports);
+            const estRefundLamports = Number(absBigInt(netCost));
+            if (estRefundLamports > 0) {
+              outRefundables.push({
+                marketAddress: addr,
+                marketQuestion,
+                estRefundLamports,
+              });
+            }
+          }
+
+          const status = decodeMarketStatus(marketAcc?.status);
+          if (status === "finalized") {
+            const onchainCreator = marketAcc?.creator;
+            if (onchainCreator?.equals?.(publicKey)) {
+              const escrow = bnToNumber(marketAcc?.creatorFeeEscrow ?? marketAcc?.creator_fee_escrow);
+              if (escrow > 0) {
+                outFees.push({
+                  marketAddress: addr,
+                  marketQuestion,
+                  feeLamports: escrow,
+                });
+              }
+            }
+          }
+        }
+
+        if (!cancelled) {
+          setClaimables(outClaimables);
+          setRefundables(outRefundables);
+          setCreatorFeeClaimables(outFees);
+        }
+      } catch (e) {
+        console.error("on-chain scan error:", e);
         if (!cancelled) {
           setClaimables([]);
           setRefundables([]);
           setCreatorFeeClaimables([]);
         }
-        return;
-      }
-
-      // 2) Batch fetch raw market accounts (includes lamports)
-      const marketInfos = await getMultipleAccountsInfoBatched(connection, marketPks, 80);
-      if (cancelled) return;
-
-      // 3) Decode markets with Anchor coder
-      const coder = (program as any).coder;
-      const decodedMarkets = new Map<string, { acc: any; lamports: number }>();
-
-      for (const pk of marketPks) {
-        const info = marketInfos.get(pk.toBase58());
-        if (!info?.data) continue;
-        try {
-          const m = coder.accounts.decode("market", info.data);
-          decodedMarkets.set(pk.toBase58(), { acc: m, lamports: info.lamports ?? 0 });
-        } catch {}
-      }
-
-      // 4) Compute all position PDAs
-      const posPdas: PublicKey[] = [];
-      const posByMarket = new Map<string, PublicKey>();
-
-      for (const pk of marketPks) {
-        const [posPda] = getUserPositionPDA(pk, publicKey);
-        posPdas.push(posPda);
-        posByMarket.set(pk.toBase58(), posPda);
-      }
-
-      // 5) Batch fetch positions
-      const posInfos = await getMultipleAccountsInfoBatched(connection, posPdas, 80);
-      if (cancelled) return;
-
-      const decodedPos = new Map<string, any>();
-      for (const pda of posPdas) {
-        const info = posInfos.get(pda.toBase58());
-        if (!info?.data) continue;
-        try {
-          const p = coder.accounts.decode("userPosition", info.data);
-          decodedPos.set(pda.toBase58(), p);
-        } catch {}
-      }
-
-      const outClaimables: Claimable[] = [];
-      const outRefundables: Refundable[] = [];
-      const outFees: CreatorFeeClaimable[] = [];
-
-      // 6) Build results without extra RPC
-      for (const pk of marketPks) {
-        if (cancelled) return;
-
-        const mkKey = pk.toBase58();
-        const marketWrap = decodedMarkets.get(mkKey);
-        if (!marketWrap) continue;
-
-        const marketAcc = marketWrap.acc;
-        const marketLamports = marketWrap.lamports ?? 0;
-
-        const posPda = posByMarket.get(mkKey);
-        const posAcc = posPda ? decodedPos.get(posPda.toBase58()) : null;
-
-        const addr = addrByPk.get(mkKey) || mkKey;
-        const mkDb =
-          marketsByAddress.get(addr) ||
-          myCreatedMarkets.find((x) => x.market_address === addr) ||
-          null;
-        const marketQuestion = mkDb?.question || "(Market)";
-
-        // ---- Claim winnings
-        const resolved = !!marketAcc?.resolved;
-        const winningIndex =
-          marketAcc?.winningOutcome != null ? bnToNumber(marketAcc.winningOutcome) : null;
-
-        if (resolved && winningIndex != null && posAcc && !posAcc.claimed) {
-          const sharesArr = Array.isArray(posAcc?.shares)
-            ? posAcc.shares.map((x: any) => bnToNumber(x))
-            : [];
-
-          const winningShares = Math.floor(Number(sharesArr[winningIndex] || 0));
-          if (winningShares > 0) {
-            const qArr = Array.isArray(marketAcc?.q)
-              ? marketAcc.q.map((x: any) => bnToNumber(x))
-              : [];
-
-            const totalWinningSupply = Number(qArr[winningIndex] || 0);
-            if (totalWinningSupply > 0 && marketLamports > 0) {
-              const payout =
-                (BigInt(winningShares) * BigInt(marketLamports)) /
-                BigInt(Math.floor(totalWinningSupply));
-
-              outClaimables.push({
-                marketAddress: addr,
-                marketQuestion,
-                estPayoutLamports: Number(payout),
-                winningIndex,
-              });
-            }
-          }
-        }
-
-        // ---- Refunds
-        const isCancelledOnChain =
-          !!marketAcc?.cancelled || decodeMarketStatus(marketAcc?.status) === "cancelled";
-
-        if (isCancelledOnChain && posAcc && !posAcc.claimed) {
-          const netCost = toBigIntI128(posAcc?.netCostLamports ?? posAcc?.net_cost_lamports);
-          const estRefundLamports = Number(absBigInt(netCost));
-          if (estRefundLamports > 0) {
-            outRefundables.push({
-              marketAddress: addr,
-              marketQuestion,
-              estRefundLamports,
-            });
-          }
-        }
-
-        // ---- Creator fees
-        const status = decodeMarketStatus(marketAcc?.status);
-        if (status === "finalized") {
-          const onchainCreator = marketAcc?.creator;
-          if (onchainCreator?.equals?.(publicKey)) {
-            const escrow = bnToNumber(marketAcc?.creatorFeeEscrow ?? marketAcc?.creator_fee_escrow);
-            if (escrow > 0) {
-              outFees.push({
-                marketAddress: addr,
-                marketQuestion,
-                feeLamports: escrow,
-              });
-            }
-          }
+      } finally {
+        if (!cancelled) {
+          setLoadingClaimables(false);
+          setLoadingCreatorFees(false);
         }
       }
+    })();
 
-      if (!cancelled) {
-        setClaimables(outClaimables);
-        setRefundables(outRefundables);
-        setCreatorFeeClaimables(outFees);
-      }
-    } catch (e) {
-      console.error("on-chain scan error:", e);
-      if (!cancelled) {
-        setClaimables([]);
-        setRefundables([]);
-        setCreatorFeeClaimables([]);
-      }
-    } finally {
-      if (!cancelled) {
-        setLoadingClaimables(false);
-        setLoadingCreatorFees(false);
-      }
-    }
-  })();
-
-  return () => {
-    cancelled = true;
-  };
-}, [
-  connected,
-  publicKey,
-  program,
-  connection,
-  myTxs,
-  myCreatedMarkets,
-  bookmarkedMarkets,
-  marketsByAddress,
-]);
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    connected,
+    publicKey,
+    program,
+    connection,
+    myTxs,
+    myCreatedMarkets,
+    bookmarkedMarkets,
+    marketsByAddress,
+  ]);
 
   /* ---------------- Stats ---------------- */
   const walletLabel = useMemo(() => shortAddr(walletBase58), [walletBase58]);
@@ -833,90 +1025,101 @@ useEffect(() => {
     });
   }, [myTxs, marketsByAddress]);
 
-  /* ---------------- Actions ---------------- */
-  async function handleClaim(marketAddress: string) {
-    if (!connected || !publicKey || !program) return;
-    const key = `claim_${marketAddress}`;
-    if (inFlightRef.current[key]) return;
-    inFlightRef.current[key] = true;
-    const claimable = claimables.find(c => c.marketAddress === marketAddress);
-    const amountSol = claimable?.estPayoutLamports ? lamportsToSol(claimable.estPayoutLamports) : 0;
-    const marketQuestion = claimable?.marketQuestion || "(Market)";
-    try {
-      setClaimingMarket(marketAddress);
-      const marketPk = new PublicKey(marketAddress);
-      const [posPda] = getUserPositionPDA(marketPk, publicKey);
-      const tx = await (program as any).methods.claimWinnings().accounts({ market: marketPk, userPosition: posPda, user: publicKey }).transaction();
-      const sig = await sendSignedTx({ connection, tx, signTx: anchorWallet!.signTransaction, feePayer: publicKey, commitment: "confirmed" });
-      await saveClaimTransaction({ marketAddress, marketQuestion, userAddress: walletBase58, txSignature: sig, txType: "claim", amountSol });
-      alert(`Claim success 🎉\n\nTx: ${sig.slice(0, 16)}...\n\nhttps://explorer.solana.com/tx/${sig}?cluster=devnet`);
-      setClaimables((prev) => prev.filter((c) => c.marketAddress !== marketAddress));
-      await reloadDashboardData();
-    } catch (e: any) {
-      console.error("handleClaim error:", e);
-      const errMsg = String(e?.message || "");
-      if (errMsg.toLowerCase().includes("already been processed")) { alert("Transaction already processed. Refreshing…"); setClaimables((prev) => prev.filter((c) => c.marketAddress !== marketAddress)); await reloadDashboardData(); return; }
-      if (errMsg.toLowerCase().includes("user rejected")) { alert("Transaction cancelled by user."); return; }
-      alert(`Claim failed: ${errMsg || "Unknown error"}`);
-    } finally { inFlightRef.current[key] = false; setClaimingMarket(null); }
-  }
-
-  async function handleRefund(marketAddress: string) {
-    if (!connected || !publicKey || !program) return;
-    const key = `refund_${marketAddress}`;
-    if (inFlightRef.current[key]) return;
-    inFlightRef.current[key] = true;
-    const refundable = refundables.find(r => r.marketAddress === marketAddress);
-    const amountSol = refundable?.estRefundLamports ? lamportsToSol(refundable.estRefundLamports) : 0;
-    const marketQuestion = refundable?.marketQuestion || "(Market)";
-    try {
-      setRefundingMarket(marketAddress);
-      const marketPk = new PublicKey(marketAddress);
-      const [posPda] = getUserPositionPDA(marketPk, publicKey);
-      const tx = await (program as any).methods.claimRefund().accounts({ market: marketPk, userPosition: posPda, user: publicKey }).transaction();
-      const sig = await sendSignedTx({ connection, tx, signTx: anchorWallet!.signTransaction, feePayer: publicKey, commitment: "confirmed" });
-      await saveClaimTransaction({ marketAddress, marketQuestion, userAddress: walletBase58, txSignature: sig, txType: "refund", amountSol });
-      alert(`Refund success 🎉\n\nTx: ${sig.slice(0, 16)}...\n\nhttps://explorer.solana.com/tx/${sig}?cluster=devnet`);
-      setRefundables((prev) => prev.filter((r) => r.marketAddress !== marketAddress));
-      await reloadDashboardData();
-    } catch (e: any) {
-      console.error("handleRefund error:", e);
-      const errMsg = String(e?.message || "");
-      if (errMsg.toLowerCase().includes("already been processed")) { alert("Transaction already processed. Refreshing…"); setRefundables((prev) => prev.filter((r) => r.marketAddress !== marketAddress)); await reloadDashboardData(); return; }
-      if (errMsg.toLowerCase().includes("user rejected")) { alert("Transaction cancelled by user."); return; }
-      alert(`Refund failed: ${errMsg || "Unknown error"}`);
-    } finally { inFlightRef.current[key] = false; setRefundingMarket(null); }
-  }
-
-  async function handleClaimCreatorFees(marketAddress: string) {
+  /* ---------------- Actions with Modal ---------------- */
+  async function executeModalAction() {
     if (!connected || !publicKey || !program || !anchorWallet) return;
-    const key = `claim_fees_${marketAddress}`;
+    
+    const { type, marketAddress, marketQuestion, amount } = actionModal;
+    if (!type) return;
+
+    const key = `${type}_${marketAddress}`;
     if (inFlightRef.current[key]) return;
     inFlightRef.current[key] = true;
-    const feeClaimable = creatorFeeClaimables.find(c => c.marketAddress === marketAddress);
-    const amountSol = feeClaimable ? lamportsToSol(feeClaimable.feeLamports) : 0;
-    const marketQuestion = feeClaimable?.marketQuestion || "(Market)";
+
+    setActionModal(prev => ({ ...prev, step: "processing" }));
+
     try {
-      setClaimingFeeMarket(marketAddress);
       const marketPk = new PublicKey(marketAddress);
-      const tx = await (program as any).methods.claimCreatorFees().accounts({ market: marketPk, creator: publicKey }).transaction();
-      const sig = await sendSignedTx({ connection, tx, signTx: anchorWallet.signTransaction, feePayer: publicKey, commitment: "confirmed" });
-      await saveClaimTransaction({ marketAddress, marketQuestion, userAddress: walletBase58, txSignature: sig, txType: "claim_fees", amountSol });
-      alert(`Creator fees claimed! 🎉\n\nTx: ${sig.slice(0, 16)}...\n\nhttps://explorer.solana.com/tx/${sig}?cluster=devnet`);
-      setCreatorFeeClaimables((prev) => prev.filter((c) => c.marketAddress !== marketAddress));
+      const [posPda] = getUserPositionPDA(marketPk, publicKey);
+      
+      let tx;
+      let txType: "claim" | "refund" | "claim_fees" = type;
+
+      if (type === "claim") {
+        tx = await (program as any).methods.claimWinnings()
+          .accounts({ market: marketPk, userPosition: posPda, user: publicKey })
+          .transaction();
+      } else if (type === "refund") {
+        tx = await (program as any).methods.claimRefund()
+          .accounts({ market: marketPk, userPosition: posPda, user: publicKey })
+          .transaction();
+      } else {
+        tx = await (program as any).methods.claimCreatorFees()
+          .accounts({ market: marketPk, creator: publicKey })
+          .transaction();
+      }
+
+      const sig = await sendSignedTx({
+        connection,
+        tx,
+        signTx: anchorWallet.signTransaction,
+        feePayer: publicKey,
+        commitment: "confirmed",
+      });
+
+      await saveClaimTransaction({
+        marketAddress,
+        marketQuestion,
+        userAddress: walletBase58,
+        txSignature: sig,
+        txType,
+        amountSol: amount,
+      });
+
+      // Update local state
+      if (type === "claim") {
+        setClaimables(prev => prev.filter(c => c.marketAddress !== marketAddress));
+      } else if (type === "refund") {
+        setRefundables(prev => prev.filter(r => r.marketAddress !== marketAddress));
+      } else {
+        setCreatorFeeClaimables(prev => prev.filter(c => c.marketAddress !== marketAddress));
+      }
+
+      setActionModal(prev => ({ ...prev, step: "success", txSignature: sig }));
       await reloadDashboardData();
+
     } catch (e: any) {
-      console.error("handleClaimCreatorFees error:", e);
+      console.error(`${type} error:`, e);
       const errMsg = String(e?.message || "");
-      if (errMsg.toLowerCase().includes("already been processed")) { alert("Transaction already processed. Refreshing…"); setCreatorFeeClaimables((prev) => prev.filter((c) => c.marketAddress !== marketAddress)); await reloadDashboardData(); return; }
-      if (errMsg.toLowerCase().includes("user rejected")) { alert("Transaction cancelled by user."); return; }
-      alert(`Claim fees failed: ${errMsg || "Unknown error"}`);
-    } finally { inFlightRef.current[key] = false; setClaimingFeeMarket(null); }
+      
+      if (errMsg.toLowerCase().includes("user rejected")) {
+        closeActionModal();
+        return;
+      }
+      
+      if (errMsg.toLowerCase().includes("already been processed")) {
+        setActionModal(prev => ({ ...prev, step: "success" }));
+        await reloadDashboardData();
+        return;
+      }
+
+      setActionModal(prev => ({
+        ...prev,
+        step: "error",
+        errorMessage: errMsg || "Transaction failed",
+      }));
+    } finally {
+      inFlightRef.current[key] = false;
+    }
   }
 
   async function handleClaimAllCreatorFees() {
     if (!creatorFeeClaimables.length) return;
-    for (const c of creatorFeeClaimables) { await handleClaimCreatorFees(c.marketAddress); }
+    for (const c of creatorFeeClaimables) {
+      openClaimFeesModal(c);
+      // Note: This will open modal for first one. For batch, we'd need different UX
+      break;
+    }
   }
 
   async function handleProposeResolution() {
@@ -1027,9 +1230,9 @@ useEffect(() => {
             </div>
           </div>
           {totalCreatorFeesSol > 0 && (
-            <button onClick={handleClaimAllCreatorFees} disabled={claimingFeeMarket !== null} className={["flex items-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-sm transition", "border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20", claimingFeeMarket ? "opacity-50 cursor-not-allowed" : ""].join(" ")}>
+            <button onClick={handleClaimAllCreatorFees} className={["flex items-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-sm transition", "border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20"].join(" ")}>
               <Coins className="w-4 h-4 text-amber-400" />
-              <span className="text-amber-400">{claimingFeeMarket ? "Claiming..." : `Claim ${totalCreatorFeesSol.toFixed(4)} SOL`}</span>
+              <span className="text-amber-400">Claim {totalCreatorFeesSol.toFixed(4)} SOL</span>
               <span className="text-amber-500/60 text-xs">fees</span>
             </button>
           )}
@@ -1078,8 +1281,8 @@ useEffect(() => {
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="text-amber-400 font-semibold">{lamportsToSol(c.feeLamports).toFixed(4)} SOL</span>
-                  <button onClick={() => handleClaimCreatorFees(c.marketAddress)} disabled={claimingFeeMarket === c.marketAddress} className={["px-3 py-1.5 rounded-lg text-xs font-semibold transition", claimingFeeMarket === c.marketAddress ? "bg-gray-700 text-gray-400 cursor-not-allowed" : "bg-amber-500 text-black hover:bg-amber-400"].join(" ")}>
-                    {claimingFeeMarket === c.marketAddress ? "..." : "Claim"}
+                  <button onClick={() => openClaimFeesModal(c)} className="px-3 py-1.5 rounded-lg text-xs font-semibold transition bg-amber-500 text-black hover:bg-amber-400">
+                    Claim
                   </button>
                 </div>
               </div>
@@ -1102,8 +1305,8 @@ useEffect(() => {
                   <div className="text-white font-semibold text-sm md:text-base truncate">{c.marketQuestion}</div>
                   <div className="text-xs text-gray-500 mt-1 truncate">{shortAddr(c.marketAddress)}{typeof c.estPayoutLamports === "number" && <> • <span className="text-pump-green font-semibold">~{lamportsToSol(c.estPayoutLamports).toFixed(4)} SOL</span></>}</div>
                 </div>
-                <button onClick={() => handleClaim(c.marketAddress)} disabled={claimingMarket === c.marketAddress} className={["px-5 py-2 rounded-lg font-semibold transition w-full sm:w-auto", claimingMarket === c.marketAddress ? "bg-gray-700 text-gray-300 cursor-not-allowed" : "bg-pump-green text-black hover:opacity-90"].join(" ")}>
-                  {claimingMarket === c.marketAddress ? "Processing…" : "Claim"}
+                <button onClick={() => openClaimModal(c)} className="px-5 py-2 rounded-lg font-semibold transition w-full sm:w-auto bg-pump-green text-black hover:opacity-90">
+                  Claim
                 </button>
               </div>
             ))}
@@ -1125,8 +1328,8 @@ useEffect(() => {
                   <div className="text-white font-semibold text-sm md:text-base truncate">{r.marketQuestion}</div>
                   <div className="text-xs text-gray-500 mt-1 truncate">{shortAddr(r.marketAddress)}{typeof r.estRefundLamports === "number" && <> • <span className="text-[#ff5c73] font-semibold">~{lamportsToSol(r.estRefundLamports).toFixed(4)} SOL</span></>}</div>
                 </div>
-                <button onClick={() => handleRefund(r.marketAddress)} disabled={refundingMarket === r.marketAddress} className={["px-5 py-2 rounded-lg font-semibold transition w-full sm:w-auto", refundingMarket === r.marketAddress ? "bg-gray-700 text-gray-300 cursor-not-allowed" : "bg-[#ff5c73] text-black hover:opacity-90"].join(" ")}>
-                  {refundingMarket === r.marketAddress ? "Processing…" : "Refund"}
+                <button onClick={() => openRefundModal(r)} className="px-5 py-2 rounded-lg font-semibold transition w-full sm:w-auto bg-[#ff5c73] text-black hover:opacity-90">
+                  Refund
                 </button>
               </div>
             ))}
@@ -1251,7 +1454,7 @@ useEffect(() => {
                             <div className="text-[10px] text-gray-500">volume</div>
                           </div>
                           <div className="flex items-center gap-2 flex-wrap justify-end">
-                            {feeClaimable && <button onClick={() => handleClaimCreatorFees(addr)} disabled={claimingFeeMarket === addr} className={["px-3 py-1.5 rounded-lg text-xs font-semibold transition", claimingFeeMarket === addr ? "bg-gray-700 text-gray-400 cursor-not-allowed" : "bg-amber-500 text-black hover:bg-amber-400"].join(" ")}>{claimingFeeMarket === addr ? "..." : "Claim fees"}</button>}
+                            {feeClaimable && <button onClick={() => openClaimFeesModal(feeClaimable)} className="px-3 py-1.5 rounded-lg text-xs font-semibold transition bg-amber-500 text-black hover:bg-amber-400">Claim fees</button>}
                             {canPropose && <button onClick={() => { setResolvingMarket(m); setSelectedOutcome(null); setMode("upload"); setProofNote(""); }} className="px-3 py-1.5 rounded-lg bg-yellow-500 text-black text-xs font-semibold hover:bg-yellow-400 transition">⚖️ Propose</button>}
                             {toResolutionStatus(m.resolution_status) === "proposed" && addr && <Link href={`/contest/${addr}`} className={["px-3 py-1.5 rounded-lg text-xs font-semibold transition border", Number(m.contest_count || 0) > 0 ? "bg-[#ff5c73]/15 border-[#ff5c73]/40 text-[#ff5c73] hover:bg-[#ff5c73]/20" : "bg-black/30 border-white/10 text-gray-300 hover:border-white/20"].join(" ")} title="Open contest / disputes">Disputes{Number(m.contest_count || 0) > 0 ? ` (${Number(m.contest_count)})` : ""}</Link>}
                             {addr && <Link href={`/trade/${addr}`} className="px-3 py-1.5 rounded-lg bg-pump-green text-black text-xs font-semibold hover:opacity-90 transition">View</Link>}
@@ -1303,6 +1506,15 @@ useEffect(() => {
           </>
         )}
       </div>
+
+      {/* Action Modal (Claim/Refund/Fees) */}
+      {actionModal.type && (
+        <ActionModal
+          modal={actionModal}
+          onClose={closeActionModal}
+          onConfirm={executeModalAction}
+        />
+      )}
 
       {/* Resolve Modal */}
       {resolvingMarket && (

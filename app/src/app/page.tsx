@@ -42,7 +42,7 @@ type Market = {
   } | null;
 };
 
-type MarketStatusFilter = "all" | "open" | "resolved";
+type MarketStatusFilter = "all" | "open" | "resolved" | "ending_soon" | "top_volume";
 
 function isMarketResolved(m: Market) {
   const nowSec = Date.now() / 1000;
@@ -58,7 +58,16 @@ function StatusFilterDropdown({
   onChange: (v: MarketStatusFilter) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const label = value === "all" ? "All" : value === "open" ? "Open" : "Resolved";
+  
+  const options: { value: MarketStatusFilter; label: string; icon?: string }[] = [
+    { value: "all", label: "All" },
+    { value: "open", label: "Open" },
+    { value: "resolved", label: "Resolved" },
+    { value: "ending_soon", label: "Ending Soon", icon: "⏰" },
+    { value: "top_volume", label: "Top Volume", icon: "🔥" },
+  ];
+
+  const selected = options.find((o) => o.value === value);
 
   return (
     <div className="relative">
@@ -67,26 +76,30 @@ function StatusFilterDropdown({
         onClick={() => setOpen((v) => !v)}
         className="flex items-center gap-2 px-4 py-2 rounded-xl border border-white/15 bg-black text-white text-sm font-semibold hover:border-white/25 transition"
       >
-        <span className="text-gray-300">Status:</span>
-        <span>{label}</span>
+        <span className="text-gray-300">Filter:</span>
+        <span>
+          {selected?.icon && <span className="mr-1">{selected.icon}</span>}
+          {selected?.label}
+        </span>
         <ChevronDown className="w-4 h-4 text-gray-300" />
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-44 rounded-2xl border border-white/10 bg-[#0a0d12] shadow-xl overflow-hidden z-50">
-          {(["all", "open", "resolved"] as MarketStatusFilter[]).map((k) => (
+        <div className="absolute right-0 mt-2 w-48 rounded-2xl border border-white/10 bg-[#0a0d12] shadow-xl overflow-hidden z-50">
+          {options.map((opt) => (
             <button
-              key={k}
+              key={opt.value}
               type="button"
               onClick={() => {
-                onChange(k);
+                onChange(opt.value);
                 setOpen(false);
               }}
-              className={`w-full text-left px-4 py-3 text-sm transition ${
-                value === k ? "bg-white/5 text-white" : "text-gray-200 hover:bg-white/5"
+              className={`w-full text-left px-4 py-3 text-sm transition flex items-center gap-2 ${
+                value === opt.value ? "bg-white/5 text-white" : "text-gray-200 hover:bg-white/5"
               }`}
             >
-              {k === "all" ? "All" : k === "open" ? "Open" : "Resolved"}
+              {opt.icon && <span>{opt.icon}</span>}
+              <span>{opt.label}</span>
             </button>
           ))}
         </div>
@@ -206,8 +219,8 @@ export default function Home() {
 
   // ✅ read status from URL (keeps last selected when coming back)
   useEffect(() => {
-    const s = (sp.get("status") || "open") as MarketStatusFilter;
-    if (s === "all" || s === "open" || s === "resolved") {
+    const s = sp.get("status") as MarketStatusFilter | null;
+    if (s && ["all", "open", "resolved", "ending_soon", "top_volume"].includes(s)) {
       setStatusFilter(s);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -237,9 +250,41 @@ export default function Home() {
   }, [markets, selectedCategory]);
 
   const statusFiltered = useMemo(() => {
-    if (statusFilter === "all") return categoryFiltered;
-    if (statusFilter === "resolved") return categoryFiltered.filter((m) => isMarketResolved(m));
-    return categoryFiltered.filter((m) => !isMarketResolved(m));
+    const nowSec = Date.now() / 1000;
+
+    // First filter by base status
+    let filtered: Market[];
+
+    if (statusFilter === "all") {
+      filtered = categoryFiltered;
+    } else if (statusFilter === "resolved") {
+      filtered = categoryFiltered.filter((m) => isMarketResolved(m));
+    } else if (statusFilter === "ending_soon") {
+      // Only open markets ending within 48 hours
+      const in48h = nowSec + 48 * 60 * 60;
+      filtered = categoryFiltered.filter((m) => {
+        if (isMarketResolved(m)) return false;
+        return m.resolutionTime > nowSec && m.resolutionTime <= in48h;
+      });
+    } else if (statusFilter === "top_volume") {
+      // Only open markets, will be sorted by volume
+      filtered = categoryFiltered.filter((m) => !isMarketResolved(m));
+    } else {
+      // "open" - default
+      filtered = categoryFiltered.filter((m) => !isMarketResolved(m));
+    }
+
+    // Then sort based on filter type
+    if (statusFilter === "ending_soon") {
+      // Sort by closest end time first
+      return [...filtered].sort((a, b) => a.resolutionTime - b.resolutionTime);
+    } else if (statusFilter === "top_volume") {
+      // Sort by highest volume first
+      return [...filtered].sort((a, b) => (b.totalVolume || 0) - (a.totalVolume || 0));
+    }
+
+    // Default: keep original order (created_at desc)
+    return filtered;
   }, [categoryFiltered, statusFilter]);
 
   // ------- FEATURED (top 3 by volume, prefer open + binary-like) -------
@@ -367,6 +412,22 @@ export default function Home() {
     const target = el.children[i] as HTMLElement | undefined;
     target?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
     setCurrentFeaturedIndex(i);
+  };
+
+  // ------- Helper for section title -------
+  const getSectionTitle = () => {
+    switch (statusFilter) {
+      case "ending_soon":
+        return "⏰ Ending Soon";
+      case "top_volume":
+        return "🔥 Top Volume";
+      case "resolved":
+        return "Resolved Markets";
+      case "open":
+        return "Open Markets";
+      default:
+        return "All Markets";
+    }
   };
 
   // ------- RENDER -------
@@ -498,8 +559,12 @@ export default function Home() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between mb-6 gap-3">
             <div>
-              <h3 className="text-xl font-bold text-white">All Markets</h3>
-              <p className="text-sm text-gray-500">{statusFiltered.length} markets</p>
+              <h3 className="text-xl font-bold text-white">{getSectionTitle()}</h3>
+              <p className="text-sm text-gray-500">
+                {statusFiltered.length} market{statusFiltered.length !== 1 ? "s" : ""}
+                {statusFilter === "ending_soon" && " ending within 48h"}
+                {statusFilter === "top_volume" && " sorted by volume"}
+              </p>
             </div>
 
             <StatusFilterDropdown value={statusFilter} onChange={setStatusFilter} />
@@ -513,8 +578,16 @@ export default function Home() {
             </div>
           ) : displayedMarkets.length === 0 ? (
             <div className="text-center py-20">
-              <div className="text-6xl mb-4">🤷</div>
-              <p className="text-gray-400 text-xl mb-4">No markets found</p>
+              <div className="text-6xl mb-4">
+                {statusFilter === "ending_soon" ? "⏰" : statusFilter === "top_volume" ? "📊" : "🤷"}
+              </div>
+              <p className="text-gray-400 text-xl mb-4">
+                {statusFilter === "ending_soon"
+                  ? "No markets ending soon"
+                  : statusFilter === "top_volume"
+                  ? "No active markets with volume"
+                  : "No markets found"}
+              </p>
               <Link href="/create">
                 <button className="btn-pump">Create the first one!</button>
               </Link>

@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Filter, Check } from 'lucide-react';
 
-type FilterOption = 'all' | 'active' | 'resolved';
+type FilterOption = 'all' | 'active' | 'resolved' | 'ending_soon' | 'top_volume';
 
 interface FilterDropdownProps {
   value: FilterOption;
@@ -14,10 +14,12 @@ export default function FilterDropdown({ value, onChange }: FilterDropdownProps)
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const options: { value: FilterOption; label: string }[] = [
+  const options: { value: FilterOption; label: string; icon?: string }[] = [
     { value: 'all', label: 'All Markets' },
     { value: 'active', label: 'Active' },
     { value: 'resolved', label: 'Resolved' },
+    { value: 'ending_soon', label: 'Ending Soon', icon: '⏰' },
+    { value: 'top_volume', label: 'Top Volume', icon: '🔥' },
   ];
 
   const selectedOption = options.find((opt) => opt.value === value);
@@ -43,7 +45,10 @@ export default function FilterDropdown({ value, onChange }: FilterDropdownProps)
         className="flex items-center space-x-2 px-4 py-2 bg-pump-gray hover:bg-pump-dark border border-gray-700 hover:border-pump-green rounded-lg transition text-gray-300 hover:text-white"
       >
         <Filter className="w-4 h-4" />
-        <span className="font-medium">{selectedOption?.label}</span>
+        <span className="font-medium">
+          {selectedOption?.icon && <span className="mr-1">{selectedOption.icon}</span>}
+          {selectedOption?.label}
+        </span>
         <svg
           className={`w-4 h-4 transition-transform ${isOpen ? 'rotate-180' : ''}`}
           fill="none"
@@ -69,7 +74,10 @@ export default function FilterDropdown({ value, onChange }: FilterDropdownProps)
                   : 'text-gray-300 hover:bg-pump-gray hover:text-white'
               }`}
             >
-              <span className="font-medium">{option.label}</span>
+              <span className="font-medium">
+                {option.icon && <span className="mr-2">{option.icon}</span>}
+                {option.label}
+              </span>
               {value === option.value && <Check className="w-4 h-4" />}
             </button>
           ))}
