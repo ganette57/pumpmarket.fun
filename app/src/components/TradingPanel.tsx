@@ -5,7 +5,7 @@ import { lamportsToSol } from "@/utils/solana";
 
 type MarketForTrade = {
   resolved: boolean;
-  bLamports?: number; // ✅ LMSR b in lamports
+  bLamports?: number; // ✅ base price in lamports (you reused bLamports for UI base)
   yesSupply?: number;
   noSupply?: number;
 
@@ -19,7 +19,12 @@ interface TradingPanelProps {
   connected: boolean;
   submitting?: boolean;
 
-  onTrade: (shares: number, outcomeIndex: number, side: "buy" | "sell", costSol?: number) => void;
+  onTrade: (
+    shares: number,
+    outcomeIndex: number,
+    side: "buy" | "sell",
+    costSol?: number
+  ) => void;
 
   marketBalanceLamports?: number | null;
   userHoldings?: number[] | null;
@@ -35,13 +40,14 @@ interface TradingPanelProps {
 
 // Fees (match on-chain): 1% platform + 2% creator = 3%
 const PLATFORM_FEE_BPS = 100; // 1%
-const CREATOR_FEE_BPS = 200;  // 2%
+const CREATOR_FEE_BPS = 200; // 2%
 
 function feeBreakdownLamports(amountLamports: number) {
   const platform = Math.floor((amountLamports * PLATFORM_FEE_BPS) / 10_000);
   const creator = Math.floor((amountLamports * CREATOR_FEE_BPS) / 10_000);
   return { platform, creator, total: platform + creator };
 }
+
 // UI pricing model (matches on-chain behavior you’re seeing):
 // pricePerShare = base + supply * slope
 const DEFAULT_BASE_PRICE_LAMPORTS = 10_000_000; // 0.01 SOL
@@ -51,6 +57,7 @@ function clampInt(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, Math.floor(n)));
 }
 
+// NOTE: kept (unused here) in case you later switch to LMSR UI
 function lmsrCostLamports(q: number[], bLamports: number, outcomeCount: number): number {
   const n = Math.max(2, Math.min(10, outcomeCount));
   if (bLamports <= 0) return 0;
@@ -58,7 +65,7 @@ function lmsrCostLamports(q: number[], bLamports: number, outcomeCount: number):
   let maxR = -Infinity;
   const r: number[] = [];
   for (let i = 0; i < n; i++) {
-    const ri = (Number(q[i] || 0)) / bLamports;
+    const ri = Number(q[i] || 0) / bLamports;
     r.push(ri);
     if (ri > maxR) maxR = ri;
   }
@@ -92,6 +99,7 @@ export default function TradingPanel({
   connected,
   submitting,
   onTrade,
+  marketBalanceLamports,
   userHoldings,
   marketClosed,
 
@@ -115,34 +123,26 @@ export default function TradingPanel({
     return Array(outcomes.length).fill(0);
   }, [market.outcomeSupplies, market.yesSupply, market.noSupply, outcomes]);
 
-// base price per share (lamports). You already set DEFAULT_B_SOL=0.01 in create,
-// so if you store bLamports on the market, we reuse it as the base price.
-const basePriceLamports = useMemo(() => {
-  const v = Number(market.bLamports);
-  return Number.isFinite(v) && v > 0 ? Math.floor(v) : DEFAULT_BASE_PRICE_LAMPORTS;
-}, [market.bLamports]);
+  // base price per share (lamports).
+  // you store bLamports on market, we reuse it as the base price.
+  const basePriceLamports = useMemo(() => {
+    const v = Number(market.bLamports);
+    return Number.isFinite(v) && v > 0 ? Math.floor(v) : DEFAULT_BASE_PRICE_LAMPORTS;
+  }, [market.bLamports]);
 
-const slopeLamportsPerSupply = DEFAULT_SLOPE_LAMPORTS_PER_SUPPLY;
+  const slopeLamportsPerSupply = DEFAULT_SLOPE_LAMPORTS_PER_SUPPLY;
 
-const totalSupply = useMemo(() => supplies.reduce((sum, x) => sum + (x || 0), 0), [supplies]);
+  const totalSupply = useMemo(() => supplies.reduce((sum, x) => sum + (x || 0), 0), [supplies]);
 
-const probs = useMemo(
-  () =>
-    supplies.map((s) =>
-      totalSupply > 0 ? (Number(s || 0) / totalSupply) * 100 : 100 / (supplies.length || 1)
-    ),
-  [supplies, totalSupply]
-);
-
-  const oddsX = useMemo(
+  const probs = useMemo(
     () =>
-      probs.map((p) => {
-        if (p <= 0) return supplies.length || 1;
-        const raw = 100 / p;
-        return Math.min(raw, 100);
-      }),
-    [probs, supplies.length]
+      supplies.map((s) =>
+        totalSupply > 0 ? (Number(s || 0) / totalSupply) * 100 : 100 / (supplies.length || 1)
+      ),
+    [supplies, totalSupply]
   );
+
+  // “Odds” shown in UI (implied / informational). Not used for payout.
 
   const isBinaryStyle = outcomes.length === 2;
 
@@ -212,24 +212,59 @@ const probs = useMemo(
     return { pricePerUnit, refund, fees, netReceive, startSupply, avgInclFees };
   }, [basePriceLamports, currentSupply, slopeLamportsPerSupply, safeShares]);
 
-  const payOrReceiveLamports = side === "buy" ? buyCostLamports.totalPay : sellRefundLamports.netReceive;
+  const payOrReceiveLamports =
+    side === "buy" ? buyCostLamports.totalPay : sellRefundLamports.netReceive;
   const feeLamports = side === "buy" ? buyCostLamports.fees.total : sellRefundLamports.fees.total;
 
   const avgPriceSol = useMemo(() => {
-    const avgLamports =
-      side === "buy" ? buyCostLamports.avgInclFees : sellRefundLamports.avgInclFees;
+    const avgLamports = side === "buy" ? buyCostLamports.avgInclFees : sellRefundLamports.avgInclFees;
     return lamportsToSol(avgLamports);
   }, [side, buyCostLamports.avgInclFees, sellRefundLamports.avgInclFees]);
 
-  const selectedOddsX = oddsX[selectedIndex] || 1;
-
-  const stakeSol = useMemo(() => (side === "buy" ? lamportsToSol(buyCostLamports.totalPay) : 0), [buyCostLamports.totalPay, side]);
-
+  // ✅ Correct “To win” estimate for your on-chain model:
+  // fees are paid out immediately, so pool increases ONLY by the buy cost (excluding fees),
+  // and winnings are pro-rata of the pool vs winning outcome supply.
   const payoutIfWinSol = useMemo(() => {
     if (side !== "buy") return null;
-    if (stakeSol <= 0 || !Number.isFinite(selectedOddsX)) return null;
-    return stakeSol * selectedOddsX;
-  }, [side, stakeSol, selectedOddsX]);
+
+    const poolNow = Number(marketBalanceLamports ?? 0);
+    if (!Number.isFinite(poolNow) || poolNow <= 0) return null;
+
+    const outcomeSupplyAfter = currentSupply + safeShares;
+    if (outcomeSupplyAfter <= 0) return null;
+
+    // Include existing holdings for a more accurate estimate of final payout
+    const userSharesAfter = userCurrent + safeShares;
+
+    // fees go out -> pool increases only by cost (excluding fees)
+    const poolAfter = poolNow + buyCostLamports.cost;
+
+    const payoutLamports = (userSharesAfter / outcomeSupplyAfter) * poolAfter;
+    if (!Number.isFinite(payoutLamports) || payoutLamports <= 0) return null;
+
+    return lamportsToSol(payoutLamports);
+  }, [
+    side,
+    marketBalanceLamports,
+    currentSupply,
+    safeShares,
+    userCurrent,
+    buyCostLamports.cost,
+  ]);
+
+  // Real “x” multiple based on (estimated payout) / (actual pay incl fees)
+  const payoutMultipleX = useMemo(() => {
+    if (side !== "buy") return null;
+    if (payoutIfWinSol == null) return null;
+
+    const paySol = lamportsToSol(buyCostLamports.totalPay); // what user actually pays (incl fees)
+    if (!Number.isFinite(paySol) || paySol <= 0) return null;
+
+    const x = payoutIfWinSol / paySol;
+    if (!Number.isFinite(x) || x <= 0) return null;
+
+    return x;
+  }, [side, payoutIfWinSol, buyCostLamports.totalPay]);
 
   const handleAmountChange: React.ChangeEventHandler<HTMLInputElement> = (e) => {
     const raw = e.target.value.replace(/[^\d]/g, "");
@@ -267,36 +302,35 @@ const probs = useMemo(
 
   if (marketClosed) return null;
 
-  const rootClass =
-  mode === "drawer"
-    ? "h-full flex flex-col" // ✅ pas de card-pump dans le drawer
-    : "card-pump";
+  const rootClass = mode === "drawer" ? "h-full flex flex-col" : "card-pump";
 
   return (
     <div className={rootClass}>
       {/* Header (drawer) */}
       {mode === "drawer" && (
-  <div className="sticky top-0 z-30 flex items-center justify-between px-4 py-3 bg-pump-dark/95 backdrop-blur border-b border-gray-800">
-    <div className="text-white font-bold text-lg">{title}</div>
-    {onClose && (
-      <button
-        onClick={onClose}
-        className="h-9 w-9 rounded-full border border-gray-800 bg-pump-dark/60 text-gray-200"
-        aria-label="Close"
-      >
-        ✕
-      </button>
-    )}
-  </div>
-)}
+        <div className="sticky top-0 z-30 flex items-center justify-between px-4 py-3 bg-pump-dark/95 backdrop-blur border-b border-gray-800">
+          <div className="text-white font-bold text-lg">{title}</div>
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="h-9 w-9 rounded-full border border-gray-800 bg-pump-dark/60 text-gray-200"
+              aria-label="Close"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      )}
 
-<div className={mode === "drawer" ? "px-4 pb-2 pt-3 flex-1 overflow-y-auto" : ""}>
+      <div className={mode === "drawer" ? "px-4 pb-2 pt-3 flex-1 overflow-y-auto" : ""}>
         {/* Buy / Sell */}
         <div className="grid grid-cols-2 gap-2 mb-4">
           <button
             onClick={() => setSide("buy")}
             className={`py-2 rounded-lg font-semibold transition ${
-              side === "buy" ? "bg-pump-green text-black" : "bg-pump-dark/60 text-gray-300 hover:bg-pump-dark"
+              side === "buy"
+                ? "bg-pump-green text-black"
+                : "bg-pump-dark/60 text-gray-300 hover:bg-pump-dark"
             }`}
           >
             Buy
@@ -304,7 +338,9 @@ const probs = useMemo(
           <button
             onClick={() => setSide("sell")}
             className={`py-2 rounded-lg font-semibold transition ${
-              side === "sell" ? "bg-gray-200 text-black" : "bg-pump-dark/60 text-gray-300 hover:bg-pump-dark"
+              side === "sell"
+                ? "bg-gray-200 text-black"
+                : "bg-pump-dark/60 text-gray-300 hover:bg-pump-dark"
             }`}
           >
             Sell
@@ -336,8 +372,12 @@ const probs = useMemo(
                 >
                   <span className="text-sm mb-1">{outcomes[i]}</span>
                   <span className="text-xl md:text-2xl">{(probs[i] ?? 0).toFixed(0)}¢</span>
-                  <span className={`mt-1 font-extrabold ${selected ? "text-black" : isRed ? "text-[#ff5c73]" : "text-pump-green"} text-base md:text-lg`}>
-                    {oddsX[i].toFixed(2)}x
+                  <span
+                    className={`mt-1 font-extrabold ${
+                      selected ? "text-black" : isRed ? "text-[#ff5c73]" : "text-pump-green"
+                    } text-base md:text-lg`}
+                  >
+                    
                   </span>
                 </button>
               );
@@ -355,8 +395,8 @@ const probs = useMemo(
             >
               {outcomes.map((o, i) => (
                 <option key={`${o}-${i}`} value={i}>
-                  {o} ({(probs[i] ?? 0).toFixed(1)}% • {oddsX[i].toFixed(2)}x)
-                </option>
+                {o} ({(probs[i] ?? 0).toFixed(1)}%)
+              </option>
               ))}
             </select>
           </div>
@@ -367,8 +407,8 @@ const probs = useMemo(
           <div className="flex items-center justify-between">
             <label className="text-xs text-gray-400 mb-1 block">Amount (shares)</label>
             <div className="text-xs text-gray-500">
-            avg {avgPriceSol.toFixed(9)}
-            <InfoTip text="Average estimate per share (base + supply*slope, includes 1% platform + 2% creator fees). Matches on-chain." />
+              avg {avgPriceSol.toFixed(9)}
+              <InfoTip text="Average estimate per share (base + supply*slope, includes 1% platform + 2% creator fees). Matches on-chain." />
             </div>
           </div>
 
@@ -382,13 +422,22 @@ const probs = useMemo(
           />
 
           <div className="flex gap-2 justify-end mt-3">
-            <button onClick={() => bumpShares(1)} className="px-4 py-2 bg-pump-dark rounded-lg font-semibold transition text-sm text-white border border-gray-700 hover:border-pump-green">
+            <button
+              onClick={() => bumpShares(1)}
+              className="px-4 py-2 bg-pump-dark rounded-lg font-semibold transition text-sm text-white border border-gray-700 hover:border-pump-green"
+            >
               +1
             </button>
-            <button onClick={() => bumpShares(20)} className="px-4 py-2 bg-pump-dark rounded-lg font-semibold transition text-sm text-white border border-gray-700 hover:border-pump-green">
+            <button
+              onClick={() => bumpShares(20)}
+              className="px-4 py-2 bg-pump-dark rounded-lg font-semibold transition text-sm text-white border border-gray-700 hover:border-pump-green"
+            >
               +20
             </button>
-            <button onClick={() => bumpShares(100)} className="px-4 py-2 bg-pump-dark rounded-lg font-semibold transition text-sm text-white border border-gray-700 hover:border-pump-green">
+            <button
+              onClick={() => bumpShares(100)}
+              className="px-4 py-2 bg-pump-dark rounded-lg font-semibold transition text-sm text-white border border-gray-700 hover:border-pump-green"
+            >
               +100
             </button>
             <button
@@ -410,21 +459,25 @@ const probs = useMemo(
               <InfoTip text={`Fees (platform 1% + creator 2%): ${lamportsToSol(feeLamports).toFixed(6)} SOL.`} />
             </div>
             <div className={`text-2xl font-extrabold ${mainAccentAmountClass} whitespace-nowrap`}>
-  {lamportsToSol(payOrReceiveLamports).toFixed(2)} SOL
-</div>
+              {lamportsToSol(payOrReceiveLamports).toFixed(2)} SOL
+            </div>
           </div>
 
           {side === "buy" && payoutIfWinSol != null && (
             <div className="mt-3 flex items-center justify-between">
               <div className="text-sm text-gray-400">
                 To win
-                <InfoTip text="Approx. value if this outcome wins (UI estimate, not LMSR)." />
+                <InfoTip text="Estimated pro-rata payout from the pool if this outcome wins (fees are paid out immediately). Estimate only." />
               </div>
               <div className="flex items-baseline gap-2">
-              <div className="text-xl font-bold text-white whitespace-nowrap">
-  {payoutIfWinSol.toFixed(2)} SOL
-</div>
-                <div className={`text-lg font-extrabold ${outcomeAccentText}`}>{selectedOddsX.toFixed(2)}x</div>
+                <div className="text-xl font-bold text-white whitespace-nowrap">
+                  {payoutIfWinSol.toFixed(2)} SOL
+                </div>
+                {payoutMultipleX != null && (
+                  <div className={`text-lg font-extrabold ${outcomeAccentText}`}>
+                    {payoutMultipleX.toFixed(2)}x
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -445,12 +498,12 @@ const probs = useMemo(
 
       {/* CTA (sticky in drawer to be visible without scroll) */}
       <div
-  className={
-    mode === "drawer"
-      ? "sticky bottom-0 z-20 px-4 pb-4 pt-3 bg-pump-dark/80 backdrop-blur border-t border-gray-800"
-      : "mt-4"
-  }
->
+        className={
+          mode === "drawer"
+            ? "sticky bottom-0 z-20 px-4 pb-4 pt-3 bg-pump-dark/80 backdrop-blur border-t border-gray-800"
+            : "mt-4"
+        }
+      >
         <button
           disabled={!!submitting || !connected || market.resolved || (side === "sell" && userCurrent <= 0)}
           onClick={handleTrade}
@@ -475,13 +528,13 @@ const probs = useMemo(
         <p className="mt-3 text-center text-xs text-gray-500">
           By trading, you agree to the{" "}
           <a
-  href={TERMS_URL}
-  target="_blank"
-  rel="noopener noreferrer"
-  className="text-gray-300 underline underline-offset-4 hover:text-white"
->
-  Terms of Use
-</a>
+            href={TERMS_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-gray-300 underline underline-offset-4 hover:text-white"
+          >
+            Terms of Use
+          </a>
           .
         </p>
       </div>
