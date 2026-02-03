@@ -477,6 +477,8 @@ export default function TradePage() {
   const [tradeStep, setTradeStep] = useState<TradeStep>("idle");
   const [tradeResult, setTradeResult] = useState<TradeResult>(null);
   const loadOnchainSnapshot = useCallback(async (marketAddress: string) => {
+    console.log("[SNAPSHOT] rpc endpoint =", (connection as any)?._rpcEndpoint);
+console.log("[SNAPSHOT] marketAddress =", marketAddress);
     try {
       const marketPk = new PublicKey(marketAddress);
   
