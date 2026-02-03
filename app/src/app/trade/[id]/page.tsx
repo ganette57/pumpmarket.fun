@@ -644,6 +644,26 @@ if (snap?.posAcc?.shares) {
       setMobileTradeOpen(false);
     }, [id]);
 
+    useEffect(() => {
+      if (!id) return;
+      if (!connection) return;
+    
+      (async () => {
+        console.log("🔥 loading pool snapshot...");
+        try {
+          const marketPk = new PublicKey(id);
+          const acc = await connection.getAccountInfo(marketPk, "confirmed");
+          const lamports = acc?.lamports ?? null;
+    
+          console.log("✅ pool lamports =", lamports);
+    
+          if (lamports != null) setMarketBalanceLamports(lamports);
+        } catch (e) {
+          console.warn("❌ pool snapshot failed:", e);
+        }
+      })();
+    }, [id, connection]);
+
   const derived: Derived | null = useMemo(() => {
     if (!market) return null;
 
