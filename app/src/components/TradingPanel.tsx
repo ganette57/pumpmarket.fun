@@ -226,22 +226,24 @@ export default function TradingPanel({
   // and winnings are pro-rata of the pool vs winning outcome supply.
   const payoutIfWinSol = useMemo(() => {
     if (side !== "buy") return null;
-
+  
     const poolNow = Number(marketBalanceLamports ?? 0);
     if (!Number.isFinite(poolNow) || poolNow <= 0) return null;
-
+  
     const outcomeSupplyAfter = currentSupply + safeShares;
     if (outcomeSupplyAfter <= 0) return null;
-
-    // Include existing holdings for a more accurate estimate of final payout
+  
     const userSharesAfter = userCurrent + safeShares;
-
-    // fees go out -> pool increases only by cost (excluding fees)
-    const poolAfter = poolNow + buyCostLamports.cost;
-
+  
+    // ✅ On-chain: pool increases by (cost + creator_fee). Platform fee leaves immediately.
+    const poolAfter =
+      poolNow +
+      buyCostLamports.cost +
+      buyCostLamports.fees.creator;
+  
     const payoutLamports = (userSharesAfter / outcomeSupplyAfter) * poolAfter;
     if (!Number.isFinite(payoutLamports) || payoutLamports <= 0) return null;
-
+  
     return lamportsToSol(payoutLamports);
   }, [
     side,
@@ -250,6 +252,7 @@ export default function TradingPanel({
     safeShares,
     userCurrent,
     buyCostLamports.cost,
+    buyCostLamports.fees.creator,
   ]);
 
   // Real “x” multiple based on (estimated payout) / (actual pay incl fees)

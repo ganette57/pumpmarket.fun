@@ -476,42 +476,41 @@ export default function TradePage() {
   // Trade modal state
   const [tradeStep, setTradeStep] = useState<TradeStep>("idle");
   const [tradeResult, setTradeResult] = useState<TradeResult>(null);
-  const loadOnchainSnapshot = useCallback(
-    async (marketAddress: string) => {
-      if (!program) return { marketAcc: null as any, posAcc: null as any, marketLamports: null as number | null };
-      try {
-        const marketPk = new PublicKey(marketAddress);
+  const loadOnchainSnapshot = useCallback(async (marketAddress: string) => {
+    try {
+      const marketPk = new PublicKey(marketAddress);
   
-        // position pda only if wallet connected
-        const posPda =
-          publicKey && connected
-            ? getUserPositionPDA(marketPk, publicKey)[0]
-            : null;
+      // ✅ does not require program
+      const mi = await connection.getAccountInfo(marketPk, "confirmed");
+      const marketLamports = mi?.lamports != null ? Number(mi.lamports) : null;
   
-        const keys: PublicKey[] = posPda ? [marketPk, posPda] : [marketPk];
+      const posPda =
+        publicKey && connected ? getUserPositionPDA(marketPk, publicKey)[0] : null;
   
-        const infos = await getMultipleAccountsInfoBatched(connection, keys, 80);
-  
-        const coder = (program as any).coder;
-  
-        const mi = infos.get(marketPk.toBase58());
-        const marketAcc = mi?.data ? coder.accounts.decode("market", mi.data) : null;
-        const marketLamports = mi?.lamports != null ? Number(mi.lamports) : null;
-  
-        let posAcc: any = null;
-        if (posPda) {
-          const pi = infos.get(posPda.toBase58());
-          posAcc = pi?.data ? coder.accounts.decode("userPosition", pi.data) : null;
-        }
-  
-        return { marketAcc, posAcc, marketLamports };
-      } catch (e) {
-        console.warn("loadOnchainSnapshot failed:", e);
-        return { marketAcc: null, posAcc: null, marketLamports: null };
+      if (!program) {
+        return { marketAcc: null as any, posAcc: null as any, marketLamports };
       }
-    },
-    [program, connection, publicKey, connected]
-  );
+  
+      // decode only when program ready
+      const keys = posPda ? [marketPk, posPda] : [marketPk];
+      const infos = await getMultipleAccountsInfoBatched(connection, keys, 80);
+      const coder = (program as any).coder;
+  
+      const mi2 = infos.get(marketPk.toBase58());
+      const marketAcc = mi2?.data ? coder.accounts.decode("market", mi2.data) : null;
+  
+      let posAcc: any = null;
+      if (posPda) {
+        const pi = infos.get(posPda.toBase58());
+        posAcc = pi?.data ? coder.accounts.decode("userPosition", pi.data) : null;
+      }
+  
+      return { marketAcc, posAcc, marketLamports };
+    } catch (e) {
+      console.warn("loadOnchainSnapshot failed:", e);
+      return { marketAcc: null, posAcc: null, marketLamports: null };
+    }
+  }, [program, connection, publicKey, connected]);
 
 // Related block (RIGHT column under TradingPanel)
 const [relatedTab, setRelatedTab] = useState<RelatedTab>("related");
