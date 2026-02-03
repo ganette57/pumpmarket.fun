@@ -109,6 +109,8 @@ export default function TradingPanel({
   onClose,
   title = "Trade",
 }: TradingPanelProps) {
+  console.log("✅ TradingPanel pool =", marketBalanceLamports);
+
   const outcomes = useMemo(() => {
     const names = (market.outcomeNames || []).map(String).filter(Boolean);
     if (names.length >= 2) return names.slice(0, 10);

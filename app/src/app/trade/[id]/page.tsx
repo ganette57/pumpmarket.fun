@@ -512,6 +512,17 @@ export default function TradePage() {
     }
   }, [program, connection, publicKey, connected]);
 
+  useEffect(() => {
+    if (!id) return;
+  
+    (async () => {
+      const snap = await loadOnchainSnapshot(id);
+      if (snap?.marketLamports != null) {
+        setMarketBalanceLamports(snap.marketLamports);
+      }
+    })();
+  }, [id]);
+
 // Related block (RIGHT column under TradingPanel)
 const [relatedTab, setRelatedTab] = useState<RelatedTab>("related");
 const [relatedLoading, setRelatedLoading] = useState(false);
