@@ -11,10 +11,19 @@ import GeoGateController from "@/components/GeoGateController";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "FunMarket — Predict. Earn. Repeat.",
-description:
-  "Turn opinions into markets. Create and trade prediction markets on Solana with multi-outcome pricing.",
+  title: "FunMarket — Prediction markets made simple, fun, and profitable.",
+  description:
+    "Turn opinions into markets. Create and trade prediction markets on Solana with multi-outcome pricing.",
+
+  icons: {
+    icon: "/favicon.ico",
+    apple: "/favicon/apple-touch-icon.png",
+  },
+
+  manifest: "/favicon/site.webmanifest",
 };
+
+
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

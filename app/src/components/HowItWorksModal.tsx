@@ -37,7 +37,7 @@ const STEPS: Step[] = [
     icon: '💰',
     title: 'Earn Fees',
     description:
-      'Market creators earn 1% on every trade. Platform earns 1%. Everyone wins.',
+      'Market creators earn 2% on every trade. Platform earns 1%. Everyone wins.',
     color: 'from-pump-green to-green-400',
   },
 ];
@@ -81,7 +81,7 @@ export default function HowItWorksModal({
             <X className="w-6 h-6" />
           </button>
           <h2 className="text-3xl font-bold text-white mb-2">
-            🚀 How Funmarket.pump Works
+            🚀 How Funmarket Works
           </h2>
           <p className="text-gray-300">
             Prediction markets made simple, fun, and profitable
