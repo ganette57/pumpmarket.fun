@@ -6,6 +6,7 @@ import "./globals.css";
 import { WalletContextProvider } from "@/components/WalletProvider";
 import AppShell from "@/components/AppShell";
 import LiveBuysTicker from "@/components/LiveBuysTicker";
+import GeoGateController from "@/components/GeoGateController";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -21,6 +22,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className={inter.className}>
         <WalletContextProvider>
           <AppShell>
+          <GeoGateController />
             {children}
 
             {/* Desktop ticker (bottom of screen) */}

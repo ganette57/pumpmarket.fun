@@ -10,7 +10,6 @@ import MarketCard from "@/components/MarketCard";
 import FeaturedMarketCardFull from "@/components/FeaturedMarketCardFull";
 import CategoryFilters from "@/components/CategoryFilters";
 import type { SelectedCategory } from "@/components/CategoryFilters";
-import GeoblockModal from "@/components/GeoblockModal";
 import { SkeletonCard, SkeletonFeaturedCard } from "@/components/SkeletonCard";
 import { isSportSubcategory } from "@/utils/categories";
 import { supabase } from "@/lib/supabaseClient";
@@ -433,7 +432,7 @@ export default function Home() {
   // ------- RENDER -------
   return (
     <>
-      <GeoblockModal />
+  
 
       {/* Category Filters - sticky */}
       <div className="border-b border-gray-800 bg-pump-dark/50 sticky top-16 z-30">
