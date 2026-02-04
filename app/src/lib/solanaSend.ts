@@ -34,7 +34,8 @@ export async function sendSignedTx({
   const latest = await connection.getLatestBlockhash(commitment);
   tx.feePayer = feePayer;
   tx.recentBlockhash = latest.blockhash;
-
+  // ✅ allow caller to partialSign (ex: market Keypair for create_market)
+  if (beforeSign) await beforeSign(tx);
   const signed = await signTx(tx);
 
   // Prefer network-returned sig
