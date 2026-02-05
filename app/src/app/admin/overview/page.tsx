@@ -25,6 +25,10 @@ type ActionableMarket = {
   type: MarketType;
   is_actionable: boolean;
   due_date: string | null;
+  // Block fields
+  is_blocked?: boolean;
+  blocked_reason?: string | null;
+  blocked_at?: string | null;
 };
 
 type Overview = {
@@ -52,7 +56,7 @@ type OnchainInfo = {
   resolutionTimeSec: number | null;
 };
 
-type DrawerMode = "approve_only" | "approve_cancel" | "cancel_only_24h" | null;
+type DrawerMode = "approve_only" | "approve_cancel" | "cancel_only_24h" | "block_only" | null;
 
 type FlowStep = "idle" | "checking" | "signing" | "confirming" | "committing" | "done" | "error";
 
@@ -67,6 +71,23 @@ type ResolvedRow = {
   resolved_at: string | null;
   market_type?: number | null;
   outcome_names?: any;
+};
+
+type ActiveMarket = {
+  market_address: string;
+  question: string | null;
+  category: string | null;
+  image_url: string | null;
+  end_date: string | null;
+  total_volume: number | null;
+  creator: string | null;
+  market_type: number | null;
+  outcome_names: any;
+  resolution_status: string | null;
+  is_blocked: boolean | null;
+  blocked_reason: string | null;
+  blocked_at: string | null;
+  blocked_by: string | null;
 };
 
 /* ========= Config ========= */
@@ -104,7 +125,7 @@ function Pill({
   tone = "neutral",
 }: {
   children: React.ReactNode;
-  tone?: "neutral" | "warn" | "ok" | "pink";
+  tone?: "neutral" | "warn" | "ok" | "pink" | "blocked" | "active";
 }) {
   const cls =
     tone === "ok"
@@ -113,6 +134,10 @@ function Pill({
       ? "border-yellow-500/40 bg-yellow-500/10 text-yellow-400"
       : tone === "pink"
       ? "border-[#ff5c73]/40 bg-[#ff5c73]/10 text-[#ff5c73]"
+      : tone === "blocked"
+      ? "border-red-600/40 bg-red-600/20 text-red-400"
+      : tone === "active"
+      ? "border-blue-500/40 bg-blue-500/10 text-blue-400"
       : "border-white/10 bg-white/5 text-gray-300";
   return (
     <span className={`px-2 py-0.5 rounded-full border text-xs font-medium ${cls}`}>
@@ -226,7 +251,7 @@ export default function AdminOverviewPage() {
 
   const [now, setNow] = useState(() => Date.now());
 
-  const [filter, setFilter] = useState<"inbox" | "resolved" | "all">("inbox");
+  const [filter, setFilter] = useState<"inbox" | "resolved" | "blocked" | "active" | "all">("inbox");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [search, setSearch] = useState("");
 
@@ -240,6 +265,15 @@ export default function AdminOverviewPage() {
   const [resolvedRows, setResolvedRows] = useState<ResolvedRow[]>([]);
   const [resolvedLoading, setResolvedLoading] = useState(false);
   const [resolvedErr, setResolvedErr] = useState<string | null>(null);
+
+  // Block state
+  const [blockLoading, setBlockLoading] = useState(false);
+  const [blockReason, setBlockReason] = useState("");
+
+  // Active markets state
+  const [activeMarkets, setActiveMarkets] = useState<ActiveMarket[]>([]);
+  const [activeLoading, setActiveLoading] = useState(false);
+  const [activeErr, setActiveErr] = useState<string | null>(null);
 
   const resolvedSorted = useMemo(() => {
     const list = [...resolvedRows];
@@ -285,6 +319,7 @@ export default function AdminOverviewPage() {
 
   useEffect(() => void load(), [load]);
 
+  // Load resolved markets
   useEffect(() => {
     let cancelled = false;
     async function fetchResolved() {
@@ -303,6 +338,28 @@ export default function AdminOverviewPage() {
       }
     }
     void fetchResolved();
+    return () => { cancelled = true; };
+  }, [filter]);
+
+  // Load active markets
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchActive() {
+      if (filter !== "active") return;
+      setActiveLoading(true);
+      setActiveErr(null);
+      try {
+        const r = await fetch("/api/admin/active-markets", { credentials: "include", cache: "no-store" });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j?.error || j?.message || `HTTP ${r.status}`);
+        if (!cancelled) setActiveMarkets((j?.markets || []) as ActiveMarket[]);
+      } catch (e: any) {
+        if (!cancelled) setActiveErr(e?.message || "Failed to load active markets");
+      } finally {
+        if (!cancelled) setActiveLoading(false);
+      }
+    }
+    void fetchActive();
     return () => { cancelled = true; };
   }, [filter]);
 
@@ -380,11 +437,44 @@ export default function AdminOverviewPage() {
 
   const filteredMarkets = useMemo(() => {
     let list = [...markets];
+    
     if (filter === "inbox") {
-      list = list.filter((m) => m.is_actionable && !isResolved(m));
+      list = list.filter((m) => m.is_actionable && !isResolved(m) && !m.is_blocked);
     } else if (filter === "resolved") {
       list = list.filter((m) => isResolved(m));
+    } else if (filter === "blocked") {
+      // ✅ FIX: Combine blocked from inbox + active markets
+      const blockedFromInbox = markets.filter((m) => m.is_blocked);
+      const blockedFromActive = activeMarkets
+        .filter((m) => m.is_blocked)
+        .map((m) => ({
+          market_address: m.market_address,
+          question: m.question,
+          contest_deadline: null,
+          contest_count: 0,
+          end_date: m.end_date,
+          proposed_winning_outcome: null,
+          type: "proposed_no_dispute" as MarketType,
+          is_actionable: false,
+          due_date: m.end_date,
+          is_blocked: true,
+          blocked_reason: m.blocked_reason,
+          blocked_at: m.blocked_at,
+        }));
+      
+      // Dedupe by market_address
+      const seen = new Set<string>();
+      list = [];
+      for (const m of [...blockedFromInbox, ...blockedFromActive]) {
+        if (!seen.has(m.market_address)) {
+          seen.add(m.market_address);
+          list.push(m);
+        }
+      }
     }
+    // "active" is handled separately
+    // "all" shows everything
+    
     if (search.trim()) {
       const q = search.toLowerCase();
       list = list.filter(
@@ -393,15 +483,41 @@ export default function AdminOverviewPage() {
           m.market_address.toLowerCase().includes(q)
       );
     }
+    
     list.sort((a, b) => {
       const ad = a.due_date ? new Date(a.due_date).getTime() : Infinity;
       const bd = b.due_date ? new Date(b.due_date).getTime() : Infinity;
       return sortDir === "asc" ? ad - bd : bd - ad;
     });
+    
     return list;
-  }, [markets, filter, search, sortDir]);
+  }, [markets, activeMarkets, filter, search, sortDir]);
+
+  // Filter active markets by search
+  const filteredActiveMarkets = useMemo(() => {
+    if (!search.trim()) return activeMarkets;
+    const q = search.toLowerCase();
+    return activeMarkets.filter(
+      (m) =>
+        m.question?.toLowerCase().includes(q) ||
+        m.market_address.toLowerCase().includes(q)
+    );
+  }, [activeMarkets, search]);
+
+  // Count blocked markets (from actionable + active)
+  const blockedCount = useMemo(() => {
+    const fromActionable = markets.filter((m) => m.is_blocked).length;
+    const fromActive = activeMarkets.filter((m) => m.is_blocked).length;
+    return fromActionable + fromActive;
+  }, [markets, activeMarkets]);
+
+  // Count active markets
+  const activeCount = useMemo(() => activeMarkets.length, [activeMarkets]);
 
   function getTypeBadge(m: ActionableMarket) {
+    if (m.is_blocked) {
+      return <Pill tone="blocked">🚫 Blocked</Pill>;
+    }
     if (isResolved(m)) {
       return <Pill tone="ok">Resolved</Pill>;
     }
@@ -415,6 +531,9 @@ export default function AdminOverviewPage() {
   }
 
   function getActionStatus(m: ActionableMarket) {
+    if (m.is_blocked) {
+      return <Pill tone="blocked">BLOCKED</Pill>;
+    }
     if (m.is_actionable) {
       return <Pill tone="ok">READY</Pill>;
     }
@@ -426,6 +545,7 @@ export default function AdminOverviewPage() {
     setFlowStep("idle");
     setFlowMsg("");
     setFlowError("");
+    setBlockReason(m.blocked_reason || "");
     if (m.type === "no_proposal_24h") {
       setDrawerMode("cancel_only_24h");
     } else if (m.type === "proposed_no_dispute") {
@@ -435,15 +555,40 @@ export default function AdminOverviewPage() {
     }
   }
 
+  // Open drawer for active market (block/unblock only)
+  function openDrawerForActive(m: ActiveMarket) {
+    const fakeActionable: ActionableMarket = {
+      market_address: m.market_address,
+      question: m.question,
+      contest_deadline: null,
+      contest_count: 0,
+      end_date: m.end_date,
+      proposed_winning_outcome: null,
+      type: "proposed_no_dispute",
+      is_actionable: false,
+      due_date: m.end_date,
+      is_blocked: !!m.is_blocked,
+      blocked_reason: m.blocked_reason,
+      blocked_at: m.blocked_at,
+    };
+    setDrawerMarket(fakeActionable);
+    setDrawerMode("block_only");
+    setFlowStep("idle");
+    setFlowMsg("");
+    setFlowError("");
+    setBlockReason(m.blocked_reason || "");
+  }
+
   function closeDrawer() {
     setDrawerMarket(null);
     setDrawerMode(null);
     setFlowStep("idle");
     setFlowMsg("");
     setFlowError("");
+    setBlockReason("");
   }
 
-  // ========= Helper: Fresh fetch on-chain state =========
+  // Helper: Fresh fetch on-chain state
   async function fetchFreshOnchainState(marketAddr: string): Promise<{
     status: string;
     disputeCount: number;
@@ -469,12 +614,61 @@ export default function AdminOverviewPage() {
     return { status, disputeCount, proposedOutcome };
   }
 
-  // ========= APPROVE FLOW =========
+  // Block/Unblock handler
+  async function doToggleBlock() {
+    if (!drawerMarket) return;
+    if (!isAdminWallet) {
+      setFlowError(`Wrong wallet. Must be ${ADMIN_PUBKEY.toBase58()}`);
+      return;
+    }
+
+    const isCurrentlyBlocked = !!drawerMarket.is_blocked;
+    const action = isCurrentlyBlocked ? "unblock" : "block";
+
+    setBlockLoading(true);
+    setFlowError("");
+
+    try {
+      const res = await postJSON<{ ok: boolean; action: string }>("/api/admin/market/block", {
+        market_address: drawerMarket.market_address,
+        action,
+        reason: blockReason || "Blocked by admin",
+        admin_wallet: publicKey?.toBase58(),
+      });
+
+      if (res.ok) {
+        setFlowMsg(`Market ${action}ed successfully!`);
+        // Refresh data
+        setTimeout(() => {
+          closeDrawer();
+          load();
+          // Also refresh active markets if we're on that tab
+          if (filter === "active") {
+            setActiveMarkets([]);
+            // Trigger re-fetch
+            setFilter("inbox");
+            setTimeout(() => setFilter("active"), 100);
+          }
+        }, 1500);
+      }
+    } catch (e: any) {
+      setFlowError(e?.message || `Failed to ${action} market`);
+    } finally {
+      setBlockLoading(false);
+    }
+  }
+
+  // APPROVE FLOW
   async function doApprove() {
     if (!drawerMarket) return;
     if (!program) return setFlowError("Program not ready");
     if (!publicKey || !signTransaction) return setFlowError("Connect wallet");
     if (!isAdminWallet) return setFlowError(`Wrong wallet. Must be ${ADMIN_PUBKEY.toBase58()}`);
+
+    if (drawerMarket.is_blocked) {
+      setFlowError("Cannot approve a blocked market. Unblock it first.");
+      return;
+    }
 
     const marketAddr = drawerMarket.market_address;
     const marketPk = new PublicKey(marketAddr);
@@ -484,14 +678,12 @@ export default function AdminOverviewPage() {
     setFlowError("");
 
     try {
-      // ✅ FRESH FETCH: Re-read on-chain state at the moment of click
       let onchainState: { status: string; disputeCount: number; proposedOutcome: number | null };
       
       try {
         onchainState = await fetchFreshOnchainState(marketAddr);
       } catch (fetchErr) {
         console.warn("[doApprove] Could not fetch on-chain state:", fetchErr);
-        // Fallback to cached state
         const oc = onchain[marketAddr];
         onchainState = {
           status: oc?.status ?? "unknown",
@@ -500,7 +692,6 @@ export default function AdminOverviewPage() {
         };
       }
 
-      // Check if already resolved
       if (onchainState.status === "finalized") {
         setFlowStep("done");
         setFlowMsg("Market already finalized on-chain!");
@@ -535,7 +726,6 @@ export default function AdminOverviewPage() {
       let txSig: string;
 
       if (onchainDisputes > 0) {
-        // Disputed: use adminFinalize(wo)
         if (wo == null) throw new Error("No winning outcome for disputed market");
         const tx = await (program as any).methods
           .adminFinalize(wo)
@@ -549,7 +739,6 @@ export default function AdminOverviewPage() {
           feePayer: publicKey,
         });
       } else {
-        // No disputes: use adminFinalizeNoDisputes() - FULL ADMIN
         const tx = await (program as any).methods
           .adminFinalizeNoDisputes()
           .accounts({ market: marketPk, admin: publicKey })
@@ -589,7 +778,7 @@ export default function AdminOverviewPage() {
     }
   }
 
-  // ========= CANCEL FLOW (disputed) =========
+  // CANCEL FLOW (disputed)
   async function doCancel() {
     if (!drawerMarket) return;
     if (!program) return setFlowError("Program not ready");
@@ -604,14 +793,12 @@ export default function AdminOverviewPage() {
     setFlowError("");
 
     try {
-      // ✅ FRESH FETCH: Re-read on-chain state at the moment of click
       let onchainState: { status: string; disputeCount: number; proposedOutcome: number | null };
 
       try {
         onchainState = await fetchFreshOnchainState(marketAddr);
       } catch (fetchErr) {
         console.warn("[doCancel] Could not fetch on-chain state:", fetchErr);
-        // Try to continue with cached state as fallback
         const oc = onchain[marketAddr];
         onchainState = {
           status: oc?.status ?? "unknown",
@@ -620,7 +807,6 @@ export default function AdminOverviewPage() {
         };
       }
 
-      // ✅ Check if already resolved on-chain
       if (onchainState.status === "cancelled") {
         setFlowStep("committing");
         setFlowMsg("Market already cancelled on-chain. Syncing DB...");
@@ -646,7 +832,6 @@ export default function AdminOverviewPage() {
         return;
       }
 
-      // ✅ Check disputes
       if (onchainState.disputeCount <= 0) {
         setFlowStep("error");
         setFlowError(`No disputes on-chain (found ${onchainState.disputeCount}). Cannot use admin_cancel.`);
@@ -695,7 +880,7 @@ export default function AdminOverviewPage() {
     }
   }
 
-  // ========= CANCEL 24H FLOW (no proposal) =========
+  // CANCEL 24H FLOW (no proposal)
   async function doCancel24h() {
     if (!drawerMarket) return;
     if (!program) return setFlowError("Program not ready");
@@ -710,7 +895,6 @@ export default function AdminOverviewPage() {
     setFlowError("");
   
     try {
-      // ✅ FRESH FETCH: Re-read on-chain state at the moment of click
       let onchainStatus = "unknown";
       
       try {
@@ -718,10 +902,8 @@ export default function AdminOverviewPage() {
         onchainStatus = state.status;
       } catch (fetchErr) {
         console.warn("[doCancel24h] Could not fetch on-chain state:", fetchErr);
-        // Continue anyway - might be a network issue
       }
   
-      // ✅ If already cancelled on-chain, skip tx and just commit DB
       if (onchainStatus === "cancelled") {
         setFlowStep("committing");
         setFlowMsg("Market already cancelled on-chain. Syncing DB...");
@@ -742,14 +924,12 @@ export default function AdminOverviewPage() {
         return;
       }
   
-      // ✅ If already finalized on-chain, cannot cancel
       if (onchainStatus === "finalized") {
         setFlowStep("error");
         setFlowError("Market already finalized on-chain. Cannot cancel.");
         return;
       }
   
-      // ✅ Normal flow - check server
       setFlowMsg("Checking server...");
   
       await postJSON("/api/admin/market/cancel", {
@@ -760,7 +940,6 @@ export default function AdminOverviewPage() {
       setFlowStep("signing");
       setFlowMsg("Signing cancel tx...");
   
-      // FULL ADMIN: adminCancelNoProposal
       const tx = await (program as any).methods
         .adminCancelNoProposal()
         .accounts({ market: marketPk, admin: publicKey })
@@ -798,7 +977,7 @@ export default function AdminOverviewPage() {
     }
   }
 
-  // ========= RENDER =========
+  // RENDER
 
   const isBusy = flowStep !== "idle" && flowStep !== "done" && flowStep !== "error";
 
@@ -821,7 +1000,7 @@ export default function AdminOverviewPage() {
           <div className="card-pump p-4 text-gray-400">No data.</div>
         ) : (
           <>
-            {/* KPI Cards - 5 columns on desktop, 2 rows on mobile */}
+            {/* KPI Cards */}
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3 md:gap-4 mb-6">
               <StatCard
                 label="Markets"
@@ -843,7 +1022,6 @@ export default function AdminOverviewPage() {
                 value={`${k.disputes_total}`}
                 hint={`open ${k.disputes_open}`}
               />
-              {/* Platform Fees KPI */}
               <StatCard
                 label="Platform Fees"
                 value={`${platformFeesSol.toFixed(4)} SOL`}
@@ -867,12 +1045,28 @@ export default function AdminOverviewPage() {
                   Inbox (actionable)
                 </button>
                 <button
+                  onClick={() => setFilter("active")}
+                  className={`px-3 md:px-4 py-2 rounded-lg text-xs md:text-sm font-medium transition ${
+                    filter === "active" ? "bg-blue-600/20 text-blue-400" : "text-gray-400 hover:text-white"
+                  }`}
+                >
+                  Active {activeCount > 0 ? `(${activeCount})` : ""}
+                </button>
+                <button
                   onClick={() => setFilter("resolved")}
                   className={`px-3 md:px-4 py-2 rounded-lg text-xs md:text-sm font-medium transition ${
                     filter === "resolved" ? "bg-white/10 text-white" : "text-gray-400 hover:text-white"
                   }`}
                 >
                   Resolved
+                </button>
+                <button
+                  onClick={() => setFilter("blocked")}
+                  className={`px-3 md:px-4 py-2 rounded-lg text-xs md:text-sm font-medium transition ${
+                    filter === "blocked" ? "bg-red-600/20 text-red-400" : "text-gray-400 hover:text-white"
+                  }`}
+                >
+                  Blocked {blockedCount > 0 ? `(${blockedCount})` : ""}
                 </button>
                 <button
                   onClick={() => setFilter("all")}
@@ -914,7 +1108,7 @@ export default function AdminOverviewPage() {
                       Type
                     </th>
                     <th className="text-left text-[10px] md:text-xs text-gray-500 uppercase tracking-wide px-3 md:px-4 py-3">
-                      Due
+                      {filter === "active" ? "Ends" : "Due"}
                     </th>
                     <th className="text-right text-[10px] md:text-xs text-gray-500 uppercase tracking-wide px-3 md:px-4 py-3">
                       Actions
@@ -922,7 +1116,85 @@ export default function AdminOverviewPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filter === "resolved" ? (
+                  {/* ACTIVE MARKETS TAB */}
+                  {filter === "active" ? (
+                    activeLoading ? (
+                      <tr>
+                        <td colSpan={4} className="px-4 py-8 text-center text-gray-500">
+                          Loading active markets...
+                        </td>
+                      </tr>
+                    ) : activeErr ? (
+                      <tr>
+                        <td colSpan={4} className="px-4 py-8 text-center text-red-300">
+                          {activeErr}
+                        </td>
+                      </tr>
+                    ) : filteredActiveMarkets.length === 0 ? (
+                      <tr>
+                        <td colSpan={4} className="px-4 py-8 text-center text-gray-500">
+                          No active markets (all markets have ended).
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredActiveMarkets.map((m) => (
+                        <tr
+                          key={m.market_address}
+                          className={`border-b border-white/5 hover:bg-white/2 transition ${
+                            m.is_blocked ? "bg-red-900/10" : ""
+                          }`}
+                        >
+                          <td className="px-3 md:px-4 py-3">
+                            <div className="text-white font-medium truncate max-w-[200px] md:max-w-xs text-sm">
+                              {m.question || "(Untitled)"}
+                            </div>
+                            <div className="text-[10px] md:text-xs text-gray-500 font-mono">
+                              {m.market_address}
+                            </div>
+                            {m.is_blocked && m.blocked_reason && (
+                              <div className="text-[10px] text-red-400 mt-1">
+                                Blocked: {m.blocked_reason}
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-3 md:px-4 py-3">
+                            {m.is_blocked ? (
+                              <Pill tone="blocked">🚫 Blocked</Pill>
+                            ) : (
+                              <Pill tone="active">🟢 Active</Pill>
+                            )}
+                          </td>
+                          <td className="px-3 md:px-4 py-3">
+                            <span className="text-xs md:text-sm text-gray-400">
+                              {formatDate(m.end_date)}
+                            </span>
+                          </td>
+                          <td className="px-3 md:px-4 py-3 text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              <Link
+                                href={`/trade/${m.market_address}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="px-2 md:px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-gray-300 text-xs font-medium hover:bg-white/10 transition"
+                              >
+                                View
+                              </Link>
+                              <button
+                                onClick={() => openDrawerForActive(m)}
+                                className={`px-2 md:px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                                  m.is_blocked
+                                    ? "bg-pump-green text-black hover:opacity-90"
+                                    : "bg-red-600 text-white hover:bg-red-700"
+                                }`}
+                              >
+                                {m.is_blocked ? "Unblock" : "Block"}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )
+                  ) : filter === "resolved" ? (
                     resolvedLoading ? (
                       <tr>
                         <td colSpan={4} className="px-4 py-8 text-center text-gray-500">
@@ -1001,7 +1273,9 @@ export default function AdminOverviewPage() {
                       filteredMarkets.map((m) => (
                         <tr
                           key={m.market_address}
-                          className="border-b border-white/5 hover:bg-white/2 transition"
+                          className={`border-b border-white/5 hover:bg-white/2 transition ${
+                            m.is_blocked ? "bg-red-900/10" : ""
+                          }`}
                         >
                           <td className="px-3 md:px-4 py-3">
                             <div className="text-white font-medium truncate max-w-[200px] md:max-w-xs text-sm">
@@ -1010,6 +1284,11 @@ export default function AdminOverviewPage() {
                             <div className="text-[10px] md:text-xs text-gray-500 font-mono">
                               {m.market_address}
                             </div>
+                            {m.is_blocked && m.blocked_reason && (
+                              <div className="text-[10px] text-red-400 mt-1">
+                                Reason: {m.blocked_reason}
+                              </div>
+                            )}
                           </td>
                           <td className="px-3 md:px-4 py-3">{getTypeBadge(m)}</td>
                           <td className="px-3 md:px-4 py-3">
@@ -1030,14 +1309,16 @@ export default function AdminOverviewPage() {
                               </Link>
                               <button
                                 onClick={() => openDrawer(m)}
-                                disabled={!m.is_actionable}
+                                disabled={!m.is_actionable && !m.is_blocked}
                                 className={`px-2 md:px-3 py-1.5 rounded-lg text-xs font-medium transition ${
-                                  m.is_actionable
+                                  m.is_blocked
+                                    ? "bg-red-600/20 text-red-400 hover:bg-red-600/30"
+                                    : m.is_actionable
                                     ? "bg-pump-green text-black hover:opacity-90"
                                     : "bg-gray-700 text-gray-500 cursor-not-allowed"
                                 }`}
                               >
-                                Open
+                                {m.is_blocked ? "Manage" : "Open"}
                               </button>
                             </div>
                           </td>
@@ -1070,96 +1351,180 @@ export default function AdminOverviewPage() {
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {getTypeBadge(drawerMarket)}
-                  {drawerMode === "approve_only" && (
+                  {drawerMode === "approve_only" && !drawerMarket.is_blocked && (
                     <Pill tone="ok">Approve only</Pill>
                   )}
-                  {drawerMode === "approve_cancel" && (
+                  {drawerMode === "approve_cancel" && !drawerMarket.is_blocked && (
                     <Pill tone="ok">Approve / Cancel</Pill>
                   )}
-                  {drawerMode === "cancel_only_24h" && (
+                  {drawerMode === "cancel_only_24h" && !drawerMarket.is_blocked && (
                     <Pill tone="warn">Cancel only</Pill>
+                  )}
+                  {drawerMode === "block_only" && (
+                    <Pill tone="active">Active market</Pill>
                   )}
                 </div>
               </div>
 
-              <div className="card-pump p-4 mb-4">
+              {/* Block/Unblock Section */}
+              <div className="card-pump p-4 mb-4 border-red-600/30">
                 <div className="text-xs text-gray-500 uppercase tracking-wide mb-3">
-                  Flow
+                  🚫 Market Moderation
                 </div>
-                <ol className="space-y-2 text-xs md:text-sm">
-                  <li className={flowStep === "checking" ? "text-white font-medium" : "text-gray-400"}>
-                    1. Server check (DB status + deadline)
-                  </li>
-                  <li className={flowStep === "signing" ? "text-white font-medium" : "text-gray-400"}>
-                    2. Wallet signs on-chain tx
-                  </li>
-                  <li className={flowStep === "confirming" ? "text-white font-medium" : "text-gray-400"}>
-                    3. Confirm signature
-                  </li>
-                  <li className={flowStep === "committing" ? "text-white font-medium" : "text-gray-400"}>
-                    4. Commit DB with tx_sig
-                  </li>
-                </ol>
-                <div className="mt-3 text-[10px] md:text-xs text-gray-500">
-                  step: {flowStep}
-                </div>
-                {flowMsg && (
-                  <div className="mt-2 text-xs md:text-sm text-pump-green">{flowMsg}</div>
+                
+                {drawerMarket.is_blocked ? (
+                  <div className="mb-3 p-3 rounded-lg bg-red-600/20 border border-red-600/30">
+                    <div className="text-sm text-red-400 font-semibold mb-1">
+                      This market is currently BLOCKED
+                    </div>
+                    <div className="text-xs text-gray-400">
+                      Reason: {drawerMarket.blocked_reason || "No reason specified"}
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      Blocked at: {formatDate(drawerMarket.blocked_at)}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mb-3 text-sm text-gray-400">
+                    Block this market to prevent trading. Users will see a blocked message.
+                    You can still cancel/refund later via admin_cancel.
+                  </div>
                 )}
-                {flowError && (
-                  <div className="mt-2 text-xs md:text-sm text-red-400">{flowError}</div>
+
+                <div className="mb-3">
+                  <label className="text-xs text-gray-400 block mb-1">
+                    {drawerMarket.is_blocked ? "Update reason (optional)" : "Block reason"}
+                  </label>
+                  <input
+                    type="text"
+                    value={blockReason}
+                    onChange={(e) => setBlockReason(e.target.value)}
+                    placeholder="e.g., Inappropriate content, TOS violation..."
+                    className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-white text-sm placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-red-500/50"
+                  />
+                </div>
+
+                <button
+                  onClick={doToggleBlock}
+                  disabled={blockLoading || !isAdminWallet}
+                  className={`w-full py-2.5 rounded-lg font-semibold text-sm transition ${
+                    drawerMarket.is_blocked
+                      ? "bg-pump-green text-black hover:opacity-90"
+                      : "bg-red-600 text-white hover:bg-red-700"
+                  } disabled:opacity-50 disabled:cursor-not-allowed`}
+                >
+                  {blockLoading
+                    ? "Processing..."
+                    : drawerMarket.is_blocked
+                    ? "✅ Unblock Market"
+                    : "🚫 Block Market"}
+                </button>
+
+                {!isAdminWallet && (
+                  <div className="text-xs text-red-400 mt-2 text-center">
+                    Connect admin wallet to manage
+                  </div>
                 )}
               </div>
 
-              <div className="text-[10px] md:text-xs text-gray-500 mt-4">
-                <div className="mb-1">Methods used:</div>
-                <div className="break-words">
-                  no-dispute: <strong>adminFinalizeNoDisputes()</strong> •{" "}
-                  disputed: <strong>adminFinalize(u8)</strong> •{" "}
-                  cancel: <strong>adminCancel()</strong> •{" "}
-                  24h cancel: <strong>adminCancelNoProposal()</strong>
+              {/* Resolution Flow - only show if NOT block_only mode and NOT blocked */}
+              {drawerMode !== "block_only" && !drawerMarket.is_blocked && (
+                <div className="card-pump p-4 mb-4">
+                  <div className="text-xs text-gray-500 uppercase tracking-wide mb-3">
+                    Resolution Flow
+                  </div>
+                  <ol className="space-y-2 text-xs md:text-sm">
+                    <li className={flowStep === "checking" ? "text-white font-medium" : "text-gray-400"}>
+                      1. Server check (DB status + deadline)
+                    </li>
+                    <li className={flowStep === "signing" ? "text-white font-medium" : "text-gray-400"}>
+                      2. Wallet signs on-chain tx
+                    </li>
+                    <li className={flowStep === "confirming" ? "text-white font-medium" : "text-gray-400"}>
+                      3. Confirm signature
+                    </li>
+                    <li className={flowStep === "committing" ? "text-white font-medium" : "text-gray-400"}>
+                      4. Commit DB with tx_sig
+                    </li>
+                  </ol>
+                  <div className="mt-3 text-[10px] md:text-xs text-gray-500">
+                    step: {flowStep}
+                  </div>
+                  {flowMsg && (
+                    <div className="mt-2 text-xs md:text-sm text-pump-green">{flowMsg}</div>
+                  )}
+                  {flowError && (
+                    <div className="mt-2 text-xs md:text-sm text-red-400">{flowError}</div>
+                  )}
                 </div>
-              </div>
+              )}
+
+              {/* Show messages for block_only mode */}
+              {drawerMode === "block_only" && (flowError || flowMsg) && (
+                <div className="card-pump p-4 mb-4">
+                  {flowMsg && (
+                    <div className="text-xs md:text-sm text-pump-green">{flowMsg}</div>
+                  )}
+                  {flowError && (
+                    <div className="text-xs md:text-sm text-red-400">{flowError}</div>
+                  )}
+                </div>
+              )}
+
+              {drawerMode !== "block_only" && (
+                <div className="text-[10px] md:text-xs text-gray-500 mt-4">
+                  <div className="mb-1">Methods used:</div>
+                  <div className="break-words">
+                    no-dispute: <strong>adminFinalizeNoDisputes()</strong> •{" "}
+                    disputed: <strong>adminFinalize(u8)</strong> •{" "}
+                    cancel: <strong>adminCancel()</strong> •{" "}
+                    24h cancel: <strong>adminCancelNoProposal()</strong>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="border-t border-white/10 p-4 flex items-center justify-between gap-3">
               <button
                 onClick={closeDrawer}
-                disabled={isBusy}
+                disabled={isBusy || blockLoading}
                 className="px-4 py-2 rounded-lg bg-white/5 text-white text-xs md:text-sm font-medium hover:bg-white/10 transition disabled:opacity-50"
               >
                 Close
               </button>
 
-              <div className="flex gap-2">
-                {drawerMode === "approve_cancel" && (
-                  <button
-                    onClick={doCancel}
-                    disabled={isBusy || !isAdminWallet}
-                    className="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-white text-xs md:text-sm font-medium hover:bg-white/10 transition disabled:opacity-50"
-                  >
-                    {isBusy ? "..." : "Cancel"}
-                  </button>
-                )}
+              {/* Only show resolution buttons if NOT block_only and NOT blocked */}
+              {drawerMode !== "block_only" && !drawerMarket.is_blocked && (
+                <div className="flex gap-2">
+                  {drawerMode === "approve_cancel" && (
+                    <button
+                      onClick={doCancel}
+                      disabled={isBusy || !isAdminWallet}
+                      className="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-white text-xs md:text-sm font-medium hover:bg-white/10 transition disabled:opacity-50"
+                    >
+                      {isBusy ? "..." : "Cancel"}
+                    </button>
+                  )}
 
-                {drawerMode === "cancel_only_24h" ? (
-                  <button
-                    onClick={doCancel24h}
-                    disabled={isBusy || !isAdminWallet}
-                    className="px-4 py-2 rounded-lg bg-pump-green text-black text-xs md:text-sm font-semibold hover:opacity-90 transition disabled:opacity-50"
-                  >
-                    {isBusy ? "Processing..." : "Cancel now"}
-                  </button>
-                ) : (
-                  <button
-                    onClick={doApprove}
-                    disabled={isBusy || !isAdminWallet}
-                    className="px-4 py-2 rounded-lg bg-pump-green text-black text-xs md:text-sm font-semibold hover:opacity-90 transition disabled:opacity-50"
-                  >
-                    {isBusy ? "Processing..." : "Approve now"}
-                  </button>
-                )}
-              </div>
+                  {drawerMode === "cancel_only_24h" ? (
+                    <button
+                      onClick={doCancel24h}
+                      disabled={isBusy || !isAdminWallet}
+                      className="px-4 py-2 rounded-lg bg-pump-green text-black text-xs md:text-sm font-semibold hover:opacity-90 transition disabled:opacity-50"
+                    >
+                      {isBusy ? "Processing..." : "Cancel now"}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={doApprove}
+                      disabled={isBusy || !isAdminWallet}
+                      className="px-4 py-2 rounded-lg bg-pump-green text-black text-xs md:text-sm font-semibold hover:opacity-90 transition disabled:opacity-50"
+                    >
+                      {isBusy ? "Processing..." : "Approve now"}
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>

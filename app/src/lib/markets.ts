@@ -50,6 +50,10 @@ export type DbMarket = {
   outcome_supplies?: any;
   yes_supply?: number | null;
   no_supply?: number | null;
+  is_blocked?: boolean | null;
+  blocked_reason?: string | null;
+  blocked_at?: string | null;
+  blocked_by?: string | null;
 };
 
 export type RecordTxInput = {
@@ -154,6 +158,10 @@ export async function getMarketByAddress(marketAddress: string): Promise<DbMarke
       "proposed_proof_note",
       "cancelled_at",
       "cancel_reason",
+      "is_blocked",
+      "blocked_reason",
+      "blocked_at",
+      "blocked_by",
     ].join(","),
     "id,market_address,creator,question,description,category,image_url,total_volume,end_date,resolved,market_type,outcome_names,outcome_supplies,yes_supply,no_supply",
     "id,market_address,creator,question,total_volume,end_date,resolved",

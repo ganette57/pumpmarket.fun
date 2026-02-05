@@ -19,6 +19,7 @@ import OddsHistoryChart from "@/components/OddsHistoryChart";
 import MarketActivityTab from "@/components/MarketActivity";
 import ResolutionPanel from "@/components/ResolutionPanel";
 import MarketCard from "@/components/MarketCard";
+import BlockedMarketBanner from "@/components/BlockedMarketBanner";
 
 import { supabase } from "@/lib/supabaseClient";
 import { buildOddsSeries, downsample } from "@/lib/marketHistory";
@@ -41,7 +42,7 @@ type UiMarket = {
   category?: string;
   imageUrl?: string;
   creator: string;
-  bLamports?: number; // ✅ LMSR b in lamports
+  bLamports?: number;
 
   totalVolume: number;
   resolutionTime: number;
@@ -73,6 +74,11 @@ type UiMarket = {
 
   yesSupply?: number;
   noSupply?: number;
+
+  // ✅ Block fields
+  isBlocked?: boolean;
+  blockedReason?: string | null;
+  blockedAt?: string | null;
 };
 
 type Derived = {
@@ -611,6 +617,11 @@ let resolutionTime = Number.isFinite(endMs) ? Math.floor(endMs / 1000) : 0;
   
           yesSupply: Number(supabaseMarket.yes_supply) || 0,
           noSupply: Number(supabaseMarket.no_supply) || 0,
+
+          // ✅ Block fields
+          isBlocked: !!supabaseMarket.is_blocked,
+          blockedReason: supabaseMarket.blocked_reason ?? null,
+          blockedAt: supabaseMarket.blocked_at ?? null,
         };
   
 // --- On-chain snapshot merge (fast)
@@ -1125,7 +1136,8 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
   const showProposedBox = isProposed && !isResolvedOnChain;
   const showResolvedProofBox = isResolvedOnChain;
 
-  const marketClosed = isResolvedOnChain || isProposed || ended;
+  // ✅ Include isBlocked in marketClosed
+  const marketClosed = isResolvedOnChain || isProposed || ended || !!market.isBlocked;
 
   const endLabel = hasValidEnd
     ? new Date(market.resolutionTime * 1000).toLocaleString("en-US", {
@@ -1236,7 +1248,14 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                   <div>{endLabel}</div>
   
                   <div className="ml-auto text-xs text-gray-500 flex items-center gap-2">
-                    {showProposedBox && (
+                    {/* ✅ Show blocked badge */}
+                    {market.isBlocked && (
+                      <span className="px-2 py-1 rounded-full border border-red-600/40 bg-red-600/20 text-red-400">
+                        🚫 Blocked
+                      </span>
+                    )}
+
+                    {showProposedBox && !market.isBlocked && (
                       <span className="px-2 py-1 rounded-full border border-pump-green/40 bg-pump-green/10 text-pump-green">
                         Proposed
                       </span>
@@ -1258,7 +1277,7 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                   </div>
                 )}
   
-                {showProposedBox && (
+                {showProposedBox && !market.isBlocked && (
                   <div className="mb-4 rounded-xl border border-pump-green/30 bg-pump-green/10 p-4">
                     <div className="text-sm text-white font-semibold">
                       Resolution proposed — contest window open
@@ -1462,7 +1481,13 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                 ════════════════════════════════════════════════════════════ */}
             <div className="lg:col-span-1">
               <div className="lg:sticky lg:top-6 space-y-4 pb-8">
-                {!isMobile && (
+                {/* ✅ Show BlockedMarketBanner instead of TradingPanel if blocked */}
+                {market.isBlocked ? (
+                  <BlockedMarketBanner 
+                    reason={market.blockedReason} 
+                    blockedAt={market.blockedAt} 
+                  />
+                ) : !isMobile ? (
                   <TradingPanel
                     mode="desktop"
                     market={{
@@ -1485,7 +1510,7 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                     userHoldings={userSharesForUi}
                     marketClosed={marketClosed}
                   />
-                )}
+                ) : null}
   
                 <ResolutionPanel
                   marketAddress={market.publicKey}
@@ -1592,6 +1617,7 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
       </div>
   
       {/* Mobile drawer - FULLSCREEN from top to bottom nav (h-14 = 56px) */}
+      {/* ✅ Don't open if blocked (marketClosed includes isBlocked) */}
       {isMobile && mobileTradeOpen && !marketClosed && (
         <div className="fixed inset-0 z-[200] pointer-events-none">
           {/* Backdrop: couvre tout l'écran sauf la bottom nav */}
