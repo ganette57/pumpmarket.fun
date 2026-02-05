@@ -6,6 +6,7 @@ import { PublicKey } from "@solana/web3.js";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { useProgram } from "@/hooks/useProgram";
 import { sendSignedTx } from "@/lib/solanaSend";
+import AdminReportsTab from "@/components/AdminReportsTab";
 
 /* ========= Constants ========= */
 
@@ -251,7 +252,7 @@ export default function AdminOverviewPage() {
 
   const [now, setNow] = useState(() => Date.now());
 
-  const [filter, setFilter] = useState<"inbox" | "resolved" | "blocked" | "active" | "all">("inbox");
+  const [filter, setFilter] = useState<"inbox" | "resolved" | "blocked" | "active" | "reports" | "all">("inbox");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [search, setSearch] = useState("");
 
@@ -274,6 +275,9 @@ export default function AdminOverviewPage() {
   const [activeMarkets, setActiveMarkets] = useState<ActiveMarket[]>([]);
   const [activeLoading, setActiveLoading] = useState(false);
   const [activeErr, setActiveErr] = useState<string | null>(null);
+
+  // Reports count for badge
+  const [pendingReportsCount, setPendingReportsCount] = useState(0);
 
   const resolvedSorted = useMemo(() => {
     const list = [...resolvedRows];
@@ -318,6 +322,22 @@ export default function AdminOverviewPage() {
   }, []);
 
   useEffect(() => void load(), [load]);
+
+  // Load pending reports count
+  useEffect(() => {
+    async function fetchReportsCount() {
+      try {
+        const r = await fetch("/api/admin/reports?status=pending", { credentials: "include" });
+        const j = await r.json().catch(() => ({}));
+        if (r.ok && j.counts) {
+          setPendingReportsCount(j.counts.pending || 0);
+        }
+      } catch {
+        // ignore
+      }
+    }
+    fetchReportsCount();
+  }, [filter]); // refresh when switching tabs
 
   // Load resolved markets
   useEffect(() => {
@@ -443,7 +463,7 @@ export default function AdminOverviewPage() {
     } else if (filter === "resolved") {
       list = list.filter((m) => isResolved(m));
     } else if (filter === "blocked") {
-      // ✅ FIX: Combine blocked from inbox + active markets
+      // Combine blocked from inbox + active markets
       const blockedFromInbox = markets.filter((m) => m.is_blocked);
       const blockedFromActive = activeMarkets
         .filter((m) => m.is_blocked)
@@ -472,8 +492,8 @@ export default function AdminOverviewPage() {
         }
       }
     }
-    // "active" is handled separately
-    // "all" shows everything
+    // "active" and "reports" are handled separately
+    // "all" shows everything from inbox
     
     if (search.trim()) {
       const q = search.toLowerCase();
@@ -508,7 +528,14 @@ export default function AdminOverviewPage() {
   const blockedCount = useMemo(() => {
     const fromActionable = markets.filter((m) => m.is_blocked).length;
     const fromActive = activeMarkets.filter((m) => m.is_blocked).length;
-    return fromActionable + fromActive;
+    // Dedupe
+    const seen = new Set<string>();
+    markets.filter((m) => m.is_blocked).forEach((m) => seen.add(m.market_address));
+    let count = seen.size;
+    activeMarkets.filter((m) => m.is_blocked).forEach((m) => {
+      if (!seen.has(m.market_address)) count++;
+    });
+    return count;
   }, [markets, activeMarkets]);
 
   // Count active markets
@@ -577,6 +604,38 @@ export default function AdminOverviewPage() {
     setFlowMsg("");
     setFlowError("");
     setBlockReason(m.blocked_reason || "");
+  }
+
+  // Open drawer to block a market (from reports tab)
+  function handleBlockFromReports(marketAddress: string) {
+    // Find in active markets first
+    const activeM = activeMarkets.find((m) => m.market_address === marketAddress);
+    if (activeM) {
+      openDrawerForActive(activeM);
+      return;
+    }
+    
+    // Fallback: create minimal actionable market for blocking
+    const fakeActionable: ActionableMarket = {
+      market_address: marketAddress,
+      question: null,
+      contest_deadline: null,
+      contest_count: 0,
+      end_date: null,
+      proposed_winning_outcome: null,
+      type: "proposed_no_dispute",
+      is_actionable: false,
+      due_date: null,
+      is_blocked: false,
+      blocked_reason: null,
+      blocked_at: null,
+    };
+    setDrawerMarket(fakeActionable);
+    setDrawerMode("block_only");
+    setFlowStep("idle");
+    setFlowMsg("");
+    setFlowError("");
+    setBlockReason("");
   }
 
   function closeDrawer() {
@@ -1069,6 +1128,19 @@ export default function AdminOverviewPage() {
                   Blocked {blockedCount > 0 ? `(${blockedCount})` : ""}
                 </button>
                 <button
+                  onClick={() => setFilter("reports")}
+                  className={`px-3 md:px-4 py-2 rounded-lg text-xs md:text-sm font-medium transition relative ${
+                    filter === "reports" ? "bg-orange-600/20 text-orange-400" : "text-gray-400 hover:text-white"
+                  }`}
+                >
+                  Reports
+                  {pendingReportsCount > 0 && (
+                    <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+                      {pendingReportsCount > 9 ? "9+" : pendingReportsCount}
+                    </span>
+                  )}
+                </button>
+                <button
                   onClick={() => setFilter("all")}
                   className={`px-3 md:px-4 py-2 rounded-lg text-xs md:text-sm font-medium transition ${
                     filter === "all" ? "bg-white/10 text-white" : "text-gray-400 hover:text-white"
@@ -1096,239 +1168,246 @@ export default function AdminOverviewPage() {
               />
             </div>
 
-            {/* Table */}
-            <div className="card-pump overflow-hidden overflow-x-auto">
-              <table className="w-full min-w-[600px]">
-                <thead>
-                  <tr className="border-b border-white/10">
-                    <th className="text-left text-[10px] md:text-xs text-gray-500 uppercase tracking-wide px-3 md:px-4 py-3">
-                      Market
-                    </th>
-                    <th className="text-left text-[10px] md:text-xs text-gray-500 uppercase tracking-wide px-3 md:px-4 py-3">
-                      Type
-                    </th>
-                    <th className="text-left text-[10px] md:text-xs text-gray-500 uppercase tracking-wide px-3 md:px-4 py-3">
-                      {filter === "active" ? "Ends" : "Due"}
-                    </th>
-                    <th className="text-right text-[10px] md:text-xs text-gray-500 uppercase tracking-wide px-3 md:px-4 py-3">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {/* ACTIVE MARKETS TAB */}
-                  {filter === "active" ? (
-                    activeLoading ? (
-                      <tr>
-                        <td colSpan={4} className="px-4 py-8 text-center text-gray-500">
-                          Loading active markets...
-                        </td>
-                      </tr>
-                    ) : activeErr ? (
-                      <tr>
-                        <td colSpan={4} className="px-4 py-8 text-center text-red-300">
-                          {activeErr}
-                        </td>
-                      </tr>
-                    ) : filteredActiveMarkets.length === 0 ? (
-                      <tr>
-                        <td colSpan={4} className="px-4 py-8 text-center text-gray-500">
-                          No active markets (all markets have ended).
-                        </td>
-                      </tr>
-                    ) : (
-                      filteredActiveMarkets.map((m) => (
-                        <tr
-                          key={m.market_address}
-                          className={`border-b border-white/5 hover:bg-white/2 transition ${
-                            m.is_blocked ? "bg-red-900/10" : ""
-                          }`}
-                        >
-                          <td className="px-3 md:px-4 py-3">
-                            <div className="text-white font-medium truncate max-w-[200px] md:max-w-xs text-sm">
-                              {m.question || "(Untitled)"}
-                            </div>
-                            <div className="text-[10px] md:text-xs text-gray-500 font-mono">
-                              {m.market_address}
-                            </div>
-                            {m.is_blocked && m.blocked_reason && (
-                              <div className="text-[10px] text-red-400 mt-1">
-                                Blocked: {m.blocked_reason}
-                              </div>
-                            )}
-                          </td>
-                          <td className="px-3 md:px-4 py-3">
-                            {m.is_blocked ? (
-                              <Pill tone="blocked">🚫 Blocked</Pill>
-                            ) : (
-                              <Pill tone="active">🟢 Active</Pill>
-                            )}
-                          </td>
-                          <td className="px-3 md:px-4 py-3">
-                            <span className="text-xs md:text-sm text-gray-400">
-                              {formatDate(m.end_date)}
-                            </span>
-                          </td>
-                          <td className="px-3 md:px-4 py-3 text-right">
-                            <div className="flex items-center justify-end gap-2">
-                              <Link
-                                href={`/trade/${m.market_address}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="px-2 md:px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-gray-300 text-xs font-medium hover:bg-white/10 transition"
-                              >
-                                View
-                              </Link>
-                              <button
-                                onClick={() => openDrawerForActive(m)}
-                                className={`px-2 md:px-3 py-1.5 rounded-lg text-xs font-medium transition ${
-                                  m.is_blocked
-                                    ? "bg-pump-green text-black hover:opacity-90"
-                                    : "bg-red-600 text-white hover:bg-red-700"
-                                }`}
-                              >
-                                {m.is_blocked ? "Unblock" : "Block"}
-                              </button>
-                            </div>
+            {/* Reports Tab */}
+            {filter === "reports" ? (
+              <div className="card-pump p-4">
+                <AdminReportsTab onBlockMarket={handleBlockFromReports} />
+              </div>
+            ) : (
+              /* Table */
+              <div className="card-pump overflow-hidden overflow-x-auto">
+                <table className="w-full min-w-[600px]">
+                  <thead>
+                    <tr className="border-b border-white/10">
+                      <th className="text-left text-[10px] md:text-xs text-gray-500 uppercase tracking-wide px-3 md:px-4 py-3">
+                        Market
+                      </th>
+                      <th className="text-left text-[10px] md:text-xs text-gray-500 uppercase tracking-wide px-3 md:px-4 py-3">
+                        Type
+                      </th>
+                      <th className="text-left text-[10px] md:text-xs text-gray-500 uppercase tracking-wide px-3 md:px-4 py-3">
+                        {filter === "active" ? "Ends" : "Due"}
+                      </th>
+                      <th className="text-right text-[10px] md:text-xs text-gray-500 uppercase tracking-wide px-3 md:px-4 py-3">
+                        Actions
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {/* ACTIVE MARKETS TAB */}
+                    {filter === "active" ? (
+                      activeLoading ? (
+                        <tr>
+                          <td colSpan={4} className="px-4 py-8 text-center text-gray-500">
+                            Loading active markets...
                           </td>
                         </tr>
-                      ))
-                    )
-                  ) : filter === "resolved" ? (
-                    resolvedLoading ? (
-                      <tr>
-                        <td colSpan={4} className="px-4 py-8 text-center text-gray-500">
-                          Loading resolved...
-                        </td>
-                      </tr>
-                    ) : resolvedErr ? (
-                      <tr>
-                        <td colSpan={4} className="px-4 py-8 text-center text-red-300">
-                          {resolvedErr}
-                        </td>
-                      </tr>
-                    ) : resolvedRows.length === 0 ? (
-                      <tr>
-                        <td colSpan={4} className="px-4 py-8 text-center text-gray-500">
-                          No resolved markets yet.
-                        </td>
-                      </tr>
-                    ) : (
-                      resolvedSorted.map((m) => (
-                        <tr
-                          key={m.market_address}
-                          className="border-b border-white/5 hover:bg-white/2 transition"
-                        >
-                          <td className="px-3 md:px-4 py-3">
-                            <div className="text-white font-medium truncate max-w-[200px] md:max-w-xs text-sm">
-                              {m.question || "(Untitled)"}
-                            </div>
-                            <div className="text-[10px] md:text-xs text-gray-500 font-mono break-all">
-                              {m.market_address}
-                            </div>
+                      ) : activeErr ? (
+                        <tr>
+                          <td colSpan={4} className="px-4 py-8 text-center text-red-300">
+                            {activeErr}
                           </td>
-                          <td className="px-3 md:px-4 py-3">
-                            <div className="flex flex-wrap gap-1 md:gap-2 items-center">
-                              <Pill tone={m.resolved_action === "approved" ? "ok" : "pink"}>
-                                {m.resolved_action === "approved" ? "Approved" : "Cancelled"}
-                              </Pill>
-                              {m.resolved_action === "approved" ? (
-                                <Pill tone="neutral">Outcome: {formatWinningOutcomeLabel(m as any)}</Pill>
-                              ) : (
-                                <Pill tone="neutral">Refund</Pill>
+                        </tr>
+                      ) : filteredActiveMarkets.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} className="px-4 py-8 text-center text-gray-500">
+                            No active markets (all markets have ended).
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredActiveMarkets.map((m) => (
+                          <tr
+                            key={m.market_address}
+                            className={`border-b border-white/5 hover:bg-white/2 transition ${
+                              m.is_blocked ? "bg-red-900/10" : ""
+                            }`}
+                          >
+                            <td className="px-3 md:px-4 py-3">
+                              <div className="text-white font-medium truncate max-w-[200px] md:max-w-xs text-sm">
+                                {m.question || "(Untitled)"}
+                              </div>
+                              <div className="text-[10px] md:text-xs text-gray-500 font-mono">
+                                {m.market_address}
+                              </div>
+                              {m.is_blocked && m.blocked_reason && (
+                                <div className="text-[10px] text-red-400 mt-1">
+                                  Blocked: {m.blocked_reason}
+                                </div>
                               )}
-                            </div>
-                            {m.tx_sig ? (
-                              <div className="text-[10px] text-gray-500 mt-1 font-mono truncate max-w-[150px]">
-                                tx: {m.tx_sig}
+                            </td>
+                            <td className="px-3 md:px-4 py-3">
+                              {m.is_blocked ? (
+                                <Pill tone="blocked">🚫 Blocked</Pill>
+                              ) : (
+                                <Pill tone="active">🟢 Active</Pill>
+                              )}
+                            </td>
+                            <td className="px-3 md:px-4 py-3">
+                              <span className="text-xs md:text-sm text-gray-400">
+                                {formatDate(m.end_date)}
+                              </span>
+                            </td>
+                            <td className="px-3 md:px-4 py-3 text-right">
+                              <div className="flex items-center justify-end gap-2">
+                                <Link
+                                  href={`/trade/${m.market_address}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="px-2 md:px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-gray-300 text-xs font-medium hover:bg-white/10 transition"
+                                >
+                                  View
+                                </Link>
+                                <button
+                                  onClick={() => openDrawerForActive(m)}
+                                  className={`px-2 md:px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                                    m.is_blocked
+                                      ? "bg-pump-green text-black hover:opacity-90"
+                                      : "bg-red-600 text-white hover:bg-red-700"
+                                  }`}
+                                >
+                                  {m.is_blocked ? "Unblock" : "Block"}
+                                </button>
                               </div>
-                            ) : null}
-                          </td>
-                          <td className="px-3 md:px-4 py-3">
-                            <span className="text-xs md:text-sm text-gray-400">{formatDate(m.resolved_at)}</span>
-                          </td>
-                          <td className="px-3 md:px-4 py-3 text-right">
-                            <div className="flex items-center justify-end gap-2">
-                              <Link
-                                href={`/trade/${m.market_address}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="px-2 md:px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-gray-300 text-xs font-medium hover:bg-white/10 transition"
-                              >
-                                View
-                              </Link>
-                            </div>
+                            </td>
+                          </tr>
+                        ))
+                      )
+                    ) : filter === "resolved" ? (
+                      resolvedLoading ? (
+                        <tr>
+                          <td colSpan={4} className="px-4 py-8 text-center text-gray-500">
+                            Loading resolved...
                           </td>
                         </tr>
-                      ))
-                    )
-                  ) : (
-                    filteredMarkets.length === 0 ? (
-                      <tr>
-                        <td colSpan={4} className="px-4 py-8 text-center text-gray-500">
-                          No markets to display.
-                        </td>
-                      </tr>
+                      ) : resolvedErr ? (
+                        <tr>
+                          <td colSpan={4} className="px-4 py-8 text-center text-red-300">
+                            {resolvedErr}
+                          </td>
+                        </tr>
+                      ) : resolvedRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} className="px-4 py-8 text-center text-gray-500">
+                            No resolved markets yet.
+                          </td>
+                        </tr>
+                      ) : (
+                        resolvedSorted.map((m) => (
+                          <tr
+                            key={m.market_address}
+                            className="border-b border-white/5 hover:bg-white/2 transition"
+                          >
+                            <td className="px-3 md:px-4 py-3">
+                              <div className="text-white font-medium truncate max-w-[200px] md:max-w-xs text-sm">
+                                {m.question || "(Untitled)"}
+                              </div>
+                              <div className="text-[10px] md:text-xs text-gray-500 font-mono break-all">
+                                {m.market_address}
+                              </div>
+                            </td>
+                            <td className="px-3 md:px-4 py-3">
+                              <div className="flex flex-wrap gap-1 md:gap-2 items-center">
+                                <Pill tone={m.resolved_action === "approved" ? "ok" : "pink"}>
+                                  {m.resolved_action === "approved" ? "Approved" : "Cancelled"}
+                                </Pill>
+                                {m.resolved_action === "approved" ? (
+                                  <Pill tone="neutral">Outcome: {formatWinningOutcomeLabel(m as any)}</Pill>
+                                ) : (
+                                  <Pill tone="neutral">Refund</Pill>
+                                )}
+                              </div>
+                              {m.tx_sig ? (
+                                <div className="text-[10px] text-gray-500 mt-1 font-mono truncate max-w-[150px]">
+                                  tx: {m.tx_sig}
+                                </div>
+                              ) : null}
+                            </td>
+                            <td className="px-3 md:px-4 py-3">
+                              <span className="text-xs md:text-sm text-gray-400">{formatDate(m.resolved_at)}</span>
+                            </td>
+                            <td className="px-3 md:px-4 py-3 text-right">
+                              <div className="flex items-center justify-end gap-2">
+                                <Link
+                                  href={`/trade/${m.market_address}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="px-2 md:px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-gray-300 text-xs font-medium hover:bg-white/10 transition"
+                                >
+                                  View
+                                </Link>
+                              </div>
+                            </td>
+                          </tr>
+                        ))
+                      )
                     ) : (
-                      filteredMarkets.map((m) => (
-                        <tr
-                          key={m.market_address}
-                          className={`border-b border-white/5 hover:bg-white/2 transition ${
-                            m.is_blocked ? "bg-red-900/10" : ""
-                          }`}
-                        >
-                          <td className="px-3 md:px-4 py-3">
-                            <div className="text-white font-medium truncate max-w-[200px] md:max-w-xs text-sm">
-                              {m.question || "(Untitled)"}
-                            </div>
-                            <div className="text-[10px] md:text-xs text-gray-500 font-mono">
-                              {m.market_address}
-                            </div>
-                            {m.is_blocked && m.blocked_reason && (
-                              <div className="text-[10px] text-red-400 mt-1">
-                                Reason: {m.blocked_reason}
-                              </div>
-                            )}
-                          </td>
-                          <td className="px-3 md:px-4 py-3">{getTypeBadge(m)}</td>
-                          <td className="px-3 md:px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              {getActionStatus(m)}
-                              <span className="text-xs md:text-sm text-gray-400">{formatDate(m.due_date)}</span>
-                            </div>
-                          </td>
-                          <td className="px-3 md:px-4 py-3 text-right">
-                            <div className="flex items-center justify-end gap-2">
-                              <Link
-                                href={`/trade/${m.market_address}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="px-2 md:px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-gray-300 text-xs font-medium hover:bg-white/10 transition"
-                              >
-                                View
-                              </Link>
-                              <button
-                                onClick={() => openDrawer(m)}
-                                disabled={!m.is_actionable && !m.is_blocked}
-                                className={`px-2 md:px-3 py-1.5 rounded-lg text-xs font-medium transition ${
-                                  m.is_blocked
-                                    ? "bg-red-600/20 text-red-400 hover:bg-red-600/30"
-                                    : m.is_actionable
-                                    ? "bg-pump-green text-black hover:opacity-90"
-                                    : "bg-gray-700 text-gray-500 cursor-not-allowed"
-                                }`}
-                              >
-                                {m.is_blocked ? "Manage" : "Open"}
-                              </button>
-                            </div>
+                      filteredMarkets.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} className="px-4 py-8 text-center text-gray-500">
+                            No markets to display.
                           </td>
                         </tr>
-                      ))
-                    )
-                  )}
-                </tbody>
-              </table>
-            </div>
+                      ) : (
+                        filteredMarkets.map((m) => (
+                          <tr
+                            key={m.market_address}
+                            className={`border-b border-white/5 hover:bg-white/2 transition ${
+                              m.is_blocked ? "bg-red-900/10" : ""
+                            }`}
+                          >
+                            <td className="px-3 md:px-4 py-3">
+                              <div className="text-white font-medium truncate max-w-[200px] md:max-w-xs text-sm">
+                                {m.question || "(Untitled)"}
+                              </div>
+                              <div className="text-[10px] md:text-xs text-gray-500 font-mono">
+                                {m.market_address}
+                              </div>
+                              {m.is_blocked && m.blocked_reason && (
+                                <div className="text-[10px] text-red-400 mt-1">
+                                  Reason: {m.blocked_reason}
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-3 md:px-4 py-3">{getTypeBadge(m)}</td>
+                            <td className="px-3 md:px-4 py-3">
+                              <div className="flex items-center gap-2">
+                                {getActionStatus(m)}
+                                <span className="text-xs md:text-sm text-gray-400">{formatDate(m.due_date)}</span>
+                              </div>
+                            </td>
+                            <td className="px-3 md:px-4 py-3 text-right">
+                              <div className="flex items-center justify-end gap-2">
+                                <Link
+                                  href={`/trade/${m.market_address}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="px-2 md:px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-gray-300 text-xs font-medium hover:bg-white/10 transition"
+                                >
+                                  View
+                                </Link>
+                                <button
+                                  onClick={() => openDrawer(m)}
+                                  disabled={!m.is_actionable && !m.is_blocked}
+                                  className={`px-2 md:px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                                    m.is_blocked
+                                      ? "bg-red-600/20 text-red-400 hover:bg-red-600/30"
+                                      : m.is_actionable
+                                      ? "bg-pump-green text-black hover:opacity-90"
+                                      : "bg-gray-700 text-gray-500 cursor-not-allowed"
+                                  }`}
+                                >
+                                  {m.is_blocked ? "Manage" : "Open"}
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))
+                      )
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </>
         )}
       </div>

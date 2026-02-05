@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { supabase } from "@/lib/supabaseClient";
-import { Bookmark, Share2 } from "lucide-react";
+import { Bookmark, Share2, Flag } from "lucide-react";
+import ReportMarketButton from "@/components/ReportMarketButton";
 
 type Props = {
   // compat ancien prop
@@ -172,8 +173,8 @@ export default function MarketActions({
   }
 
   return (
-    <div className="flex items-center gap-3 shrink-0">
-      {/* Bookmark (no circle, clean like Polymarket) */}
+    <div className="flex items-center gap-2 shrink-0">
+      {/* Bookmark */}
       <button
         type="button"
         disabled={busy}
@@ -181,14 +182,14 @@ export default function MarketActions({
         className={[
           "p-2 rounded-lg transition",
           "hover:bg-white/5 active:scale-[0.98]",
-          bookmarked ? "text-pump-green" : "text-gray-300",
+          bookmarked ? "text-pump-green" : "text-gray-400",
           busy ? "opacity-60" : "",
         ].join(" ")}
         title={bookmarked ? "Bookmarked" : "Bookmark"}
         aria-label={bookmarked ? "Remove bookmark" : "Bookmark market"}
       >
         <Bookmark
-          className="w-6 h-6"
+          className="w-5 h-5"
           fill={bookmarked ? "currentColor" : "none"}
         />
       </button>
@@ -197,12 +198,15 @@ export default function MarketActions({
       <button
         type="button"
         onClick={share}
-        className="p-2 rounded-lg text-gray-300 hover:bg-white/5 active:scale-[0.98] transition"
+        className="p-2 rounded-lg text-gray-400 hover:bg-white/5 active:scale-[0.98] transition"
         title="Share"
         aria-label="Share market"
       >
-        <Share2 className="w-6 h-6" />
+        <Share2 className="w-5 h-5" />
       </button>
+
+      {/* Report */}
+      <ReportMarketButton marketAddress={address} variant="icon" />
     </div>
   );
 }
