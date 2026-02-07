@@ -569,7 +569,7 @@ export default function LiveViewerPage() {
     if (TERMINAL_STATUSES.includes(session.status) && session.market_address) {
       const timer = setTimeout(() => {
         router.replace(`/trade/${session.market_address}`);
-      }, 1500);
+      }, 600);
       return () => clearTimeout(timer);
     }
   }, [session?.status, session?.market_address, router]);
@@ -897,12 +897,10 @@ export default function LiveViewerPage() {
 
   // Terminal state: show brief message while redirect fires
   if (TERMINAL_STATUSES.includes(session.status)) {
-    const label = session.status === "ended" ? "Stream ended" : session.status === "resolved" ? "Session resolved" : "Session cancelled";
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
-          <p className="text-gray-400 text-lg mb-2">{label}</p>
-          <p className="text-gray-600 text-sm">Redirecting to market&hellip;</p>
+          <p className="text-gray-400 text-lg">Stream ended &mdash; redirecting&hellip;</p>
         </div>
       </div>
     );
