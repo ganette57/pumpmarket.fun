@@ -23,6 +23,9 @@ export type LiveSession = {
   status: LiveSessionStatus;
   thumbnail_url?: string | null;
   pinned_outcome?: number | null;
+  started_at?: string | null;
+  lock_at?: string | null;
+  end_at?: string | null;
   ended_at?: string | null;
 };
 
@@ -36,7 +39,11 @@ export type CreateLiveSessionPayload = {
 };
 
 export type UpdateLiveSessionPatch = Partial<
-  Pick<LiveSession, "title" | "stream_url" | "status" | "thumbnail_url" | "pinned_outcome" | "ended_at">
+  Pick<
+    LiveSession,
+    "title" | "stream_url" | "status" | "thumbnail_url" | "pinned_outcome" |
+    "started_at" | "lock_at" | "end_at" | "ended_at"
+  >
 >;
 
 /* -------------------------------------------------------------------------- */
@@ -44,7 +51,7 @@ export type UpdateLiveSessionPatch = Partial<
 /* -------------------------------------------------------------------------- */
 
 const LIVE_SESSION_COLS =
-  "id,created_at,title,market_address,host_wallet,stream_url,status,thumbnail_url,pinned_outcome,ended_at";
+  "id,created_at,title,market_address,host_wallet,stream_url,status,thumbnail_url,pinned_outcome,started_at,lock_at,end_at,ended_at";
 
 /* -------------------------------------------------------------------------- */
 /*  READ                                                                       */
@@ -128,7 +135,7 @@ export async function createLiveSession(
 export async function updateLiveSession(
   id: string,
   patch: UpdateLiveSessionPatch
-): Promise<void> {
+): Promise<LiveSession> {
   if (!id) throw new Error("id is required");
 
   const safePatch: Record<string, unknown> = {};
@@ -137,17 +144,29 @@ export async function updateLiveSession(
   if (patch.status !== undefined) safePatch.status = patch.status;
   if (patch.thumbnail_url !== undefined) safePatch.thumbnail_url = patch.thumbnail_url;
   if (patch.pinned_outcome !== undefined) safePatch.pinned_outcome = patch.pinned_outcome;
+
+  // Timestamp columns — accept ISO string or null
+  if (patch.started_at !== undefined) safePatch.started_at = patch.started_at;
+  if (patch.lock_at !== undefined) safePatch.lock_at = patch.lock_at;
+  if (patch.end_at !== undefined) safePatch.end_at = patch.end_at;
   if (patch.ended_at !== undefined) safePatch.ended_at = patch.ended_at;
 
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("live_sessions")
     .update(safePatch)
-    .eq("id", id);
+    .eq("id", id)
+    .select(LIVE_SESSION_COLS)
+    .single();
 
   if (error) {
     console.error("updateLiveSession error:", error);
+    // Surface RLS / permission errors clearly
+    if (error.code === "42501" || error.message?.includes("policy")) {
+      throw new Error("Permission denied — you may not be the session host, or RLS policies are missing.");
+    }
     throw error;
   }
+  return data as LiveSession;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -205,6 +224,66 @@ export async function getActiveLiveSessionForMarket(
     return null;
   }
   return data as { id: string; title: string; status: LiveSessionStatus } | null;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  LIVE ACTIVITY (recent trades for a market)                                 */
+/* -------------------------------------------------------------------------- */
+
+export type RecentTrade = {
+  id: string;
+  created_at: string;
+  user_address: string;
+  is_buy: boolean;
+  is_yes: boolean | null;
+  shares: number;
+  cost: number;
+  outcome_index: number | null;
+  outcome_name: string | null;
+};
+
+export async function fetchRecentTrades(
+  marketAddress: string,
+  limit = 20
+): Promise<RecentTrade[]> {
+  if (!marketAddress) return [];
+  const { data, error } = await supabase
+    .from("transactions")
+    .select("id,created_at,user_address,is_buy,is_yes,shares,cost,outcome_index,outcome_name")
+    .eq("market_address", marketAddress)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error("fetchRecentTrades error:", error);
+    return [];
+  }
+  return (data as RecentTrade[]) || [];
+}
+
+export function subscribeRecentTrades(
+  marketAddress: string,
+  cb: (trade: RecentTrade) => void
+) {
+  const channel = supabase
+    .channel(`live_trades_${marketAddress}`)
+    .on(
+      "postgres_changes",
+      {
+        event: "INSERT",
+        schema: "public",
+        table: "transactions",
+        filter: `market_address=eq.${marketAddress}`,
+      },
+      (payload) => {
+        if (payload.new) cb(payload.new as RecentTrade);
+      }
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
 }
 
 /* -------------------------------------------------------------------------- */

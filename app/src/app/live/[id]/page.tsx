@@ -21,8 +21,11 @@ import {
   getLiveSession,
   subscribeLiveSession,
   updateLiveSession,
+  fetchRecentTrades,
+  subscribeRecentTrades,
   type LiveSession,
   type LiveSessionStatus,
+  type RecentTrade,
 } from "@/lib/liveSessions";
 
 import { lamportsToSol, solToLamports, getUserPositionPDA, PLATFORM_WALLET } from "@/utils/solana";
@@ -192,12 +195,15 @@ function StatusBanner({ status }: { status: LiveSessionStatus }) {
 function HostControls({
   session,
   onStatusChange,
+  error,
 }: {
   session: LiveSession;
   onStatusChange: (s: LiveSessionStatus) => void;
+  error?: string | null;
 }) {
   const statusFlow: LiveSessionStatus[] = ["live", "locked", "ended", "resolved"];
   const [collapsed, setCollapsed] = useState(false);
+  const isTerminal = ["resolved", "cancelled"].includes(session.status);
 
   return (
     <div className="rounded-xl border border-gray-800/60 bg-pump-dark/40 px-3 py-2">
@@ -218,28 +224,41 @@ function HostControls({
         </svg>
       </button>
       {!collapsed && (
-        <div className="flex flex-wrap gap-1.5 mt-2">
-          {statusFlow.map((s) => (
-            <button
-              key={s}
-              disabled={session.status === s}
-              onClick={() => onStatusChange(s)}
-              className={`px-2.5 py-1 rounded-md text-[11px] font-semibold border transition ${
-                session.status === s
-                  ? "bg-pump-green/15 border-pump-green text-pump-green"
-                  : "bg-pump-dark/40 border-gray-800 text-gray-400 hover:border-gray-600 hover:text-gray-200"
-              }`}
-            >
-              {s.charAt(0).toUpperCase() + s.slice(1)}
-            </button>
-          ))}
-          <button
-            disabled={session.status === "cancelled"}
-            onClick={() => onStatusChange("cancelled")}
-            className="px-2.5 py-1 rounded-md text-[11px] font-semibold border border-red-800/60 text-red-400/80 hover:bg-red-900/20 transition"
-          >
-            Cancel
-          </button>
+        <div className="space-y-2 mt-2">
+          {isTerminal ? (
+            <p className="text-[11px] text-gray-500">
+              Session is {session.status}. No further actions available.
+            </p>
+          ) : (
+            <div className="flex flex-wrap gap-1.5">
+              {statusFlow.map((s) => (
+                <button
+                  key={s}
+                  disabled={session.status === s}
+                  onClick={() => onStatusChange(s)}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-semibold border transition ${
+                    session.status === s
+                      ? "bg-pump-green/15 border-pump-green text-pump-green"
+                      : "bg-pump-dark/40 border-gray-800 text-gray-400 hover:border-gray-600 hover:text-gray-200"
+                  }`}
+                >
+                  {s.charAt(0).toUpperCase() + s.slice(1)}
+                </button>
+              ))}
+              <button
+                disabled={session.status === "cancelled"}
+                onClick={() => onStatusChange("cancelled")}
+                className="px-2.5 py-1 rounded-md text-[11px] font-semibold border border-red-800/60 text-red-400/80 hover:bg-red-900/20 transition"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+          {error && (
+            <p className="text-[11px] text-red-400 bg-red-900/20 rounded-md px-2 py-1">
+              {error}
+            </p>
+          )}
         </div>
       )}
     </div>
@@ -394,6 +413,82 @@ function MobileBuySheet({
   );
 }
 
+/* ── Live Activity feed ──────────────────────────────────────────────── */
+
+function LiveActivity({ trades }: { trades: RecentTrade[] }) {
+  if (trades.length === 0) return null;
+
+  return (
+    <div className="card-pump p-4">
+      <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+        <span className="w-1.5 h-1.5 rounded-full bg-pump-green animate-pulse" />
+        Live Activity
+      </h3>
+      <div className="space-y-1.5 max-h-[320px] overflow-y-auto">
+        {trades.map((t) => {
+          const wallet = t.user_address
+            ? `${t.user_address.slice(0, 4)}...${t.user_address.slice(-4)}`
+            : "anon";
+          const name = t.outcome_name || (t.is_yes === true ? "YES" : t.is_yes === false ? "NO" : "—");
+          const costLabel = typeof t.cost === "number" && t.cost > 0 ? `${t.cost.toFixed(3)} SOL` : "";
+          const age = timeSince(t.created_at);
+
+          return (
+            <div key={t.id} className="flex items-center gap-2 text-[11px] py-1 border-b border-gray-800/40 last:border-0">
+              <span className={`font-semibold ${t.is_buy ? "text-pump-green" : "text-[#ff5c73]"}`}>
+                {t.is_buy ? "BUY" : "SELL"}
+              </span>
+              <span className="text-gray-400 truncate">{wallet}</span>
+              <span className="text-white font-medium">{name}</span>
+              {costLabel && <span className="text-gray-500">{costLabel}</span>}
+              <span className="ml-auto text-gray-600 whitespace-nowrap">{age}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function timeSince(dateStr: string): string {
+  const s = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
+  if (s < 5) return "now";
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+}
+
+/* ── BUY toasts (bottom-up) ─────────────────────────────────────────── */
+
+function BuyToasts({ toasts }: { toasts: (RecentTrade & { _key: number })[] }) {
+  if (toasts.length === 0) return null;
+
+  return (
+    <div className="fixed bottom-20 left-4 z-[150] flex flex-col-reverse gap-2 pointer-events-none">
+      {toasts.map((t) => {
+        const wallet = t.user_address
+          ? `${t.user_address.slice(0, 4)}...${t.user_address.slice(-4)}`
+          : "anon";
+        const name = t.outcome_name || (t.is_yes === true ? "YES" : t.is_yes === false ? "NO" : "");
+        const costLabel = typeof t.cost === "number" && t.cost > 0 ? `${t.cost.toFixed(3)} SOL` : "";
+
+        return (
+          <div
+            key={t._key}
+            className="bg-pump-green/15 border border-pump-green/40 rounded-xl px-3 py-2 text-xs text-white shadow-lg backdrop-blur-sm animate-slideUp"
+          >
+            <span className="font-semibold text-pump-green">BUY</span>{" "}
+            <span className="text-gray-300">{wallet}</span>{" "}
+            <span className="font-medium">{name}</span>
+            {costLabel && <span className="text-gray-400 ml-1">{costLabel}</span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ══════════════════════════════════════════════════════════════════════
    MAIN PAGE
    ══════════════════════════════════════════════════════════════════════ */
@@ -418,6 +513,11 @@ export default function LiveViewerPage() {
 
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
   const [showBuyHint, setShowBuyHint] = useState(false);
+
+  // Live Activity + toasts
+  const [recentTrades, setRecentTrades] = useState<RecentTrade[]>([]);
+  const [buyToasts, setBuyToasts] = useState<(RecentTrade & { _key: number })[]>([]);
+  const toastCounter = useRef(0);
 
   const inFlightRef = useRef<Record<string, boolean>>({});
 
@@ -461,6 +561,30 @@ export default function LiveViewerPage() {
     });
     return unsub;
   }, [sessionId]);
+
+  /* ── Live Activity (recent trades) ─────────────────────────────── */
+
+  useEffect(() => {
+    if (!session?.market_address) return;
+    fetchRecentTrades(session.market_address, 20).then(setRecentTrades);
+  }, [session?.market_address]);
+
+  useEffect(() => {
+    if (!session?.market_address) return;
+    const unsub = subscribeRecentTrades(session.market_address, (trade) => {
+      // Prepend to activity list
+      setRecentTrades((prev) => [trade, ...prev].slice(0, 20));
+      // Add BUY toast (only for buy trades)
+      if (trade.is_buy) {
+        const key = ++toastCounter.current;
+        setBuyToasts((prev) => [...prev, { ...trade, _key: key }].slice(-3));
+        setTimeout(() => {
+          setBuyToasts((prev) => prev.filter((t) => t._key !== key));
+        }, 4000);
+      }
+    });
+    return unsub;
+  }, [session?.market_address]);
 
   /* ── Load market ───────────────────────────────────────────────── */
 
@@ -687,18 +811,49 @@ export default function LiveViewerPage() {
 
   /* ── Host status change ────────────────────────────────────────── */
 
+  const [statusError, setStatusError] = useState<string | null>(null);
+
   async function handleStatusChange(newStatus: LiveSessionStatus) {
     if (!session) return;
+    setStatusError(null);
+
+    const now = new Date().toISOString();
+
+    // Build status-specific patch with correct Supabase column names
+    const patch: Record<string, unknown> = { status: newStatus };
+
+    switch (newStatus) {
+      case "live":
+        patch.lock_at = null;
+        patch.end_at = null;
+        patch.ended_at = null;
+        // Only set started_at if not already set
+        if (!session.started_at) patch.started_at = now;
+        break;
+      case "locked":
+        patch.lock_at = now;
+        break;
+      case "ended":
+        patch.end_at = now;
+        patch.ended_at = now;
+        break;
+      case "resolved":
+        patch.end_at = session.end_at || now;
+        patch.ended_at = session.ended_at || now;
+        break;
+      case "cancelled":
+        patch.end_at = session.end_at || now;
+        patch.ended_at = session.ended_at || now;
+        break;
+    }
+
     try {
-      const patch: Record<string, unknown> = { status: newStatus };
-      if (newStatus === "ended" || newStatus === "cancelled") {
-        patch.ended_at = new Date().toISOString();
-      }
-      await updateLiveSession(session.id, patch);
-      setSession((prev) => prev ? { ...prev, status: newStatus } : prev);
-    } catch (e) {
+      const updated = await updateLiveSession(session.id, patch as any);
+      setSession(updated);
+    } catch (e: any) {
       console.error("Status change failed:", e);
-      alert("Failed to update status");
+      const msg = String(e?.message || "Failed to update status");
+      setStatusError(msg);
     }
   }
 
@@ -810,7 +965,7 @@ export default function LiveViewerPage() {
 
             {/* Host controls */}
             {isHost && (
-              <HostControls session={session} onStatusChange={handleStatusChange} />
+              <HostControls session={session} onStatusChange={handleStatusChange} error={statusError} />
             )}
 
             {/* Comments */}
@@ -853,6 +1008,9 @@ export default function LiveViewerPage() {
                   </p>
                 </div>
               )}
+
+              {/* Live Activity */}
+              <LiveActivity trades={recentTrades} />
             </div>
           </div>
         </div>
@@ -901,6 +1059,9 @@ export default function LiveViewerPage() {
           </button>
         </div>
       )}
+
+      {/* BUY toasts — slide up from bottom-left */}
+      <BuyToasts toasts={buyToasts} />
     </>
   );
 }

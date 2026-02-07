@@ -32,9 +32,10 @@ interface FeaturedMarket {
 
 interface FeaturedMarketCardFullProps {
   market: FeaturedMarket;
+  liveSessionId?: string | null;
 }
 
-export default function FeaturedMarketCardFull({ market }: FeaturedMarketCardFullProps) {
+export default function FeaturedMarketCardFull({ market, liveSessionId }: FeaturedMarketCardFullProps) {
   const [imageError, setImageError] = useState(false);
 
   const outcomes = useMemo(() => {
@@ -60,8 +61,19 @@ export default function FeaturedMarketCardFull({ market }: FeaturedMarketCardFul
     <div className="w-full">
       <Link href={`/trade/${market.id}`}>
         {/* Single clean card - no extra borders */}
-        <div className="bg-[#0a0b0d] border border-gray-800 hover:border-pump-green/60 rounded-2xl transition-all duration-300 hover:shadow-[0_0_40px_rgba(16,185,129,0.15)] cursor-pointer overflow-hidden">
-          
+        <div className="bg-[#0a0b0d] border border-gray-800 hover:border-pump-green/60 rounded-2xl transition-all duration-300 hover:shadow-[0_0_40px_rgba(16,185,129,0.15)] cursor-pointer overflow-hidden relative">
+          {/* LIVE badge */}
+          {liveSessionId && (
+            <a
+              href={`/live/${liveSessionId}`}
+              onClick={(e) => e.stopPropagation()}
+              className="absolute top-3 right-3 z-10 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-600/90 hover:bg-red-500 text-white text-xs font-bold shadow-lg transition"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+              LIVE
+            </a>
+          )}
+
           {/* DESKTOP */}
           <div className="hidden md:flex min-h-[400px]">
             

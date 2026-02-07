@@ -27,6 +27,9 @@ CREATE TABLE IF NOT EXISTS live_sessions (
                 CHECK (status IN ('scheduled','live','locked','ended','resolved','cancelled')),
   thumbnail_url TEXT,
   pinned_outcome INTEGER,
+  started_at    TIMESTAMPTZ,
+  lock_at       TIMESTAMPTZ,
+  end_at        TIMESTAMPTZ,
   ended_at      TIMESTAMPTZ
 );
 
@@ -91,6 +94,34 @@ CREATE POLICY "public_update_live_sessions"
   USING (true);
 ```
 
+### Wallet-based RLS (recommended upgrade)
+
+For production, replace the permissive UPDATE policy with a host-only policy.
+This requires passing the wallet address as a Supabase JWT claim or using a
+server-side API route with service role key:
+
+```sql
+-- Option A: Use a server-side API route (recommended)
+-- The frontend calls POST /api/live-sessions/[id]/status with a signed message.
+-- The API route verifies the signature, checks host_wallet match, then uses
+-- the service role client to update.
+
+-- Option B: Supabase custom claims (if using Supabase Auth)
+-- DROP POLICY IF EXISTS "public_update_live_sessions" ON live_sessions;
+-- CREATE POLICY "host_only_update"
+--   ON live_sessions FOR UPDATE
+--   USING (host_wallet = current_setting('request.jwt.claims')::jsonb->>'wallet');
+```
+
+### RLS error handling
+
+The client code catches Supabase error code `42501` (permission denied) and
+surfaces a clear message: "Permission denied — you may not be the session host".
+If you see this error during development, check that:
+1. The RLS policies above are applied to the `live_sessions` table.
+2. The user's wallet matches `host_wallet` (if using host-only policy).
+3. The Supabase anon key has the correct permissions.
+
 ## Routes
 
 | Route | Description |
@@ -106,7 +137,11 @@ CREATE POLICY "public_update_live_sessions"
 | `listLiveSessions(filter?)` | List sessions, optionally filtered by status |
 | `getLiveSession(id)` | Get a single session by ID |
 | `createLiveSession(payload)` | Create a new live session |
-| `updateLiveSession(id, patch)` | Update session fields (status, title, etc.) |
+| `updateLiveSession(id, patch)` | Update session fields; returns re-fetched row |
+| `listActiveLiveSessionsMap()` | Map of market_address → session id for LIVE badges |
+| `getActiveLiveSessionForMarket(addr)` | Latest active session for a market |
+| `fetchRecentTrades(marketAddr, limit?)` | Last N trades for a market (Live Activity) |
+| `subscribeRecentTrades(marketAddr, cb)` | Realtime subscription for new trades |
 | `subscribeLiveSession(id, cb)` | Realtime subscription for a single session |
 | `subscribeLiveSessionsList(cb)` | Realtime subscription for the full list |
 
@@ -120,6 +155,18 @@ CREATE POLICY "public_update_live_sessions"
 6. Host sees **Host Controls** panel with status buttons:
    - **Live** → **Locked** → **Ended** → **Resolved**
    - Or **Cancel** at any time
+
+### Status → Column mapping
+
+| Transition | Columns set |
+|------------|-------------|
+| → `live`   | `lock_at=NULL, end_at=NULL, ended_at=NULL`; if `started_at` is NULL, set `started_at=now()` |
+| → `locked` | `lock_at=now()` |
+| → `ended`  | `end_at=now(), ended_at=now()` |
+| → `resolved` | `end_at=coalesce(end_at, now()), ended_at=coalesce(ended_at, now())` |
+| → `cancelled` | `end_at=coalesce(end_at, now()), ended_at=coalesce(ended_at, now())` |
+
+After each update, the row is re-fetched (not optimistic) to avoid stale state.
 
 ## UI Lock Behavior
 

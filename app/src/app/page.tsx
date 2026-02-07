@@ -490,7 +490,7 @@ export default function Home() {
                 >
                   {featuredMarkets.map((market) => (
                     <div key={market.id} className="w-full flex-shrink-0">
-                      <FeaturedMarketCardFull market={market} />
+                      <FeaturedMarketCardFull market={market} liveSessionId={liveMap[market.id] || null} />
                     </div>
                   ))}
                 </div>
@@ -527,7 +527,7 @@ export default function Home() {
                 >
                   {featuredMarkets.map((market) => (
                     <div key={market.id} className="min-w-[92%] snap-center">
-                      <FeaturedMarketCardFull market={market} />
+                      <FeaturedMarketCardFull market={market} liveSessionId={liveMap[market.id] || null} />
                     </div>
                   ))}
                 </div>
