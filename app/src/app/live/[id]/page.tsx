@@ -20,7 +20,6 @@ import { getMarketByAddress, recordTransaction, applyTradeToMarketInSupabase } f
 import {
   getLiveSession,
   subscribeLiveSession,
-  updateLiveSession,
   fetchRecentTrades,
   subscribeRecentTrades,
   type LiveSession,
@@ -30,6 +29,7 @@ import {
 
 import { lamportsToSol, solToLamports, getUserPositionPDA, PLATFORM_WALLET } from "@/utils/solana";
 import { sendSignedTx } from "@/lib/solanaSend";
+import bs58 from "bs58";
 
 /* ── helpers ────────────────────────────────────────────────────────── */
 
@@ -498,7 +498,7 @@ export default function LiveViewerPage() {
   const router = useRouter();
   const sessionId = typeof params?.id === "string" ? params.id : Array.isArray(params?.id) ? params.id[0] : "";
 
-  const { publicKey, connected, signTransaction } = useWallet();
+  const { publicKey, connected, signTransaction, signMessage } = useWallet();
   const { connection } = useConnection();
   const program = useProgram();
   const isMobile = useIsMobile(1024);
@@ -826,46 +826,50 @@ export default function LiveViewerPage() {
   const [statusError, setStatusError] = useState<string | null>(null);
 
   async function handleStatusChange(newStatus: LiveSessionStatus) {
-    if (!session) return;
+    if (!session || !publicKey) return;
     setStatusError(null);
 
-    const now = new Date().toISOString();
+    if (!signMessage) {
+      setStatusError("Wallet does not support message signing");
+      return;
+    }
 
-    // Build status-specific patch with correct Supabase column names
-    const patch: Record<string, unknown> = { status: newStatus };
+    const ts = Date.now();
+    const message = `FUNMARKET_LIVE_STATUS|${session.id}|${newStatus}|${ts}`;
+    const messageBytes = new TextEncoder().encode(message);
 
-    switch (newStatus) {
-      case "live":
-        patch.lock_at = null;
-        patch.end_at = null;
-        patch.ended_at = null;
-        // Only set started_at if not already set
-        if (!session.started_at) patch.started_at = now;
-        break;
-      case "locked":
-        patch.lock_at = now;
-        break;
-      case "ended":
-        patch.end_at = now;
-        patch.ended_at = now;
-        break;
-      case "resolved":
-        patch.end_at = session.end_at || now;
-        patch.ended_at = session.ended_at || now;
-        break;
-      case "cancelled":
-        patch.end_at = session.end_at || now;
-        patch.ended_at = session.ended_at || now;
-        break;
+    let sigBytes: Uint8Array;
+    try {
+      sigBytes = await signMessage(messageBytes);
+    } catch (e: any) {
+      const msg = String(e?.message || "");
+      if (!msg.toLowerCase().includes("user rejected")) {
+        setStatusError("Failed to sign message");
+      }
+      return;
     }
 
     try {
-      const updated = await updateLiveSession(session.id, patch as any);
-      setSession(updated);
+      const res = await fetch(`/api/live-sessions/${session.id}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          wallet: publicKey.toBase58(),
+          signature: bs58.encode(sigBytes),
+          newStatus,
+          ts,
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json.error || `Server error ${res.status}`);
+      }
+
+      setSession(json.session as LiveSession);
     } catch (e: any) {
       console.error("Status change failed:", e);
-      const msg = String(e?.message || "Failed to update status");
-      setStatusError(msg);
+      setStatusError(String(e?.message || "Failed to update status"));
     }
   }
 
