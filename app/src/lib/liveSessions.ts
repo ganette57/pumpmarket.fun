@@ -151,20 +151,33 @@ export async function updateLiveSession(
   if (patch.end_at !== undefined) safePatch.end_at = patch.end_at;
   if (patch.ended_at !== undefined) safePatch.ended_at = patch.ended_at;
 
-  const { data, error } = await supabase
+  // Step 1: run the update (no select — avoids "Cannot coerce" on 0/multi rows)
+  const { error: updateError } = await supabase
     .from("live_sessions")
     .update(safePatch)
-    .eq("id", id)
-    .select(LIVE_SESSION_COLS)
-    .single();
+    .eq("id", id);
 
-  if (error) {
-    console.error("updateLiveSession error:", error);
-    // Surface RLS / permission errors clearly
-    if (error.code === "42501" || error.message?.includes("policy")) {
+  if (updateError) {
+    console.error("updateLiveSession error:", updateError);
+    if (updateError.code === "42501" || updateError.message?.includes("policy")) {
       throw new Error("Permission denied — you may not be the session host, or RLS policies are missing.");
     }
-    throw error;
+    throw updateError;
+  }
+
+  // Step 2: re-fetch the row to return fresh state
+  const { data, error: fetchError } = await supabase
+    .from("live_sessions")
+    .select(LIVE_SESSION_COLS)
+    .eq("id", id)
+    .maybeSingle();
+
+  if (fetchError) {
+    console.error("updateLiveSession re-fetch error:", fetchError);
+    throw fetchError;
+  }
+  if (!data) {
+    throw new Error("Live session not found or permission denied (RLS).");
   }
   return data as LiveSession;
 }
@@ -173,7 +186,7 @@ export async function updateLiveSession(
 /*  DISCOVERABILITY QUERIES                                                    */
 /* -------------------------------------------------------------------------- */
 
-const ACTIVE_STATUSES: LiveSessionStatus[] = ["live", "locked", "scheduled"];
+const ACTIVE_STATUSES: LiveSessionStatus[] = ["live", "locked"];
 
 /**
  * Returns a map of market_address -> session id for all active live sessions.

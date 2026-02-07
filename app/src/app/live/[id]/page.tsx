@@ -562,6 +562,18 @@ export default function LiveViewerPage() {
     return unsub;
   }, [sessionId]);
 
+  // Redirect to trade page when session enters a terminal state
+  const TERMINAL_STATUSES: LiveSessionStatus[] = ["ended", "resolved", "cancelled"];
+  useEffect(() => {
+    if (!session) return;
+    if (TERMINAL_STATUSES.includes(session.status) && session.market_address) {
+      const timer = setTimeout(() => {
+        router.replace(`/trade/${session.market_address}`);
+      }, 1500);
+      return () => clearTimeout(timer);
+    }
+  }, [session?.status, session?.market_address, router]);
+
   /* ── Live Activity (recent trades) ─────────────────────────────── */
 
   useEffect(() => {
@@ -878,6 +890,19 @@ export default function LiveViewerPage() {
           <Link href="/live" className="text-pump-green hover:underline">
             Back to live
           </Link>
+        </div>
+      </div>
+    );
+  }
+
+  // Terminal state: show brief message while redirect fires
+  if (TERMINAL_STATUSES.includes(session.status)) {
+    const label = session.status === "ended" ? "Stream ended" : session.status === "resolved" ? "Session resolved" : "Session cancelled";
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-gray-400 text-lg mb-2">{label}</p>
+          <p className="text-gray-600 text-sm">Redirecting to market&hellip;</p>
         </div>
       </div>
     );
