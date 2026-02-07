@@ -26,6 +26,7 @@ import { buildOddsSeries, downsample } from "@/lib/marketHistory";
 import { getMarketByAddress, recordTransaction, applyTradeToMarketInSupabase } from "@/lib/markets";
 
 import { lamportsToSol, solToLamports, getUserPositionPDA, PLATFORM_WALLET } from "@/utils/solana";
+import { getActiveLiveSessionForMarket, type LiveSessionStatus } from "@/lib/liveSessions";
 
 import type { SocialLinks } from "@/components/SocialLinksForm";
 import { useCallback } from "react";
@@ -531,6 +532,9 @@ console.log("[SNAPSHOT] marketAddress =", marketAddress);
     })();
   }, [id]);
 
+// Live session for this market (for banner CTA)
+const [activeLiveSession, setActiveLiveSession] = useState<{ id: string; title: string; status: LiveSessionStatus } | null>(null);
+
 // Related block (RIGHT column under TradingPanel)
 const [relatedTab, setRelatedTab] = useState<RelatedTab>("related");
 const [relatedLoading, setRelatedLoading] = useState(false);
@@ -655,6 +659,13 @@ if (snap?.posAcc?.shares) {
       setPositionShares(null);
       setOddsPoints([]);
       setMobileTradeOpen(false);
+      setActiveLiveSession(null);
+    }, [id]);
+
+    // Fetch active live session for this market
+    useEffect(() => {
+      if (!id) return;
+      getActiveLiveSessionForMarket(id).then(setActiveLiveSession).catch(() => {});
     }, [id]);
 
     useEffect(() => {
@@ -1195,6 +1206,27 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                 LEFT COLUMN - Contenu qui scroll avec la page
                 ════════════════════════════════════════════════════════════ */}
             <div className="lg:col-span-2 space-y-6">
+              {/* Live session banner CTA */}
+              {activeLiveSession && (
+                <Link
+                  href={`/live/${activeLiveSession.id}`}
+                  className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl border border-red-500/40 bg-red-500/10 hover:bg-red-500/20 transition group"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span className="relative flex h-2.5 w-2.5 shrink-0">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
+                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500" />
+                    </span>
+                    <span className="text-sm text-white font-medium truncate">
+                      This market is <span className="font-bold text-red-400">LIVE</span> — Watch &amp; trade
+                    </span>
+                  </div>
+                  <span className="shrink-0 text-xs font-semibold text-red-400 group-hover:text-white transition px-3 py-1.5 rounded-lg border border-red-500/40 bg-red-500/10">
+                    Watch Live
+                  </span>
+                </Link>
+              )}
+
               {/* Market card */}
               <div className="card-pump">
                 <div className="flex items-start gap-4">

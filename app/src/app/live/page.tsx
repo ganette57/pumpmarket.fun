@@ -56,18 +56,27 @@ function SessionCard({ session }: { session: LiveSession }) {
               className="object-cover w-full h-full opacity-75 group-hover:opacity-90 transition"
             />
           ) : (
-            <div className="flex items-center justify-center w-full h-full bg-gradient-to-br from-pump-dark to-black">
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                className="w-12 h-12 text-gray-700"
-              >
-                <circle cx="12" cy="12" r="2" />
-                <path d="M16.24 7.76a6 6 0 0 1 0 8.48" />
-                <path d="M7.76 7.76a6 6 0 0 0 0 8.48" />
-              </svg>
+            <div className="flex flex-col items-center justify-center w-full h-full bg-gradient-to-br from-gray-900 via-pump-dark to-black">
+              <div className="relative mb-1">
+                {session.status === "live" && (
+                  <span className="absolute -top-1 -right-1 flex h-3 w-3">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500" />
+                  </span>
+                )}
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  className="w-10 h-10 text-gray-600"
+                >
+                  <circle cx="12" cy="12" r="2" />
+                  <path d="M16.24 7.76a6 6 0 0 1 0 8.48" />
+                  <path d="M7.76 7.76a6 6 0 0 0 0 8.48" />
+                </svg>
+              </div>
+              <span className="text-[10px] text-gray-600 font-medium uppercase tracking-wider">Stream</span>
             </div>
           )}
 

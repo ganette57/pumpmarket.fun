@@ -151,6 +151,63 @@ export async function updateLiveSession(
 }
 
 /* -------------------------------------------------------------------------- */
+/*  DISCOVERABILITY QUERIES                                                    */
+/* -------------------------------------------------------------------------- */
+
+const ACTIVE_STATUSES: LiveSessionStatus[] = ["live", "locked", "scheduled"];
+
+/**
+ * Returns a map of market_address -> session id for all active live sessions.
+ * Used by the home feed to render LIVE badges without N+1 queries.
+ */
+export async function listActiveLiveSessionsMap(): Promise<Record<string, string>> {
+  const { data, error } = await supabase
+    .from("live_sessions")
+    .select("id,market_address,status,created_at")
+    .in("status", ACTIVE_STATUSES)
+    .order("created_at", { ascending: false })
+    .limit(100);
+
+  if (error) {
+    console.error("listActiveLiveSessionsMap error:", error);
+    return {};
+  }
+
+  const map: Record<string, string> = {};
+  for (const row of (data || []) as { id: string; market_address: string }[]) {
+    if (!map[row.market_address]) {
+      map[row.market_address] = row.id;
+    }
+  }
+  return map;
+}
+
+/**
+ * Returns the latest active live session for a specific market, or null.
+ * Used by the trade page to show a "Watch Live" banner.
+ */
+export async function getActiveLiveSessionForMarket(
+  marketAddress: string
+): Promise<{ id: string; title: string; status: LiveSessionStatus } | null> {
+  if (!marketAddress) return null;
+
+  const { data, error } = await supabase
+    .from("live_sessions")
+    .select("id,title,status")
+    .eq("market_address", marketAddress)
+    .in("status", ACTIVE_STATUSES)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error("getActiveLiveSessionForMarket error:", error);
+    return null;
+  }
+  return data as { id: string; title: string; status: LiveSessionStatus } | null;
+}
+
+/* -------------------------------------------------------------------------- */
 /*  REALTIME                                                                   */
 /* -------------------------------------------------------------------------- */
 

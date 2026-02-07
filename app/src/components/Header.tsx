@@ -118,6 +118,18 @@ export default function Header() {
               How it works
             </button>
 
+            {/* Live */}
+            <Link
+              href="/live"
+              className="hidden md:inline-flex items-center gap-1.5 text-sm text-gray-300 hover:text-pump-green transition"
+            >
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
+              </span>
+              Live
+            </Link>
+
             {/* Create */}
             <Link
               href="/create"

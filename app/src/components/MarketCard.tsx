@@ -21,9 +21,11 @@ interface MarketCardProps {
     totalVolume: number;
     resolved: boolean;
   };
+  /** If set, shows a LIVE badge linking to /live/[liveSessionId] */
+  liveSessionId?: string | null;
 }
 
-export default function MarketCard({ market }: MarketCardProps) {
+export default function MarketCard({ market, liveSessionId }: MarketCardProps) {
   const now = Date.now() / 1000;
   const daysLeft = Math.max(0, Math.floor((market.resolutionTime - now) / 86400));
 
@@ -74,14 +76,28 @@ export default function MarketCard({ market }: MarketCardProps) {
               <CategoryImagePlaceholder category={safeCategoryKey} />
             </div>
           )}
+          {/* LIVE BADGE — links to /live/[id], stops propagation to keep card link safe */}
+          {liveSessionId && !(market.resolved || now >= market.resolutionTime) && (
+            <Link
+              href={`/live/${liveSessionId}`}
+              onClick={(e) => e.stopPropagation()}
+              className="absolute top-3 right-3 z-10"
+            >
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide bg-red-600 text-white shadow-lg hover:bg-red-500 transition">
+                <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                Live
+              </span>
+            </Link>
+          )}
+
           {/* ENDED BADGE */}
-{(market.resolved || now >= market.resolutionTime) && (
-  <div className="absolute top-3 right-3 z-10">
-    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wide bg-black/80 border border-gray-700 text-gray-200">
-      Ended
-    </span>
-  </div>
-)}
+          {!liveSessionId && (market.resolved || now >= market.resolutionTime) && (
+            <div className="absolute top-3 right-3 z-10">
+              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wide bg-black/80 border border-gray-700 text-gray-200">
+                Ended
+              </span>
+            </div>
+          )}
 
           {/* dark fade bottom */}
           <div className="absolute inset-0 bg-gradient-to-t from-[#05070b] via-transparent" />

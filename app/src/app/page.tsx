@@ -13,6 +13,7 @@ import type { SelectedCategory } from "@/components/CategoryFilters";
 import { SkeletonCard, SkeletonFeaturedCard } from "@/components/SkeletonCard";
 import { isSportSubcategory } from "@/utils/categories";
 import { supabase } from "@/lib/supabaseClient";
+import { listActiveLiveSessionsMap } from "@/lib/liveSessions";
 
 type Market = {
   id?: string;
@@ -120,6 +121,9 @@ export default function Home() {
   const router = useRouter();
   const sp = useSearchParams();
 
+  // Live session map: market_address -> session id
+  const [liveMap, setLiveMap] = useState<Record<string, string>>({});
+
   const observerTarget = useRef<HTMLDivElement>(null);
 
   // ✅ used only on mobile to detect which slide is centered
@@ -128,6 +132,7 @@ export default function Home() {
   // ------- LOAD MARKETS FROM SUPABASE -------
   useEffect(() => {
     void loadMarkets();
+    listActiveLiveSessionsMap().then(setLiveMap).catch(() => {});
   }, []);
 
   async function loadMarkets() {
@@ -603,7 +608,7 @@ export default function Home() {
                     transition={{ duration: 0.35, delay: index * 0.03 }}
                     className="h-full"
                   >
-                    <MarketCard market={market as any} />
+                    <MarketCard market={market as any} liveSessionId={liveMap[market.publicKey] || null} />
                   </motion.div>
                 ))}
               </div>
