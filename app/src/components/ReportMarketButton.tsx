@@ -122,14 +122,14 @@ export default function ReportMarketButton({ marketAddress, variant = "icon", cl
     <>
       {buttonContent()}
 
-      {/* Modal */}
+      {/* Modal - Full screen on mobile, centered on desktop */}
       {isOpen && (
-        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="bg-pump-dark border border-white/20 rounded-2xl p-6 max-w-md w-full shadow-2xl">
+        <div className="fixed inset-0 z-[300] flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="bg-pump-dark border border-white/20 rounded-t-2xl sm:rounded-2xl w-full sm:max-w-md max-h-[90vh] sm:max-h-[85vh] sm:m-4 shadow-2xl flex flex-col">
             
             {submitted ? (
               // Success state
-              <div className="text-center py-4">
+              <div className="text-center py-8 px-6">
                 <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-pump-green/20 flex items-center justify-center">
                   <svg className="w-8 h-8 text-pump-green" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
@@ -141,7 +141,7 @@ export default function ReportMarketButton({ marketAddress, variant = "icon", cl
                 </p>
                 <button
                   onClick={closeModal}
-                  className="px-6 py-2 rounded-lg bg-pump-green text-black font-semibold hover:opacity-90 transition"
+                  className="px-6 py-2.5 rounded-xl bg-pump-green text-black font-semibold hover:opacity-90 transition"
                 >
                   Close
                 </button>
@@ -149,8 +149,9 @@ export default function ReportMarketButton({ marketAddress, variant = "icon", cl
             ) : (
               // Form state
               <>
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                {/* Header - Fixed */}
+                <div className="flex items-center justify-between p-4 border-b border-white/10 shrink-0">
+                  <h3 className="text-lg font-bold text-white flex items-center gap-2">
                     <svg className="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                     </svg>
@@ -158,7 +159,7 @@ export default function ReportMarketButton({ marketAddress, variant = "icon", cl
                   </h3>
                   <button
                     onClick={closeModal}
-                    className="text-gray-400 hover:text-white transition"
+                    className="p-2 -mr-2 text-gray-400 hover:text-white transition"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -166,96 +167,101 @@ export default function ReportMarketButton({ marketAddress, variant = "icon", cl
                   </button>
                 </div>
 
-                <p className="text-sm text-gray-400 mb-4">
-                  Help us maintain a safe platform by reporting markets that violate our guidelines.
-                </p>
-
-                {/* Reason selection */}
-                <div className="mb-4">
-                  <label className="text-sm text-gray-300 font-medium mb-2 block">
-                    Why are you reporting this market?
-                  </label>
-                  <div className="space-y-2">
-                    {REASONS.map((r) => (
-                      <button
-                        key={r.value}
-                        onClick={() => setSelectedReason(r.value)}
-                        className={`w-full text-left p-3 rounded-xl border transition ${
-                          selectedReason === r.value
-                            ? "border-red-500/60 bg-red-500/10"
-                            : "border-white/10 bg-white/5 hover:border-white/20"
-                        }`}
-                      >
-                        <div className="flex items-center gap-3">
-                          <div
-                            className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
-                              selectedReason === r.value
-                                ? "border-red-500 bg-red-500"
-                                : "border-gray-500"
-                            }`}
-                          >
-                            {selectedReason === r.value && (
-                              <div className="w-1.5 h-1.5 rounded-full bg-white" />
-                            )}
-                          </div>
-                          <div>
-                            <div className="text-sm font-medium text-white">{r.label}</div>
-                            <div className="text-xs text-gray-500">{r.description}</div>
-                          </div>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Additional details */}
-                <div className="mb-4">
-                  <label className="text-sm text-gray-300 font-medium mb-2 block">
-                    Additional details (optional)
-                  </label>
-                  <textarea
-                    value={details}
-                    onChange={(e) => setDetails(e.target.value)}
-                    placeholder="Provide any additional context..."
-                    maxLength={1000}
-                    rows={3}
-                    className="w-full px-3 py-2 rounded-xl bg-black/30 border border-white/10 text-white text-sm placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-red-500/50 resize-none"
-                  />
-                  <div className="text-xs text-gray-500 text-right mt-1">
-                    {details.length}/1000
-                  </div>
-                </div>
-
-                {/* Error */}
-                {error && (
-                  <div className="mb-4 p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-sm">
-                    {error}
-                  </div>
-                )}
-
-                {/* Actions */}
-                <div className="flex gap-3">
-                  <button
-                    onClick={closeModal}
-                    disabled={submitting}
-                    className="flex-1 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white font-medium hover:bg-white/10 transition disabled:opacity-50"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleSubmit}
-                    disabled={submitting || !selectedReason}
-                    className="flex-1 py-2.5 rounded-xl bg-red-600 text-white font-semibold hover:bg-red-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {submitting ? "Submitting..." : "Submit Report"}
-                  </button>
-                </div>
-
-                {!publicKey && (
-                  <p className="text-xs text-gray-500 text-center mt-3">
-                    Connect your wallet to help us track repeat reporters.
+                {/* Scrollable content */}
+                <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                  <p className="text-sm text-gray-400">
+                    Help us maintain a safe platform by reporting markets that violate our guidelines.
                   </p>
-                )}
+
+                  {/* Reason selection */}
+                  <div>
+                    <label className="text-sm text-gray-300 font-medium mb-2 block">
+                      Why are you reporting this market?
+                    </label>
+                    <div className="space-y-2">
+                      {REASONS.map((r) => (
+                        <button
+                          key={r.value}
+                          onClick={() => setSelectedReason(r.value)}
+                          className={`w-full text-left p-3 rounded-xl border transition ${
+                            selectedReason === r.value
+                              ? "border-red-500/60 bg-red-500/10"
+                              : "border-white/10 bg-white/5 hover:border-white/20"
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div
+                              className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                                selectedReason === r.value
+                                  ? "border-red-500 bg-red-500"
+                                  : "border-gray-500"
+                              }`}
+                            >
+                              {selectedReason === r.value && (
+                                <div className="w-1.5 h-1.5 rounded-full bg-white" />
+                              )}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="text-sm font-medium text-white">{r.label}</div>
+                              <div className="text-xs text-gray-500">{r.description}</div>
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Additional details */}
+                  <div>
+                    <label className="text-sm text-gray-300 font-medium mb-2 block">
+                      Additional details (optional)
+                    </label>
+                    <textarea
+                      value={details}
+                      onChange={(e) => setDetails(e.target.value)}
+                      placeholder="Provide any additional context..."
+                      maxLength={1000}
+                      rows={3}
+                      className="w-full px-3 py-2 rounded-xl bg-black/30 border border-white/10 text-white text-sm placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-red-500/50 resize-none"
+                    />
+                    <div className="text-xs text-gray-500 text-right mt-1">
+                      {details.length}/1000
+                    </div>
+                  </div>
+
+                  {/* Error */}
+                  {error && (
+                    <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-sm">
+                      {error}
+                    </div>
+                  )}
+
+                  {!publicKey && (
+                    <p className="text-xs text-gray-500 text-center">
+                      Connect your wallet to help us track repeat reporters.
+                    </p>
+                  )}
+                </div>
+
+                {/* Footer - Fixed */}
+                <div className="p-4 border-t border-white/10 shrink-0 bg-pump-dark">
+                  <div className="flex gap-3">
+                    <button
+                      onClick={closeModal}
+                      disabled={submitting}
+                      className="flex-1 py-3 rounded-xl bg-white/5 border border-white/10 text-white font-medium hover:bg-white/10 transition disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleSubmit}
+                      disabled={submitting || !selectedReason}
+                      className="flex-1 py-3 rounded-xl bg-red-600 text-white font-semibold hover:bg-red-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {submitting ? "Submitting..." : "Submit Report"}
+                    </button>
+                  </div>
+                </div>
               </>
             )}
           </div>
