@@ -40,6 +40,8 @@ type Market = {
     telegram?: string;
     website?: string;
   } | null;
+
+  sportMeta?: Record<string, unknown> | null;
 };
 
 type MarketStatusFilter = "all" | "open" | "resolved" | "ending_soon" | "top_volume";
@@ -158,6 +160,7 @@ export default function Home() {
           market_type,
           outcome_names,
           outcome_supplies,
+          sport_meta,
           created_at
         `
         )
@@ -209,6 +212,7 @@ export default function Home() {
             outcomeSupplies,
             creator: row.creator ?? null,
             socialLinks: row.social_links ?? null,
+            sportMeta: row.sport_meta ?? null,
           } as Market;
         }) ?? [];
 
@@ -239,14 +243,17 @@ export default function Home() {
     if (selectedCategory === "sports") {
       return markets.filter((m) => {
         const cat = m.category?.toLowerCase();
-        // Match "sports" or any sport subcategory
-        return cat === "sports" || isSportSubcategory(cat);
+        return cat === "sports" || isSportSubcategory(cat) || !!m.sportMeta;
       });
     }
 
-    // Sport subcategory (football, basketball, etc.)
+    // Sport subcategory (soccer, basketball, etc.) — match by sport_meta.sport
     if (isSportSubcategory(selectedCategory)) {
-      return markets.filter((m) => m.category?.toLowerCase() === selectedCategory);
+      return markets.filter((m) => {
+        const metaSport = (m.sportMeta as any)?.sport;
+        if (metaSport && metaSport === selectedCategory) return true;
+        return m.category?.toLowerCase() === selectedCategory;
+      });
     }
 
     // Regular category

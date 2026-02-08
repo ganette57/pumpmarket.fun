@@ -12,6 +12,7 @@ export type SportEvent = {
   home_team: string | null;
   away_team: string | null;
   start_time: string | null;
+  end_time: string | null;
   status: string;
   score: Record<string, unknown>;
   last_update: string | null;
@@ -33,37 +34,6 @@ export async function getSportEvent(id: string): Promise<SportEvent | null> {
   return data as SportEvent | null;
 }
 
-export async function createSportEvent(row: {
-  provider: string;
-  provider_event_id: string;
-  sport: string;
-  home_team: string;
-  away_team: string;
-  start_time: string;
-  status?: string;
-}): Promise<SportEvent> {
-  const { data, error } = await supabase
-    .from("sport_events")
-    .insert({
-      provider: row.provider,
-      provider_event_id: row.provider_event_id,
-      sport: row.sport,
-      home_team: row.home_team,
-      away_team: row.away_team,
-      start_time: row.start_time,
-      status: row.status || "scheduled",
-      score: {},
-    })
-    .select("*")
-    .single();
-
-  if (error) {
-    console.error("createSportEvent error:", error);
-    throw error;
-  }
-  return data as SportEvent;
-}
-
 /** Client-side read-only refresh (no token = just returns cached row) */
 export async function refreshSportEvent(sportEventId: string): Promise<SportEvent | null> {
   const res = await fetch("/api/sports/refresh-one", {
@@ -74,4 +44,28 @@ export async function refreshSportEvent(sportEventId: string): Promise<SportEven
   if (!res.ok) return null;
   const json = await res.json();
   return (json.event as SportEvent) ?? null;
+}
+
+/** Create sport event via server endpoint (bypasses RLS) */
+export async function createSportEventServer(row: {
+  provider: string;
+  provider_event_id: string;
+  sport: string;
+  home_team: string;
+  away_team: string;
+  start_time: string;
+  end_time?: string;
+  league?: string;
+}): Promise<SportEvent> {
+  const res = await fetch("/api/sports/create-event", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(row),
+  });
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(errBody.error || "Failed to create sport event");
+  }
+  const json = await res.json();
+  return json.event as SportEvent;
 }

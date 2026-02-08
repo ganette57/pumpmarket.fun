@@ -18,7 +18,7 @@ import CategoryImagePlaceholder from "@/components/CategoryImagePlaceholder";
 
 import { useProgram } from "@/hooks/useProgram";
 import { indexMarket } from "@/lib/markets";
-import { createSportEvent } from "@/lib/sportEvents";
+import { createSportEventServer } from "@/lib/sportEvents";
 import { sendSignedTx } from "@/lib/solanaSend";
 
 // Combined category type for create page
@@ -272,6 +272,16 @@ export default function CreateMarketPage() {
   const [sportHomeTeam, setSportHomeTeam] = useState("");
   const [sportAwayTeam, setSportAwayTeam] = useState("");
   const [sportType, setSportType] = useState<string>("soccer");
+  const [sportEndTime, setSportEndTime] = useState<Date | null>(null);
+  const [sportLeague, setSportLeague] = useState("");
+  const [sportProviderEventId, setSportProviderEventId] = useState("");
+
+  // Match search
+  const [matchQuery, setMatchQuery] = useState("");
+  const [matchResults, setMatchResults] = useState<any[]>([]);
+  const [matchSearching, setMatchSearching] = useState(false);
+  const [matchDropdownOpen, setMatchDropdownOpen] = useState(false);
+  const matchSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Check if current category is a sport
   const isSportsMarket = useMemo(() => {
@@ -421,6 +431,44 @@ export default function CreateMarketPage() {
     setCreationError(null);
   }
 
+  function handleMatchSearch(q: string) {
+    setMatchQuery(q);
+    if (matchSearchTimer.current) clearTimeout(matchSearchTimer.current);
+    if (!q.trim()) {
+      setMatchResults([]);
+      setMatchDropdownOpen(false);
+      return;
+    }
+    setMatchSearching(true);
+    matchSearchTimer.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/sports/search?q=${encodeURIComponent(q.trim())}`);
+        if (res.ok) {
+          const json = await res.json();
+          setMatchResults(json.matches || []);
+          setMatchDropdownOpen(true);
+        }
+      } catch {
+        setMatchResults([]);
+      } finally {
+        setMatchSearching(false);
+      }
+    }, 300);
+  }
+
+  function selectMatch(m: any) {
+    setSportType(m.sport);
+    setSportHomeTeam(m.home_team);
+    setSportAwayTeam(m.away_team);
+    setSportLeague(m.league || "");
+    setSportProviderEventId(m.provider_event_id || "");
+    if (m.start_time) setResolutionDate(new Date(m.start_time));
+    if (m.end_time) setSportEndTime(new Date(m.end_time));
+    setQuestion(`${m.home_team} vs ${m.away_team}${m.league ? ` - ${m.league}` : ""}`);
+    setMatchDropdownOpen(false);
+    setMatchQuery(`${m.home_team} vs ${m.away_team}`);
+  }
+
   async function handleCreateMarket() {
     if (!canSubmit || !publicKey || !program) return;
     if (!signTransaction) {
@@ -495,18 +543,19 @@ export default function CreateMarketPage() {
       const isBinary = onchainType === 0 && onchainNames.length === 2;
       const fullDescription = buildFullDescription();
 
-      // If sport market, create sport_events row first
+      // If sport market, create sport_events row via server endpoint
       let sportEventId: string | undefined;
       let sportMeta: Record<string, unknown> | undefined;
       if (isSportsMarket && sportHomeTeam.trim() && sportAwayTeam.trim()) {
-        const evt = await createSportEvent({
-          provider: "manual",
-          provider_event_id: `manual_${marketKeypair.publicKey.toBase58()}`,
+        const evt = await createSportEventServer({
+          provider: sportProviderEventId ? "mock" : "manual",
+          provider_event_id: sportProviderEventId || `manual_${marketKeypair.publicKey.toBase58()}`,
           sport: sportType,
           home_team: sportHomeTeam.trim(),
           away_team: sportAwayTeam.trim(),
           start_time: resolutionDate.toISOString(),
-          status: "scheduled",
+          end_time: sportEndTime ? sportEndTime.toISOString() : undefined,
+          league: sportLeague || undefined,
         });
         sportEventId = evt.id;
         sportMeta = {
@@ -514,6 +563,7 @@ export default function CreateMarketPage() {
           home_team: sportHomeTeam.trim(),
           away_team: sportAwayTeam.trim(),
           start_time: resolutionDate.toISOString(),
+          end_time: sportEndTime ? sportEndTime.toISOString() : undefined,
         };
       }
 
@@ -630,12 +680,53 @@ export default function CreateMarketPage() {
         {isSportsMarket && (
           <div className="mb-6">
             <InfoBox>
-              <p className="font-semibold mb-1">⚽ Sports Match Market</p>
+              <p className="font-semibold mb-1">Sports Match Market</p>
               <p>
-                Trading closes at match start time. After the match ends, you have 24h to propose the outcome. A 4h
-                dispute window may follow.
+                Live trading enabled. Trading auto-locks 2 minutes before end time. After the match ends, you have 24h to propose the outcome.
               </p>
             </InfoBox>
+          </div>
+        )}
+
+        {/* Match Picker Search */}
+        {isSportsMarket && (
+          <div className="mb-6 relative">
+            <label className="block text-white font-semibold mb-2">Search a match (optional)</label>
+            <input
+              type="text"
+              value={matchQuery}
+              onChange={(e) => handleMatchSearch(e.target.value)}
+              onFocus={() => matchResults.length > 0 && setMatchDropdownOpen(true)}
+              onBlur={() => setTimeout(() => setMatchDropdownOpen(false), 200)}
+              className="input-pump w-full"
+              placeholder="e.g. PSG, Lakers, Alcaraz..."
+            />
+            {matchSearching && (
+              <span className="absolute right-3 top-[42px] text-xs text-gray-500">Searching...</span>
+            )}
+            {matchDropdownOpen && matchResults.length > 0 && (
+              <div className="absolute z-50 left-0 right-0 mt-1 bg-pump-gray border border-white/10 rounded-xl max-h-64 overflow-y-auto shadow-2xl">
+                {matchResults.map((m: any) => (
+                  <button
+                    key={m.provider_event_id}
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => selectMatch(m)}
+                    className="w-full text-left px-4 py-3 hover:bg-white/5 transition border-b border-white/5 last:border-0"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-white">
+                        {m.home_team} vs {m.away_team}
+                      </span>
+                      <span className="text-xs text-gray-500 ml-2">{m.sport}</span>
+                    </div>
+                    <div className="text-xs text-gray-400 mt-0.5">
+                      {m.league} &middot; {new Date(m.start_time).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -651,9 +742,8 @@ export default function CreateMarketPage() {
               >
                 <option value="soccer">Soccer</option>
                 <option value="basketball">Basketball</option>
-                <option value="american_football">American Football</option>
-                <option value="mma">MMA</option>
                 <option value="tennis">Tennis</option>
+                <option value="mma">MMA</option>
               </select>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -909,27 +999,38 @@ export default function CreateMarketPage() {
           )}
         </div>
 
-        {/* End Date / Match Start Time */}
+        {/* End Date / Match End Time */}
         <div className="mb-6">
           <label className="block text-white font-semibold mb-2">
-            {isSportsMarket ? "Match Start Time *" : "End Date & Time *"}
+            {isSportsMarket ? "Match End Time *" : "End Date & Time *"}
           </label>
           <div className="relative">
             <DatePicker
-              selected={resolutionDate}
-              onChange={(date: Date | null) => date && setResolutionDate(date)}
+              selected={isSportsMarket && sportEndTime ? sportEndTime : resolutionDate}
+              onChange={(date: Date | null) => {
+                if (!date) return;
+                if (isSportsMarket) {
+                  setSportEndTime(date);
+                  // Also push resolution date forward if needed
+                  if (!resolutionDate || date > resolutionDate) {
+                    setResolutionDate(date);
+                  }
+                } else {
+                  setResolutionDate(date);
+                }
+              }}
               showTimeSelect
               timeFormat="HH:mm"
               timeIntervals={15}
               dateFormat="MMMM d, yyyy h:mm aa"
               minDate={new Date()}
               className="input-pump w-full pl-10"
-              placeholderText={isSportsMarket ? "Select match start time" : "Select end date and time"}
+              placeholderText={isSportsMarket ? "Select match end time" : "Select end date and time"}
             />
             <Calendar className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-500 pointer-events-none" />
           </div>
           {isSportsMarket && (
-            <p className="text-xs text-gray-500 mt-2">⚠️ Trading stops at this time. Set the kick-off / first serve time.</p>
+            <p className="text-xs text-gray-500 mt-2">Live trading enabled. Trading auto-locks 2 minutes before end time.</p>
           )}
         </div>
 

@@ -44,13 +44,31 @@ export async function POST(req: Request) {
 
         await supabase.from("sport_events").update(patch).eq("id", sportEventId);
 
-        // Update sport_trading_state on linked markets if terminal
-        if (["finished", "cancelled", "postponed"].includes(change.status)) {
+        // Update sport_trading_state on linked markets
+        const isTerminal = ["finished", "cancelled", "postponed"].includes(change.status);
+        if (isTerminal) {
           await supabase
             .from("markets")
             .update({ sport_trading_state: "ended_by_sport" })
             .eq("sport_event_id", sportEventId)
             .in("market_mode", ["sport", "sport_live"]);
+        } else {
+          // Check T-2 end_time lock
+          const endTime = event.end_time ? new Date(event.end_time).getTime() : NaN;
+          const now = Date.now();
+          if (Number.isFinite(endTime) && now >= endTime - 2 * 60_000) {
+            await supabase
+              .from("markets")
+              .update({ sport_trading_state: "locked_by_sport" })
+              .eq("sport_event_id", sportEventId)
+              .in("market_mode", ["sport", "sport_live"]);
+          } else {
+            await supabase
+              .from("markets")
+              .update({ sport_trading_state: "open" })
+              .eq("sport_event_id", sportEventId)
+              .in("market_mode", ["sport", "sport_live"]);
+          }
         }
 
         // Re-fetch updated row

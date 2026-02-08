@@ -5,20 +5,10 @@ import { ChevronDown } from "lucide-react";
 
 // ============ CATEGORIES DATA ============
 export const SPORT_SUBCATEGORIES = [
-  { id: "football", label: "Football" },
-  { id: "basketball", label: "Basketball" },
-  { id: "hockey", label: "Hockey" },
   { id: "soccer", label: "Soccer" },
+  { id: "basketball", label: "Basketball" },
   { id: "tennis", label: "Tennis" },
-  { id: "golf", label: "Golf" },
   { id: "mma", label: "MMA" },
-  { id: "cricket", label: "Cricket" },
-  { id: "baseball", label: "Baseball" },
-  { id: "boxing", label: "Boxing" },
-  { id: "chess", label: "Chess" },
-  { id: "esports", label: "Esports" },
-  { id: "motorsport", label: "Motorsport" },
-  { id: "olympics", label: "Olympics" },
 ] as const;
 
 export type SportSubcategoryId = (typeof SPORT_SUBCATEGORIES)[number]["id"];

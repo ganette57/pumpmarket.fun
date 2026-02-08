@@ -1285,10 +1285,12 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
   const showProposedBox = isProposed && !isResolvedOnChain;
   const showResolvedProofBox = isResolvedOnChain;
 
-  // ✅ Include isBlocked + sport trading state in marketClosed
-  const sportLocked = market.sportTradingState === "locked_by_sport";
-  const sportEnded = market.sportTradingState === "ended_by_sport";
-  const marketClosed = isResolvedOnChain || isProposed || ended || !!market.isBlocked || sportEnded;
+  // Sport lock logic: T-2 minutes before end_time, or finished = closed
+  const sportFinished = sportEvent?.status === "finished" || market.sportTradingState === "ended_by_sport";
+  const sportEndMs = sportEvent?.end_time ? new Date(sportEvent.end_time).getTime() : NaN;
+  const sportLockMs = Number.isFinite(sportEndMs) ? sportEndMs - 2 * 60_000 : NaN;
+  const sportLocked = !sportFinished && Number.isFinite(sportLockMs) && Date.now() >= sportLockMs;
+  const marketClosed = isResolvedOnChain || isProposed || ended || !!market.isBlocked || sportFinished || sportLocked;
 
   const endLabel = hasValidEnd
     ? new Date(market.resolutionTime * 1000).toLocaleString("en-US", {
@@ -1377,12 +1379,12 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
               )}
 
               {/* Sport trading state banners */}
-              {sportLocked && (
+              {sportLocked && !sportFinished && (
                 <div className="rounded-xl border border-yellow-500/40 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-200 flex items-center gap-2">
-                  <span className="text-yellow-400 font-bold">Locked</span> — Match in progress, trading paused
+                  <span className="text-yellow-400 font-bold">Locked</span> — Trading locked (match ending soon)
                 </div>
               )}
-              {sportEnded && (
+              {sportFinished && (
                 <div className="rounded-xl border border-gray-600 bg-gray-800/40 px-4 py-3 text-sm text-gray-300 flex items-center gap-2">
                   Match ended — trading closed
                 </div>
