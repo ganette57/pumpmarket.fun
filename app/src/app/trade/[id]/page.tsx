@@ -27,6 +27,7 @@ import { getMarketByAddress, recordTransaction, applyTradeToMarketInSupabase } f
 
 import { lamportsToSol, solToLamports, getUserPositionPDA, PLATFORM_WALLET } from "@/utils/solana";
 import { getActiveLiveSessionForMarket, type LiveSessionStatus } from "@/lib/liveSessions";
+import { getSportEvent, refreshSportEvent, type SportEvent } from "@/lib/sportEvents";
 
 import type { SocialLinks } from "@/components/SocialLinksForm";
 import { useCallback } from "react";
@@ -80,6 +81,12 @@ type UiMarket = {
   isBlocked?: boolean;
   blockedReason?: string | null;
   blockedAt?: string | null;
+
+  // Sport fields
+  marketMode?: string | null;
+  sportEventId?: string | null;
+  sportMeta?: Record<string, unknown> | null;
+  sportTradingState?: string | null;
 };
 
 type Derived = {
@@ -279,6 +286,102 @@ async function getMultipleAccountsInfoBatched(
     });
   }
   return res;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   SPORT SCORE CARD
+   ══════════════════════════════════════════════════════════════ */
+
+function sportStatusColor(s: string) {
+  if (s === "live") return "bg-red-500 text-white";
+  if (s === "finished") return "bg-gray-600 text-gray-200";
+  if (s === "cancelled" || s === "postponed") return "bg-yellow-600/80 text-yellow-100";
+  return "bg-blue-600/80 text-blue-100"; // scheduled
+}
+
+function formatScore(score: Record<string, unknown>, sport: string): string {
+  if (!score || !Object.keys(score).length) return "—";
+  if (sport === "tennis" && Array.isArray(score.sets)) {
+    return (score.sets as number[][]).map(s => s.join("-")).join(", ");
+  }
+  if (sport === "mma") {
+    const parts: string[] = [];
+    if (score.round != null) parts.push(`R${score.round}`);
+    if (score.method) parts.push(String(score.method));
+    return parts.join(" · ") || "—";
+  }
+  if (score.home != null && score.away != null) {
+    return `${score.home} – ${score.away}`;
+  }
+  return JSON.stringify(score);
+}
+
+function SportScoreCard({
+  event,
+  refreshing,
+  onRefresh,
+}: {
+  event: SportEvent;
+  refreshing: boolean;
+  onRefresh: () => void;
+}) {
+  const isLive = event.status === "live";
+  const isTerminal = ["finished", "cancelled", "postponed"].includes(event.status);
+
+  return (
+    <div className={`card-pump border ${isLive ? "border-red-500/50" : "border-white/10"}`}>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <span className={`px-2 py-0.5 rounded-full text-xs font-bold uppercase ${sportStatusColor(event.status)}`}>
+            {isLive && (
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-white mr-1.5 animate-pulse" />
+            )}
+            {event.status}
+          </span>
+          {event.league && (
+            <span className="text-xs text-gray-500">{event.league}</span>
+          )}
+        </div>
+        {!isTerminal && (
+          <button
+            onClick={onRefresh}
+            disabled={refreshing}
+            className="text-xs text-gray-400 hover:text-white transition disabled:opacity-40"
+          >
+            {refreshing ? "..." : "Refresh"}
+          </button>
+        )}
+      </div>
+
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex-1 text-right">
+          <span className="text-sm font-semibold text-white">{event.home_team || "Home"}</span>
+        </div>
+        <div className="text-center px-3">
+          <span className="text-lg font-bold text-pump-green">
+            {formatScore(event.score, event.sport)}
+          </span>
+        </div>
+        <div className="flex-1 text-left">
+          <span className="text-sm font-semibold text-white">{event.away_team || "Away"}</span>
+        </div>
+      </div>
+
+      {event.start_time && (
+        <div className="text-center mt-2 text-xs text-gray-500">
+          {new Date(event.start_time).toLocaleString("en-US", {
+            month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+          })}
+        </div>
+      )}
+
+      {event.last_update && (
+        <div className="text-center mt-1 text-[10px] text-gray-600">
+          Updated {new Date(event.last_update).toLocaleTimeString()}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -534,6 +637,8 @@ console.log("[SNAPSHOT] marketAddress =", marketAddress);
 
 // Live session for this market (for banner CTA)
 const [activeLiveSession, setActiveLiveSession] = useState<{ id: string; title: string; status: LiveSessionStatus } | null>(null);
+const [sportEvent, setSportEvent] = useState<SportEvent | null>(null);
+const [sportRefreshing, setSportRefreshing] = useState(false);
 
 // Related block (RIGHT column under TradingPanel)
 const [relatedTab, setRelatedTab] = useState<RelatedTab>("related");
@@ -626,6 +731,12 @@ let resolutionTime = Number.isFinite(endMs) ? Math.floor(endMs / 1000) : 0;
           isBlocked: !!supabaseMarket.is_blocked,
           blockedReason: supabaseMarket.blocked_reason ?? null,
           blockedAt: supabaseMarket.blocked_at ?? null,
+
+          // Sport fields
+          marketMode: (supabaseMarket as any).market_mode ?? null,
+          sportEventId: (supabaseMarket as any).sport_event_id ?? null,
+          sportMeta: (supabaseMarket as any).sport_meta ?? null,
+          sportTradingState: (supabaseMarket as any).sport_trading_state ?? null,
         };
   
 // --- On-chain snapshot merge (fast)
@@ -667,6 +778,33 @@ if (snap?.posAcc?.shares) {
       if (!id) return;
       getActiveLiveSessionForMarket(id).then(setActiveLiveSession).catch(() => {});
     }, [id]);
+
+    // Fetch sport event if market is sport-linked
+    useEffect(() => {
+      if (!market?.sportEventId) { setSportEvent(null); return; }
+      getSportEvent(market.sportEventId).then(setSportEvent).catch(() => {});
+    }, [market?.sportEventId]);
+
+    // Auto-refresh sport event every 30s while live
+    useEffect(() => {
+      if (!sportEvent || sportEvent.status !== "live" || !market?.sportEventId) return;
+      const iv = setInterval(async () => {
+        const updated = await refreshSportEvent(market.sportEventId!).catch(() => null);
+        if (updated) setSportEvent(updated);
+      }, 30_000);
+      return () => clearInterval(iv);
+    }, [sportEvent?.status, market?.sportEventId]);
+
+    const handleSportRefresh = useCallback(async () => {
+      if (!market?.sportEventId || sportRefreshing) return;
+      setSportRefreshing(true);
+      try {
+        const updated = await refreshSportEvent(market.sportEventId);
+        if (updated) setSportEvent(updated);
+      } finally {
+        setSportRefreshing(false);
+      }
+    }, [market?.sportEventId, sportRefreshing]);
 
     useEffect(() => {
       if (!id) return;
@@ -1147,8 +1285,10 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
   const showProposedBox = isProposed && !isResolvedOnChain;
   const showResolvedProofBox = isResolvedOnChain;
 
-  // ✅ Include isBlocked in marketClosed
-  const marketClosed = isResolvedOnChain || isProposed || ended || !!market.isBlocked;
+  // ✅ Include isBlocked + sport trading state in marketClosed
+  const sportLocked = market.sportTradingState === "locked_by_sport";
+  const sportEnded = market.sportTradingState === "ended_by_sport";
+  const marketClosed = isResolvedOnChain || isProposed || ended || !!market.isBlocked || sportEnded;
 
   const endLabel = hasValidEnd
     ? new Date(market.resolutionTime * 1000).toLocaleString("en-US", {
@@ -1225,6 +1365,27 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                     Watch Live
                   </span>
                 </Link>
+              )}
+
+              {/* Sport score card */}
+              {sportEvent && market.marketMode === "sport" && (
+                <SportScoreCard
+                  event={sportEvent}
+                  refreshing={sportRefreshing}
+                  onRefresh={handleSportRefresh}
+                />
+              )}
+
+              {/* Sport trading state banners */}
+              {sportLocked && (
+                <div className="rounded-xl border border-yellow-500/40 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-200 flex items-center gap-2">
+                  <span className="text-yellow-400 font-bold">Locked</span> — Match in progress, trading paused
+                </div>
+              )}
+              {sportEnded && (
+                <div className="rounded-xl border border-gray-600 bg-gray-800/40 px-4 py-3 text-sm text-gray-300 flex items-center gap-2">
+                  Match ended — trading closed
+                </div>
               )}
 
               {/* Market card */}

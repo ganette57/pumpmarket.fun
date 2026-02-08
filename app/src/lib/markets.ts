@@ -54,6 +54,12 @@ export type DbMarket = {
   blocked_reason?: string | null;
   blocked_at?: string | null;
   blocked_by?: string | null;
+
+  // sport market fields
+  market_mode?: string | null;
+  sport_event_id?: string | null;
+  sport_meta?: Record<string, unknown> | null;
+  sport_trading_state?: string | null;
 };
 
 export type RecordTxInput = {
@@ -162,6 +168,10 @@ export async function getMarketByAddress(marketAddress: string): Promise<DbMarke
       "blocked_reason",
       "blocked_at",
       "blocked_by",
+      "market_mode",
+      "sport_event_id",
+      "sport_meta",
+      "sport_trading_state",
     ].join(","),
     "id,market_address,creator,question,description,category,image_url,total_volume,end_date,resolved,market_type,outcome_names,outcome_supplies,yes_supply,no_supply",
     "id,market_address,creator,question,total_volume,end_date,resolved",
@@ -369,6 +379,11 @@ export type IndexMarketInput = {
 
   // optional
   total_volume?: number | null; // lamports
+
+  // sport market fields
+  market_mode?: string | null;
+  sport_event_id?: string | null;
+  sport_meta?: Record<string, unknown> | null;
 };
 
 export async function indexMarket(input: IndexMarketInput): Promise<void> {
@@ -402,6 +417,11 @@ export async function indexMarket(input: IndexMarketInput): Promise<void> {
     contested: false,
     contest_count: 0,
   };
+
+  // Sport fields (only included when present)
+  if (input.market_mode) payload.market_mode = input.market_mode;
+  if (input.sport_event_id) payload.sport_event_id = input.sport_event_id;
+  if (input.sport_meta) payload.sport_meta = input.sport_meta;
 
   // Upsert by market_address (requires unique index on market_address)
   const { error } = await supabase

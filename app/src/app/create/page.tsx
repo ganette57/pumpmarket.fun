@@ -18,6 +18,7 @@ import CategoryImagePlaceholder from "@/components/CategoryImagePlaceholder";
 
 import { useProgram } from "@/hooks/useProgram";
 import { indexMarket } from "@/lib/markets";
+import { createSportEvent } from "@/lib/sportEvents";
 import { sendSignedTx } from "@/lib/solanaSend";
 
 // Combined category type for create page
@@ -267,6 +268,11 @@ export default function CreateMarketPage() {
   const [resolutionSource, setResolutionSource] = useState<string>("official_league");
   const [proofLink, setProofLink] = useState<string>("");
 
+  // Sport event fields (for sport_events table)
+  const [sportHomeTeam, setSportHomeTeam] = useState("");
+  const [sportAwayTeam, setSportAwayTeam] = useState("");
+  const [sportType, setSportType] = useState<string>("soccer");
+
   // Check if current category is a sport
   const isSportsMarket = useMemo(() => {
     return category === "sports" || (category !== "" && isSportSubcategory(category));
@@ -489,6 +495,28 @@ export default function CreateMarketPage() {
       const isBinary = onchainType === 0 && onchainNames.length === 2;
       const fullDescription = buildFullDescription();
 
+      // If sport market, create sport_events row first
+      let sportEventId: string | undefined;
+      let sportMeta: Record<string, unknown> | undefined;
+      if (isSportsMarket && sportHomeTeam.trim() && sportAwayTeam.trim()) {
+        const evt = await createSportEvent({
+          provider: "manual",
+          provider_event_id: `manual_${marketKeypair.publicKey.toBase58()}`,
+          sport: sportType,
+          home_team: sportHomeTeam.trim(),
+          away_team: sportAwayTeam.trim(),
+          start_time: resolutionDate.toISOString(),
+          status: "scheduled",
+        });
+        sportEventId = evt.id;
+        sportMeta = {
+          sport: sportType,
+          home_team: sportHomeTeam.trim(),
+          away_team: sportAwayTeam.trim(),
+          start_time: resolutionDate.toISOString(),
+        };
+      }
+
       await indexMarket({
         market_address: marketKeypair.publicKey.toBase58(),
         question: question.slice(0, 200),
@@ -507,7 +535,11 @@ export default function CreateMarketPage() {
         no_supply: isBinary ? (onchainSupplies[1] ?? 0) : null,
 
         total_volume: 0,
-        resolved: false,
+
+        // Sport fields (undefined for normal markets — ignored by indexMarket)
+        market_mode: sportEventId ? "sport" : undefined,
+        sport_event_id: sportEventId,
+        sport_meta: sportMeta,
       } as any);
 
       setCreationStep("done");
@@ -604,6 +636,54 @@ export default function CreateMarketPage() {
                 dispute window may follow.
               </p>
             </InfoBox>
+          </div>
+        )}
+
+        {/* Sport Event Details */}
+        {isSportsMarket && (
+          <div className="mb-6 space-y-4">
+            <div>
+              <label className="block text-white font-semibold mb-2">Sport *</label>
+              <select
+                value={sportType}
+                onChange={(e) => setSportType(e.target.value)}
+                className="input-pump w-full"
+              >
+                <option value="soccer">Soccer</option>
+                <option value="basketball">Basketball</option>
+                <option value="american_football">American Football</option>
+                <option value="mma">MMA</option>
+                <option value="tennis">Tennis</option>
+              </select>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-white font-semibold mb-2">
+                  {sportType === "mma" || sportType === "tennis" ? "Player A *" : "Home Team *"}
+                </label>
+                <input
+                  type="text"
+                  value={sportHomeTeam}
+                  onChange={(e) => setSportHomeTeam(e.target.value)}
+                  className="input-pump w-full"
+                  placeholder={sportType === "mma" || sportType === "tennis" ? "e.g. Alcaraz" : "e.g. Real Madrid"}
+                  maxLength={100}
+                />
+              </div>
+              <div>
+                <label className="block text-white font-semibold mb-2">
+                  {sportType === "mma" || sportType === "tennis" ? "Player B *" : "Away Team *"}
+                </label>
+                <input
+                  type="text"
+                  value={sportAwayTeam}
+                  onChange={(e) => setSportAwayTeam(e.target.value)}
+                  className="input-pump w-full"
+                  placeholder={sportType === "mma" || sportType === "tennis" ? "e.g. Zverev" : "e.g. Barcelona"}
+                  maxLength={100}
+                />
+              </div>
+            </div>
           </div>
         )}
 
