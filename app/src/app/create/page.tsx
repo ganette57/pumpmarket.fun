@@ -282,11 +282,21 @@ export default function CreateMarketPage() {
   const [matchSearching, setMatchSearching] = useState(false);
   const [matchDropdownOpen, setMatchDropdownOpen] = useState(false);
   const matchSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const matchAbortRef = useRef<AbortController | null>(null);
+
+  // Sports mode: "match" (default for sport subcategories) or "general" (Sports General only)
+  const [sportsMode, setSportsMode] = useState<"match" | "general">("match");
 
   // Check if current category is a sport
   const isSportsMarket = useMemo(() => {
     return category === "sports" || (category !== "" && isSportSubcategory(category));
   }, [category]);
+
+  // Is this specifically the "Sports (General)" top-level category?
+  const isSportsGeneral = category === "sports";
+
+  // Should we show match-specific fields? (match picker, sport type, teams, match end time)
+  const isMatchMode = isSportsMarket && !(isSportsGeneral && sportsMode === "general");
 
   // On-chain defaults (hidden from user)
   const DEFAULT_B_SOL = 0.01;
@@ -294,17 +304,17 @@ export default function CreateMarketPage() {
   const DEFAULT_MAX_TRADE_SHARES = 5_000_000;
   const DEFAULT_COOLDOWN_SECONDS = 0;
 
-  // When switching to sports category, set default outcomes for match
+  // When switching to sports match category, set default outcomes
   useEffect(() => {
-    if (isSportsMarket && marketType === 0) {
+    if (isMatchMode && marketType === 0) {
       setOutcomeInputs(["Team A", "Team B"]);
     }
-  }, [isSportsMarket]);
+  }, [isMatchMode]);
 
   // when switching type: reset/ensure valid outcomes UI
   useEffect(() => {
     if (marketType === 0) {
-      if (isSportsMarket) {
+      if (isMatchMode) {
         setOutcomeInputs(["Team A", "Team B"]);
       } else {
         setOutcomeInputs(["YES", "NO"]);
@@ -316,14 +326,14 @@ export default function CreateMarketPage() {
         return ["Option 1", "Option 2"];
       });
     }
-  }, [marketType, isSportsMarket]);
+  }, [marketType, isMatchMode]);
 
   // sync: outcomeInputs -> outcomesText
   useEffect(() => {
     const txt = outcomesToText(outcomeInputs);
-    const defaultTxt = isSportsMarket ? "Team A\nTeam B" : "YES\nNO";
+    const defaultTxt = isMatchMode ? "Team A\nTeam B" : "YES\nNO";
     setOutcomesText(txt || (marketType === 0 ? defaultTxt : "Option 1\nOption 2"));
-  }, [outcomeInputs, marketType, isSportsMarket]);
+  }, [outcomeInputs, marketType, isMatchMode]);
 
   const outcomes = useMemo(() => parseOutcomes(outcomesText), [outcomesText]);
 
@@ -408,7 +418,7 @@ export default function CreateMarketPage() {
   function buildFullDescription(): string {
     let desc = description || "";
 
-    if (isSportsMarket) {
+    if (isMatchMode) {
       const parts: string[] = [];
 
       const sourceLabel = RESOLUTION_SOURCES.find((s) => s.value === resolutionSource)?.label || resolutionSource;
@@ -434,26 +444,47 @@ export default function CreateMarketPage() {
   function handleMatchSearch(q: string) {
     setMatchQuery(q);
     if (matchSearchTimer.current) clearTimeout(matchSearchTimer.current);
-    if (!q.trim()) {
+
+    // Cancel any in-flight request
+    if (matchAbortRef.current) {
+      matchAbortRef.current.abort();
+      matchAbortRef.current = null;
+    }
+
+    if (!q.trim() || q.trim().length < 3) {
       setMatchResults([]);
       setMatchDropdownOpen(false);
+      setMatchSearching(false);
       return;
     }
+
     setMatchSearching(true);
     matchSearchTimer.current = setTimeout(async () => {
+      const controller = new AbortController();
+      matchAbortRef.current = controller;
       try {
-        const res = await fetch(`/api/sports/search?q=${encodeURIComponent(q.trim())}`);
+        const res = await fetch("/api/sports/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ q: q.trim(), sport: sportType }),
+          signal: controller.signal,
+        });
         if (res.ok) {
           const json = await res.json();
           setMatchResults(json.matches || []);
           setMatchDropdownOpen(true);
         }
-      } catch {
-        setMatchResults([]);
+      } catch (e: any) {
+        if (e?.name !== "AbortError") {
+          setMatchResults([]);
+        }
       } finally {
-        setMatchSearching(false);
+        // Only clear searching if this is still the active controller
+        if (matchAbortRef.current === controller) {
+          setMatchSearching(false);
+        }
       }
-    }, 300);
+    }, 500);
   }
 
   function selectMatch(m: any) {
@@ -543,10 +574,11 @@ export default function CreateMarketPage() {
       const isBinary = onchainType === 0 && onchainNames.length === 2;
       const fullDescription = buildFullDescription();
 
-      // If sport market, create sport_events row via server endpoint
+      // If sport MATCH market, create sport_events row via server endpoint
+      // Skip for "general" sports questions (no match data)
       let sportEventId: string | undefined;
       let sportMeta: Record<string, unknown> | undefined;
-      if (isSportsMarket && sportHomeTeam.trim() && sportAwayTeam.trim()) {
+      if (isMatchMode && sportHomeTeam.trim() && sportAwayTeam.trim()) {
         const evt = await createSportEventServer({
           provider: sportProviderEventId ? "mock" : "manual",
           provider_event_id: sportProviderEventId || `manual_${marketKeypair.publicKey.toBase58()}`,
@@ -676,20 +708,48 @@ export default function CreateMarketPage() {
           )}
         </div>
 
-        {/* Sports Match Info Box */}
+        {/* Sports mode toggle (only for "Sports (General)" top-level) */}
+        {isSportsGeneral && (
+          <div className="mb-6">
+            <label className="block text-white font-semibold mb-2">Market Type</label>
+            <div className="grid grid-cols-2 gap-3">
+              <TypeCard
+                active={sportsMode === "match"}
+                onClick={() => setSportsMode("match")}
+                title="Match"
+                desc="Tied to a specific match with auto-lock."
+              />
+              <TypeCard
+                active={sportsMode === "general"}
+                onClick={() => setSportsMode("general")}
+                title="General"
+                desc="General sports question (e.g. medals, awards)."
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Sports Info Box */}
         {isSportsMarket && (
           <div className="mb-6">
             <InfoBox>
-              <p className="font-semibold mb-1">Sports Match Market</p>
-              <p>
-                Live trading enabled. Trading auto-locks 2 minutes before end time. After the match ends, you have 24h to propose the outcome.
-              </p>
+              {isMatchMode ? (
+                <>
+                  <p className="font-semibold mb-1">Sports Match Market</p>
+                  <p>Live trading enabled. Trading auto-locks 2 minutes before end time. After the match ends, you have 24h to propose the outcome.</p>
+                </>
+              ) : (
+                <>
+                  <p className="font-semibold mb-1">Sports Question</p>
+                  <p>General sports prediction market. Resolution works like a normal market — propose the outcome before the end date.</p>
+                </>
+              )}
             </InfoBox>
           </div>
         )}
 
         {/* Match Picker Search */}
-        {isSportsMarket && (
+        {isMatchMode && (
           <div className="mb-6 relative">
             <label className="block text-white font-semibold mb-2">Search a match (optional)</label>
             <input
@@ -731,7 +791,7 @@ export default function CreateMarketPage() {
         )}
 
         {/* Sport Event Details */}
-        {isSportsMarket && (
+        {isMatchMode && (
           <div className="mb-6 space-y-4">
             <div>
               <label className="block text-white font-semibold mb-2">Sport *</label>
@@ -781,7 +841,7 @@ export default function CreateMarketPage() {
         {/* Question / Match */}
         <div className="mb-6">
           <label className="block text-white font-semibold mb-2">
-            {isSportsMarket ? "Match *" : "Question *"}{" "}
+            {isMatchMode ? "Match *" : "Question *"}{" "}
             <span className="text-gray-500 font-normal text-sm ml-2">({question.length}/200)</span>
           </label>
           <input
@@ -791,7 +851,7 @@ export default function CreateMarketPage() {
             maxLength={200}
             className={`input-pump w-full ${questionError ? "input-error" : ""}`}
             placeholder={
-              isSportsMarket
+              isMatchMode
                 ? "e.g. Alcaraz vs Zverev - Australian Open Final"
                 : marketType === 0
                 ? "Will SOL reach $500 in 2025?"
@@ -804,7 +864,7 @@ export default function CreateMarketPage() {
         {/* Description / Notes */}
         <div className="mb-6">
           <label className="block text-white font-semibold mb-2">
-            {isSportsMarket ? "Notes (optional)" : "Description (optional)"}{" "}
+            {isMatchMode ? "Notes (optional)" : "Description (optional)"}{" "}
             <span className="text-gray-500 font-normal text-sm ml-2">({description.length}/500)</span>
           </label>
           <textarea
@@ -813,13 +873,13 @@ export default function CreateMarketPage() {
             maxLength={500}
             rows={3}
             className={`input-pump w-full ${descriptionError ? "input-error" : ""}`}
-            placeholder={isSportsMarket ? "Any additional context about the match..." : "Describe the resolution conditions..."}
+            placeholder={isMatchMode ? "Any additional context about the match..." : "Describe the resolution conditions..."}
           />
           {descriptionError && <p className="text-pump-red text-sm mt-2 font-semibold">❌ {descriptionError}</p>}
         </div>
 
         {/* Sports-specific: Resolution Source */}
-        {isSportsMarket && (
+        {isMatchMode && (
           <div className="mb-6">
             <label className="block text-white font-semibold mb-2">Resolution Source *</label>
             <select
@@ -838,7 +898,7 @@ export default function CreateMarketPage() {
         )}
 
         {/* Sports-specific: Proof Link */}
-        {isSportsMarket && (
+        {isMatchMode && (
           <div className="mb-6">
             <label className="block text-white font-semibold mb-2">Proof Link (recommended)</label>
             <input
@@ -860,13 +920,13 @@ export default function CreateMarketPage() {
               active={marketType === 0}
               onClick={() => setMarketType(0)}
               title="Binary"
-              desc={isSportsMarket ? "2 players/teams. Head-to-head." : "Exactly 2 outcomes (YES/NO)."}
+              desc={isMatchMode ? "2 players/teams. Head-to-head." : "Exactly 2 outcomes (YES/NO)."}
             />
             <TypeCard
               active={marketType === 1}
               onClick={() => setMarketType(1)}
               title="Multi-choice"
-              desc={isSportsMarket ? "Tournament winner, podium, etc." : "2–10 outcomes."}
+              desc={isMatchMode ? "Tournament winner, podium, etc." : "2–10 outcomes."}
             />
           </div>
         </div>
@@ -875,7 +935,7 @@ export default function CreateMarketPage() {
         <div className="mb-6">
           <div className="flex items-end justify-between gap-3 mb-2">
             <label className="block text-white font-semibold">
-              {isSportsMarket ? "Players / Teams *" : "Outcomes *"}{" "}
+              {isMatchMode ? "Players / Teams *" : "Outcomes *"}{" "}
               <span className="text-gray-500 font-normal text-sm ml-2">({marketType === 0 ? "must be 2" : "2 to 10"})</span>
             </label>
 
@@ -904,7 +964,7 @@ export default function CreateMarketPage() {
               return (
                 <div key={idx} className="flex items-center gap-2">
                   <div className="w-12 text-xs text-gray-500 font-mono flex-shrink-0">
-                    {marketType === 0 ? (isSportsMarket ? (idx === 0 ? "P1" : "P2") : idx === 0 ? "YES" : "NO") : `#${idx + 1}`}
+                    {marketType === 0 ? (isMatchMode ? (idx === 0 ? "P1" : "P2") : idx === 0 ? "YES" : "NO") : `#${idx + 1}`}
                   </div>
 
                   <input
@@ -912,7 +972,7 @@ export default function CreateMarketPage() {
                     onChange={(e) => updateOutcomeAt(idx, e.target.value)}
                     className={`input-pump w-full ${outcomesError ? "input-error" : ""}`}
                     placeholder={
-                      isSportsMarket
+                      isMatchMode
                         ? idx === 0
                           ? "e.g. Alcaraz"
                           : "e.g. Zverev"
@@ -1003,14 +1063,14 @@ export default function CreateMarketPage() {
         {/* End Date / Match End Time */}
         <div className="mb-6">
           <label className="block text-white font-semibold mb-2">
-            {isSportsMarket ? "Match End Time *" : "End Date & Time *"}
+            {isMatchMode ? "Match End Time *" : "End Date & Time *"}
           </label>
           <div className="relative">
             <DatePicker
-              selected={isSportsMarket && sportEndTime ? sportEndTime : resolutionDate}
+              selected={isMatchMode && sportEndTime ? sportEndTime : resolutionDate}
               onChange={(date: Date | null) => {
                 if (!date) return;
-                if (isSportsMarket) {
+                if (isMatchMode) {
                   setSportEndTime(date);
                   // Also push resolution date forward if needed
                   if (!resolutionDate || date > resolutionDate) {
@@ -1026,11 +1086,11 @@ export default function CreateMarketPage() {
               dateFormat="MMMM d, yyyy h:mm aa"
               minDate={new Date()}
               className="input-pump w-full pl-10"
-              placeholderText={isSportsMarket ? "Select match end time" : "Select end date and time"}
+              placeholderText={isMatchMode ? "Select match end time" : "Select end date and time"}
             />
             <Calendar className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-500 pointer-events-none" />
           </div>
-          {isSportsMarket && (
+          {isMatchMode && (
             <p className="text-xs text-gray-500 mt-2">Live trading enabled. Trading auto-locks 2 minutes before end time.</p>
           )}
         </div>
@@ -1040,8 +1100,8 @@ export default function CreateMarketPage() {
           <SocialLinksForm value={socialLinks} onChange={setSocialLinks} />
         </div>
 
-        {/* Cancellation Policy Warning (Sports only) */}
-        {isSportsMarket && (
+        {/* Cancellation Policy Warning (Match only) */}
+        {isMatchMode && (
           <div className="mb-6">
             <WarningBox>
               <p className="font-semibold mb-2">Cancellation Policy</p>

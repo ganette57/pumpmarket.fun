@@ -1,8 +1,36 @@
 import { NextResponse } from "next/server";
 import {
-  isAvailable as isApiSportsAvailable,
+  isAvailable as isSportapi7Available,
   searchMatches,
-} from "@/lib/sportsProviders/apiSportsProvider";
+} from "@/lib/sportsProviders/sportapi7Provider";
+
+// ---------------------------------------------------------------------------
+// In-memory TTL cache (60s)
+// ---------------------------------------------------------------------------
+
+const CACHE_TTL_MS = 60_000;
+const cache = new Map<string, { ts: number; data: any[] }>();
+
+function getCached(key: string): any[] | null {
+  const entry = cache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > CACHE_TTL_MS) {
+    cache.delete(key);
+    return null;
+  }
+  return entry.data;
+}
+
+function setCache(key: string, data: any[]) {
+  cache.set(key, { ts: Date.now(), data });
+  // Prune old entries (prevent unbounded growth)
+  if (cache.size > 200) {
+    const now = Date.now();
+    Array.from(cache.entries()).forEach(([k, v]) => {
+      if (now - v.ts > CACHE_TTL_MS) cache.delete(k);
+    });
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Mock fallback (used when RAPIDAPI_KEY is not set)
@@ -123,8 +151,11 @@ function buildMockMatches(): MockMatch[] {
   ];
 }
 
-function mockSearch(q: string): MockMatch[] {
-  const matches = buildMockMatches();
+function mockSearch(q: string, sport?: string): MockMatch[] {
+  let matches = buildMockMatches();
+  if (sport && sport !== "all") {
+    matches = matches.filter((m) => m.sport === sport);
+  }
   if (!q) return matches;
   const lq = q.toLowerCase();
   return matches.filter((m) => {
@@ -134,30 +165,46 @@ function mockSearch(q: string): MockMatch[] {
 }
 
 // ---------------------------------------------------------------------------
-// Route handler — supports both GET (legacy) and POST
+// Shared search logic
+// ---------------------------------------------------------------------------
+
+async function handleSearch(q: string, sport: string) {
+  // Min length 3 server-side
+  if (q.length < 3) {
+    return NextResponse.json({ matches: [] });
+  }
+
+  // No key => mock
+  if (!isSportapi7Available()) {
+    return NextResponse.json({ matches: mockSearch(q, sport) });
+  }
+
+  // Check cache
+  const cacheKey = `sport:${sport}:q:${q.toLowerCase()}`;
+  const cached = getCached(cacheKey);
+  if (cached) {
+    return NextResponse.json({ matches: cached });
+  }
+
+  try {
+    const matches = await searchMatches({ sport, q });
+    setCache(cacheKey, matches);
+    return NextResponse.json({ matches });
+  } catch (e: any) {
+    console.error("sports/search provider error, falling back to mock:", e?.message);
+    return NextResponse.json({ matches: mockSearch(q, sport) });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Route handlers — GET (legacy) and POST
 // ---------------------------------------------------------------------------
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const q = (searchParams.get("q") || "").trim();
   const sport = (searchParams.get("sport") || "soccer").trim();
-
-  // No key => mock
-  if (!isApiSportsAvailable()) {
-    return NextResponse.json({ matches: mockSearch(q) });
-  }
-
-  if (!q) {
-    return NextResponse.json({ matches: [] });
-  }
-
-  try {
-    const matches = await searchMatches({ sport, q });
-    return NextResponse.json({ matches });
-  } catch (e: any) {
-    console.error("sports/search provider error, falling back to mock:", e?.message);
-    return NextResponse.json({ matches: mockSearch(q) });
-  }
+  return handleSearch(q, sport);
 }
 
 export async function POST(req: Request) {
@@ -165,20 +212,8 @@ export async function POST(req: Request) {
     const body = await req.json();
     const q = String(body.q || "").trim();
     const sport = String(body.sport || "soccer").trim();
-
-    if (!isApiSportsAvailable()) {
-      return NextResponse.json({ matches: mockSearch(q) });
-    }
-
-    if (!q) {
-      return NextResponse.json({ matches: [] });
-    }
-
-    const matches = await searchMatches({ sport, q });
-    return NextResponse.json({ matches });
-  } catch (e: any) {
-    console.error("sports/search provider error, falling back to mock:", e?.message);
-    const q = "";
-    return NextResponse.json({ matches: mockSearch(q) });
+    return handleSearch(q, sport);
+  } catch {
+    return NextResponse.json({ matches: [] });
   }
 }
