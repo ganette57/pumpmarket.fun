@@ -1,6 +1,13 @@
 // src/lib/sportsProviders/sportapi7Provider.ts
 // Server-only: SportAPI7 (RapidAPI) provider for match search.
-// Kept deliberately simple — search only (no live score refresh yet).
+// SportAPI7 mirrors SofaScore's API structure.
+//
+// Real endpoints (verified from SofaScore SDK):
+//   /api/v1/search/all?q={query}&page=0       — search everything (events, teams, tournaments)
+//   /api/v1/search/teams?q={query}&page=0     — search teams only
+//   /api/v1/team/{teamId}/events/next/{page}  — upcoming events for a team
+//   /api/v1/sport/{slug}/scheduled-events/{YYYY-MM-DD} — events for a sport on a date
+//   /api/v1/sport/{slug}/events/live           — live events for a sport
 
 const DEBUG = process.env.SPORTS_DEBUG === "1";
 
@@ -37,7 +44,7 @@ function estimatedEndTime(startIso: string, sport: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Normalized types (must match existing UI expectations)
+// Normalized types (must match existing UI expectations — DO NOT CHANGE)
 // ---------------------------------------------------------------------------
 
 export type NormalizedMatch = {
@@ -53,6 +60,55 @@ export type NormalizedMatch = {
   label: string;
   raw: Record<string, unknown>;
 };
+
+// ---------------------------------------------------------------------------
+// Sport slug mapping: our internal names → SportAPI7 (SofaScore) slugs
+// ---------------------------------------------------------------------------
+
+const SPORT_SLUG: Record<string, string> = {
+  soccer: "football",
+  basketball: "basketball",
+  tennis: "tennis",
+  mma: "mma",
+  american_football: "american-football",
+};
+
+// Reverse: SportAPI7 slug → our internal name
+const SLUG_TO_SPORT: Record<string, string> = {
+  football: "soccer",
+  basketball: "basketball",
+  tennis: "tennis",
+  mma: "mma",
+  "american-football": "american_football",
+};
+
+// ---------------------------------------------------------------------------
+// Internal cache (30s TTL to avoid rate limits)
+// ---------------------------------------------------------------------------
+
+const CACHE_TTL_MS = 30_000;
+const searchCache = new Map<string, { ts: number; data: NormalizedMatch[] }>();
+
+function getCached(key: string): NormalizedMatch[] | null {
+  const entry = searchCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > CACHE_TTL_MS) {
+    searchCache.delete(key);
+    return null;
+  }
+  return entry.data;
+}
+
+function setCache(key: string, data: NormalizedMatch[]) {
+  searchCache.set(key, { ts: Date.now(), data });
+  // Prune stale entries
+  if (searchCache.size > 100) {
+    const now = Date.now();
+    Array.from(searchCache.entries()).forEach(([k, v]) => {
+      if (now - v.ts > CACHE_TTL_MS) searchCache.delete(k);
+    });
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Generic fetch helper
@@ -83,158 +139,201 @@ async function apiFetch(path: string): Promise<any> {
 }
 
 // ---------------------------------------------------------------------------
-// Sport ID mapping — SportAPI7 uses numeric category IDs
-// ---------------------------------------------------------------------------
-
-// SportAPI7 category IDs (from their docs / playground)
-const SPORT_CATEGORY: Record<string, number> = {
-  soccer: 1,
-  basketball: 2,
-  tennis: 5,
-  mma: 7,          // combat sports / MMA
-  american_football: 63,
-};
-
-// ---------------------------------------------------------------------------
 // Status normalization
 // ---------------------------------------------------------------------------
 
-function normalizeStatus(statusCode: number | string | undefined): "scheduled" | "live" | "finished" {
-  // SportAPI7 status codes: 0=not started, 6/7=in progress, 100=ended, etc.
-  // We're conservative: if unclear, default to "scheduled"
-  const code = Number(statusCode);
-  if (isNaN(code)) return "scheduled";
+function normalizeStatus(event: any): "scheduled" | "live" | "finished" {
+  // SofaScore status structure: { code: number, type: string, description: string }
+  const statusType = (event?.status?.type || "").toLowerCase();
+  if (statusType === "inprogress") return "live";
+  if (statusType === "finished") return "finished";
+  if (statusType === "notstarted") return "scheduled";
 
-  // Common across SportAPI7 event status codes:
-  // 0 = not started
-  // 6, 7, 31, 32, 41, 42 = in progress / various periods
-  // 100 = ended
-  // 70 = cancelled, 60 = postponed
-  if (code === 0) return "scheduled";
-  if (code === 100 || code === 70 || code === 60 || code === 110 || code === 120) return "finished";
-  if (code > 0 && code < 100) return "live";
+  // Fallback: check numeric code
+  const code = Number(event?.status?.code);
+  if (!isNaN(code)) {
+    if (code === 0) return "scheduled";
+    if (code === 100 || code >= 60) return "finished";
+    if (code > 0 && code < 60) return "live";
+  }
+
   return "scheduled";
 }
 
 // ---------------------------------------------------------------------------
-// Search: uses /api/v1/search/multi (multi-sport search)
+// Event → NormalizedMatch converter
 // ---------------------------------------------------------------------------
 
-async function searchMulti(q: string, sport: string): Promise<NormalizedMatch[]> {
-  // SportAPI7 multi-search endpoint
-  const encodedQ = encodeURIComponent(q);
-  const data = await apiFetch(`/api/v1/search/multi?q=${encodedQ}`);
+function eventToMatch(event: any, sport: string): NormalizedMatch | null {
+  if (!event) return null;
 
-  dbg("searchMulti response type:", typeof data, "keys:", data ? Object.keys(data) : "null");
+  const homeTeam = event?.homeTeam?.name || event?.homeTeam?.shortName || "";
+  const awayTeam = event?.awayTeam?.name || event?.awayTeam?.shortName || "";
+  if (!homeTeam && !awayTeam) return null;
 
-  // data.results or data.data may contain sections by type
+  const eventId = event?.id || event?.customId || `${Date.now()}_${Math.random()}`;
+  const league = event?.tournament?.name || event?.season?.name || "";
+  const startTs = event?.startTimestamp;
+  const startIso = startTs
+    ? new Date(startTs * 1000).toISOString()
+    : new Date().toISOString();
+
+  return {
+    provider: "sportapi7",
+    provider_event_id: `sportapi7_${sport}_${eventId}`,
+    sport,
+    league,
+    home_team: homeTeam,
+    away_team: awayTeam,
+    start_time: startIso,
+    end_time: estimatedEndTime(startIso, sport),
+    status: normalizeStatus(event),
+    label: `${homeTeam} vs ${awayTeam}`,
+    raw: {
+      sportapi7_event_id: eventId,
+      tournament_id: event?.tournament?.uniqueTournament?.id ?? event?.tournament?.id,
+      status_code: event?.status?.code,
+      status_type: event?.status?.type,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Strategy 1: Global search via /api/v1/search/all
+// Returns events + teams. We extract events matching our sport, then
+// for matched teams we fetch their next events.
+// ---------------------------------------------------------------------------
+
+async function searchViaGlobal(q: string, sport: string): Promise<NormalizedMatch[]> {
+  const encoded = encodeURIComponent(q);
+  const data = await apiFetch(`/api/v1/search/all?q=${encoded}&page=0`);
+
+  dbg("search/all keys:", data ? Object.keys(data) : "null");
+
   const results: NormalizedMatch[] = [];
-  const targetCategoryId = SPORT_CATEGORY[sport];
+  const targetSlug = SPORT_SLUG[sport] || "football";
 
-  // SportAPI7 returns: { results: [ { type: "event", entity: {...} }, ... ] }
-  // or it may return sections grouped by type
-  const items: any[] = Array.isArray(data?.results) ? data.results : [];
+  // Extract direct event results
+  const events: any[] = Array.isArray(data?.events) ? data.events : [];
+  for (const item of events) {
+    const sportSlug = item?.tournament?.category?.sport?.slug || "";
+    if (sportSlug && sportSlug !== targetSlug) continue;
+    const match = eventToMatch(item, sport);
+    if (match) results.push(match);
+  }
 
-  for (const item of items) {
-    // Items can be events or teams; we want events
-    if (item?.type !== "event") continue;
-    const e = item?.entity;
-    if (!e) continue;
+  // If we got events, return them
+  if (results.length > 0) return results.slice(0, 25);
 
-    // Filter by sport category if we know the mapping
-    const eventCategoryId = e?.tournament?.category?.sport?.id ?? e?.category?.sport?.id;
-    if (targetCategoryId && eventCategoryId && eventCategoryId !== targetCategoryId) continue;
+  // Otherwise, try to find teams and fetch their next events
+  const teams: any[] = Array.isArray(data?.teams) ? data.teams : [];
+  for (const team of teams) {
+    const teamSportSlug = team?.sport?.slug || "";
+    if (teamSportSlug && teamSportSlug !== targetSlug) continue;
+    const teamId = team?.id;
+    if (!teamId) continue;
 
-    const homeTeam = e?.homeTeam?.name || e?.homeTeam?.shortName || "Home";
-    const awayTeam = e?.awayTeam?.name || e?.awayTeam?.shortName || "Away";
-    const eventId = e?.id || e?.eventId || `${Date.now()}`;
-    const league = e?.tournament?.name || e?.league?.name || "";
-    const startTs = e?.startTimestamp;
-    const startIso = startTs ? new Date(startTs * 1000).toISOString() : new Date().toISOString();
-    const statusCode = e?.status?.code ?? e?.statusCode;
-
-    results.push({
-      provider: "sportapi7",
-      provider_event_id: `sportapi7_${sport}_${eventId}`,
-      sport,
-      league,
-      home_team: homeTeam,
-      away_team: awayTeam,
-      start_time: startIso,
-      end_time: estimatedEndTime(startIso, sport),
-      status: normalizeStatus(statusCode),
-      label: `${homeTeam} vs ${awayTeam}`,
-      raw: { sportapi7_event_id: eventId, category_id: eventCategoryId, status_code: statusCode },
-    });
+    try {
+      const teamEvents = await apiFetch(`/api/v1/team/${teamId}/events/next/0`);
+      const nextEvents: any[] = Array.isArray(teamEvents?.events) ? teamEvents.events : [];
+      for (const evt of nextEvents) {
+        const match = eventToMatch(evt, sport);
+        if (match) results.push(match);
+      }
+      if (results.length > 0) break; // Got results from first matching team
+    } catch (e: any) {
+      dbg("team events fetch failed for team", teamId, ":", e?.message);
+    }
   }
 
   return results.slice(0, 25);
 }
 
 // ---------------------------------------------------------------------------
-// Fallback: search by team name within a sport category
+// Strategy 2: Team search via /api/v1/search/teams, then fetch team events
 // ---------------------------------------------------------------------------
 
-async function searchByTeam(q: string, sport: string): Promise<NormalizedMatch[]> {
-  const categoryId = SPORT_CATEGORY[sport];
-  if (!categoryId) return [];
+async function searchViaTeams(q: string, sport: string): Promise<NormalizedMatch[]> {
+  const encoded = encodeURIComponent(q);
+  const targetSlug = SPORT_SLUG[sport] || "football";
 
-  // Try team search
-  const encodedQ = encodeURIComponent(q);
+  const data = await apiFetch(`/api/v1/search/teams?q=${encoded}&page=0`);
+  dbg("search/teams keys:", data ? Object.keys(data) : "null");
+
+  const teams: any[] = Array.isArray(data?.teams) ? data.teams : [];
+  if (!teams.length) return [];
+
+  // Find first team matching our sport
   let teamId: number | null = null;
-
-  try {
-    const teamsData = await apiFetch(`/api/v1/search/teams?q=${encodedQ}`);
-    const teams: any[] = Array.isArray(teamsData?.results) ? teamsData.results : [];
-
-    // Find first team matching our sport
-    for (const t of teams) {
-      const team = t?.entity || t;
-      const teamSportId = team?.sport?.id ?? team?.tournament?.category?.sport?.id;
-      if (teamSportId === categoryId || !teamSportId) {
-        teamId = team?.id;
-        break;
-      }
+  for (const team of teams) {
+    const teamSportSlug = team?.sport?.slug || "";
+    if (!teamSportSlug || teamSportSlug === targetSlug) {
+      teamId = team?.id;
+      break;
     }
-  } catch (e: any) {
-    dbg("team search failed:", e?.message);
-    return [];
   }
 
   if (!teamId) return [];
 
   // Fetch upcoming events for team
-  try {
-    const eventsData = await apiFetch(`/api/v1/team/${teamId}/events/next/0`);
-    const events: any[] = Array.isArray(eventsData?.events) ? eventsData.events : [];
+  const eventsData = await apiFetch(`/api/v1/team/${teamId}/events/next/0`);
+  const events: any[] = Array.isArray(eventsData?.events) ? eventsData.events : [];
 
-    return events.map((e: any) => {
-      const homeTeam = e?.homeTeam?.name || "Home";
-      const awayTeam = e?.awayTeam?.name || "Away";
-      const eventId = e?.id || `${Date.now()}`;
-      const league = e?.tournament?.name || "";
-      const startTs = e?.startTimestamp;
-      const startIso = startTs ? new Date(startTs * 1000).toISOString() : new Date().toISOString();
-      const statusCode = e?.status?.code;
-
-      return {
-        provider: "sportapi7",
-        provider_event_id: `sportapi7_${sport}_${eventId}`,
-        sport,
-        league,
-        home_team: homeTeam,
-        away_team: awayTeam,
-        start_time: startIso,
-        end_time: estimatedEndTime(startIso, sport),
-        status: normalizeStatus(statusCode),
-        label: `${homeTeam} vs ${awayTeam}`,
-        raw: { sportapi7_event_id: eventId, team_id: teamId, status_code: statusCode },
-      } as NormalizedMatch;
-    }).slice(0, 25);
-  } catch (e: any) {
-    dbg("team events fetch failed:", e?.message);
-    return [];
+  const results: NormalizedMatch[] = [];
+  for (const evt of events) {
+    const match = eventToMatch(evt, sport);
+    if (match) results.push(match);
   }
+  return results.slice(0, 25);
+}
+
+// ---------------------------------------------------------------------------
+// Strategy 3: Scheduled events for today + tomorrow, filter by q substring
+// This is the most reliable fallback — no search endpoint needed.
+// ---------------------------------------------------------------------------
+
+function formatDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+async function searchViaSchedule(q: string, sport: string): Promise<NormalizedMatch[]> {
+  const slug = SPORT_SLUG[sport];
+  if (!slug) return [];
+
+  const lq = q.toLowerCase();
+  const results: NormalizedMatch[] = [];
+  const today = new Date();
+
+  // Fetch today + next 2 days
+  for (let offset = 0; offset <= 2 && results.length < 25; offset++) {
+    const d = new Date(today.getTime() + offset * 86400_000);
+    const dateStr = formatDate(d);
+
+    try {
+      const data = await apiFetch(`/api/v1/sport/${slug}/scheduled-events/${dateStr}`);
+      const events: any[] = Array.isArray(data?.events) ? data.events : [];
+      dbg(`scheduled-events ${slug}/${dateStr}: ${events.length} events`);
+
+      for (const evt of events) {
+        const homeName = (evt?.homeTeam?.name || "").toLowerCase();
+        const awayName = (evt?.awayTeam?.name || "").toLowerCase();
+        const leagueName = (evt?.tournament?.name || "").toLowerCase();
+
+        if (homeName.includes(lq) || awayName.includes(lq) || leagueName.includes(lq)) {
+          const match = eventToMatch(evt, sport);
+          if (match) results.push(match);
+        }
+      }
+    } catch (e: any) {
+      dbg(`scheduled-events ${slug}/${dateStr} failed:`, e?.message);
+      // Don't throw — just skip this date
+    }
+  }
+
+  return results.slice(0, 25);
 }
 
 // ---------------------------------------------------------------------------
@@ -246,23 +345,51 @@ export async function searchMatches(params: {
   q: string;
 }): Promise<NormalizedMatch[]> {
   const { sport, q } = params;
-  if (!q.trim()) return [];
+  const trimmed = q.trim();
+  if (trimmed.length < 3) return [];
 
-  // Try multi-search first
-  try {
-    const multiResults = await searchMulti(q, sport);
-    if (multiResults.length > 0) return multiResults;
-  } catch (e: any) {
-    dbg("multi-search failed, trying team search:", e?.message);
+  // Check internal cache
+  const cacheKey = `${sport}:${trimmed.toLowerCase()}`;
+  const cached = getCached(cacheKey);
+  if (cached) {
+    dbg("cache hit:", cacheKey);
+    return cached;
   }
 
-  // Fallback to team-based search
+  // Strategy 1: Global search (search/all)
   try {
-    return await searchByTeam(q, sport);
+    const results = await searchViaGlobal(trimmed, sport);
+    if (results.length > 0) {
+      setCache(cacheKey, results);
+      return results;
+    }
   } catch (e: any) {
-    dbg("team search also failed:", e?.message);
-    return [];
+    dbg("search/all failed:", e?.message);
   }
+
+  // Strategy 2: Team search + next events
+  try {
+    const results = await searchViaTeams(trimmed, sport);
+    if (results.length > 0) {
+      setCache(cacheKey, results);
+      return results;
+    }
+  } catch (e: any) {
+    dbg("search/teams failed:", e?.message);
+  }
+
+  // Strategy 3: Scheduled events with substring filter (most reliable)
+  try {
+    const results = await searchViaSchedule(trimmed, sport);
+    setCache(cacheKey, results);
+    return results;
+  } catch (e: any) {
+    dbg("scheduled-events fallback failed:", e?.message);
+  }
+
+  // Everything failed — return empty (don't throw)
+  setCache(cacheKey, []);
+  return [];
 }
 
 // ---------------------------------------------------------------------------
