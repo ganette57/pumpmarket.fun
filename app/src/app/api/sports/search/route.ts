@@ -1,4 +1,12 @@
 import { NextResponse } from "next/server";
+import {
+  isAvailable as isApiSportsAvailable,
+  searchMatches,
+} from "@/lib/sportsProviders/apiSportsProvider";
+
+// ---------------------------------------------------------------------------
+// Mock fallback (used when RAPIDAPI_KEY is not set)
+// ---------------------------------------------------------------------------
 
 type MockMatch = {
   provider: string;
@@ -101,23 +109,76 @@ function buildMockMatches(): MockMatch[] {
       start_time: futureISO(72),
       end_time: futureISO(72.5),
     },
+    // American Football
+    {
+      provider: "mock",
+      provider_event_id: "mock_chiefs_eagles",
+      sport: "american_football",
+      league: "NFL",
+      home_team: "Kansas City Chiefs",
+      away_team: "Philadelphia Eagles",
+      start_time: futureISO(60),
+      end_time: futureISO(63.5),
+    },
   ];
 }
 
+function mockSearch(q: string): MockMatch[] {
+  const matches = buildMockMatches();
+  if (!q) return matches;
+  const lq = q.toLowerCase();
+  return matches.filter((m) => {
+    const haystack = `${m.home_team} ${m.away_team} ${m.league} ${m.sport}`.toLowerCase();
+    return haystack.includes(lq);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Route handler — supports both GET (legacy) and POST
+// ---------------------------------------------------------------------------
+
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
-  const q = (searchParams.get("q") || "").toLowerCase().trim();
+  const q = (searchParams.get("q") || "").trim();
+  const sport = (searchParams.get("sport") || "soccer").trim();
 
-  const matches = buildMockMatches();
-
-  if (!q) {
-    return NextResponse.json({ matches });
+  // No key => mock
+  if (!isApiSportsAvailable()) {
+    return NextResponse.json({ matches: mockSearch(q) });
   }
 
-  const filtered = matches.filter((m) => {
-    const haystack = `${m.home_team} ${m.away_team} ${m.league} ${m.sport}`.toLowerCase();
-    return haystack.includes(q);
-  });
+  if (!q) {
+    return NextResponse.json({ matches: [] });
+  }
 
-  return NextResponse.json({ matches: filtered });
+  try {
+    const matches = await searchMatches({ sport, q });
+    return NextResponse.json({ matches });
+  } catch (e: any) {
+    console.error("sports/search provider error, falling back to mock:", e?.message);
+    return NextResponse.json({ matches: mockSearch(q) });
+  }
+}
+
+export async function POST(req: Request) {
+  try {
+    const body = await req.json();
+    const q = String(body.q || "").trim();
+    const sport = String(body.sport || "soccer").trim();
+
+    if (!isApiSportsAvailable()) {
+      return NextResponse.json({ matches: mockSearch(q) });
+    }
+
+    if (!q) {
+      return NextResponse.json({ matches: [] });
+    }
+
+    const matches = await searchMatches({ sport, q });
+    return NextResponse.json({ matches });
+  } catch (e: any) {
+    console.error("sports/search provider error, falling back to mock:", e?.message);
+    const q = "";
+    return NextResponse.json({ matches: mockSearch(q) });
+  }
 }

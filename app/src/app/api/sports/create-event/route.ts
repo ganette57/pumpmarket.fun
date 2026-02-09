@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServer";
+import {
+  isAvailable as isApiSportsAvailable,
+  fetchEvent,
+} from "@/lib/sportsProviders/apiSportsProvider";
 
 export async function POST(req: Request) {
   try {
@@ -21,21 +25,56 @@ export async function POST(req: Request) {
       );
     }
 
+    // If provider_event_id looks like an API-Sports ID, try to fetch enriched data
+    let enriched: {
+      status?: string;
+      score?: Record<string, unknown>;
+      raw?: Record<string, unknown>;
+      league?: string | null;
+      start_time?: string | null;
+      end_time?: string | null;
+    } | null = null;
+
+    if (
+      provider_event_id &&
+      !provider_event_id.startsWith("mock_") &&
+      !provider_event_id.startsWith("manual_") &&
+      isApiSportsAvailable()
+    ) {
+      try {
+        const apiResult = await fetchEvent(provider_event_id, sport);
+        if (apiResult) {
+          enriched = {
+            status: apiResult.status,
+            score: apiResult.score,
+            raw: apiResult.raw,
+            league: apiResult.league || league,
+            start_time: apiResult.start_time || start_time,
+            end_time: apiResult.end_time || end_time,
+          };
+        }
+      } catch (e: any) {
+        console.error("create-event enrichment error (continuing with basic data):", e?.message);
+      }
+    }
+
     const supabase = supabaseServer();
 
     const { data, error } = await supabase
       .from("sport_events")
       .insert({
-        provider,
+        provider: enriched ? "api-sports" : provider,
         provider_event_id: provider_event_id || `manual_${Date.now()}`,
         sport,
-        league,
+        league: enriched?.league ?? league,
         home_team,
         away_team,
-        start_time,
-        end_time,
-        status: "scheduled",
-        score: {},
+        start_time: enriched?.start_time ?? start_time,
+        end_time: enriched?.end_time ?? end_time,
+        status: enriched?.status ?? "scheduled",
+        score: enriched?.score ?? {},
+        raw: enriched?.raw ?? null,
+        last_update: enriched ? new Date().toISOString() : null,
       })
       .select("*")
       .single();

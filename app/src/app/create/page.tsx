@@ -744,6 +744,7 @@ export default function CreateMarketPage() {
                 <option value="basketball">Basketball</option>
                 <option value="tennis">Tennis</option>
                 <option value="mma">MMA</option>
+                <option value="american_football">American Football</option>
               </select>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

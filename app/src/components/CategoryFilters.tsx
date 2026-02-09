@@ -9,6 +9,7 @@ export const SPORT_SUBCATEGORIES = [
   { id: "basketball", label: "Basketball" },
   { id: "tennis", label: "Tennis" },
   { id: "mma", label: "MMA" },
+  { id: "american_football", label: "American Football" },
 ] as const;
 
 export type SportSubcategoryId = (typeof SPORT_SUBCATEGORIES)[number]["id"];
