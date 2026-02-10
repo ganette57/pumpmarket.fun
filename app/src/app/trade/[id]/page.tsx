@@ -1267,7 +1267,14 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
 
   const { marketType, names, supplies, percentages, isBinaryStyle, missingOutcomes } = derived;
 
-  const nowSec = Math.floor(Date.now() / 1000);
+  // Client-side timer: update `now` every 15s so status badges auto-transition
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const iv = setInterval(() => setNowMs(Date.now()), 15_000);
+    return () => clearInterval(iv);
+  }, []);
+
+  const nowSec = Math.floor(nowMs / 1000);
   const hasValidEnd = Number.isFinite(market.resolutionTime) && market.resolutionTime > 0;
   const ended = hasValidEnd ? nowSec >= market.resolutionTime : false;
 
@@ -1285,11 +1292,32 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
   const showProposedBox = isProposed && !isResolvedOnChain;
   const showResolvedProofBox = isResolvedOnChain;
 
-  // Sport lock logic: T-2 minutes before end_time, or finished = closed
+  // Sport status: scheduled → live → locked → finished
+  // Read sportStartTime from sportMeta or sportEvent
+  const sportStartMs = (() => {
+    const raw = sportEvent?.start_time || (market.sportMeta as any)?.start_time;
+    if (!raw) return NaN;
+    const t = new Date(raw).getTime();
+    return Number.isFinite(t) ? t : NaN;
+  })();
+
   const sportFinished = sportEvent?.status === "finished" || market.sportTradingState === "ended_by_sport";
   const sportEndMs = sportEvent?.end_time ? new Date(sportEvent.end_time).getTime() : NaN;
   const sportLockMs = Number.isFinite(sportEndMs) ? sportEndMs - 2 * 60_000 : NaN;
-  const sportLocked = !sportFinished && Number.isFinite(sportLockMs) && Date.now() >= sportLockMs;
+  const sportLocked = !sportFinished && Number.isFinite(sportLockMs) && nowMs >= sportLockMs;
+
+  // Compute sport phase: scheduled | live | locked | finished
+  const sportPhase: "scheduled" | "live" | "locked" | "finished" | null = (() => {
+    if (!market.marketMode || market.marketMode !== "sport") return null;
+    if (sportFinished) return "finished";
+    if (sportLocked) return "locked";
+    if (Number.isFinite(sportStartMs) && nowMs >= sportStartMs) return "live";
+    if (Number.isFinite(sportStartMs) && nowMs < sportStartMs) return "scheduled";
+    // Fallback: if we have end but no start, use ended check
+    if (ended) return "finished";
+    return "scheduled";
+  })();
+
   const marketClosed = isResolvedOnChain || isProposed || ended || !!market.isBlocked || sportFinished || sportLocked;
 
   const endLabel = hasValidEnd
@@ -1379,12 +1407,12 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
               )}
 
               {/* Sport trading state banners */}
-              {sportLocked && !sportFinished && (
+              {sportPhase === "locked" && (
                 <div className="rounded-xl border border-yellow-500/40 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-200 flex items-center gap-2">
-                  <span className="text-yellow-400 font-bold">Locked</span> — Trading locked (match ending soon)
+                  <span className="text-yellow-400 font-bold">Trading closed (T-2)</span> — Match ending soon, trading locked
                 </div>
               )}
-              {sportFinished && (
+              {sportPhase === "finished" && (
                 <div className="rounded-xl border border-gray-600 bg-gray-800/40 px-4 py-3 text-sm text-gray-300 flex items-center gap-2">
                   Match ended — trading closed
                 </div>
@@ -1443,10 +1471,28 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                   <div>{endLabel}</div>
   
                   <div className="ml-auto text-xs text-gray-500 flex items-center gap-2">
-                    {/* ✅ Show blocked badge */}
+                    {/* Blocked badge */}
                     {market.isBlocked && (
                       <span className="px-2 py-1 rounded-full border border-red-600/40 bg-red-600/20 text-red-400">
-                        🚫 Blocked
+                        Blocked
+                      </span>
+                    )}
+
+                    {/* Sport phase badges */}
+                    {!market.isBlocked && sportPhase === "scheduled" && !showProposedBox && !showResolvedProofBox && (
+                      <span className="px-2 py-1 rounded-full border border-blue-500/40 bg-blue-500/10 text-blue-400">
+                        Scheduled
+                      </span>
+                    )}
+                    {!market.isBlocked && sportPhase === "live" && !showProposedBox && !showResolvedProofBox && (
+                      <span className="px-2 py-1 rounded-full border border-red-500/40 bg-red-500/10 text-red-400 flex items-center gap-1">
+                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                        Live
+                      </span>
+                    )}
+                    {!market.isBlocked && sportPhase === "locked" && !showProposedBox && !showResolvedProofBox && (
+                      <span className="px-2 py-1 rounded-full border border-yellow-500/40 bg-yellow-500/10 text-yellow-400">
+                        Trading closed (T-2)
                       </span>
                     )}
 
@@ -1455,7 +1501,7 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                         Proposed
                       </span>
                     )}
-  
+
                     {showResolvedProofBox && (
                       <span className="px-2 py-1 rounded-full border border-gray-600 bg-gray-800/40 text-green-400">
                         Resolved

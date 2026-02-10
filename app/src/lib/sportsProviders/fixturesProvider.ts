@@ -2,8 +2,8 @@
 // Server-only: Fixture list provider adapter.
 //
 // Selects the backend provider based on FIXTURES_PROVIDER env var:
-//   "odds_feed" — live data from Odds Feed (RapidAPI)
-//   "mock"      — built-in mock fixtures (default when no RAPIDAPI_KEY)
+//   "api_football" — live data from API-Football (v3.football.api-sports.io)
+//   "mock"         — built-in mock fixtures (default when no APISPORTS_KEY)
 //
 // Exports:
 //   isAvailable(): boolean
@@ -11,11 +11,6 @@
 //
 // Never throws — catches everything and returns [].
 // end_time = estimated match end − 2 minutes (T-2 auto-end rule).
-
-import {
-  isAvailable as isOddsFeedAvailable,
-  listUpcomingMatches as oddsFeedListUpcoming,
-} from "./oddsFeedProvider";
 
 // Re-export the NormalizedMatch type from oddsFeedProvider
 export type { NormalizedMatch } from "./oddsFeedProvider";
@@ -70,23 +65,27 @@ function setCache(key: string, data: NormalizedMatch[]) {
 // Provider selection
 // ---------------------------------------------------------------------------
 
-type ProviderName = "mock" | "odds_feed";
+type ProviderName = "mock" | "api_football";
+
+function getApiSportsKey(): string | null {
+  return process.env.APISPORTS_KEY || null;
+}
 
 function getProviderName(): ProviderName {
   const env = (process.env.FIXTURES_PROVIDER || "").trim().toLowerCase();
-  if (env === "odds_feed" || env === "odds-feed") return "odds_feed";
+  if (env === "api_football" || env === "api-football") return "api_football";
   if (env === "mock") return "mock";
-  // Auto-detect: use odds_feed if RAPIDAPI_KEY is set
-  if (isOddsFeedAvailable()) return "odds_feed";
+  // Auto-detect: use api_football if APISPORTS_KEY is set
+  if (getApiSportsKey()) return "api_football";
   return "mock";
 }
 
 export function isAvailable(): boolean {
-  return getProviderName() === "odds_feed" && isOddsFeedAvailable();
+  return getProviderName() === "api_football" && !!getApiSportsKey();
 }
 
 // ---------------------------------------------------------------------------
-// Mock fixtures (spread across 7 days, all sports)
+// Default match durations (for estimated end_time)
 // ---------------------------------------------------------------------------
 
 const DURATION_MS: Record<string, number> = {
@@ -96,6 +95,145 @@ const DURATION_MS: Record<string, number> = {
   mma: 2 * 3600_000,                              // 2h
   american_football: 3 * 3600_000 + 30 * 60_000,  // 3h30m
 };
+
+function estimatedEndTime(startIso: string, sport: string): string {
+  const ms = DURATION_MS[sport] || DURATION_MS.soccer;
+  return new Date(new Date(startIso).getTime() + ms).toISOString();
+}
+
+// ---------------------------------------------------------------------------
+// API-Football provider
+// Base: https://v3.football.api-sports.io
+// Auth: x-apisports-key header
+// Endpoint: GET /fixtures?from=YYYY-MM-DD&to=YYYY-MM-DD&timezone=...
+// ---------------------------------------------------------------------------
+
+const API_FOOTBALL_HOST = "v3.football.api-sports.io";
+
+function formatDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function normalizeApiFootballStatus(short: string): "scheduled" | "live" | "finished" {
+  const s = (short || "").toUpperCase();
+  // Finished statuses
+  if (s === "FT" || s === "AET" || s === "PEN" || s === "AWD" || s === "WO") return "finished";
+  // Live statuses
+  if (s === "1H" || s === "HT" || s === "2H" || s === "ET" || s === "BT" || s === "P" || s === "LIVE" || s === "INT") return "live";
+  // Cancelled / postponed treated as scheduled for listing
+  if (s === "CANC" || s === "PST" || s === "ABD" || s === "SUSP") return "scheduled";
+  // Default: scheduled (TBD, NS, etc.)
+  return "scheduled";
+}
+
+async function apiFootballFetch(fromDate: string, toDate: string): Promise<NormalizedMatch[]> {
+  const key = getApiSportsKey();
+  if (!key) throw new Error("APISPORTS_KEY not set");
+
+  const tz = process.env.APISPORTS_TZ || "Europe/Paris";
+  const url = `https://${API_FOOTBALL_HOST}/fixtures?from=${fromDate}&to=${toDate}&timezone=${encodeURIComponent(tz)}`;
+  dbg("api-football fetch", url);
+
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      "x-apisports-key": key,
+    },
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    dbg("api-football error", res.status, text.slice(0, 300));
+    throw new Error(`API-Football ${res.status}: ${text.slice(0, 200)}`);
+  }
+
+  const json = await res.json();
+
+  // Response: { response: [...] }
+  const fixtures: any[] = Array.isArray(json?.response) ? json.response : [];
+  dbg(`api-football: ${fixtures.length} fixtures from ${fromDate} to ${toDate}`);
+
+  const results: NormalizedMatch[] = [];
+  for (const f of fixtures) {
+    const match = apiFootballToMatch(f);
+    if (match) results.push(match);
+  }
+  return results;
+}
+
+function apiFootballToMatch(f: any): NormalizedMatch | null {
+  if (!f) return null;
+
+  const fixture = f.fixture;
+  const teams = f.teams;
+  const league = f.league;
+
+  const homeTeam = teams?.home?.name || "";
+  const awayTeam = teams?.away?.name || "";
+  if (!homeTeam && !awayTeam) return null;
+
+  const fixtureId = fixture?.id;
+  if (!fixtureId) return null;
+
+  const startIso = fixture?.date
+    ? new Date(fixture.date).toISOString()
+    : new Date().toISOString();
+
+  const leagueName = league?.name || "";
+  const statusShort = fixture?.status?.short || "";
+
+  return {
+    provider: "api-football",
+    provider_event_id: String(fixtureId),
+    sport: "soccer",
+    league: leagueName,
+    home_team: homeTeam,
+    away_team: awayTeam,
+    start_time: startIso,
+    end_time: estimatedEndTime(startIso, "soccer"),
+    status: normalizeApiFootballStatus(statusShort),
+    label: `${homeTeam} vs ${awayTeam}`,
+    raw: {
+      api_football_id: fixtureId,
+      league_id: league?.id,
+      country: league?.country,
+      round: league?.round,
+      venue: fixture?.venue?.name,
+    },
+  };
+}
+
+async function apiFootballListUpcoming(params: {
+  sport: string;
+  days: number;
+  base_date?: string;
+}): Promise<NormalizedMatch[]> {
+  const { days, base_date } = params;
+  // API-Football only supports soccer — return empty for other sports
+  // (future: add other sport APIs)
+  if (params.sport !== "soccer") {
+    dbg("api-football only supports soccer, returning []");
+    return [];
+  }
+
+  const baseDate = base_date ? new Date(base_date) : new Date();
+  const fromDate = formatDate(baseDate);
+  const toDate = formatDate(new Date(baseDate.getTime() + (days - 1) * 86400_000));
+
+  try {
+    return await apiFootballFetch(fromDate, toDate);
+  } catch (e: any) {
+    dbg("api-football fetch failed:", e?.message);
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mock fixtures (spread across 7 days, all sports)
+// ---------------------------------------------------------------------------
 
 function futureISO(hoursFromNow: number): string {
   return new Date(Date.now() + hoursFromNow * 3600_000).toISOString();
@@ -270,16 +408,16 @@ export async function listUpcomingMatches(params: {
   if (provider === "mock") {
     result = mockMatchList(sport);
   } else {
-    // odds_feed provider
+    // api_football provider
     try {
-      const raw = await oddsFeedListUpcoming({ sport, days, base_date });
-      // Apply T-2 rule to end_time from odds-feed results
+      const raw = await apiFootballListUpcoming({ sport, days, base_date });
+      // Apply T-2 rule to end_time
       result = raw.map((m) => ({
         ...m,
         end_time: applyT2(m.end_time),
       }));
     } catch (e: any) {
-      dbg("odds_feed failed, falling back to mock:", e?.message);
+      dbg("api_football failed, falling back to mock:", e?.message);
       result = mockMatchList(sport);
     }
   }
