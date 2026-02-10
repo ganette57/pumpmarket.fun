@@ -283,7 +283,6 @@ export default function CreateMarketPage() {
   const [fixturesLoaded, setFixturesLoaded] = useState(false);
   const [fixtureFilter, setFixtureFilter] = useState("");
   const [fixtureError, setFixtureError] = useState("");
-  const fixtureAbortRef = useRef<AbortController | null>(null);
 
   // Sports mode: "match" (default for sport subcategories) or "general" (Sports General only)
   const [sportsMode, setSportsMode] = useState<"match" | "general">("match");
@@ -443,24 +442,15 @@ export default function CreateMarketPage() {
   }
 
   async function handleLoadFixtures() {
-    // Cancel any in-flight request
-    if (fixtureAbortRef.current) {
-      fixtureAbortRef.current.abort();
-      fixtureAbortRef.current = null;
-    }
-
+    if (fixturesLoading) return;
     setFixturesLoading(true);
     setFixtureError("");
-
-    const controller = new AbortController();
-    fixtureAbortRef.current = controller;
 
     try {
       const res = await fetch("/api/sports/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sport: sportType }),
-        signal: controller.signal,
       });
 
       if (res.status === 429) {
@@ -479,14 +469,10 @@ export default function CreateMarketPage() {
       } else {
         setFixtureError("Failed to load matches.");
       }
-    } catch (e: any) {
-      if (e?.name !== "AbortError") {
-        setFixtureError("Failed to load matches.");
-      }
+    } catch {
+      setFixtureError("Failed to load matches.");
     } finally {
-      if (fixtureAbortRef.current === controller) {
-        setFixturesLoading(false);
-      }
+      setFixturesLoading(false);
     }
   }
 
@@ -528,6 +514,26 @@ export default function CreateMarketPage() {
       setFixtureError("");
     }
   }, [sportType]);
+
+  // Client-side filtered fixtures + grouped by day
+  const fixturesByDay = useMemo(() => {
+    const filtered = fixtures.filter((m: any) => {
+      if (!fixtureFilter.trim()) return true;
+      const lq = fixtureFilter.toLowerCase();
+      const hay = `${m.home_team} ${m.away_team} ${m.league}`.toLowerCase();
+      return hay.includes(lq);
+    });
+    const groups: { label: string; matches: any[] }[] = [];
+    const dayMap = new Map<string, any[]>();
+    for (const m of filtered) {
+      const d = new Date(m.start_time);
+      const key = d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+      if (!dayMap.has(key)) dayMap.set(key, []);
+      dayMap.get(key)!.push(m);
+    }
+    dayMap.forEach((matches, label) => groups.push({ label, matches }));
+    return groups;
+  }, [fixtures, fixtureFilter]);
 
   async function handleCreateMarket() {
     if (!canSubmit || !publicKey || !program) return;
@@ -866,41 +872,45 @@ export default function CreateMarketPage() {
                   />
                 </div>
 
-                {/* Scrollable list */}
-                <div className="max-h-72 overflow-y-auto border border-white/10 rounded-xl bg-pump-gray">
-                  {fixtures
-                    .filter((m: any) => {
-                      if (!fixtureFilter.trim()) return true;
-                      const lq = fixtureFilter.toLowerCase();
-                      const hay = `${m.home_team} ${m.away_team} ${m.league}`.toLowerCase();
-                      return hay.includes(lq);
-                    })
-                    .map((m: any) => {
-                      const d = new Date(m.start_time);
-                      const dateStr = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-                      const timeStr = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
-                      return (
-                        <button
-                          key={m.provider_event_id}
-                          type="button"
-                          onClick={() => selectMatch(m)}
-                          className="w-full text-left px-4 py-3 hover:bg-white/5 transition border-b border-white/5 last:border-0"
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-sm font-medium text-white truncate">
-                              {m.home_team} vs {m.away_team}
-                            </span>
-                            <span className="text-[10px] font-mono text-gray-500 flex-shrink-0 bg-white/5 px-1.5 py-0.5 rounded">
-                              {dateStr}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            <span className="text-xs text-gray-400 truncate">{m.league}</span>
-                            <span className="text-[10px] text-gray-500">{timeStr}</span>
-                          </div>
-                        </button>
-                      );
-                    })}
+                {/* Scrollable list grouped by day */}
+                <div className="max-h-80 overflow-y-auto border border-white/10 rounded-xl bg-pump-gray">
+                  {fixturesByDay.length === 0 && (
+                    <p className="text-xs text-gray-500 text-center py-4">No matches match your filter.</p>
+                  )}
+                  {fixturesByDay.map((group) => (
+                    <div key={group.label}>
+                      {/* Day header */}
+                      <div className="sticky top-0 z-10 px-4 py-1.5 bg-pump-dark/90 border-b border-white/10 backdrop-blur-sm">
+                        <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
+                          {group.label}
+                        </span>
+                      </div>
+                      {group.matches.map((m: any) => {
+                        const d = new Date(m.start_time);
+                        const timeStr = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+                        return (
+                          <button
+                            key={m.provider_event_id}
+                            type="button"
+                            onClick={() => selectMatch(m)}
+                            className="w-full text-left px-4 py-3 hover:bg-white/5 transition border-b border-white/5 last:border-0"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-sm font-medium text-white truncate">
+                                {m.home_team} vs {m.away_team}
+                              </span>
+                              <span className="text-[10px] font-mono text-gray-500 flex-shrink-0 bg-white/5 px-1.5 py-0.5 rounded">
+                                {timeStr}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2 mt-0.5">
+                              <span className="text-xs text-gray-400 truncate">{m.league}</span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ))}
                 </div>
 
                 {/* Reload button */}

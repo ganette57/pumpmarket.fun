@@ -40,6 +40,33 @@ function applyT2(endIso: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Internal cache — 15 min TTL
+// ---------------------------------------------------------------------------
+
+const CACHE_TTL_MS = 15 * 60_000;
+const fixtureCache = new Map<string, { ts: number; data: NormalizedMatch[] }>();
+
+function getCached(key: string): NormalizedMatch[] | null {
+  const entry = fixtureCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > CACHE_TTL_MS) {
+    fixtureCache.delete(key);
+    return null;
+  }
+  return entry.data;
+}
+
+function setCache(key: string, data: NormalizedMatch[]) {
+  fixtureCache.set(key, { ts: Date.now(), data });
+  if (fixtureCache.size > 50) {
+    const now = Date.now();
+    Array.from(fixtureCache.entries()).forEach(([k, v]) => {
+      if (now - v.ts > CACHE_TTL_MS) fixtureCache.delete(k);
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Provider selection
 // ---------------------------------------------------------------------------
 
@@ -62,7 +89,6 @@ export function isAvailable(): boolean {
 // Mock fixtures (spread across 7 days, all sports)
 // ---------------------------------------------------------------------------
 
-// Default match durations in ms (for estimated end_time)
 const DURATION_MS: Record<string, number> = {
   soccer: 2 * 3600_000 + 15 * 60_000,           // 2h15m
   basketball: 2 * 3600_000 + 30 * 60_000,        // 2h30m
@@ -78,7 +104,7 @@ function futureISO(hoursFromNow: number): string {
 function futureEndISO(hoursFromNow: number, sport: string): string {
   const durationMs = DURATION_MS[sport] || DURATION_MS.soccer;
   const startMs = Date.now() + hoursFromNow * 3600_000;
-  // Apply T-2: end_time = start + duration - 2 min
+  // T-2: end_time = start + duration - 2 min
   return new Date(startMs + durationMs - T2_MS).toISOString();
 }
 
@@ -211,13 +237,15 @@ function mockMatchList(sport?: string): NormalizedMatch[] {
   if (sport && sport !== "all") {
     matches = matches.filter((m) => m.sport === sport);
   }
-  return matches;
+  // Sort by start_time ascending
+  matches.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
+  return matches.slice(0, 400);
 }
 
 // ---------------------------------------------------------------------------
 // listUpcomingMatches — the ONLY public function for fetching fixtures.
 // Returns NormalizedMatch[] sorted by start_time, with T-2 applied to end_time.
-// Never throws.
+// Hard cap: 400 matches. Never throws.
 // ---------------------------------------------------------------------------
 
 export async function listUpcomingMatches(params: {
@@ -227,22 +255,40 @@ export async function listUpcomingMatches(params: {
 }): Promise<NormalizedMatch[]> {
   const { sport, days = 7, base_date } = params;
   const provider = getProviderName();
+
+  const cacheKey = `fixtures:${provider}:${sport}:${base_date || "today"}:${days}`;
+  const cached = getCached(cacheKey);
+  if (cached) {
+    dbg("cache hit:", cacheKey, `(${cached.length} matches)`);
+    return cached;
+  }
+
   dbg("listUpcomingMatches", { provider, sport, days, base_date });
 
+  let result: NormalizedMatch[];
+
   if (provider === "mock") {
-    return mockMatchList(sport);
+    result = mockMatchList(sport);
+  } else {
+    // odds_feed provider
+    try {
+      const raw = await oddsFeedListUpcoming({ sport, days, base_date });
+      // Apply T-2 rule to end_time from odds-feed results
+      result = raw.map((m) => ({
+        ...m,
+        end_time: applyT2(m.end_time),
+      }));
+    } catch (e: any) {
+      dbg("odds_feed failed, falling back to mock:", e?.message);
+      result = mockMatchList(sport);
+    }
   }
 
-  // odds_feed provider
-  try {
-    const raw = await oddsFeedListUpcoming({ sport, days, base_date });
-    // Apply T-2 rule to end_time from odds-feed results
-    return raw.map((m) => ({
-      ...m,
-      end_time: applyT2(m.end_time),
-    }));
-  } catch (e: any) {
-    dbg("odds_feed failed, falling back to mock:", e?.message);
-    return mockMatchList(sport);
-  }
+  // Sort + hard cap
+  result.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
+  result = result.slice(0, 400);
+
+  setCache(cacheKey, result);
+  dbg(`result: ${result.length} matches`);
+  return result;
 }
