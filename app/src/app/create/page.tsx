@@ -276,12 +276,11 @@ export default function CreateMarketPage() {
   const [sportLeague, setSportLeague] = useState("");
   const [sportProviderEventId, setSportProviderEventId] = useState("");
 
-  // Match search
-  const [matchQuery, setMatchQuery] = useState("");
+  // Provider linking (button-click-only — no keystroke search)
   const [matchResults, setMatchResults] = useState<any[]>([]);
   const [matchSearching, setMatchSearching] = useState(false);
   const [matchDropdownOpen, setMatchDropdownOpen] = useState(false);
-  const matchSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [matchError, setMatchError] = useState<string>("");
   const matchAbortRef = useRef<AbortController | null>(null);
 
   // Sports mode: "match" (default for sport subcategories) or "general" (Sports General only)
@@ -441,9 +440,13 @@ export default function CreateMarketPage() {
     setCreationError(null);
   }
 
-  function handleMatchSearch(q: string) {
-    setMatchQuery(q);
-    if (matchSearchTimer.current) clearTimeout(matchSearchTimer.current);
+  async function handleFindMatch() {
+    // Build query from home/away team names
+    const q = [sportHomeTeam.trim(), sportAwayTeam.trim()].filter(Boolean).join(" ");
+    if (q.length < 3) {
+      setMatchError("Enter at least one team/player name first.");
+      return;
+    }
 
     // Cancel any in-flight request
     if (matchAbortRef.current) {
@@ -451,40 +454,52 @@ export default function CreateMarketPage() {
       matchAbortRef.current = null;
     }
 
-    if (!q.trim() || q.trim().length < 3) {
-      setMatchResults([]);
-      setMatchDropdownOpen(false);
-      setMatchSearching(false);
-      return;
-    }
-
     setMatchSearching(true);
-    matchSearchTimer.current = setTimeout(async () => {
-      const controller = new AbortController();
-      matchAbortRef.current = controller;
-      try {
-        const res = await fetch("/api/sports/search", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ q: q.trim(), sport: sportType }),
-          signal: controller.signal,
-        });
-        if (res.ok) {
-          const json = await res.json();
-          setMatchResults(json.matches || []);
-          setMatchDropdownOpen(true);
-        }
-      } catch (e: any) {
-        if (e?.name !== "AbortError") {
-          setMatchResults([]);
-        }
-      } finally {
-        // Only clear searching if this is still the active controller
-        if (matchAbortRef.current === controller) {
-          setMatchSearching(false);
-        }
+    setMatchError("");
+    setMatchResults([]);
+    setMatchDropdownOpen(false);
+
+    const controller = new AbortController();
+    matchAbortRef.current = controller;
+
+    try {
+      const res = await fetch("/api/sports/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          q,
+          sport: sportType,
+          start_time: resolutionDate ? resolutionDate.toISOString() : undefined,
+        }),
+        signal: controller.signal,
+      });
+
+      if (res.status === 429) {
+        setMatchError("Rate limit reached. Try again later.");
+        return;
       }
-    }, 500);
+
+      if (res.ok) {
+        const json = await res.json();
+        const matches = json.matches || [];
+        setMatchResults(matches);
+        if (matches.length > 0) {
+          setMatchDropdownOpen(true);
+        } else {
+          setMatchError("No match found. You can still create the market manually.");
+        }
+      } else {
+        setMatchError("Search failed. You can still create the market manually.");
+      }
+    } catch (e: any) {
+      if (e?.name !== "AbortError") {
+        setMatchError("Search failed. You can still create the market manually.");
+      }
+    } finally {
+      if (matchAbortRef.current === controller) {
+        setMatchSearching(false);
+      }
+    }
   }
 
   function selectMatch(m: any) {
@@ -497,7 +512,7 @@ export default function CreateMarketPage() {
     if (m.end_time) setSportEndTime(new Date(m.end_time));
     setQuestion(`${m.home_team} vs ${m.away_team}${m.league ? ` - ${m.league}` : ""}`);
     setMatchDropdownOpen(false);
-    setMatchQuery(`${m.home_team} vs ${m.away_team}`);
+    setMatchError("");
   }
 
   async function handleCreateMarket() {
@@ -580,7 +595,7 @@ export default function CreateMarketPage() {
       let sportMeta: Record<string, unknown> | undefined;
       if (isMatchMode && sportHomeTeam.trim() && sportAwayTeam.trim()) {
         const evt = await createSportEventServer({
-          provider: sportProviderEventId ? "mock" : "manual",
+          provider: sportProviderEventId ? "odds-feed" : "manual",
           provider_event_id: sportProviderEventId || `manual_${marketKeypair.publicKey.toBase58()}`,
           sport: sportType,
           home_team: sportHomeTeam.trim(),
@@ -748,48 +763,6 @@ export default function CreateMarketPage() {
           </div>
         )}
 
-        {/* Match Picker Search */}
-        {isMatchMode && (
-          <div className="mb-6 relative">
-            <label className="block text-white font-semibold mb-2">Search a match (optional)</label>
-            <input
-              type="text"
-              value={matchQuery}
-              onChange={(e) => handleMatchSearch(e.target.value)}
-              onFocus={() => matchResults.length > 0 && setMatchDropdownOpen(true)}
-              onBlur={() => setTimeout(() => setMatchDropdownOpen(false), 200)}
-              className="input-pump w-full"
-              placeholder="e.g. PSG, Lakers, Alcaraz..."
-            />
-            {matchSearching && (
-              <span className="absolute right-3 top-[42px] text-xs text-gray-500">Searching...</span>
-            )}
-            {matchDropdownOpen && matchResults.length > 0 && (
-              <div className="absolute z-50 left-0 right-0 mt-1 bg-pump-gray border border-white/10 rounded-xl max-h-64 overflow-y-auto shadow-2xl">
-                {matchResults.map((m: any) => (
-                  <button
-                    key={m.provider_event_id}
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => selectMatch(m)}
-                    className="w-full text-left px-4 py-3 hover:bg-white/5 transition border-b border-white/5 last:border-0"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium text-white">
-                        {m.home_team} vs {m.away_team}
-                      </span>
-                      <span className="text-xs text-gray-500 ml-2">{m.sport}</span>
-                    </div>
-                    <div className="text-xs text-gray-400 mt-0.5">
-                      {m.league} &middot; {new Date(m.start_time).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
         {/* Sport Event Details */}
         {isMatchMode && (
           <div className="mb-6 space-y-4">
@@ -835,6 +808,82 @@ export default function CreateMarketPage() {
                 />
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Link to Provider (button-click only — no keystroke search) */}
+        {isMatchMode && (
+          <div className="mb-6 relative">
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-white font-semibold">Link to provider (optional)</label>
+              {sportProviderEventId && (
+                <span className="text-xs font-medium text-pump-green flex items-center gap-1">
+                  <CheckCircle className="w-3.5 h-3.5" /> Linked
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-gray-500 mb-3">
+              Click below to find this match in our database. This enables live score tracking.
+            </p>
+            <button
+              type="button"
+              onClick={handleFindMatch}
+              disabled={matchSearching || (!sportHomeTeam.trim() && !sportAwayTeam.trim())}
+              className={[
+                "px-4 py-2 rounded-lg text-sm font-semibold transition flex items-center gap-2",
+                matchSearching || (!sportHomeTeam.trim() && !sportAwayTeam.trim())
+                  ? "bg-gray-700 text-gray-400 cursor-not-allowed"
+                  : "bg-white/10 text-white border border-white/20 hover:bg-white/15 hover:border-white/30",
+              ].join(" ")}
+            >
+              {matchSearching ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Searching...
+                </>
+              ) : (
+                "Find match in provider"
+              )}
+            </button>
+            {matchError && (
+              <p className="text-xs text-yellow-400 mt-2">{matchError}</p>
+            )}
+            {sportProviderEventId && !matchDropdownOpen && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSportProviderEventId("");
+                  setMatchResults([]);
+                  setMatchError("");
+                }}
+                className="text-xs text-gray-500 hover:text-gray-300 mt-2 underline"
+              >
+                Unlink
+              </button>
+            )}
+            {matchDropdownOpen && matchResults.length > 0 && (
+              <div className="absolute z-50 left-0 right-0 mt-2 bg-pump-gray border border-white/10 rounded-xl max-h-64 overflow-y-auto shadow-2xl">
+                {matchResults.map((m: any) => (
+                  <button
+                    key={m.provider_event_id}
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => selectMatch(m)}
+                    className="w-full text-left px-4 py-3 hover:bg-white/5 transition border-b border-white/5 last:border-0"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-white">
+                        {m.home_team} vs {m.away_team}
+                      </span>
+                      <span className="text-xs text-gray-500 ml-2">{m.sport}</span>
+                    </div>
+                    <div className="text-xs text-gray-400 mt-0.5">
+                      {m.league} &middot; {new Date(m.start_time).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
 

@@ -1,10 +1,10 @@
 # RapidAPI Sports Provider Setup
 
-## Current Provider: SportAPI7
+## Current Provider: Odds Feed
 
-We use **SportAPI7** (`sportapi7.p.rapidapi.com`) as the primary sports data provider for match search. This is a multi-sport API that covers soccer, basketball, tennis, MMA, and American football through a single subscription.
+We use **Odds Feed** (`odds-feed.p.rapidapi.com`) as the primary sports data provider for match linking. This is a multi-sport API that covers soccer, basketball, tennis, MMA, and American football through a single subscription.
 
-> **Note:** The previous API-Sports provider (api-football-v1, api-basketball, etc.) required separate subscriptions per sport and had pending approval issues. SportAPI7 replaces it for search. The legacy `apiSportsProvider.ts` is still used by `/api/sports/refresh-one` and `/api/sports/create-event` for live score refresh — it will be migrated in a future pass.
+> **Strategy:** Users create their market manually (sport, teams, dates), then optionally click "Find match in provider" to link to a provider event via a single API call. This avoids keystroke-based live search and stays within the 500 req/month free tier.
 
 ## Required Environment Variables
 
@@ -14,16 +14,33 @@ We use **SportAPI7** (`sportapi7.p.rapidapi.com`) as the primary sports data pro
 | `SPORTS_DEBUG` | No | `0` | Set to `1` to enable debug logging for provider calls |
 | `SPORTS_REFRESH_TOKEN` | No | — | Admin token for server-side refresh polling |
 
-SportAPI7 uses a single host: `sportapi7.p.rapidapi.com` (hardcoded, no env override needed).
+Odds Feed uses a single host: `odds-feed.p.rapidapi.com` (hardcoded, no env override needed).
 
 ## RapidAPI Subscription
 
-Subscribe to **SportAPI7** on RapidAPI:
-- URL: https://rapidapi.com/fluis26/api/sportapi7
+Subscribe to **Odds Feed** on RapidAPI:
+- URL: https://rapidapi.com/tipsters/api/odds-feed
+- Free tier: 500 requests/month
 - Endpoints used:
-  - `GET /api/v1/search/multi?q=` — multi-sport search (events + teams)
-  - `GET /api/v1/search/teams?q=` — team search (fallback)
-  - `GET /api/v1/team/{teamId}/events/next/0` — upcoming events for a team
+  - `GET /v1/events/list?sport_id={id}&day={YYYY-MM-DD}&page=1` — events for a sport on a date
+
+### Sport ID Mapping
+
+| Our internal name | Odds Feed sport_id |
+|---|---|
+| soccer | 1 |
+| tennis | 2 |
+| basketball | 3 |
+| mma | 4 |
+| american_football | 12 |
+
+## How It Works
+
+1. User fills in sport type, home team, away team, and match date on the Create page
+2. User clicks "Find match in provider" → ONE POST to `/api/sports/search`
+3. Server calls Odds Feed `/v1/events/list` for that sport + date, filters by team name substring
+4. Results shown in dropdown → user selects a match → `provider_event_id` stored
+5. If no match found, user can still create the market manually (provider = "manual")
 
 ## Testing
 
@@ -32,7 +49,7 @@ Subscribe to **SportAPI7** on RapidAPI:
 ```bash
 curl -X POST http://localhost:3000/api/sports/search \
   -H "Content-Type: application/json" \
-  -d '{"q": "PSG", "sport": "soccer"}'
+  -d '{"q": "PSG", "sport": "soccer", "start_time": "2026-02-15T20:00:00.000Z"}'
 ```
 
 ### Search with curl (GET, legacy)
@@ -47,8 +64,8 @@ curl "http://localhost:3000/api/sports/search?q=PSG&sport=soccer"
 {
   "matches": [
     {
-      "provider": "sportapi7",
-      "provider_event_id": "sportapi7_soccer_12345",
+      "provider": "odds-feed",
+      "provider_event_id": "oddsfeed_soccer_12345",
       "sport": "soccer",
       "league": "Ligue 1",
       "home_team": "PSG",
@@ -63,12 +80,11 @@ curl "http://localhost:3000/api/sports/search?q=PSG&sport=soccer"
 }
 ```
 
-## Rate Limits & Caching
+## Caching
 
-- **Client-side:** Debounced at 500ms, minimum 3 characters before searching.
-- **Server-side:** 60-second in-memory TTL cache per `sport:q` pair.
-- SportAPI7 free tier: ~100 requests/day. Paid tiers have higher limits.
-- The admin refresh endpoint (`/api/sports/refresh-one` with `x-refresh-token`) still uses the legacy API-Sports provider for live score updates. Run via cron every 30-60s during live events.
+- **Server-side (route):** 60-second in-memory TTL cache per `sport:q:start_time` tuple.
+- **Provider-side:** 60-second internal TTL cache to avoid duplicate API calls.
+- No client-side debounce needed — search only fires on explicit button click.
 
 ## Fallback Behavior
 
@@ -79,14 +95,22 @@ If `RAPIDAPI_KEY` is not set:
 
 The app works fully in development without a RapidAPI key.
 
+## Provider Field Values
+
+| Value | Meaning |
+|---|---|
+| `odds-feed` | Match linked to Odds Feed provider event |
+| `manual` | Market created without provider linking |
+| `mock` | Mock data (dev only, no API key) |
+
 ## Legacy: API-Sports Provider
 
-The files below still use the old API-Sports multi-host provider and are NOT yet migrated to SportAPI7:
+The files below still use the old API-Sports multi-host provider and are NOT yet migrated:
 - `app/src/lib/sportsProviders/apiSportsProvider.ts` — used by refresh-one and create-event
 - `app/src/app/api/sports/refresh-one/route.ts`
 - `app/src/app/api/sports/create-event/route.ts`
 
-These will be updated once SportAPI7 event-by-ID fetch is confirmed working.
+These will be updated once Odds Feed event-by-ID fetch is confirmed working.
 
 ### Legacy env vars (only needed for refresh/create-event enrichment)
 

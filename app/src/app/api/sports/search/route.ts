@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import {
-  isAvailable as isSportapi7Available,
+  isAvailable as isOddsFeedAvailable,
   searchMatches,
-} from "@/lib/sportsProviders/sportapi7Provider";
+} from "@/lib/sportsProviders/oddsFeedProvider";
 
 // ---------------------------------------------------------------------------
 // In-memory TTL cache (60s)
@@ -168,26 +168,26 @@ function mockSearch(q: string, sport?: string): MockMatch[] {
 // Shared search logic
 // ---------------------------------------------------------------------------
 
-async function handleSearch(q: string, sport: string) {
+async function handleSearch(q: string, sport: string, start_time?: string) {
   // Min length 3 server-side
   if (q.length < 3) {
     return NextResponse.json({ matches: [] });
   }
 
   // No key => mock
-  if (!isSportapi7Available()) {
+  if (!isOddsFeedAvailable()) {
     return NextResponse.json({ matches: mockSearch(q, sport) });
   }
 
   // Check cache
-  const cacheKey = `sport:${sport}:q:${q.toLowerCase()}`;
+  const cacheKey = `sport:${sport}:q:${q.toLowerCase()}:st:${start_time || ""}`;
   const cached = getCached(cacheKey);
   if (cached) {
     return NextResponse.json({ matches: cached });
   }
 
   try {
-    const matches = await searchMatches({ sport, q });
+    const matches = await searchMatches({ sport, q, start_time });
     setCache(cacheKey, matches);
     return NextResponse.json({ matches });
   } catch (e: any) {
@@ -212,7 +212,8 @@ export async function POST(req: Request) {
     const body = await req.json();
     const q = String(body.q || "").trim();
     const sport = String(body.sport || "soccer").trim();
-    return handleSearch(q, sport);
+    const start_time = body.start_time ? String(body.start_time) : undefined;
+    return handleSearch(q, sport, start_time);
   } catch {
     return NextResponse.json({ matches: [] });
   }
