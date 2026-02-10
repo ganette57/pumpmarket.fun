@@ -275,6 +275,7 @@ export default function CreateMarketPage() {
   const [sportEndTime, setSportEndTime] = useState<Date | null>(null);
   const [sportLeague, setSportLeague] = useState("");
   const [sportProviderEventId, setSportProviderEventId] = useState("");
+  const [sportProviderName, setSportProviderName] = useState("");
 
   // Fixture list (loaded once per sport, cached server-side)
   const [fixtures, setFixtures] = useState<any[]>([]);
@@ -495,6 +496,7 @@ export default function CreateMarketPage() {
     setSportAwayTeam(m.away_team);
     setSportLeague(m.league || "");
     setSportProviderEventId(m.provider_event_id || "");
+    setSportProviderName(m.provider || "");
     if (m.start_time) setResolutionDate(new Date(m.start_time));
     if (m.end_time) setSportEndTime(new Date(m.end_time));
     setQuestion(`${m.home_team} vs ${m.away_team}${m.league ? ` - ${m.league}` : ""}`);
@@ -506,6 +508,7 @@ export default function CreateMarketPage() {
 
   function clearSelectedMatch() {
     setSportProviderEventId("");
+    setSportProviderName("");
     setSportHomeTeam("");
     setSportAwayTeam("");
     setSportLeague("");
@@ -606,7 +609,7 @@ export default function CreateMarketPage() {
       let sportMeta: Record<string, unknown> | undefined;
       if (isMatchMode && sportHomeTeam.trim() && sportAwayTeam.trim()) {
         const evt = await createSportEventServer({
-          provider: sportProviderEventId ? "odds-feed" : "manual",
+          provider: sportProviderEventId ? (sportProviderName || "odds-feed") : "manual",
           provider_event_id: sportProviderEventId || `manual_${marketKeypair.publicKey.toBase58()}`,
           sport: sportType,
           home_team: sportHomeTeam.trim(),

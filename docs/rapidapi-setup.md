@@ -1,6 +1,27 @@
 # RapidAPI Sports Provider Setup
 
-## Current Provider: Odds Feed
+## Architecture: Fixtures Provider Adapter
+
+The fixture browsing system uses a **provider adapter** (`fixturesProvider.ts`) that selects the backend based on the `FIXTURES_PROVIDER` env var:
+
+| `FIXTURES_PROVIDER` | Behavior |
+|---|---|
+| `odds_feed` | Live data from Odds Feed (RapidAPI) |
+| `mock` | Built-in mock fixtures (19 matches across 5 sports) |
+| *(not set)* | Auto-detect: uses `odds_feed` if `RAPIDAPI_KEY` is present, otherwise `mock` |
+
+> **T-2 Auto-End Rule:** All fixture `end_time` values are set to **match end minus 2 minutes**. This means trading auto-locks 2 minutes before the estimated match end.
+
+### File Layout
+
+| File | Role |
+|---|---|
+| `lib/sportsProviders/fixturesProvider.ts` | Provider adapter — the ONLY import for fixture browsing |
+| `lib/sportsProviders/oddsFeedProvider.ts` | Odds Feed implementation (called by fixturesProvider) |
+| `app/api/sports/search/route.ts` | API route — imports from fixturesProvider |
+| `lib/sportsProviders/apiSportsProvider.ts` | Legacy — used by refresh-one and create-event only |
+
+## Current Live Provider: Odds Feed
 
 We use **Odds Feed** (`odds-feed.p.rapidapi.com`) as the primary sports data provider for match listing and linking. This is a multi-sport API that covers soccer, basketball, tennis, MMA, and American football.
 
@@ -13,6 +34,7 @@ We use **Odds Feed** (`odds-feed.p.rapidapi.com`) as the primary sports data pro
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `RAPIDAPI_KEY` | Yes | — | Your RapidAPI key. If missing, the app falls back to mock data. |
+| `FIXTURES_PROVIDER` | No | auto-detect | `odds_feed` or `mock`. Auto-detects from RAPIDAPI_KEY if not set. |
 | `SPORTS_DEBUG` | No | `0` | Set to `1` to enable debug logging for provider calls |
 | `SPORTS_REFRESH_TOKEN` | No | — | Admin token for server-side refresh polling |
 
@@ -59,11 +81,13 @@ Subscribe to **Odds Feed** on RapidAPI:
 
 1. User selects a sport category and enters match mode
 2. User clicks "Load matches (next 7 days)" → ONE POST to `/api/sports/search`
-3. Server calls Odds Feed for 7 days of events (1 API call per day, cached 15 min)
-4. UI shows scrollable list with client-side text filter (no extra API calls)
-5. User clicks a match → auto-fills: home team, away team, start time, end time, provider event ID
-6. User writes any question and creates the market
-7. If no match selected, user can still create manually (provider = "manual")
+3. `fixturesProvider` selects backend (mock or odds_feed) based on env config
+4. If odds_feed: calls Odds Feed for 7 days of events (1 API call per day, cached 15 min), applies T-2 to end_time
+5. If mock: returns 19 built-in fixtures with T-2 already applied
+6. UI shows scrollable list with client-side text filter (no extra API calls)
+7. User clicks a match → auto-fills: home team, away team, start time, end time (T-2), provider event ID, provider name
+8. User writes any question and creates the market
+9. If no match selected, user can still create manually (provider = "manual")
 
 ## API Route: `/api/sports/search`
 
@@ -98,7 +122,7 @@ curl "http://localhost:3000/api/sports/search?sport=soccer"
       "home_team": "Arsenal",
       "away_team": "Chelsea",
       "start_time": "2026-02-15T20:00:00.000Z",
-      "end_time": "2026-02-15T22:15:00.000Z",
+      "end_time": "2026-02-15T22:13:00.000Z",
       "status": "scheduled",
       "label": "Arsenal vs Chelsea",
       "raw": { ... }
@@ -107,15 +131,17 @@ curl "http://localhost:3000/api/sports/search?sport=soccer"
 }
 ```
 
+> Note: `end_time` is estimated match end minus 2 minutes (T-2 rule).
+
 ## Caching
 
-- **Provider-level:** 15 min in-memory TTL cache keyed by `sport + base_date + days`.
-- **Route-level:** 10 min in-memory TTL cache keyed by `sport + base_date + q`.
+- **Provider-level (oddsFeedProvider):** 15 min in-memory TTL cache keyed by `sport + base_date + days`.
+- **Route-level (search route):** 10 min in-memory TTL cache keyed by `sport + base_date + q`.
 - **Client-side filter:** Purely local, zero API calls. Filters the already-loaded list by substring.
 
 ## Fallback Behavior
 
-If `RAPIDAPI_KEY` is not set:
+If `RAPIDAPI_KEY` is not set (or `FIXTURES_PROVIDER=mock`):
 - `/api/sports/search` returns mock matches spread across 7 days (19 fixtures across all sports)
 - `/api/sports/refresh-one` falls back to the legacy mock provider
 - `/api/sports/create-event` inserts basic data without enrichment
@@ -127,8 +153,8 @@ The app works fully in development without a RapidAPI key.
 | Value | Meaning |
 |---|---|
 | `odds-feed` | Match linked to Odds Feed provider event |
+| `mock-fixtures` | Mock data from fixturesProvider (dev only, no API key) |
 | `manual` | Market created without provider linking |
-| `mock` | Mock data (dev only, no API key) |
 
 ## Legacy: API-Sports Provider
 
