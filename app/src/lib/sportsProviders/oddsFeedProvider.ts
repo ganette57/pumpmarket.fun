@@ -1,13 +1,15 @@
 // src/lib/sportsProviders/oddsFeedProvider.ts
-// Server-only: Odds Feed (RapidAPI) provider for match search.
-// Host: odds-feed.p.rapidapi.com (by Tipsters — same team as SportScore)
+// Server-only: Odds Feed (RapidAPI) provider.
+// Host: odds-feed.p.rapidapi.com
 //
-// Strategy: button-click-only search (no keystroke spam).
-// The user fills in sport + teams manually, then clicks "Link to provider"
-// → ONE API call to find a matching event → store provider_event_id if found.
+// Strategy: "fixture list" — fetch upcoming events for a sport over N days,
+// cache aggressively (15 min TTL), let UI filter client-side.
 //
-// Endpoints used:
-//   GET /v1/events/list?sport_id={id}&day={YYYY-MM-DD}&page=1
+// Correct endpoint: GET /api/v1/events/list?sport_id={id}&day={YYYY-MM-DD}&page=1
+// Response shape:
+//   { data: [{ id, sport: { id, name, slug }, tournament, category,
+//              team_home: { name }, team_away: { name },
+//              status, start_at, ... }] }
 
 const DEBUG = process.env.SPORTS_DEBUG === "1";
 
@@ -44,7 +46,7 @@ function estimatedEndTime(startIso: string, sport: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Normalized types (must match existing UI expectations — DO NOT CHANGE)
+// NormalizedMatch (DO NOT CHANGE — used by UI)
 // ---------------------------------------------------------------------------
 
 export type NormalizedMatch = {
@@ -62,8 +64,7 @@ export type NormalizedMatch = {
 };
 
 // ---------------------------------------------------------------------------
-// Sport ID mapping: our internal names → Odds Feed sport IDs
-// These IDs match the Tipsters / SportScore convention.
+// Sport ID mapping
 // ---------------------------------------------------------------------------
 
 const SPORT_ID: Record<string, number> = {
@@ -74,36 +75,30 @@ const SPORT_ID: Record<string, number> = {
   american_football: 12,
 };
 
-// Reverse: sport ID → our internal name
-const ID_TO_SPORT: Record<number, string> = {};
-for (const [k, v] of Object.entries(SPORT_ID)) {
-  ID_TO_SPORT[v] = k;
-}
-
 // ---------------------------------------------------------------------------
-// Internal cache (60s TTL to avoid rate limits — 500 req/month budget)
+// Internal cache — 15 min TTL (aggressive to stay under 500 req/month)
 // ---------------------------------------------------------------------------
 
-const CACHE_TTL_MS = 60_000;
-const searchCache = new Map<string, { ts: number; data: NormalizedMatch[] }>();
+const CACHE_TTL_MS = 15 * 60_000; // 15 minutes
+const eventCache = new Map<string, { ts: number; data: NormalizedMatch[] }>();
 
 function getCached(key: string): NormalizedMatch[] | null {
-  const entry = searchCache.get(key);
+  const entry = eventCache.get(key);
   if (!entry) return null;
   if (Date.now() - entry.ts > CACHE_TTL_MS) {
-    searchCache.delete(key);
+    eventCache.delete(key);
     return null;
   }
   return entry.data;
 }
 
 function setCache(key: string, data: NormalizedMatch[]) {
-  searchCache.set(key, { ts: Date.now(), data });
+  eventCache.set(key, { ts: Date.now(), data });
   // Prune stale entries
-  if (searchCache.size > 100) {
+  if (eventCache.size > 50) {
     const now = Date.now();
-    Array.from(searchCache.entries()).forEach(([k, v]) => {
-      if (now - v.ts > CACHE_TTL_MS) searchCache.delete(k);
+    Array.from(eventCache.entries()).forEach(([k, v]) => {
+      if (now - v.ts > CACHE_TTL_MS) eventCache.delete(k);
     });
   }
 }
@@ -137,58 +132,90 @@ async function apiFetch(path: string): Promise<any> {
 }
 
 // ---------------------------------------------------------------------------
+// Date helper
+// ---------------------------------------------------------------------------
+
+function formatDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+// ---------------------------------------------------------------------------
+// Parse "YYYY-MM-DD HH:mm:ss" (or ISO) → ISO string
+// ---------------------------------------------------------------------------
+
+function parseStartAt(raw: string | number | undefined): string {
+  if (!raw) return new Date().toISOString();
+  if (typeof raw === "number") {
+    // Unix timestamp (seconds)
+    return new Date(raw * 1000).toISOString();
+  }
+  // "YYYY-MM-DD HH:mm:ss" → replace space with T, append Z
+  const s = String(raw).trim();
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s)) {
+    return new Date(s.replace(" ", "T") + "Z").toISOString();
+  }
+  // Already ISO or other parsable format
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+}
+
+// ---------------------------------------------------------------------------
 // Status normalization
 // ---------------------------------------------------------------------------
 
 function normalizeStatus(event: any): "scheduled" | "live" | "finished" {
-  const statusType = String(event?.status?.type || "").toLowerCase();
-  if (statusType === "inprogress" || statusType === "live") return "live";
-  if (statusType === "finished" || statusType === "ended") return "finished";
-  if (statusType === "notstarted" || statusType === "scheduled") return "scheduled";
+  const raw = String(event?.status || "").toUpperCase();
+  if (raw === "FINISHED" || raw === "ENDED") return "finished";
+  if (raw === "LIVE" || raw === "INPLAY" || raw === "IN_PLAY") return "live";
+  if (raw === "NOTSTARTED" || raw === "SCHEDULED" || raw === "NOT_STARTED") return "scheduled";
 
-  // Fallback: check numeric code
-  const code = Number(event?.status?.code);
-  if (!isNaN(code)) {
-    if (code === 0) return "scheduled";
-    if (code === 100 || code >= 60) return "finished";
-    if (code > 0 && code < 60) return "live";
-  }
+  // Fallback: check nested status object (some providers)
+  const statusType = String(event?.status?.type || "").toUpperCase();
+  if (statusType === "FINISHED" || statusType === "ENDED") return "finished";
+  if (statusType === "INPROGRESS" || statusType === "LIVE") return "live";
 
   return "scheduled";
 }
 
 // ---------------------------------------------------------------------------
 // Event → NormalizedMatch converter
-// Handles both nested { homeTeam: { name } } and flat { homeTeamName } shapes.
+// Handles Odds Feed shape: team_home/team_away, tournament, start_at
+// Also handles fallback shapes: homeTeam/awayTeam, startTimestamp
 // ---------------------------------------------------------------------------
 
 function eventToMatch(event: any, sport: string): NormalizedMatch | null {
   if (!event) return null;
 
+  // Primary: Odds Feed uses team_home / team_away objects
   const homeTeam =
+    event?.team_home?.name ||
     event?.homeTeam?.name ||
     event?.homeTeam?.shortName ||
-    event?.homeTeamName ||
+    event?.home_team ||
     "";
   const awayTeam =
+    event?.team_away?.name ||
     event?.awayTeam?.name ||
     event?.awayTeam?.shortName ||
-    event?.awayTeamName ||
+    event?.away_team ||
     "";
   if (!homeTeam && !awayTeam) return null;
 
-  const eventId =
-    event?.id || event?.customId || `${Date.now()}_${Math.random()}`;
+  const eventId = event?.id || event?.customId || `${Date.now()}_${Math.random()}`;
+
+  // League: tournament.name > category.name > league.name
   const league =
     event?.tournament?.name ||
+    event?.category?.name ||
     event?.league?.name ||
-    event?.leagueName ||
-    event?.season?.name ||
     "";
-  const startTs = event?.startTimestamp || event?.start_timestamp;
-  const startIso = startTs
-    ? new Date(startTs * 1000).toISOString()
-    : event?.startTime || event?.start_time || new Date().toISOString();
+
+  const startIso = parseStartAt(
+    event?.start_at || event?.startTimestamp || event?.start_timestamp || event?.startTime
+  );
 
   return {
     provider: "odds-feed",
@@ -203,138 +230,127 @@ function eventToMatch(event: any, sport: string): NormalizedMatch | null {
     label: `${homeTeam} vs ${awayTeam}`,
     raw: {
       oddsfeed_event_id: eventId,
-      tournament_id:
-        event?.tournament?.uniqueTournament?.id ??
-        event?.tournament?.id ??
-        event?.tournamentId,
-      status_code: event?.status?.code,
-      status_type: event?.status?.type,
+      tournament_id: event?.tournament?.id,
+      category_id: event?.category?.id,
+      sport_slug: event?.sport?.slug,
     },
   };
 }
 
 // ---------------------------------------------------------------------------
-// Date helper
-// ---------------------------------------------------------------------------
-
-function formatDate(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
-// ---------------------------------------------------------------------------
-// Fetch events for a sport on a given date, filter by query substring
+// Fetch events for a single date
 // ---------------------------------------------------------------------------
 
 async function fetchEventsForDate(
   sportId: number,
   dateStr: string,
   sport: string,
-  lq: string,
 ): Promise<NormalizedMatch[]> {
   const data = await apiFetch(
-    `/v1/events/list?sport_id=${sportId}&day=${dateStr}&page=1`,
+    `/api/v1/events/list?sport_id=${sportId}&day=${dateStr}&page=1`,
   );
 
-  // Response may be { data: [...] } or { events: [...] } or just [...]
+  // Response: { data: [...] } or { events: [...] } or [...]
   const events: any[] =
     Array.isArray(data?.data) ? data.data :
     Array.isArray(data?.events) ? data.events :
     Array.isArray(data) ? data :
     [];
 
-  dbg(`events ${sport}/${dateStr}: ${events.length} events, query="${lq}"`);
+  dbg(`events ${sport}/${dateStr}: ${events.length} raw events`);
 
   const results: NormalizedMatch[] = [];
   for (const evt of events) {
-    const homeName = (
-      evt?.homeTeam?.name || evt?.homeTeamName || ""
-    ).toLowerCase();
-    const awayName = (
-      evt?.awayTeam?.name || evt?.awayTeamName || ""
-    ).toLowerCase();
-    const leagueName = (
-      evt?.tournament?.name || evt?.league?.name || evt?.leagueName || ""
-    ).toLowerCase();
-
-    if (
-      homeName.includes(lq) ||
-      awayName.includes(lq) ||
-      leagueName.includes(lq)
-    ) {
-      const match = eventToMatch(evt, sport);
-      if (match) results.push(match);
-    }
+    const match = eventToMatch(evt, sport);
+    if (match) results.push(match);
   }
-
   return results;
 }
 
 // ---------------------------------------------------------------------------
-// Public API: searchMatches
+// listUpcomingMatches: fetch N days of fixtures, return sorted list.
+// This is the PRIMARY function used by the search route.
 // Never throws — catches everything and returns [].
 // ---------------------------------------------------------------------------
 
-export async function searchMatches(params: {
+export async function listUpcomingMatches(params: {
   sport: string;
-  q: string;
-  start_time?: string; // optional ISO date to focus the search window
+  days?: number;       // default 7
+  base_date?: string;  // ISO or YYYY-MM-DD; default today
 }): Promise<NormalizedMatch[]> {
-  const { sport, q, start_time } = params;
-  const trimmed = q.trim();
-  if (trimmed.length < 3) return [];
-
+  const { sport, days = 7, base_date } = params;
   const sportId = SPORT_ID[sport];
   if (!sportId) {
     dbg("unknown sport:", sport);
     return [];
   }
 
-  // Check internal cache
-  const cacheKey = `${sport}:${trimmed.toLowerCase()}:${start_time || ""}`;
+  const baseDate = base_date ? new Date(base_date) : new Date();
+  const baseDateStr = formatDate(baseDate);
+  const cacheKey = `list:${sport}:${baseDateStr}:${days}`;
+
   const cached = getCached(cacheKey);
   if (cached) {
-    dbg("cache hit:", cacheKey);
+    dbg("cache hit:", cacheKey, `(${cached.length} matches)`);
     return cached;
   }
 
-  const lq = trimmed.toLowerCase();
-  const results: NormalizedMatch[] = [];
+  const all: NormalizedMatch[] = [];
 
   try {
-    // Determine date window: if start_time provided, center around that day;
-    // otherwise use today + next 2 days.
-    const baseDate = start_time ? new Date(start_time) : new Date();
-
-    // Fetch base day, then ±1 day if needed (max 3 API calls)
-    for (
-      let offset = 0;
-      offset <= 2 && results.length < 25;
-      offset++
-    ) {
+    for (let offset = 0; offset < days; offset++) {
       const d = new Date(baseDate.getTime() + offset * 86400_000);
       const dateStr = formatDate(d);
 
       try {
-        const dayResults = await fetchEventsForDate(sportId, dateStr, sport, lq);
-        for (const m of dayResults) {
-          results.push(m);
-          if (results.length >= 25) break;
-        }
+        const dayResults = await fetchEventsForDate(sportId, dateStr, sport);
+        for (const m of dayResults) all.push(m);
       } catch (e: any) {
         dbg(`events ${sport}/${dateStr} failed:`, e?.message);
-        // Don't throw — just skip this date
+        // Skip this date, continue
       }
-
-      // If we got results on the first day, no need to fetch more days
-      if (results.length > 0 && offset === 0) break;
     }
   } catch (e: any) {
-    dbg("searchMatches top-level error:", e?.message);
+    dbg("listUpcomingMatches top-level error:", e?.message);
   }
 
-  setCache(cacheKey, results);
-  return results;
+  // Sort by start_time ascending
+  all.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
+
+  // Hard limit 400
+  const result = all.slice(0, 400);
+  setCache(cacheKey, result);
+  dbg(`listUpcomingMatches ${sport}: ${result.length} matches (${days} days from ${baseDateStr})`);
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// searchMatches: backward-compatible wrapper.
+// If q is provided and >= 3 chars, filter results locally.
+// If q is empty/short, return full list.
+// Never throws.
+// ---------------------------------------------------------------------------
+
+export async function searchMatches(params: {
+  sport: string;
+  q?: string;
+  start_time?: string;
+  days?: number;
+}): Promise<NormalizedMatch[]> {
+  const { sport, q, start_time, days = 7 } = params;
+
+  const matches = await listUpcomingMatches({
+    sport,
+    days,
+    base_date: start_time,
+  });
+
+  const trimmed = (q || "").trim().toLowerCase();
+  if (trimmed.length < 3) return matches;
+
+  // Filter locally by substring
+  return matches.filter((m) => {
+    const haystack = `${m.home_team} ${m.away_team} ${m.league}`.toLowerCase();
+    return haystack.includes(trimmed);
+  });
 }

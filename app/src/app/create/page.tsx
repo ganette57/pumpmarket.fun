@@ -7,7 +7,7 @@ import { BN } from "@coral-xyz/anchor";
 import { useRouter } from "next/navigation";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
-import { Calendar, Upload, X, Plus, Trash2, Info, AlertTriangle, CheckCircle, Loader2 } from "lucide-react";
+import { Calendar, Upload, X, Plus, Trash2, Info, AlertTriangle, CheckCircle, Loader2, Search } from "lucide-react";
 import Image from "next/image";
 
 import { validateMarketQuestion, validateMarketDescription } from "@/utils/bannedWords";
@@ -276,12 +276,13 @@ export default function CreateMarketPage() {
   const [sportLeague, setSportLeague] = useState("");
   const [sportProviderEventId, setSportProviderEventId] = useState("");
 
-  // Provider linking (button-click-only — no keystroke search)
-  const [matchResults, setMatchResults] = useState<any[]>([]);
-  const [matchSearching, setMatchSearching] = useState(false);
-  const [matchDropdownOpen, setMatchDropdownOpen] = useState(false);
-  const [matchError, setMatchError] = useState<string>("");
-  const matchAbortRef = useRef<AbortController | null>(null);
+  // Fixture list (loaded once per sport, cached server-side)
+  const [fixtures, setFixtures] = useState<any[]>([]);
+  const [fixturesLoading, setFixturesLoading] = useState(false);
+  const [fixturesLoaded, setFixturesLoaded] = useState(false);
+  const [fixtureFilter, setFixtureFilter] = useState("");
+  const [fixtureError, setFixtureError] = useState("");
+  const fixtureAbortRef = useRef<AbortController | null>(null);
 
   // Sports mode: "match" (default for sport subcategories) or "general" (Sports General only)
   const [sportsMode, setSportsMode] = useState<"match" | "general">("match");
@@ -440,70 +441,56 @@ export default function CreateMarketPage() {
     setCreationError(null);
   }
 
-  async function handleFindMatch() {
-    // Build query from home/away team names
-    const q = [sportHomeTeam.trim(), sportAwayTeam.trim()].filter(Boolean).join(" ");
-    if (q.length < 3) {
-      setMatchError("Enter at least one team/player name first.");
-      return;
-    }
-
+  async function handleLoadFixtures() {
     // Cancel any in-flight request
-    if (matchAbortRef.current) {
-      matchAbortRef.current.abort();
-      matchAbortRef.current = null;
+    if (fixtureAbortRef.current) {
+      fixtureAbortRef.current.abort();
+      fixtureAbortRef.current = null;
     }
 
-    setMatchSearching(true);
-    setMatchError("");
-    setMatchResults([]);
-    setMatchDropdownOpen(false);
+    setFixturesLoading(true);
+    setFixtureError("");
 
     const controller = new AbortController();
-    matchAbortRef.current = controller;
+    fixtureAbortRef.current = controller;
 
     try {
       const res = await fetch("/api/sports/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          q,
-          sport: sportType,
-          start_time: resolutionDate ? resolutionDate.toISOString() : undefined,
-        }),
+        body: JSON.stringify({ sport: sportType }),
         signal: controller.signal,
       });
 
       if (res.status === 429) {
-        setMatchError("Rate limit reached. Try again later.");
+        setFixtureError("Rate limit reached. Try again later.");
         return;
       }
 
       if (res.ok) {
         const json = await res.json();
         const matches = json.matches || [];
-        setMatchResults(matches);
-        if (matches.length > 0) {
-          setMatchDropdownOpen(true);
-        } else {
-          setMatchError("No match found. You can still create the market manually.");
+        setFixtures(matches);
+        setFixturesLoaded(true);
+        if (matches.length === 0) {
+          setFixtureError("No upcoming matches found for this sport.");
         }
       } else {
-        setMatchError("Search failed. You can still create the market manually.");
+        setFixtureError("Failed to load matches.");
       }
     } catch (e: any) {
       if (e?.name !== "AbortError") {
-        setMatchError("Search failed. You can still create the market manually.");
+        setFixtureError("Failed to load matches.");
       }
     } finally {
-      if (matchAbortRef.current === controller) {
-        setMatchSearching(false);
+      if (fixtureAbortRef.current === controller) {
+        setFixturesLoading(false);
       }
     }
   }
 
   function selectMatch(m: any) {
-    setSportType(m.sport);
+    setSportType(m.sport || sportType);
     setSportHomeTeam(m.home_team);
     setSportAwayTeam(m.away_team);
     setSportLeague(m.league || "");
@@ -511,9 +498,33 @@ export default function CreateMarketPage() {
     if (m.start_time) setResolutionDate(new Date(m.start_time));
     if (m.end_time) setSportEndTime(new Date(m.end_time));
     setQuestion(`${m.home_team} vs ${m.away_team}${m.league ? ` - ${m.league}` : ""}`);
-    setMatchDropdownOpen(false);
-    setMatchError("");
+    // Also set outcomes to team names for binary
+    if (marketType === 0) {
+      setOutcomeInputs([m.home_team, m.away_team]);
+    }
   }
+
+  function clearSelectedMatch() {
+    setSportProviderEventId("");
+    setSportHomeTeam("");
+    setSportAwayTeam("");
+    setSportLeague("");
+    setSportEndTime(null);
+    setQuestion("");
+    if (marketType === 0) {
+      setOutcomeInputs(["Team A", "Team B"]);
+    }
+  }
+
+  // Reset fixtures when sport type changes
+  useEffect(() => {
+    if (fixturesLoaded) {
+      setFixtures([]);
+      setFixturesLoaded(false);
+      setFixtureFilter("");
+      setFixtureError("");
+    }
+  }, [sportType]);
 
   async function handleCreateMarket() {
     if (!canSubmit || !publicKey || !program) return;
@@ -763,23 +774,148 @@ export default function CreateMarketPage() {
           </div>
         )}
 
-        {/* Sport Event Details */}
+        {/* Sport selector */}
         {isMatchMode && (
-          <div className="mb-6 space-y-4">
-            <div>
-              <label className="block text-white font-semibold mb-2">Sport *</label>
-              <select
-                value={sportType}
-                onChange={(e) => setSportType(e.target.value)}
-                className="input-pump w-full"
-              >
-                <option value="soccer">Soccer</option>
-                <option value="basketball">Basketball</option>
-                <option value="tennis">Tennis</option>
-                <option value="mma">MMA</option>
-                <option value="american_football">American Football</option>
-              </select>
+          <div className="mb-6">
+            <label className="block text-white font-semibold mb-2">Sport *</label>
+            <select
+              value={sportType}
+              onChange={(e) => setSportType(e.target.value)}
+              className="input-pump w-full"
+            >
+              <option value="soccer">Soccer</option>
+              <option value="basketball">Basketball</option>
+              <option value="tennis">Tennis</option>
+              <option value="mma">MMA</option>
+              <option value="american_football">American Football</option>
+            </select>
+          </div>
+        )}
+
+        {/* Upcoming Matches — fixture list */}
+        {isMatchMode && (
+          <div className="mb-6">
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-white font-semibold">
+                Select a match (optional)
+              </label>
+              {sportProviderEventId && (
+                <span className="text-xs font-medium text-pump-green flex items-center gap-1">
+                  <CheckCircle className="w-3.5 h-3.5" /> Linked
+                </span>
+              )}
             </div>
+            <p className="text-xs text-gray-500 mb-3">
+              Pick from upcoming matches to auto-fill teams, times, and enable live score tracking.
+            </p>
+
+            {/* Selected match banner */}
+            {sportProviderEventId && (
+              <div className="flex items-center justify-between p-3 mb-3 rounded-lg bg-pump-green/10 border border-pump-green/30">
+                <span className="text-sm text-white font-medium">
+                  {sportHomeTeam} vs {sportAwayTeam}
+                  {sportLeague ? <span className="text-gray-400 ml-2">({sportLeague})</span> : null}
+                </span>
+                <button
+                  type="button"
+                  onClick={clearSelectedMatch}
+                  className="text-xs text-gray-400 hover:text-white ml-3 underline"
+                >
+                  Clear
+                </button>
+              </div>
+            )}
+
+            {/* Load button */}
+            {!fixturesLoaded && !fixturesLoading && (
+              <button
+                type="button"
+                onClick={handleLoadFixtures}
+                className="px-4 py-2 rounded-lg text-sm font-semibold transition flex items-center gap-2 bg-white/10 text-white border border-white/20 hover:bg-white/15 hover:border-white/30"
+              >
+                Load matches (next 7 days)
+              </button>
+            )}
+
+            {fixturesLoading && (
+              <div className="flex items-center gap-2 py-3 text-gray-400 text-sm">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Loading upcoming matches...
+              </div>
+            )}
+
+            {fixtureError && (
+              <p className="text-xs text-yellow-400 mt-2">{fixtureError}</p>
+            )}
+
+            {/* Fixture list + filter */}
+            {fixturesLoaded && fixtures.length > 0 && !sportProviderEventId && (
+              <div className="mt-2">
+                {/* Client-side quick filter */}
+                <div className="relative mb-2">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+                  <input
+                    type="text"
+                    value={fixtureFilter}
+                    onChange={(e) => setFixtureFilter(e.target.value)}
+                    className="input-pump w-full pl-9 text-sm"
+                    placeholder="Filter by team or league..."
+                  />
+                </div>
+
+                {/* Scrollable list */}
+                <div className="max-h-72 overflow-y-auto border border-white/10 rounded-xl bg-pump-gray">
+                  {fixtures
+                    .filter((m: any) => {
+                      if (!fixtureFilter.trim()) return true;
+                      const lq = fixtureFilter.toLowerCase();
+                      const hay = `${m.home_team} ${m.away_team} ${m.league}`.toLowerCase();
+                      return hay.includes(lq);
+                    })
+                    .map((m: any) => {
+                      const d = new Date(m.start_time);
+                      const dateStr = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+                      const timeStr = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+                      return (
+                        <button
+                          key={m.provider_event_id}
+                          type="button"
+                          onClick={() => selectMatch(m)}
+                          className="w-full text-left px-4 py-3 hover:bg-white/5 transition border-b border-white/5 last:border-0"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-sm font-medium text-white truncate">
+                              {m.home_team} vs {m.away_team}
+                            </span>
+                            <span className="text-[10px] font-mono text-gray-500 flex-shrink-0 bg-white/5 px-1.5 py-0.5 rounded">
+                              {dateStr}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="text-xs text-gray-400 truncate">{m.league}</span>
+                            <span className="text-[10px] text-gray-500">{timeStr}</span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                </div>
+
+                {/* Reload button */}
+                <button
+                  type="button"
+                  onClick={handleLoadFixtures}
+                  className="text-xs text-gray-500 hover:text-gray-300 mt-2 underline"
+                >
+                  Reload
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Teams / Players (auto-filled by fixture selection, or manual entry) */}
+        {isMatchMode && (
+          <div className="mb-6">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-white font-semibold mb-2">
@@ -808,82 +944,6 @@ export default function CreateMarketPage() {
                 />
               </div>
             </div>
-          </div>
-        )}
-
-        {/* Link to Provider (button-click only — no keystroke search) */}
-        {isMatchMode && (
-          <div className="mb-6 relative">
-            <div className="flex items-center justify-between mb-2">
-              <label className="block text-white font-semibold">Link to provider (optional)</label>
-              {sportProviderEventId && (
-                <span className="text-xs font-medium text-pump-green flex items-center gap-1">
-                  <CheckCircle className="w-3.5 h-3.5" /> Linked
-                </span>
-              )}
-            </div>
-            <p className="text-xs text-gray-500 mb-3">
-              Click below to find this match in our database. This enables live score tracking.
-            </p>
-            <button
-              type="button"
-              onClick={handleFindMatch}
-              disabled={matchSearching || (!sportHomeTeam.trim() && !sportAwayTeam.trim())}
-              className={[
-                "px-4 py-2 rounded-lg text-sm font-semibold transition flex items-center gap-2",
-                matchSearching || (!sportHomeTeam.trim() && !sportAwayTeam.trim())
-                  ? "bg-gray-700 text-gray-400 cursor-not-allowed"
-                  : "bg-white/10 text-white border border-white/20 hover:bg-white/15 hover:border-white/30",
-              ].join(" ")}
-            >
-              {matchSearching ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Searching...
-                </>
-              ) : (
-                "Find match in provider"
-              )}
-            </button>
-            {matchError && (
-              <p className="text-xs text-yellow-400 mt-2">{matchError}</p>
-            )}
-            {sportProviderEventId && !matchDropdownOpen && (
-              <button
-                type="button"
-                onClick={() => {
-                  setSportProviderEventId("");
-                  setMatchResults([]);
-                  setMatchError("");
-                }}
-                className="text-xs text-gray-500 hover:text-gray-300 mt-2 underline"
-              >
-                Unlink
-              </button>
-            )}
-            {matchDropdownOpen && matchResults.length > 0 && (
-              <div className="absolute z-50 left-0 right-0 mt-2 bg-pump-gray border border-white/10 rounded-xl max-h-64 overflow-y-auto shadow-2xl">
-                {matchResults.map((m: any) => (
-                  <button
-                    key={m.provider_event_id}
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => selectMatch(m)}
-                    className="w-full text-left px-4 py-3 hover:bg-white/5 transition border-b border-white/5 last:border-0"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium text-white">
-                        {m.home_team} vs {m.away_team}
-                      </span>
-                      <span className="text-xs text-gray-500 ml-2">{m.sport}</span>
-                    </div>
-                    <div className="text-xs text-gray-400 mt-0.5">
-                      {m.league} &middot; {new Date(m.start_time).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
         )}
 

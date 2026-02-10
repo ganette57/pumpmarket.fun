@@ -2,9 +2,11 @@
 
 ## Current Provider: Odds Feed
 
-We use **Odds Feed** (`odds-feed.p.rapidapi.com`) as the primary sports data provider for match linking. This is a multi-sport API that covers soccer, basketball, tennis, MMA, and American football through a single subscription.
+We use **Odds Feed** (`odds-feed.p.rapidapi.com`) as the primary sports data provider for match listing and linking. This is a multi-sport API that covers soccer, basketball, tennis, MMA, and American football.
 
-> **Strategy:** Users create their market manually (sport, teams, dates), then optionally click "Find match in provider" to link to a provider event via a single API call. This avoids keystroke-based live search and stays within the 500 req/month free tier.
+> **Note:** Odds Feed is temporary — we plan to evaluate API-Football and other providers in the future.
+
+> **Strategy:** The server fetches upcoming fixtures (7 days) for a sport in one batch, caches the result for 15 minutes, and serves it to the UI. The user browses a scrollable match list and clicks to select a match. No keystroke-based search — one server call per sport per cache window.
 
 ## Required Environment Variables
 
@@ -22,7 +24,26 @@ Subscribe to **Odds Feed** on RapidAPI:
 - URL: https://rapidapi.com/tipsters/api/odds-feed
 - Free tier: 500 requests/month
 - Endpoints used:
-  - `GET /v1/events/list?sport_id={id}&day={YYYY-MM-DD}&page=1` — events for a sport on a date
+  - `GET /api/v1/events/list?sport_id={id}&day={YYYY-MM-DD}&page=1` — events for a sport on a date
+
+### Response Shape
+
+```json
+{
+  "data": [
+    {
+      "id": 12345,
+      "sport": { "id": 1, "name": "Football", "slug": "football" },
+      "tournament": { "id": 100, "name": "Premier League" },
+      "category": { "id": 50, "name": "England" },
+      "team_home": { "name": "Arsenal" },
+      "team_away": { "name": "Chelsea" },
+      "status": "SCHEDULED",
+      "start_at": "2026-02-15 20:00:00"
+    }
+  ]
+}
+```
 
 ### Sport ID Mapping
 
@@ -36,29 +57,35 @@ Subscribe to **Odds Feed** on RapidAPI:
 
 ## How It Works
 
-1. User fills in sport type, home team, away team, and match date on the Create page
-2. User clicks "Find match in provider" → ONE POST to `/api/sports/search`
-3. Server calls Odds Feed `/v1/events/list` for that sport + date, filters by team name substring
-4. Results shown in dropdown → user selects a match → `provider_event_id` stored
-5. If no match found, user can still create the market manually (provider = "manual")
+1. User selects a sport category and enters match mode
+2. User clicks "Load matches (next 7 days)" → ONE POST to `/api/sports/search`
+3. Server calls Odds Feed for 7 days of events (1 API call per day, cached 15 min)
+4. UI shows scrollable list with client-side text filter (no extra API calls)
+5. User clicks a match → auto-fills: home team, away team, start time, end time, provider event ID
+6. User writes any question and creates the market
+7. If no match selected, user can still create manually (provider = "manual")
 
-## Testing
+## API Route: `/api/sports/search`
 
-### Search with curl (POST)
+### POST (primary)
 
 ```bash
 curl -X POST http://localhost:3000/api/sports/search \
   -H "Content-Type: application/json" \
-  -d '{"q": "PSG", "sport": "soccer", "start_time": "2026-02-15T20:00:00.000Z"}'
+  -d '{"sport": "soccer"}'
 ```
 
-### Search with curl (GET, legacy)
+Optional parameters:
+- `base_date` (YYYY-MM-DD or ISO) — start of 7-day window, default today
+- `q` — optional text filter (applied server-side, min 3 chars)
+
+### GET (legacy)
 
 ```bash
-curl "http://localhost:3000/api/sports/search?q=PSG&sport=soccer"
+curl "http://localhost:3000/api/sports/search?sport=soccer"
 ```
 
-### Expected response shape
+### Response
 
 ```json
 {
@@ -67,13 +94,13 @@ curl "http://localhost:3000/api/sports/search?q=PSG&sport=soccer"
       "provider": "odds-feed",
       "provider_event_id": "oddsfeed_soccer_12345",
       "sport": "soccer",
-      "league": "Ligue 1",
-      "home_team": "PSG",
-      "away_team": "Marseille",
+      "league": "Premier League",
+      "home_team": "Arsenal",
+      "away_team": "Chelsea",
       "start_time": "2026-02-15T20:00:00.000Z",
       "end_time": "2026-02-15T22:15:00.000Z",
       "status": "scheduled",
-      "label": "PSG vs Marseille",
+      "label": "Arsenal vs Chelsea",
       "raw": { ... }
     }
   ]
@@ -82,15 +109,15 @@ curl "http://localhost:3000/api/sports/search?q=PSG&sport=soccer"
 
 ## Caching
 
-- **Server-side (route):** 60-second in-memory TTL cache per `sport:q:start_time` tuple.
-- **Provider-side:** 60-second internal TTL cache to avoid duplicate API calls.
-- No client-side debounce needed — search only fires on explicit button click.
+- **Provider-level:** 15 min in-memory TTL cache keyed by `sport + base_date + days`.
+- **Route-level:** 10 min in-memory TTL cache keyed by `sport + base_date + q`.
+- **Client-side filter:** Purely local, zero API calls. Filters the already-loaded list by substring.
 
 ## Fallback Behavior
 
 If `RAPIDAPI_KEY` is not set:
-- `/api/sports/search` returns hardcoded mock matches (PSG, Lakers, Alcaraz, etc.)
-- `/api/sports/refresh-one` falls back to the legacy mock provider (random status transitions)
+- `/api/sports/search` returns mock matches spread across 7 days (19 fixtures across all sports)
+- `/api/sports/refresh-one` falls back to the legacy mock provider
 - `/api/sports/create-event` inserts basic data without enrichment
 
 The app works fully in development without a RapidAPI key.
@@ -105,12 +132,10 @@ The app works fully in development without a RapidAPI key.
 
 ## Legacy: API-Sports Provider
 
-The files below still use the old API-Sports multi-host provider and are NOT yet migrated:
+The files below still use the old API-Sports multi-host provider and are NOT touched:
 - `app/src/lib/sportsProviders/apiSportsProvider.ts` — used by refresh-one and create-event
 - `app/src/app/api/sports/refresh-one/route.ts`
 - `app/src/app/api/sports/create-event/route.ts`
-
-These will be updated once Odds Feed event-by-ID fetch is confirmed working.
 
 ### Legacy env vars (only needed for refresh/create-event enrichment)
 
