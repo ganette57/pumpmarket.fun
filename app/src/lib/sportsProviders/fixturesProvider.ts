@@ -102,13 +102,28 @@ function estimatedEndTime(startIso: string, sport: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// API-Football provider
+// API-Football provider (FREE plan compatible)
 // Base: https://v3.football.api-sports.io
 // Auth: x-apisports-key header
-// Endpoint: GET /fixtures?from=YYYY-MM-DD&to=YYYY-MM-DD&timezone=...
+//
+// Free plan limitation: `from/to` and `next` parameters are PAID-only.
+// We use: GET /fixtures?date=YYYY-MM-DD&league=ID&season=YEAR&timezone=TZ
+// One call per day per league. Days clamped to 3 max, 3 leagues = 9 calls max
+// per cache miss. With 15min cache that's well under the 100/day free quota.
 // ---------------------------------------------------------------------------
 
 const API_FOOTBALL_HOST = "v3.football.api-sports.io";
+
+// Top leagues to fetch. We keep this small to stay within free-plan quota.
+// Expand as needed: Serie A = 135, Bundesliga = 78, Champions League = 2, etc.
+const API_FOOTBALL_LEAGUES = [
+  { id: 61,  name: "Ligue 1" },
+  { id: 39,  name: "Premier League" },
+  { id: 140, name: "La Liga" },
+];
+
+// Max days to fetch per request to stay within free-plan quota
+const API_FOOTBALL_MAX_DAYS = 3;
 
 function formatDate(d: Date): string {
   const y = d.getFullYear();
@@ -120,48 +135,50 @@ function formatDate(d: Date): string {
 function normalizeApiFootballStatus(short: string): "scheduled" | "live" | "finished" {
   const s = (short || "").toUpperCase();
   // Finished statuses
-  if (s === "FT" || s === "AET" || s === "PEN" || s === "AWD" || s === "WO") return "finished";
+  if (s === "FT" || s === "AET" || s === "PEN") return "finished";
   // Live statuses
-  if (s === "1H" || s === "HT" || s === "2H" || s === "ET" || s === "BT" || s === "P" || s === "LIVE" || s === "INT") return "live";
-  // Cancelled / postponed treated as scheduled for listing
-  if (s === "CANC" || s === "PST" || s === "ABD" || s === "SUSP") return "scheduled";
-  // Default: scheduled (TBD, NS, etc.)
+  if (s === "1H" || s === "HT" || s === "2H" || s === "ET" || s === "BT" || s === "P") return "live";
+  // Default: scheduled (NS, TBD, PST, CANC, etc.)
   return "scheduled";
 }
 
-async function apiFootballFetch(fromDate: string, toDate: string): Promise<NormalizedMatch[]> {
-  const key = getApiSportsKey();
-  if (!key) throw new Error("APISPORTS_KEY not set");
+/** Fetch fixtures for ONE date + ONE league, trying season=currentYear then currentYear-1 */
+async function apiFootballFetchDateLeague(
+  date: string,
+  leagueId: number,
+  tz: string,
+  key: string,
+): Promise<any[]> {
+  const currentYear = new Date().getFullYear();
+  // Some leagues (e.g. Premier League) use prior year as season (2025-2026 season = 2025).
+  // Try current year first; if 0 results, retry with year-1.
+  for (const season of [currentYear, currentYear - 1]) {
+    const url =
+      `https://${API_FOOTBALL_HOST}/fixtures` +
+      `?date=${date}&league=${leagueId}&season=${season}` +
+      `&timezone=${encodeURIComponent(tz)}`;
+    dbg("api-football fetch", url);
 
-  const tz = process.env.APISPORTS_TZ || "Europe/Paris";
-  const url = `https://${API_FOOTBALL_HOST}/fixtures?from=${fromDate}&to=${toDate}&timezone=${encodeURIComponent(tz)}`;
-  dbg("api-football fetch", url);
+    const res = await fetch(url, {
+      method: "GET",
+      headers: { "x-apisports-key": key },
+    });
 
-  const res = await fetch(url, {
-    method: "GET",
-    headers: {
-      "x-apisports-key": key,
-    },
-  });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      dbg("api-football error", res.status, text.slice(0, 300));
+      // Don't retry season on HTTP error — bail
+      return [];
+    }
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    dbg("api-football error", res.status, text.slice(0, 300));
-    throw new Error(`API-Football ${res.status}: ${text.slice(0, 200)}`);
+    const json = await res.json();
+    const fixtures: any[] = Array.isArray(json?.response) ? json.response : [];
+    dbg(`  league=${leagueId} season=${season} date=${date} → ${fixtures.length} fixtures`);
+
+    if (fixtures.length > 0) return fixtures;
+    // 0 results — try previous season
   }
-
-  const json = await res.json();
-
-  // Response: { response: [...] }
-  const fixtures: any[] = Array.isArray(json?.response) ? json.response : [];
-  dbg(`api-football: ${fixtures.length} fixtures from ${fromDate} to ${toDate}`);
-
-  const results: NormalizedMatch[] = [];
-  for (const f of fixtures) {
-    const match = apiFootballToMatch(f);
-    if (match) results.push(match);
-  }
-  return results;
+  return [];
 }
 
 function apiFootballToMatch(f: any): NormalizedMatch | null {
@@ -198,10 +215,14 @@ function apiFootballToMatch(f: any): NormalizedMatch | null {
     label: `${homeTeam} vs ${awayTeam}`,
     raw: {
       api_football_id: fixtureId,
+      status_short: statusShort,
+      status_long: fixture?.status?.long,
       league_id: league?.id,
+      season: league?.season,
       country: league?.country,
       round: league?.round,
       venue: fixture?.venue?.name,
+      timezone: process.env.APISPORTS_TZ || "Europe/Paris",
     },
   };
 }
@@ -213,22 +234,46 @@ async function apiFootballListUpcoming(params: {
 }): Promise<NormalizedMatch[]> {
   const { days, base_date } = params;
   // API-Football only supports soccer — return empty for other sports
-  // (future: add other sport APIs)
   if (params.sport !== "soccer") {
     dbg("api-football only supports soccer, returning []");
     return [];
   }
 
-  const baseDate = base_date ? new Date(base_date) : new Date();
-  const fromDate = formatDate(baseDate);
-  const toDate = formatDate(new Date(baseDate.getTime() + (days - 1) * 86400_000));
-
-  try {
-    return await apiFootballFetch(fromDate, toDate);
-  } catch (e: any) {
-    dbg("api-football fetch failed:", e?.message);
+  const key = getApiSportsKey();
+  if (!key) {
+    dbg("APISPORTS_KEY not set");
     return [];
   }
+
+  const tz = process.env.APISPORTS_TZ || "Europe/Paris";
+  const baseDate = base_date ? new Date(base_date) : new Date();
+  const clampedDays = Math.min(days, API_FOOTBALL_MAX_DAYS);
+
+  const all: NormalizedMatch[] = [];
+  // Fetch each day × each league in parallel (max 9 concurrent requests)
+  const fetches: Promise<void>[] = [];
+
+  for (let d = 0; d < clampedDays; d++) {
+    const dateStr = formatDate(new Date(baseDate.getTime() + d * 86400_000));
+    for (const league of API_FOOTBALL_LEAGUES) {
+      fetches.push(
+        apiFootballFetchDateLeague(dateStr, league.id, tz, key)
+          .then((fixtures) => {
+            for (const f of fixtures) {
+              const m = apiFootballToMatch(f);
+              if (m) all.push(m);
+            }
+          })
+          .catch((e: any) => {
+            dbg(`api-football error league=${league.id} date=${dateStr}:`, e?.message);
+          }),
+      );
+    }
+  }
+
+  await Promise.all(fetches);
+  dbg(`api-football total: ${all.length} fixtures across ${clampedDays} days × ${API_FOOTBALL_LEAGUES.length} leagues`);
+  return all;
 }
 
 // ---------------------------------------------------------------------------
