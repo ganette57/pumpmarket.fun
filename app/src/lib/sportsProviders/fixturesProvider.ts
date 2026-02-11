@@ -2,8 +2,9 @@
 // Server-only: Fixture list provider adapter.
 //
 // Selects the backend provider based on FIXTURES_PROVIDER env var:
-//   "api_football" — live data from API-Football (v3.football.api-sports.io)
-//   "mock"         — built-in mock fixtures (default when no APISPORTS_KEY)
+//   "thesportsdb"  — live data from TheSportsDB (multi-sport)
+//   "api_football"  — live data from API-Football (soccer only, v3.football.api-sports.io)
+//   "mock"          — built-in mock fixtures (default when no keys)
 //
 // Exports:
 //   isAvailable(): boolean
@@ -15,6 +16,7 @@
 // Re-export the NormalizedMatch type from oddsFeedProvider
 export type { NormalizedMatch } from "./oddsFeedProvider";
 import type { NormalizedMatch } from "./oddsFeedProvider";
+import { listUpcomingMatchesTheSportsDB } from "./theSportsDbProvider";
 
 const DEBUG = process.env.SPORTS_DEBUG === "1";
 
@@ -65,23 +67,32 @@ function setCache(key: string, data: NormalizedMatch[]) {
 // Provider selection
 // ---------------------------------------------------------------------------
 
-type ProviderName = "mock" | "api_football";
+type ProviderName = "mock" | "api_football" | "thesportsdb";
 
 function getApiSportsKey(): string | null {
   return process.env.APISPORTS_KEY || null;
 }
 
+function getTheSportsDbKey(): string | null {
+  return process.env.THESPORTSDB_KEY || null;
+}
+
 function getProviderName(): ProviderName {
   const env = (process.env.FIXTURES_PROVIDER || "").trim().toLowerCase();
+  if (env === "thesportsdb" || env === "the-sports-db" || env === "thesportsdb") return "thesportsdb";
   if (env === "api_football" || env === "api-football") return "api_football";
   if (env === "mock") return "mock";
-  // Auto-detect: use api_football if APISPORTS_KEY is set
+  // Auto-detect: prefer thesportsdb if its key exists, then api_football
+  if (getTheSportsDbKey()) return "thesportsdb";
   if (getApiSportsKey()) return "api_football";
   return "mock";
 }
 
 export function isAvailable(): boolean {
-  return getProviderName() === "api_football" && !!getApiSportsKey();
+  const p = getProviderName();
+  if (p === "thesportsdb") return true; // works with free key "3" too
+  if (p === "api_football") return !!getApiSportsKey();
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -452,6 +463,18 @@ export async function listUpcomingMatches(params: {
 
   if (provider === "mock") {
     result = mockMatchList(sport);
+  } else if (provider === "thesportsdb") {
+    try {
+      const raw = await listUpcomingMatchesTheSportsDB({ sport, days, base_date });
+      // Apply T-2 rule to end_time
+      result = raw.map((m) => ({
+        ...m,
+        end_time: applyT2(m.end_time),
+      }));
+    } catch (e: any) {
+      dbg("thesportsdb failed:", e?.message);
+      result = [];
+    }
   } else {
     // api_football provider
     try {
@@ -462,8 +485,8 @@ export async function listUpcomingMatches(params: {
         end_time: applyT2(m.end_time),
       }));
     } catch (e: any) {
-      dbg("api_football failed, falling back to mock:", e?.message);
-      result = mockMatchList(sport);
+      dbg("api_football failed:", e?.message);
+      result = [];
     }
   }
 

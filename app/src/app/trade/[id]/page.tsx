@@ -639,6 +639,10 @@ console.log("[SNAPSHOT] marketAddress =", marketAddress);
 const [activeLiveSession, setActiveLiveSession] = useState<{ id: string; title: string; status: LiveSessionStatus } | null>(null);
 const [sportEvent, setSportEvent] = useState<SportEvent | null>(null);
 const [sportRefreshing, setSportRefreshing] = useState(false);
+const [liveScore, setLiveScore] = useState<{
+  home_score: number | null; away_score: number | null;
+  minute: number | null; status: string;
+} | null>(null);
 
 // Related block (RIGHT column under TradingPanel)
 const [relatedTab, setRelatedTab] = useState<RelatedTab>("related");
@@ -794,6 +798,39 @@ if (snap?.posAcc?.shares) {
       }, 30_000);
       return () => clearInterval(iv);
     }, [sportEvent?.status, market?.sportEventId]);
+
+    // Poll /api/sports/live for thesportsdb-linked markets during live window
+    useEffect(() => {
+      const meta = market?.sportMeta as any;
+      const provider = meta?.provider;
+      const providerEventId = meta?.provider_event_id;
+      if (provider !== "thesportsdb" || !providerEventId) return;
+      // Only poll when market is in sport mode and could be live
+      if (market?.marketMode !== "sport") return;
+
+      let cancelled = false;
+      const poll = async () => {
+        try {
+          const res = await fetch(
+            `/api/sports/live?provider=thesportsdb&event_id=${encodeURIComponent(providerEventId)}`
+          );
+          if (!res.ok || cancelled) return;
+          const data = await res.json();
+          if (!cancelled) {
+            setLiveScore({
+              home_score: data.home_score ?? null,
+              away_score: data.away_score ?? null,
+              minute: data.minute ?? null,
+              status: data.status ?? "unknown",
+            });
+          }
+        } catch { /* ignore */ }
+      };
+
+      poll(); // initial fetch
+      const iv = setInterval(poll, 15_000);
+      return () => { cancelled = true; clearInterval(iv); };
+    }, [market?.sportMeta, market?.marketMode]);
 
     const handleSportRefresh = useCallback(async () => {
       if (!market?.sportEventId || sportRefreshing) return;
@@ -1488,6 +1525,11 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                       <span className="px-2 py-1 rounded-full border border-red-500/40 bg-red-500/10 text-red-400 flex items-center gap-1">
                         <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
                         Live
+                        {liveScore && liveScore.home_score != null && liveScore.away_score != null && (
+                          <span className="ml-1 font-mono text-white">
+                            {liveScore.home_score}–{liveScore.away_score}
+                          </span>
+                        )}
                       </span>
                     )}
                     {!market.isBlocked && sportPhase === "locked" && !showProposedBox && !showResolvedProofBox && (
