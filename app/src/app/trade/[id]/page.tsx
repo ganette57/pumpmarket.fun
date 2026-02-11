@@ -1566,9 +1566,9 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
               )}
 
               {/* Market card */}
-              <div className="card-pump">
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0 w-20 h-20 rounded-xl overflow-hidden bg-pump-dark">
+              <div className="bg-black border border-gray-800 rounded-xl p-4 md:p-5 hover:border-pump-green/60 transition-all duration-200">
+                <div className="flex items-start gap-3">
+                  <div className="flex-shrink-0 w-16 h-16 md:w-20 md:h-20 rounded-xl overflow-hidden bg-pump-dark">
                     {market.imageUrl ? (
                       <Image
                         src={market.imageUrl}
@@ -1586,8 +1586,8 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                   </div>
   
                   <div className="flex-1 min-w-0">
-                    <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 mb-3 min-w-0">
-                      <h1 className="text-2xl md:text-3xl font-bold text-white leading-tight break-words min-w-0">
+                    <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-2 mb-2 min-w-0">
+                      <h1 className="text-xl md:text-2xl font-bold text-white leading-tight break-words min-w-0">
                         {market.question}
                       </h1>
   
@@ -1608,7 +1608,7 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                   </div>
                 </div>
   
-                <div className="flex gap-4 text-sm text-gray-400 mt-4 pt-4 border-t border-gray-800">
+                <div className="flex gap-4 text-sm text-gray-400 mt-3 pt-3 border-t border-gray-800">
                   <div>
                     <span className="text-gray-500">
                       {formatVol(market.totalVolume)} SOL Vol
@@ -1662,7 +1662,7 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                   </div>
                 </div>
   
-                <p className="text-gray-400 mt-4 mb-4">{market.description}</p>
+                <p className="text-gray-400 text-sm mt-3 mb-3">{market.description}</p>
   
                 {missingOutcomes && (
                   <div className="mb-4 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-yellow-200">
@@ -1701,24 +1701,24 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
   
                 {/* Outcomes */}
                 {isBinaryStyle ? (
-                  <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="mt-4 grid grid-cols-2 gap-3">
                     {names.slice(0, 2).map((outcome, index) => {
                       const pct = (percentages[index] ?? 0).toFixed(1);
                       const supply = supplies[index] || 0;
                       const isYes = index === 0;
-  
+
                       return (
                         <button
                           key={index}
                           onClick={() => openMobileTrade(index)}
                           disabled={!isMobile || marketClosed}
-                          className={`text-left rounded-2xl px-5 py-4 md:px-6 md:py-5 border bg-pump-dark/80 transition ${
+                          className={`text-left rounded-xl px-4 py-3 md:px-5 md:py-4 border bg-black transition ${
                             isYes
                               ? "border-pump-green/60"
                               : "border-[#ff5c73]/60"
                           } ${isMobile && !marketClosed ? "active:scale-[0.99]" : ""}`}
                         >
-                          <div className="flex items-center justify-between text-xs text-gray-400 mb-2">
+                          <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
                             <span
                               className={`uppercase tracking-wide font-semibold ${
                                 isYes ? "text-pump-green" : "text-[#ff5c73]"
@@ -1726,19 +1726,19 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                             >
                               {outcome}
                             </span>
-                            <span className="text-gray-500">Supply: {supply}</span>
+                            <span className="text-gray-500 text-[11px]">Supply: {supply}</span>
                           </div>
-  
+
                           <div
-                            className={`text-3xl md:text-4xl font-bold tabular-nums ${
+                            className={`text-2xl md:text-3xl font-bold tabular-nums ${
                               isYes ? "text-pump-green" : "text-[#ff5c73]"
                             }`}
                           >
                             {pct}%
                           </div>
-  
+
                           {isMobile && !marketClosed && (
-                            <div className="mt-2 text-xs text-gray-500">
+                            <div className="mt-1 text-[11px] text-gray-500">
                               Tap to trade
                             </div>
                           )}
@@ -1747,17 +1747,17 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                     })}
                   </div>
                 ) : (
-                  <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {names.map((outcome, index) => (
                       <button
                         key={index}
                         onClick={() => openMobileTrade(index)}
                         disabled={!isMobile || marketClosed}
-                        className={`text-left rounded-xl p-4 border border-pump-border bg-pump-dark/60 transition ${
+                        className={`text-left rounded-xl px-3 py-2.5 md:p-3 border border-gray-800 bg-black transition ${
                           isMobile && !marketClosed ? "active:scale-[0.99]" : ""
                         }`}
                       >
-                        <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center justify-between gap-2">
                           <div className="text-sm font-semibold text-white truncate">
                             {outcome}
                           </div>
@@ -1765,11 +1765,11 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                             {(percentages[index] ?? 0).toFixed(1)}%
                           </div>
                         </div>
-                        <div className="mt-2 text-xs text-gray-500">
+                        <div className="mt-1 text-[11px] text-gray-500">
                           Supply: {supplies[index] || 0}
                         </div>
                         {isMobile && !marketClosed && (
-                          <div className="mt-2 text-xs text-gray-500">
+                          <div className="mt-1 text-[11px] text-gray-500">
                             Tap to trade
                           </div>
                         )}
@@ -1779,7 +1779,7 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                 )}
   
                 {/* Stats */}
-                <div className="grid grid-cols-2 gap-4 pt-4 border-t border-gray-700 mt-6">
+                <div className="grid grid-cols-2 gap-3 pt-3 border-t border-gray-700 mt-4">
                   <div>
                     <div className="text-xs text-gray-500 mb-1">Volume</div>
                     <div className="text-lg font-semibold text-white">
