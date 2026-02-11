@@ -316,70 +316,155 @@ function formatScore(score: Record<string, unknown>, sport: string): string {
   return JSON.stringify(score);
 }
 
+function pickEventBanner(event: any, meta?: any): string | null {
+  const keys = ["strBanner", "strFanart1", "strThumb", "strPoster"];
+  const sources = [event?.raw, event?.meta?.raw, meta?.raw, meta?.images, meta];
+  for (const key of keys) {
+    for (const src of sources) {
+      const v = src?.[key];
+      if (typeof v === "string" && v.startsWith("http")) return v;
+    }
+  }
+  return null;
+}
+
+function pickBadge(event: any, meta: any, side: "home" | "away"): string | null {
+  const keys = side === "home"
+    ? ["strHomeTeamBadge", "home_badge", "strHomeTeamLogo"]
+    : ["strAwayTeamBadge", "away_badge", "strAwayTeamLogo"];
+  const sources = [event, event?.raw, event?.meta?.raw, meta, meta?.raw, meta?.images];
+  for (const key of keys) {
+    for (const src of sources) {
+      const v = src?.[key];
+      if (typeof v === "string" && v.startsWith("http")) return v;
+    }
+  }
+  return null;
+}
+
+function liveLabel(event: any): string {
+  const m = event?.raw?.intProgress || event?.raw?.minute || event?.minute;
+  if (m != null && String(m).trim() !== "" && m !== 0 && m !== "0") return `${m}'`;
+  return "";
+}
+
 function SportScoreCard({
   event,
+  meta,
   refreshing,
   onRefresh,
 }: {
   event: SportEvent;
+  meta?: any;
   refreshing: boolean;
   onRefresh: () => void;
 }) {
   const isLive = event.status === "live";
   const isTerminal = ["finished", "cancelled", "postponed"].includes(event.status);
+  const banner = pickEventBanner(event, meta);
+  const homeBadge = pickBadge(event, meta, "home");
+  const awayBadge = pickBadge(event, meta, "away");
+  const minute = liveLabel(event);
+  const hasScore = event.score && (event.score.home != null || event.score.away != null);
 
   return (
-    <div className={`card-pump border ${isLive ? "border-red-500/50" : "border-white/10"}`}>
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <span className={`px-2 py-0.5 rounded-full text-xs font-bold uppercase ${sportStatusColor(event.status)}`}>
-            {isLive && (
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-white mr-1.5 animate-pulse" />
+    <div className={`rounded-xl border overflow-hidden bg-pump-gray ${
+      isLive ? "border-red-500/50 shadow-[0_0_24px_rgba(239,68,68,0.15)]" : "border-white/10"
+    }`}>
+      {/* Banner image (edge-to-edge) */}
+      {banner && (
+        <div className="relative h-28 sm:h-36">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={banner} alt="" className="w-full h-full object-cover" />
+          <div className="absolute inset-0 bg-gradient-to-t from-pump-gray via-pump-gray/80 to-pump-gray/30" />
+        </div>
+      )}
+
+      <div className={`px-4 ${banner ? "pt-2 pb-4" : "py-4"}`}>
+        {/* Status + league + refresh */}
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <span className={`px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wide ${sportStatusColor(event.status)}`}>
+              {isLive && (
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-white mr-1.5 animate-pulse" />
+              )}
+              {isLive ? (minute ? `LIVE ${minute}` : "LIVE") : event.status}
+            </span>
+            {event.league && (
+              <span className="text-xs text-gray-500 truncate max-w-[140px]">{event.league}</span>
             )}
-            {event.status}
-          </span>
-          {event.league && (
-            <span className="text-xs text-gray-500">{event.league}</span>
+          </div>
+          {!isTerminal && (
+            <button
+              onClick={onRefresh}
+              disabled={refreshing}
+              className="text-xs text-gray-400 hover:text-white transition disabled:opacity-40"
+            >
+              {refreshing ? "..." : "↻"}
+            </button>
           )}
         </div>
-        {!isTerminal && (
-          <button
-            onClick={onRefresh}
-            disabled={refreshing}
-            className="text-xs text-gray-400 hover:text-white transition disabled:opacity-40"
-          >
-            {refreshing ? "..." : "Refresh"}
-          </button>
+
+        {/* Teams + Score */}
+        <div className="flex items-center justify-between gap-2">
+          {/* Home */}
+          <div className="flex-1 flex flex-col items-center gap-1.5 min-w-0">
+            {homeBadge ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={homeBadge} alt="" className="w-12 h-12 sm:w-14 sm:h-14 object-contain drop-shadow-lg" />
+            ) : (
+              <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-white/5 flex items-center justify-center text-lg font-bold text-gray-600">
+                {(event.home_team || "H")[0]}
+              </div>
+            )}
+            <span className="text-xs sm:text-sm font-semibold text-white text-center leading-tight line-clamp-2">
+              {event.home_team || "Home"}
+            </span>
+          </div>
+
+          {/* Score / VS */}
+          <div className="text-center px-2 shrink-0">
+            {hasScore ? (
+              <div className={`text-2xl sm:text-3xl font-black tabular-nums ${isLive ? "text-pump-green" : "text-white"}`}>
+                {formatScore(event.score, event.sport)}
+              </div>
+            ) : (
+              <div className="text-lg font-bold text-gray-600">VS</div>
+            )}
+          </div>
+
+          {/* Away */}
+          <div className="flex-1 flex flex-col items-center gap-1.5 min-w-0">
+            {awayBadge ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={awayBadge} alt="" className="w-12 h-12 sm:w-14 sm:h-14 object-contain drop-shadow-lg" />
+            ) : (
+              <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-white/5 flex items-center justify-center text-lg font-bold text-gray-600">
+                {(event.away_team || "A")[0]}
+              </div>
+            )}
+            <span className="text-xs sm:text-sm font-semibold text-white text-center leading-tight line-clamp-2">
+              {event.away_team || "Away"}
+            </span>
+          </div>
+        </div>
+
+        {/* Kickoff time */}
+        {event.start_time && (
+          <div className="text-center mt-3 text-xs text-gray-500">
+            {new Date(event.start_time).toLocaleString("en-US", {
+              month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+            })}
+          </div>
+        )}
+
+        {/* Last updated */}
+        {event.last_update && (
+          <div className="text-center mt-1 text-[10px] text-gray-600">
+            Updated {new Date(event.last_update).toLocaleTimeString()}
+          </div>
         )}
       </div>
-
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex-1 text-right">
-          <span className="text-sm font-semibold text-white">{event.home_team || "Home"}</span>
-        </div>
-        <div className="text-center px-3">
-          <span className="text-lg font-bold text-pump-green">
-            {formatScore(event.score, event.sport)}
-          </span>
-        </div>
-        <div className="flex-1 text-left">
-          <span className="text-sm font-semibold text-white">{event.away_team || "Away"}</span>
-        </div>
-      </div>
-
-      {event.start_time && (
-        <div className="text-center mt-2 text-xs text-gray-500">
-          {new Date(event.start_time).toLocaleString("en-US", {
-            month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
-          })}
-        </div>
-      )}
-
-      {event.last_update && (
-        <div className="text-center mt-1 text-[10px] text-gray-600">
-          Updated {new Date(event.last_update).toLocaleTimeString()}
-        </div>
-      )}
     </div>
   );
 }
@@ -862,6 +947,22 @@ if (snap?.posAcc?.shares) {
         }
       })();
     }, [id, connection]);
+
+  // Merge liveScore into sportEvent for display (card shows live data even if event.score empty)
+  const sportEventForUi = useMemo(() => {
+    if (!sportEvent) return null;
+    const ev: any = {
+      ...sportEvent,
+      score: { ...(sportEvent.score || {}) },
+      raw: { ...(sportEvent.raw || {}) },
+    };
+    if (liveScore) {
+      if (liveScore.home_score != null && ev.score.home == null) ev.score.home = liveScore.home_score;
+      if (liveScore.away_score != null && ev.score.away == null) ev.score.away = liveScore.away_score;
+      if (liveScore.minute != null) ev.raw.intProgress = liveScore.minute;
+    }
+    return ev as SportEvent;
+  }, [sportEvent, liveScore]);
 
   const derived: Derived | null = useMemo(() => {
     if (!market) return null;
@@ -1443,9 +1544,10 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
               )}
 
               {/* Sport score card */}
-              {sportEvent && market.marketMode === "sport" && (
+              {sportEventForUi && market.marketMode === "sport" && (
                 <SportScoreCard
-                  event={sportEvent}
+                  event={sportEventForUi}
+                  meta={market?.sportMeta}
                   refreshing={sportRefreshing}
                   onRefresh={handleSportRefresh}
                 />
