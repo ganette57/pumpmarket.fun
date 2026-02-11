@@ -466,7 +466,7 @@ export async function listUpcomingMatches(params: {
   } else if (provider === "thesportsdb") {
     try {
       const raw = await listUpcomingMatchesTheSportsDB({ sport, days, base_date });
-      // Apply T-2 rule to end_time
+      // Apply T-2 rule to end_time only
       result = raw.map((m) => ({
         ...m,
         end_time: applyT2(m.end_time),
@@ -479,7 +479,7 @@ export async function listUpcomingMatches(params: {
     // api_football provider
     try {
       const raw = await apiFootballListUpcoming({ sport, days, base_date });
-      // Apply T-2 rule to end_time
+      // Apply T-2 rule to end_time only
       result = raw.map((m) => ({
         ...m,
         end_time: applyT2(m.end_time),
@@ -489,6 +489,36 @@ export async function listUpcomingMatches(params: {
       result = [];
     }
   }
+
+  // Sanity guards after T-2 application
+  const nowIso = Date.now();
+  result = result.map((m) => {
+    const startMs = new Date(m.start_time).getTime();
+    let endMs = new Date(m.end_time).getTime();
+
+    // Guard: end_time must never be before start_time
+    // (can happen if duration is tiny or T-2 overshot)
+    if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs <= startMs) {
+      const sportDur = DURATION_MS[m.sport] || DURATION_MS.soccer;
+      endMs = startMs + sportDur - T2_MS;
+      dbg("guard: end_time <= start_time, recalculated", m.provider_event_id);
+    }
+
+    // Guard: if now < start_time, status cannot be "finished" or "live"
+    let status = m.status;
+    if (Number.isFinite(startMs) && nowIso < startMs) {
+      if (status === "finished" || status === "live") {
+        dbg("guard: status was", status, "but now < start_time, forcing scheduled", m.provider_event_id);
+        status = "scheduled";
+      }
+    }
+
+    return {
+      ...m,
+      end_time: Number.isFinite(endMs) ? new Date(endMs).toISOString() : m.end_time,
+      status,
+    };
+  });
 
   // Sort + hard cap
   result.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());

@@ -1345,18 +1345,25 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
   const sportLocked = !sportFinished && Number.isFinite(sportLockMs) && nowMs >= sportLockMs;
 
   // Compute sport phase: scheduled | live | locked | finished
+  // GUARD: if now < sportStartMs, the match hasn't started — force "scheduled"
+  // regardless of what the API status says. This prevents premature "ended".
   const sportPhase: "scheduled" | "live" | "locked" | "finished" | null = (() => {
     if (!market.marketMode || market.marketMode !== "sport") return null;
+    // Hard guard: match hasn't started yet → always scheduled
+    if (Number.isFinite(sportStartMs) && nowMs < sportStartMs) return "scheduled";
     if (sportFinished) return "finished";
     if (sportLocked) return "locked";
     if (Number.isFinite(sportStartMs) && nowMs >= sportStartMs) return "live";
-    if (Number.isFinite(sportStartMs) && nowMs < sportStartMs) return "scheduled";
     // Fallback: if we have end but no start, use ended check
     if (ended) return "finished";
     return "scheduled";
   })();
 
-  const marketClosed = isResolvedOnChain || isProposed || ended || !!market.isBlocked || sportFinished || sportLocked;
+  // marketClosed also respects the start_time guard:
+  // if match hasn't started, sport-related locks don't apply
+  const sportBeforeStart = Number.isFinite(sportStartMs) && nowMs < sportStartMs;
+  const marketClosed = isResolvedOnChain || isProposed || ended || !!market.isBlocked
+    || (!sportBeforeStart && (sportFinished || sportLocked));
 
   const endLabel = hasValidEnd
     ? new Date(market.resolutionTime * 1000).toLocaleString("en-US", {

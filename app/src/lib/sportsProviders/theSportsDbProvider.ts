@@ -57,36 +57,147 @@ function estimatedEndTime(startIso: string, sport: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Timezone-safe date parsing
+//
+// TheSportsDB returns dateEvent ("YYYY-MM-DD") + strTime ("HH:MM:SS") in
+// the league's LOCAL timezone, NOT UTC. Parsing them naively as
+// `new Date("2026-02-15T19:30:00")` is WRONG — JS interprets that
+// inconsistently across environments (sometimes local, sometimes UTC).
+//
+// We use Intl.DateTimeFormat to compute the UTC offset for the event's
+// timezone at the exact date in question, which handles DST correctly.
+// ---------------------------------------------------------------------------
+
+/**
+ * Convert a local date+time in a specific IANA timezone to UTC epoch ms.
+ * Example: zonedTimeToUtcMs("2026-02-15", "19:30:00", "Europe/London")
+ *   → correct UTC ms whether London is in GMT or BST at that date.
+ *
+ * Approach:
+ * 1. Parse components and create a UTC "guess" (pretend it's UTC).
+ * 2. Format that guess in the target timezone to see what local time it maps to.
+ * 3. The difference = timezone offset. Subtract it.
+ */
+function zonedTimeToUtcMs(dateYMD: string, timeHMS: string, tz: string): number {
+  const [y, mo, d] = dateYMD.split("-").map(Number);
+  const parts = (timeHMS || "00:00:00").split(":");
+  const h = Number(parts[0]) || 0;
+  const mi = Number(parts[1]) || 0;
+  const s = Number(parts[2]) || 0;
+
+  // Step 1: naive UTC guess — treat input components as UTC
+  const guessMs = Date.UTC(y, mo - 1, d, h, mi, s);
+
+  // Step 2: format guessMs in the target tz to see what local time it shows
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+
+  const fmtParts = fmt.formatToParts(new Date(guessMs));
+  const g = (type: string) => {
+    const val = fmtParts.find((p) => p.type === type)?.value || "0";
+    return parseInt(val, 10);
+  };
+
+  let localH = g("hour");
+  if (localH === 24) localH = 0; // midnight edge case in some locales
+  const localAsUtcMs = Date.UTC(g("year"), g("month") - 1, g("day"), localH, g("minute"), g("second"));
+
+  // Step 3: offset = how much the tz is ahead of UTC
+  // localAsUtcMs - guessMs = offset
+  // To convert local→UTC: subtract offset
+  const offsetMs = localAsUtcMs - guessMs;
+  return guessMs - offsetMs;
+}
+
+/**
+ * Parse TheSportsDB event into a UTC ISO start_time string.
+ *
+ * Priority:
+ * 1. strTimestamp — if present and parseable, it's already an ISO 8601
+ *    timestamp (TheSportsDB documents it as UTC). Use directly.
+ * 2. dateEvent + strTime — local time in the league's timezone.
+ *    Requires timezone-aware conversion via zonedTimeToUtcMs().
+ * 3. Fallback: current time (should never happen for real events).
+ */
+function parseTheSportsDbStart(event: any, leagueCfg?: LeagueConfig): string {
+  // Priority 1: strTimestamp (ISO 8601, typically UTC from TheSportsDB)
+  if (event.strTimestamp) {
+    const ts = new Date(event.strTimestamp);
+    if (!isNaN(ts.getTime())) {
+      dbg(
+        "  parseStart: using strTimestamp",
+        event.idEvent,
+        event.strTimestamp,
+        "→",
+        ts.toISOString(),
+      );
+      return ts.toISOString();
+    }
+  }
+
+  // Priority 2: dateEvent + strTime with timezone from league config
+  if (event.dateEvent) {
+    const time = event.strTime || "00:00:00";
+    const tz = leagueCfg?.tz || "UTC";
+    const utcMs = zonedTimeToUtcMs(event.dateEvent, time, tz);
+
+    if (Number.isFinite(utcMs)) {
+      const iso = new Date(utcMs).toISOString();
+      dbg(
+        "  parseStart: dateEvent+strTime",
+        event.idEvent,
+        `${event.dateEvent} ${time} [${tz}]`,
+        "→",
+        iso,
+      );
+      return iso;
+    }
+  }
+
+  // Fallback
+  dbg("  parseStart: FALLBACK to now()", event.idEvent);
+  return new Date().toISOString();
+}
+
+// ---------------------------------------------------------------------------
 // League mapping
 //
 // TheSportsDB league IDs for our target leagues.
-// Each entry maps our internal sport name to one or more league IDs + names.
-// The search keywords help match API responses that may use variant names.
+// Each entry includes an IANA timezone for the league's local times.
+// TheSportsDB dateEvent + strTime are in the league's LOCAL timezone,
+// so we must convert them to UTC explicitly.
 // ---------------------------------------------------------------------------
 
 type LeagueConfig = {
   id: number;
   name: string;
   sport: string;
-  keywords: string[]; // for fuzzy matching
+  keywords: string[];
+  tz: string; // IANA timezone for strTime interpretation
 };
 
 const TARGET_LEAGUES: LeagueConfig[] = [
   // Soccer
-  { id: 4334, name: "French Ligue 1",          sport: "soccer",            keywords: ["ligue 1", "french"] },
-  { id: 4335, name: "Spanish La Liga",          sport: "soccer",            keywords: ["la liga", "spanish", "primera"] },
-  { id: 4328, name: "English Premier League",   sport: "soccer",            keywords: ["premier league", "english premier"] },
-  { id: 4332, name: "Italian Serie A",          sport: "soccer",            keywords: ["serie a", "italian"] },
-  { id: 4429, name: "FIFA World Cup",           sport: "soccer",            keywords: ["world cup", "fifa"] },
+  { id: 4334, name: "French Ligue 1",          sport: "soccer",            keywords: ["ligue 1", "french"],                   tz: "Europe/Paris" },
+  { id: 4335, name: "Spanish La Liga",          sport: "soccer",            keywords: ["la liga", "spanish", "primera"],        tz: "Europe/Madrid" },
+  { id: 4328, name: "English Premier League",   sport: "soccer",            keywords: ["premier league", "english premier"],    tz: "Europe/London" },
+  { id: 4332, name: "Italian Serie A",          sport: "soccer",            keywords: ["serie a", "italian"],                  tz: "Europe/Rome" },
+  { id: 4429, name: "FIFA World Cup",           sport: "soccer",            keywords: ["world cup", "fifa"],                   tz: "UTC" },
   // Basketball
-  { id: 4387, name: "NBA",                      sport: "basketball",        keywords: ["nba", "national basketball"] },
+  { id: 4387, name: "NBA",                      sport: "basketball",        keywords: ["nba", "national basketball"],           tz: "America/New_York" },
   // American Football
-  { id: 4391, name: "NFL",                      sport: "american_football", keywords: ["nfl", "national football league"] },
-  // Tennis — TheSportsDB doesn't have "ATP"/"WTA" as single leagues.
-  // Major tournaments have their own IDs. We use well-known ones.
-  // These IDs may need adjustment based on what TheSportsDB actually returns.
-  { id: 4581, name: "ATP Tour",                 sport: "tennis",            keywords: ["atp"] },
-  { id: 4582, name: "WTA Tour",                 sport: "tennis",            keywords: ["wta"] },
+  { id: 4391, name: "NFL",                      sport: "american_football", keywords: ["nfl", "national football league"],      tz: "America/New_York" },
+  // Tennis — tournament locations vary; UTC is a safe baseline
+  { id: 4581, name: "ATP Tour",                 sport: "tennis",            keywords: ["atp"],                                 tz: "UTC" },
+  { id: 4582, name: "WTA Tour",                 sport: "tennis",            keywords: ["wta"],                                 tz: "UTC" },
 ];
 
 function leaguesForSport(sport: string): LeagueConfig[] {
@@ -234,22 +345,15 @@ function eventToMatch(event: any, leagueCfg?: LeagueConfig): NormalizedMatch | n
   const eventId = event.idEvent;
   if (!eventId) return null;
 
-  // Build start_time from strTimestamp (ISO 8601) or dateEvent + strTime
-  let startIso: string;
-  if (event.strTimestamp) {
-    const ts = new Date(event.strTimestamp);
-    startIso = isNaN(ts.getTime()) ? new Date().toISOString() : ts.toISOString();
-  } else if (event.dateEvent) {
-    const time = event.strTime || "00:00:00";
-    const combined = `${event.dateEvent}T${time}`;
-    const ts = new Date(combined);
-    startIso = isNaN(ts.getTime()) ? new Date().toISOString() : ts.toISOString();
-  } else {
-    startIso = new Date().toISOString();
-  }
+  // Timezone-safe start_time parsing (always returns UTC ISO)
+  const startIso = parseTheSportsDbStart(event, leagueCfg);
 
   const sport = leagueCfg?.sport || mapSport(event.strSport);
   const league = event.strLeague || leagueCfg?.name || "";
+
+  // end_time = start + sport duration (T-2 is applied later in fixturesProvider)
+  const endIso = estimatedEndTime(startIso, sport);
+
   const status = mapStatus(event);
 
   return {
@@ -260,7 +364,7 @@ function eventToMatch(event: any, leagueCfg?: LeagueConfig): NormalizedMatch | n
     home_team: homeTeam,
     away_team: awayTeam,
     start_time: startIso,
-    end_time: estimatedEndTime(startIso, sport),
+    end_time: endIso,
     status,
     label: `${homeTeam} vs ${awayTeam}`,
     raw: {
@@ -274,6 +378,7 @@ function eventToMatch(event: any, leagueCfg?: LeagueConfig): NormalizedMatch | n
       season: event.strSeason || null,
       home_badge: event.strHomeTeamBadge || null,
       away_badge: event.strAwayTeamBadge || null,
+      parsed_tz: leagueCfg?.tz || "UTC",
     },
   };
 }
@@ -416,6 +521,10 @@ export async function fetchLiveScore(eventId: string): Promise<LiveScoreResult> 
     const minuteMatch = progress.match(/(\d+)(?:'|:|min)/);
     if (minuteMatch) minute = parseInt(minuteMatch[1], 10);
 
+    // Parse start_time with timezone awareness (find matching league config)
+    const leagueCfg = TARGET_LEAGUES.find((l) => String(l.id) === String(ev.idLeague));
+    const startIso = parseTheSportsDbStart(ev, leagueCfg);
+
     const result: LiveScoreResult = {
       provider: "thesportsdb",
       provider_event_id: eventId,
@@ -425,7 +534,7 @@ export async function fetchLiveScore(eventId: string): Promise<LiveScoreResult> 
       home_score: homeScore,
       away_score: awayScore,
       minute,
-      start_time: ev.strTimestamp || null,
+      start_time: startIso,
       league: ev.strLeague || null,
       raw: {
         status_text: ev.strStatus || null,
