@@ -498,6 +498,7 @@ export default function CreateMarketPage() {
   const [sportHomeTeam, setSportHomeTeam] = useState("");
   const [sportAwayTeam, setSportAwayTeam] = useState("");
   const [sportType, setSportType] = useState<string>("soccer");
+  const [sportStartTime, setSportStartTime] = useState<Date | null>(null);
   const [sportEndTime, setSportEndTime] = useState<Date | null>(null);
   const [sportLeague, setSportLeague] = useState("");
   const [sportProviderEventId, setSportProviderEventId] = useState("");
@@ -670,10 +671,33 @@ export default function CreateMarketPage() {
     setSportLeague(m.league || "");
     setSportProviderEventId(m.provider_event_id || "");
     setSportProviderName(m.provider || "");
-    if (m.start_time) setResolutionDate(new Date(m.start_time));
-    if (m.end_time) setSportEndTime(new Date(m.end_time));
+
+    // Track match start_time separately for sport_meta
+    if (m.start_time) setSportStartTime(new Date(m.start_time));
+
+    // resolutionDate = when market/trading ends = end_time (already T-2 adjusted)
+    // NOT start_time — that was the bug causing premature "ended" state
+    if (m.end_time) {
+      const endDate = new Date(m.end_time);
+      setResolutionDate(endDate);
+      setSportEndTime(endDate);
+    } else if (m.start_time) {
+      // Fallback: no end_time → estimate from start + sport duration - T2
+      const SPORT_DURATIONS: Record<string, number> = {
+        soccer: 2 * 3600_000 + 15 * 60_000,
+        basketball: 2 * 3600_000 + 30 * 60_000,
+        tennis: 3 * 3600_000,
+        american_football: 3 * 3600_000 + 30 * 60_000,
+        mma: 2 * 3600_000,
+      };
+      const dur = SPORT_DURATIONS[m.sport] || SPORT_DURATIONS.soccer;
+      const T2 = 2 * 60_000;
+      const estimated = new Date(new Date(m.start_time).getTime() + dur - T2);
+      setResolutionDate(estimated);
+      setSportEndTime(estimated);
+    }
+
     setQuestion(`${m.home_team} vs ${m.away_team}${m.league ? ` - ${m.league}` : ""}`);
-    // Also set outcomes to team names for binary
     if (marketType === 0) {
       setOutcomeInputs([m.home_team, m.away_team]);
     }
@@ -685,6 +709,7 @@ export default function CreateMarketPage() {
     setSportHomeTeam("");
     setSportAwayTeam("");
     setSportLeague("");
+    setSportStartTime(null);
     setSportEndTime(null);
     setQuestion("");
     if (marketType === 0) {
@@ -708,7 +733,25 @@ export default function CreateMarketPage() {
 
     try {
       const marketKeypair = Keypair.generate();
-      const resolutionTimestamp = Math.floor(resolutionDate.getTime() / 1000);
+
+      // For sport markets: ensure resolution time = sport end (T-2), not match start
+      // Safety: if resolutionDate somehow ended up <= sportStartTime, recompute
+      let effectiveEndDate = resolutionDate;
+      if (isMatchMode && sportStartTime && resolutionDate.getTime() <= sportStartTime.getTime()) {
+        const SPORT_DURATIONS: Record<string, number> = {
+          soccer: 2 * 3600_000 + 15 * 60_000,
+          basketball: 2 * 3600_000 + 30 * 60_000,
+          tennis: 3 * 3600_000,
+          american_football: 3 * 3600_000 + 30 * 60_000,
+          mma: 2 * 3600_000,
+        };
+        const dur = SPORT_DURATIONS[sportType] || SPORT_DURATIONS.soccer;
+        const T2 = 2 * 60_000;
+        effectiveEndDate = new Date(sportStartTime.getTime() + dur - T2);
+        console.warn("[create] resolutionDate <= sportStartTime, recomputed to", effectiveEndDate.toISOString());
+      }
+
+      const resolutionTimestamp = Math.floor(effectiveEndDate.getTime() / 1000);
       const bLamportsU64 = Math.floor(DEFAULT_B_SOL * 1_000_000_000);
 
       const tx = await (program as any).methods
@@ -771,23 +814,29 @@ export default function CreateMarketPage() {
       let sportEventId: string | undefined;
       let sportMeta: Record<string, unknown> | undefined;
       if (isMatchMode && sportHomeTeam.trim() && sportAwayTeam.trim()) {
+        // Use actual match start_time (not resolutionDate which is end_time/T-2)
+        const matchStart = sportStartTime || resolutionDate;
+        const matchEnd = sportEndTime || resolutionDate;
+
         const evt = await createSportEventServer({
-          provider: sportProviderEventId ? (sportProviderName || "api-football") : "manual",
+          provider: sportProviderEventId ? (sportProviderName || "thesportsdb") : "manual",
           provider_event_id: sportProviderEventId || `manual_${marketKeypair.publicKey.toBase58()}`,
           sport: sportType,
           home_team: sportHomeTeam.trim(),
           away_team: sportAwayTeam.trim(),
-          start_time: resolutionDate.toISOString(),
-          end_time: sportEndTime ? sportEndTime.toISOString() : undefined,
+          start_time: matchStart.toISOString(),
+          end_time: matchEnd.toISOString(),
           league: sportLeague || undefined,
         });
         sportEventId = evt.id;
         sportMeta = {
           sport: sportType,
+          provider: sportProviderEventId ? (sportProviderName || "thesportsdb") : "manual",
+          provider_event_id: sportProviderEventId || undefined,
           home_team: sportHomeTeam.trim(),
           away_team: sportAwayTeam.trim(),
-          start_time: resolutionDate.toISOString(),
-          end_time: sportEndTime ? sportEndTime.toISOString() : undefined,
+          start_time: matchStart.toISOString(),
+          end_time: matchEnd.toISOString(),
         };
       }
 
@@ -797,7 +846,7 @@ export default function CreateMarketPage() {
         description: fullDescription || undefined,
         category: category || "other",
         image_url: imagePreview || undefined,
-        end_date: resolutionDate.toISOString(),
+        end_date: effectiveEndDate.toISOString(),
         creator: publicKey.toBase58(),
         social_links: socialLinks,
 
