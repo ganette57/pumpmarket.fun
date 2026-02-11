@@ -56,6 +56,7 @@ export async function createSportEventServer(row: {
   start_time: string;
   end_time?: string;
   league?: string;
+  raw?: any;
 }): Promise<SportEvent> {
   const res = await fetch("/api/sports/create-event", {
     method: "POST",

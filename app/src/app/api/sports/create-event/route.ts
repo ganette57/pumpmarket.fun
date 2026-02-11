@@ -73,7 +73,7 @@ export async function POST(req: Request) {
         end_time: enriched?.end_time ?? end_time,
         status: enriched?.status ?? "scheduled",
         score: enriched?.score ?? {},
-        raw: enriched?.raw ?? null,
+        raw: enriched?.raw ?? body.raw ?? null,
         last_update: enriched ? new Date().toISOString() : null,
       })
       .select("*")

@@ -503,6 +503,7 @@ export default function CreateMarketPage() {
   const [sportLeague, setSportLeague] = useState("");
   const [sportProviderEventId, setSportProviderEventId] = useState("");
   const [sportProviderName, setSportProviderName] = useState("");
+  const [sportRaw, setSportRaw] = useState<any>(null);
 
   // Match picker modal
   const [matchPickerOpen, setMatchPickerOpen] = useState(false);
@@ -671,6 +672,7 @@ export default function CreateMarketPage() {
     setSportLeague(m.league || "");
     setSportProviderEventId(m.provider_event_id || "");
     setSportProviderName(m.provider || "");
+    setSportRaw(m.raw ?? null);
 
     // Track match start_time separately for sport_meta
     if (m.start_time) setSportStartTime(new Date(m.start_time));
@@ -711,6 +713,7 @@ export default function CreateMarketPage() {
     setSportLeague("");
     setSportStartTime(null);
     setSportEndTime(null);
+    setSportRaw(null);
     setQuestion("");
     if (marketType === 0) {
       setOutcomeInputs(["Team A", "Team B"]);
@@ -827,6 +830,7 @@ export default function CreateMarketPage() {
           start_time: matchStart.toISOString(),
           end_time: matchEnd.toISOString(),
           league: sportLeague || undefined,
+          raw: sportRaw ?? undefined,
         });
         sportEventId = evt.id;
         sportMeta = {
@@ -837,6 +841,7 @@ export default function CreateMarketPage() {
           away_team: sportAwayTeam.trim(),
           start_time: matchStart.toISOString(),
           end_time: matchEnd.toISOString(),
+          raw: sportRaw ?? undefined,
         };
       }
 
