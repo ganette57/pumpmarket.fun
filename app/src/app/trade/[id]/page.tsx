@@ -1283,6 +1283,13 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
     }
   }
 
+  // Client-side timer: update `now` every 15s so status badges auto-transition
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const iv = setInterval(() => setNowMs(Date.now()), 15_000);
+    return () => clearInterval(iv);
+  }, []);
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -1304,12 +1311,6 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
 
   const { marketType, names, supplies, percentages, isBinaryStyle, missingOutcomes } = derived;
 
-  // Client-side timer: update `now` every 15s so status badges auto-transition
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  useEffect(() => {
-    const iv = setInterval(() => setNowMs(Date.now()), 15_000);
-    return () => clearInterval(iv);
-  }, []);
 
   const nowSec = Math.floor(nowMs / 1000);
   const hasValidEnd = Number.isFinite(market.resolutionTime) && market.resolutionTime > 0;
