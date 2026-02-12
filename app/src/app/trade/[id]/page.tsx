@@ -1608,10 +1608,11 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                   </div>
                 </div>
   
-                <div className="flex gap-4 text-sm text-gray-400 mt-3 pt-3 border-t border-gray-800">
+                <div className="flex items-center gap-4 text-sm text-gray-400 mt-3 pt-3 border-t border-gray-800">
                   <div>
-                    <span className="text-gray-500">
-                      {formatVol(market.totalVolume)} SOL Vol
+                    <span className="text-xs text-gray-400">Vol</span>{" "}
+                    <span className="text-base md:text-lg font-semibold text-white">
+                      {formatVol(market.totalVolume)} SOL
                     </span>
                   </div>
   
@@ -1717,10 +1718,13 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                               : "border-[#ff5c73]/60"
                           } ${isMobile && !marketClosed ? "active:scale-[0.99]" : ""}`}
                         >
-                          <div className={`uppercase tracking-wide text-xs font-semibold mb-1 ${
-                            isYes ? "text-pump-green" : "text-[#ff5c73]"
-                          }`}>
-                            {outcome}
+                          <div className="flex items-center justify-between mb-1">
+                            <span className={`uppercase tracking-wide text-xs font-semibold ${
+                              isYes ? "text-pump-green" : "text-[#ff5c73]"
+                            }`}>
+                              {outcome}
+                            </span>
+                            <span className="hidden md:block text-[11px] text-gray-500">Supply: {supplies[index] || 0}</span>
                           </div>
 
                           <div
@@ -1752,6 +1756,9 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                           <div className="text-pump-green font-bold">
                             {(percentages[index] ?? 0).toFixed(1)}%
                           </div>
+                        </div>
+                        <div className="hidden md:block mt-1 text-[11px] text-gray-500">
+                          Supply: {supplies[index] || 0}
                         </div>
                       </button>
                     ))}
