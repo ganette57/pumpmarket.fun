@@ -1,4 +1,5 @@
-import type { Connection, PublicKey, Transaction } from "@solana/web3.js";
+import { Transaction } from "@solana/web3.js";
+import type { Connection, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 
 type SendSignedTxArgs = {
@@ -20,46 +21,68 @@ function getSigFromSignedTx(signed: Transaction): string | null {
   return null;
 }
 
+let signingInProgress = false;
+
 export async function sendSignedTx({
-    connection,
-    tx,
-    signTx,
-    feePayer,
-    commitment = "confirmed",
-    beforeSign,
-  }: SendSignedTxArgs): Promise<string> {
+  connection,
+  tx,
+  signTx,
+  feePayer,
+  commitment = "confirmed",
+  beforeSign,
+}: SendSignedTxArgs): Promise<string> {
   if (!feePayer) throw new Error("Missing feePayer");
 
-  // Always set fee payer + fresh blockhash BEFORE signing
-  const latest = await connection.getLatestBlockhash(commitment);
-  tx.feePayer = feePayer;
-  tx.recentBlockhash = latest.blockhash;
-  // ✅ allow caller to partialSign (ex: market Keypair for create_market)
-  if (beforeSign) await beforeSign(tx);
-  const signed = await signTx(tx);
-
-  // Prefer network-returned sig
-  let txSig: string | null = null;
-
-  try {
-    txSig = await connection.sendRawTransaction(signed.serialize(), {
-      skipPreflight: false,
-      maxRetries: 3,
-    });
-  } catch (e: any) {
-    const msg = String(e?.message || "").toLowerCase();
-
-    // If already processed, we can still try to confirm using the locally-derivable sig
-    if (!msg.includes("already been processed")) throw e;
-
-    txSig = getSigFromSignedTx(signed);
-    if (!txSig) throw e; // can't confirm without signature
+  if (signingInProgress) {
+    throw new Error("Signature already in progress");
   }
 
-  await connection.confirmTransaction(
-    { signature: txSig, blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight },
-    commitment
-  );
+  signingInProgress = true;
 
-  return txSig;
+  try {
+    const latest = await connection.getLatestBlockhash(commitment);
+
+    // Keep original behavior: set fee payer + blockhash on the tx before signing
+    tx.feePayer = feePayer;
+    tx.recentBlockhash = latest.blockhash;
+    
+    if (beforeSign) await beforeSign(tx);
+    
+    // Yield to event loop → helps Phantom popup rendering
+    await new Promise((r) => setTimeout(r, 0));
+    
+    const signed = await signTx(tx);
+
+    let txSig: string | null = null;
+
+    try {
+      txSig = await connection.sendRawTransaction(
+        signed.serialize(),
+        {
+          skipPreflight: false,
+          maxRetries: 3,
+        }
+      );
+    } catch (e: any) {
+      const msg = String(e?.message || "").toLowerCase();
+
+      if (!msg.includes("already been processed")) throw e;
+
+      txSig = getSigFromSignedTx(signed);
+      if (!txSig) throw e;
+    }
+
+    await connection.confirmTransaction(
+      {
+        signature: txSig,
+        blockhash: latest.blockhash,
+        lastValidBlockHeight: latest.lastValidBlockHeight,
+      },
+      commitment
+    );
+
+    return txSig;
+  } finally {
+    signingInProgress = false;
+  }
 }
