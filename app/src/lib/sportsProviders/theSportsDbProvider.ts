@@ -118,6 +118,23 @@ function zonedTimeToUtcMs(dateYMD: string, timeHMS: string, tz: string): number 
 }
 
 /**
+ * Parse a timestamp string as UTC.
+ * TheSportsDB strTimestamp often looks like "2026-02-12T00:00:00" with NO
+ * timezone suffix. Per JS spec, `new Date("...T...")` without Z is parsed
+ * as LOCAL time, which shifts the result by the server's UTC offset.
+ * This helper forces UTC interpretation for bare ISO strings.
+ */
+function parseTsUtc(s: string): Date | null {
+  const t = String(s || "").trim();
+  if (!t) return null;
+  // Already has timezone info — parse as-is
+  if (/[zZ]$/.test(t) || /[+-]\d{2}:\d{2}$/.test(t)) return new Date(t);
+  // Bare ISO without tz → force UTC
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(t)) return new Date(t + "Z");
+  return new Date(t);
+}
+
+/**
  * Parse TheSportsDB event into a UTC ISO start_time string.
  *
  * Priority:
@@ -129,9 +146,11 @@ function zonedTimeToUtcMs(dateYMD: string, timeHMS: string, tz: string): number 
  */
 function parseTheSportsDbStart(event: any, leagueCfg?: LeagueConfig): string {
   // Priority 1: strTimestamp (ISO 8601, typically UTC from TheSportsDB)
+  // IMPORTANT: use parseTsUtc — bare "YYYY-MM-DDTHH:mm:ss" must be treated
+  // as UTC, not local time. Without this, times shift by server tz offset.
   if (event.strTimestamp) {
-    const ts = new Date(event.strTimestamp);
-    if (!isNaN(ts.getTime())) {
+    const ts = parseTsUtc(event.strTimestamp);
+    if (ts && !isNaN(ts.getTime())) {
       dbg(
         "  parseStart: using strTimestamp",
         event.idEvent,
@@ -325,13 +344,39 @@ function mapStatus(event: any): "scheduled" | "live" | "finished" {
 
   // Fallback: if both scores present and event date is in the past, it's finished
   if (intHomeScore != null && intAwayScore != null) {
-    const eventTime = event.strTimestamp ? new Date(event.strTimestamp).getTime() : 0;
+    const tsParsed = event.strTimestamp ? parseTsUtc(event.strTimestamp) : null;
+    const eventTime = tsParsed ? tsParsed.getTime() : 0;
     if (eventTime > 0 && Date.now() - eventTime > 4 * 3600_000) {
       return "finished";
     }
     return "live"; // scores present but recent = probably live
   }
 
+  return "scheduled";
+}
+
+/**
+ * If provider says "scheduled" but we're inside the match time window,
+ * override to "live". Prevents UI stuck on "Scheduled" after kickoff.
+ * Grace: 5 min before start, 10 min after estimated end.
+ */
+function overrideLiveIfInWindow(
+  status: "scheduled" | "live" | "finished",
+  startIso: string,
+  sport: string,
+): "scheduled" | "live" | "finished" {
+  if (status !== "scheduled") return status;
+  const startMs = new Date(startIso).getTime();
+  if (!Number.isFinite(startMs)) return "scheduled";
+  const dur = DURATION_MS[sport] || DURATION_MS.soccer;
+  const endMs = startMs + dur;
+  const now = Date.now();
+  const GRACE_BEFORE = 5 * 60_000;
+  const GRACE_AFTER = 10 * 60_000;
+  if (now >= startMs - GRACE_BEFORE && now <= endMs + GRACE_AFTER) {
+    dbg("  overrideLiveIfInWindow: scheduled → live", startIso);
+    return "live";
+  }
   return "scheduled";
 }
 
@@ -354,7 +399,8 @@ function eventToMatch(event: any, leagueCfg?: LeagueConfig): NormalizedMatch | n
   // end_time = start + sport duration (T-2 is applied later in fixturesProvider)
   const endIso = estimatedEndTime(startIso, sport);
 
-  const status = mapStatus(event);
+  const rawStatus = mapStatus(event);
+  const status = overrideLiveIfInWindow(rawStatus, startIso, sport);
 
   return {
     provider: "thesportsdb",
@@ -511,7 +557,7 @@ export async function fetchLiveScore(eventId: string): Promise<LiveScoreResult> 
     }
 
     const ev = events[0];
-    const status = mapStatus(ev);
+    const rawStatus = mapStatus(ev);
     const homeScore = ev.intHomeScore != null ? Number(ev.intHomeScore) : null;
     const awayScore = ev.intAwayScore != null ? Number(ev.intAwayScore) : null;
 
@@ -524,6 +570,10 @@ export async function fetchLiveScore(eventId: string): Promise<LiveScoreResult> 
     // Parse start_time with timezone awareness (find matching league config)
     const leagueCfg = TARGET_LEAGUES.find((l) => String(l.id) === String(ev.idLeague));
     const startIso = parseTheSportsDbStart(ev, leagueCfg);
+
+    // Live override: if provider says scheduled but we're inside match window
+    const sport = leagueCfg?.sport || mapSport(ev.strSport);
+    const status = overrideLiveIfInWindow(rawStatus, startIso, sport);
 
     const result: LiveScoreResult = {
       provider: "thesportsdb",
