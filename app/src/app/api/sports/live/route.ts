@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
     const result = await fetchLiveScore(eventId);
     return NextResponse.json(result, {
       headers: {
-        "Cache-Control": "public, max-age=10, s-maxage=10",
+        "Cache-Control": "no-store",
       },
     });
   } catch {

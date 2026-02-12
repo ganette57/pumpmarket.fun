@@ -2,9 +2,14 @@
 // Server-only: RapidAPI (API-Sports) integration for search + event fetch.
 
 const DEBUG = process.env.SPORTS_DEBUG === "1";
+const DEBUG_SPORT_SCORES = process.env.DEBUG_SPORT_SCORES === "1";
 
 function dbg(...args: unknown[]) {
   if (DEBUG) console.log("[api-sports]", ...args);
+}
+
+function scoreDbg(...args: unknown[]) {
+  if (DEBUG_SPORT_SCORES) console.log("[sports-scores-debug]", ...args);
 }
 
 // ---------------------------------------------------------------------------
@@ -52,7 +57,12 @@ function estimatedEndTime(startIso: string, sport: string): string {
 // Generic fetch helper
 // ---------------------------------------------------------------------------
 
-async function apiFetch(sport: string, path: string, params: Record<string, string>): Promise<any> {
+async function apiFetch(
+  sport: string,
+  path: string,
+  params: Record<string, string>,
+  debugMeta?: { providerEventId?: string | null; leagueKey?: string | null },
+): Promise<any> {
   const key = getKey();
   if (!key) throw new Error("RAPIDAPI_KEY not set");
 
@@ -63,6 +73,20 @@ async function apiFetch(sport: string, path: string, params: Record<string, stri
   }
 
   dbg("fetch", url.toString());
+
+  const isFootballLike = sport === "soccer" || sport === "american_football";
+  if (isFootballLike) {
+    scoreDbg(
+      "request",
+      JSON.stringify({
+        provider: "api-sports",
+        sport_key: sport,
+        league_key: debugMeta?.leagueKey ?? null,
+        provider_event_id: debugMeta?.providerEventId ?? null,
+        endpoint: path,
+      }),
+    );
+  }
 
   const res = await fetch(url.toString(), {
     method: "GET",
@@ -75,11 +99,40 @@ async function apiFetch(sport: string, path: string, params: Record<string, stri
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
+    if (isFootballLike) {
+      scoreDbg(
+        "response",
+        JSON.stringify({
+          provider: "api-sports",
+          sport_key: sport,
+          provider_event_id: debugMeta?.providerEventId ?? null,
+          endpoint: path,
+          http_status: res.status,
+          body_preview: text.slice(0, 200),
+        }),
+      );
+    }
     dbg("error", res.status, text.slice(0, 200));
     throw new Error(`API-Sports ${res.status}: ${text.slice(0, 200)}`);
   }
 
-  return res.json();
+  const json = await res.json();
+  if (isFootballLike) {
+    const response0 = Array.isArray(json?.response) ? json.response[0] : null;
+    const keys = response0 && typeof response0 === "object" ? Object.keys(response0).slice(0, 10) : [];
+    scoreDbg(
+      "response",
+      JSON.stringify({
+        provider: "api-sports",
+        sport_key: sport,
+        provider_event_id: debugMeta?.providerEventId ?? null,
+        endpoint: path,
+        http_status: res.status,
+        keys_preview: keys,
+      }),
+    );
+  }
+  return json;
 }
 
 // ---------------------------------------------------------------------------
@@ -461,11 +514,11 @@ export async function fetchEvent(
 
   try {
     switch (sport) {
-      case "soccer": return await fetchSoccerEvent(numericId);
+      case "soccer": return await fetchSoccerEvent(numericId, providerEventId);
       case "basketball": return await fetchBasketballEvent(numericId);
       case "tennis": return await fetchTennisEvent(numericId);
       case "mma": return await fetchMmaEvent(numericId);
-      case "american_football": return await fetchAmFootballEvent(numericId);
+      case "american_football": return await fetchAmFootballEvent(numericId, providerEventId);
       default: return null;
     }
   } catch (e: any) {
@@ -476,8 +529,8 @@ export async function fetchEvent(
 
 // --- per-sport fetchEvent implementations ---
 
-async function fetchSoccerEvent(fixtureId: string): Promise<NormalizedEvent | null> {
-  const res = await apiFetch("soccer", "/v3/fixtures", { id: fixtureId });
+async function fetchSoccerEvent(fixtureId: string, providerEventId: string): Promise<NormalizedEvent | null> {
+  const res = await apiFetch("soccer", "/v3/fixtures", { id: fixtureId }, { providerEventId });
   const f = res?.response?.[0];
   if (!f) return null;
 
@@ -560,8 +613,8 @@ async function fetchMmaEvent(fightId: string): Promise<NormalizedEvent | null> {
   };
 }
 
-async function fetchAmFootballEvent(gameId: string): Promise<NormalizedEvent | null> {
-  const res = await apiFetch("american_football", "/games", { id: gameId });
+async function fetchAmFootballEvent(gameId: string, providerEventId: string): Promise<NormalizedEvent | null> {
+  const res = await apiFetch("american_football", "/games", { id: gameId }, { providerEventId });
   const g = res?.response?.[0];
   if (!g) return null;
 

@@ -296,7 +296,31 @@ function sportStatusColor(s: string) {
   if (s === "live") return "bg-red-500 text-white";
   if (s === "finished") return "bg-gray-600 text-gray-200";
   if (s === "cancelled" || s === "postponed") return "bg-yellow-600/80 text-yellow-100";
-  return "bg-blue-600/80 text-blue-100"; // scheduled
+  if (s === "scheduled") return "bg-blue-600/80 text-blue-100";
+  return "bg-gray-700 text-gray-200"; // unknown/neutral
+}
+
+function resolveDisplayStatus(event: any): "scheduled" | "live" | "finished" | "unknown" {
+  const raw = String(event?.status || "").toLowerCase();
+  const hasFinalScore = event?.score?.home != null && event?.score?.away != null;
+
+  if (["finished", "final", "ended", "ft"].includes(raw)) return "finished";
+  if (["live", "in_play", "inplay"].includes(raw)) return "live";
+  if (["scheduled", "not_started", "notstarted", "ns"].includes(raw)) {
+    // Some providers lag status updates; final score should still render as terminal.
+    return hasFinalScore ? "finished" : "scheduled";
+  }
+
+  // Keep unknown statuses neutral instead of forcing scheduled/live.
+  if (hasFinalScore) return "finished";
+  return "unknown";
+}
+
+function statusBadgeLabel(status: "scheduled" | "live" | "finished" | "unknown", minute: string): string {
+  if (status === "live") return minute ? `LIVE ${minute}` : "LIVE";
+  if (status === "finished") return "FINAL";
+  if (status === "scheduled") return "SCHEDULED";
+  return "—";
 }
 
 function formatScore(score: Record<string, unknown>, sport: string): string {
@@ -359,8 +383,9 @@ function SportScoreCard({
   refreshing: boolean;
   onRefresh: () => void;
 }) {
-  const isLive = event.status === "live";
-  const isTerminal = ["finished", "cancelled", "postponed"].includes(event.status);
+  const displayStatus = resolveDisplayStatus(event);
+  const isLive = displayStatus === "live";
+  const isTerminal = displayStatus === "finished" || ["cancelled", "postponed"].includes(String(event.status || "").toLowerCase());
   const banner = pickEventBanner(event, meta);
   const homeBadge = pickBadge(event, meta, "home");
   const awayBadge = pickBadge(event, meta, "away");
@@ -384,11 +409,11 @@ function SportScoreCard({
         {/* Status + league + refresh */}
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
-            <span className={`px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wide ${sportStatusColor(event.status)}`}>
+            <span className={`px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wide ${sportStatusColor(displayStatus)}`}>
               {isLive && (
                 <span className="inline-block w-1.5 h-1.5 rounded-full bg-white mr-1.5 animate-pulse" />
               )}
-              {isLive ? (minute ? `LIVE ${minute}` : "LIVE") : event.status}
+              {statusBadgeLabel(displayStatus, minute)}
             </span>
             {event.league && (
               <span className="text-xs text-gray-500 truncate max-w-[140px]">{event.league}</span>
@@ -884,7 +909,7 @@ if (snap?.posAcc?.shares) {
       return () => clearInterval(iv);
     }, [sportEvent?.status, market?.sportEventId]);
 
-    // Poll /api/sports/live for thesportsdb-linked markets during live window
+    // Poll /api/sports/live for thesportsdb-linked markets with adaptive interval.
     useEffect(() => {
       const meta = market?.sportMeta as any;
       const provider = meta?.provider;
@@ -894,27 +919,34 @@ if (snap?.posAcc?.shares) {
       if (market?.marketMode !== "sport") return;
 
       let cancelled = false;
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
       const poll = async () => {
         try {
           const res = await fetch(
-            `/api/sports/live?provider=thesportsdb&event_id=${encodeURIComponent(providerEventId)}`
+            `/api/sports/live?provider=thesportsdb&event_id=${encodeURIComponent(providerEventId)}`,
+            { cache: "no-store" }
           );
           if (!res.ok || cancelled) return;
           const data = await res.json();
           if (!cancelled) {
+            const nextStatus = data.status ?? "unknown";
             setLiveScore({
               home_score: data.home_score ?? null,
               away_score: data.away_score ?? null,
               minute: data.minute ?? null,
-              status: data.status ?? "unknown",
+              status: nextStatus,
             });
+            const nextMs = (nextStatus === "live" || nextStatus === "in_play") ? 15_000 : 90_000;
+            timeoutId = setTimeout(poll, nextMs);
           }
         } catch { /* ignore */ }
       };
 
       poll(); // initial fetch
-      const iv = setInterval(poll, 15_000);
-      return () => { cancelled = true; clearInterval(iv); };
+      return () => {
+        cancelled = true;
+        if (timeoutId) clearTimeout(timeoutId);
+      };
     }, [market?.sportMeta, market?.marketMode]);
 
     const handleSportRefresh = useCallback(async () => {
