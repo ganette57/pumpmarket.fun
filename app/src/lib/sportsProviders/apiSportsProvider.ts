@@ -41,7 +41,7 @@ function hostFor(sport: string): string {
 
 // Default match durations in ms (for estimated end_time)
 const DURATION_MS: Record<string, number> = {
-  soccer: 2 * 3600_000 + 15 * 60_000,           // 2h15m
+  soccer: 110 * 60_000,                          // 1h50m
   basketball: 2 * 3600_000 + 30 * 60_000,        // 2h30m
   tennis: 3 * 3600_000,                           // 3h
   mma: 2 * 3600_000,                              // 2h

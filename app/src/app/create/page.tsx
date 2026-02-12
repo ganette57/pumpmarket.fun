@@ -36,6 +36,20 @@ const RESOLUTION_SOURCES = [
   { value: "other", label: "Other (specify in notes)" },
 ] as const;
 
+const T2_MS = 2 * 60_000;
+const SPORT_DURATION_MS: Record<string, number> = {
+  soccer: 110 * 60_000,
+  basketball: 150 * 60_000,
+  tennis: 3 * 3600_000,
+  american_football: 3 * 3600_000 + 30 * 60_000,
+  mma: 2 * 3600_000,
+};
+
+function estimateMatchEnd(startDate: Date, sport: string): Date {
+  const dur = SPORT_DURATION_MS[sport] || SPORT_DURATION_MS.soccer;
+  return new Date(startDate.getTime() + dur);
+}
+
 // ---------- helpers ----------
 function parseOutcomes(text: string) {
   return text
@@ -675,28 +689,22 @@ export default function CreateMarketPage() {
     setSportRaw(m.raw ?? null);
 
     // Track match start_time separately for sport_meta
-    if (m.start_time) setSportStartTime(new Date(m.start_time));
+    const parsedStart = m.start_time ? new Date(m.start_time) : null;
+    const matchStart = parsedStart && Number.isFinite(parsedStart.getTime()) ? parsedStart : null;
+    if (matchStart) setSportStartTime(matchStart);
 
-    // resolutionDate = when market/trading ends = end_time (already T-2 adjusted)
-    // NOT start_time — that was the bug causing premature "ended" state
-    if (m.end_time) {
+    // Keep trading close at T-2 while storing event end_time as actual match end.
+    if (matchStart) {
+      const sport = String(m.sport || sportType || "").toLowerCase();
+      const estimatedMatchEnd = estimateMatchEnd(matchStart, sport);
+      setSportEndTime(estimatedMatchEnd);
+      setResolutionDate(new Date(estimatedMatchEnd.getTime() - T2_MS));
+    } else if (m.end_time) {
       const endDate = new Date(m.end_time);
-      setResolutionDate(endDate);
-      setSportEndTime(endDate);
-    } else if (m.start_time) {
-      // Fallback: no end_time → estimate from start + sport duration - T2
-      const SPORT_DURATIONS: Record<string, number> = {
-        soccer: 2 * 3600_000 + 15 * 60_000,
-        basketball: 2 * 3600_000 + 30 * 60_000,
-        tennis: 3 * 3600_000,
-        american_football: 3 * 3600_000 + 30 * 60_000,
-        mma: 2 * 3600_000,
-      };
-      const dur = SPORT_DURATIONS[m.sport] || SPORT_DURATIONS.soccer;
-      const T2 = 2 * 60_000;
-      const estimated = new Date(new Date(m.start_time).getTime() + dur - T2);
-      setResolutionDate(estimated);
-      setSportEndTime(estimated);
+      if (Number.isFinite(endDate.getTime())) {
+        setResolutionDate(endDate);
+        setSportEndTime(new Date(endDate.getTime() + T2_MS));
+      }
     }
 
     setQuestion(`${m.home_team} vs ${m.away_team}${m.league ? ` - ${m.league}` : ""}`);
@@ -741,16 +749,8 @@ export default function CreateMarketPage() {
       // Safety: if resolutionDate somehow ended up <= sportStartTime, recompute
       let effectiveEndDate = resolutionDate;
       if (isMatchMode && sportStartTime && resolutionDate.getTime() <= sportStartTime.getTime()) {
-        const SPORT_DURATIONS: Record<string, number> = {
-          soccer: 2 * 3600_000 + 15 * 60_000,
-          basketball: 2 * 3600_000 + 30 * 60_000,
-          tennis: 3 * 3600_000,
-          american_football: 3 * 3600_000 + 30 * 60_000,
-          mma: 2 * 3600_000,
-        };
-        const dur = SPORT_DURATIONS[sportType] || SPORT_DURATIONS.soccer;
-        const T2 = 2 * 60_000;
-        effectiveEndDate = new Date(sportStartTime.getTime() + dur - T2);
+        const estimatedMatchEnd = estimateMatchEnd(sportStartTime, sportType);
+        effectiveEndDate = new Date(estimatedMatchEnd.getTime() - T2_MS);
         console.warn("[create] resolutionDate <= sportStartTime, recomputed to", effectiveEndDate.toISOString());
       }
 
@@ -817,9 +817,9 @@ export default function CreateMarketPage() {
       let sportEventId: string | undefined;
       let sportMeta: Record<string, unknown> | undefined;
       if (isMatchMode && sportHomeTeam.trim() && sportAwayTeam.trim()) {
-        // Use actual match start_time (not resolutionDate which is end_time/T-2)
+        // Store real match end_time on sport_events (UTC ISO), while market end_date stays T-2.
         const matchStart = sportStartTime || resolutionDate;
-        const matchEnd = sportEndTime || resolutionDate;
+        const matchEnd = sportEndTime || estimateMatchEnd(matchStart, sportType);
 
         const evt = await createSportEventServer({
           provider: sportProviderEventId ? (sportProviderName || "thesportsdb") : "manual",

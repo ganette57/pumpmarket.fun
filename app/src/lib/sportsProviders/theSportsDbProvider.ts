@@ -44,7 +44,7 @@ function v1Url(endpoint: string): string {
 // ---------------------------------------------------------------------------
 
 const DURATION_MS: Record<string, number> = {
-  soccer: 2 * 3600_000 + 15 * 60_000,            // 2h15m
+  soccer: 110 * 60_000,                           // 1h50m
   basketball: 2 * 3600_000 + 30 * 60_000,         // 2h30m
   tennis: 3 * 3600_000,                            // 3h
   american_football: 3 * 3600_000 + 30 * 60_000,   // 3h30m
