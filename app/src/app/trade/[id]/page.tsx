@@ -368,15 +368,15 @@ function SportScoreCard({
   const hasScore = event.score && (event.score.home != null || event.score.away != null);
 
   return (
-    <div className={`rounded-xl border overflow-hidden bg-pump-gray ${
-      isLive ? "border-red-500/50 shadow-[0_0_24px_rgba(239,68,68,0.15)]" : "border-white/10"
+    <div className={`rounded-xl border overflow-hidden bg-black ${
+      isLive ? "border-red-500/50 shadow-[0_0_24px_rgba(239,68,68,0.15)]" : "border-gray-800"
     }`}>
       {/* Banner image (edge-to-edge) */}
       {banner && (
         <div className="relative h-28 sm:h-36">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={banner} alt="" className="w-full h-full object-cover" />
-          <div className="absolute inset-0 bg-gradient-to-t from-pump-gray via-pump-gray/80 to-pump-gray/30" />
+          <div className="absolute inset-0 bg-gradient-to-t from-black via-black/80 to-black/30" />
         </div>
       )}
 
@@ -1704,7 +1704,6 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                   <div className="mt-4 grid grid-cols-2 gap-3">
                     {names.slice(0, 2).map((outcome, index) => {
                       const pct = (percentages[index] ?? 0).toFixed(1);
-                      const supply = supplies[index] || 0;
                       const isYes = index === 0;
 
                       return (
@@ -1718,15 +1717,10 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                               : "border-[#ff5c73]/60"
                           } ${isMobile && !marketClosed ? "active:scale-[0.99]" : ""}`}
                         >
-                          <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
-                            <span
-                              className={`uppercase tracking-wide font-semibold ${
-                                isYes ? "text-pump-green" : "text-[#ff5c73]"
-                              }`}
-                            >
-                              {outcome}
-                            </span>
-                            <span className="text-gray-500 text-[11px]">Supply: {supply}</span>
+                          <div className={`uppercase tracking-wide text-xs font-semibold mb-1 ${
+                            isYes ? "text-pump-green" : "text-[#ff5c73]"
+                          }`}>
+                            {outcome}
                           </div>
 
                           <div
@@ -1736,18 +1730,12 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                           >
                             {pct}%
                           </div>
-
-                          {isMobile && !marketClosed && (
-                            <div className="mt-1 text-[11px] text-gray-500">
-                              Tap to trade
-                            </div>
-                          )}
                         </button>
                       );
                     })}
                   </div>
                 ) : (
-                  <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div className="mt-4 grid grid-cols-2 gap-2">
                     {names.map((outcome, index) => (
                       <button
                         key={index}
@@ -1765,38 +1753,15 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                             {(percentages[index] ?? 0).toFixed(1)}%
                           </div>
                         </div>
-                        <div className="mt-1 text-[11px] text-gray-500">
-                          Supply: {supplies[index] || 0}
-                        </div>
-                        {isMobile && !marketClosed && (
-                          <div className="mt-1 text-[11px] text-gray-500">
-                            Tap to trade
-                          </div>
-                        )}
                       </button>
                     ))}
                   </div>
                 )}
   
-                {/* Stats */}
-                <div className="grid grid-cols-2 gap-3 pt-3 border-t border-gray-700 mt-4">
-                  <div>
-                    <div className="text-xs text-gray-500 mb-1">Volume</div>
-                    <div className="text-lg font-semibold text-white">
-                      {lamportsToSol(market.totalVolume).toFixed(2)} SOL
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-gray-500 mb-1">Outcomes</div>
-                    <div className="text-lg font-semibold text-white">
-                      {names.length}
-                    </div>
-                  </div>
-                </div>
               </div>
   
               {/* Odds history */}
-              <div className="card-pump">
+              <div className="bg-black border border-gray-800 rounded-xl p-4 md:p-5">
                 <div className="mb-4">
                   <h2 className="text-xl font-bold text-white">Odds history</h2>
                 </div>
@@ -1825,7 +1790,7 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                     </div>
                   </>
                 ) : (
-                  <div className="text-sm text-gray-400 bg-pump-dark/40 border border-gray-800 rounded-xl p-4">
+                  <div className="text-sm text-gray-500 border border-gray-800 rounded-lg p-4">
                     No history yet (need transactions for this market).
                   </div>
                 )}
