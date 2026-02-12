@@ -119,6 +119,8 @@ type TradeResult = {
   error?: string;
 } | null;
 
+type DisplayStatus = "scheduled" | "live" | "finished" | "unknown";
+
 function useIsMobile(breakpointPx = 1024) {
   const [isMobile, setIsMobile] = useState(false);
   useEffect(() => {
@@ -172,6 +174,16 @@ function formatVol(volLamports: number) {
 function clampInt(n: number, min: number, max: number) {
   const v = Math.floor(Number(n) || 0);
   return Math.max(min, Math.min(max, v));
+}
+
+function toFiniteNumber(v: any): number {
+  if (typeof v === "number") return Number.isFinite(v) ? v : 0;
+  if (typeof v === "bigint") return Number(v);
+  if (v && typeof v.toString === "function") {
+    const n = Number(v.toString());
+    return Number.isFinite(n) ? n : 0;
+  }
+  return 0;
 }
 
 function marketTopPct(m: any): number {
@@ -300,7 +312,7 @@ function sportStatusColor(s: string) {
   return "bg-gray-700 text-gray-200"; // unknown/neutral
 }
 
-function resolveDisplayStatus(event: any): "scheduled" | "live" | "finished" | "unknown" {
+function resolveDisplayStatus(event: any): DisplayStatus {
   const raw = String(event?.status || "").toLowerCase();
   const hasFinalScore = event?.score?.home != null && event?.score?.away != null;
 
@@ -316,8 +328,8 @@ function resolveDisplayStatus(event: any): "scheduled" | "live" | "finished" | "
   return "unknown";
 }
 
-function statusBadgeLabel(status: "scheduled" | "live" | "finished" | "unknown", minute: string): string {
-  if (status === "live") return minute ? `LIVE ${minute}` : "LIVE";
+function statusBadgeLabel(status: DisplayStatus, minute: string): string {
+  if (status === "live") return minute ? `LIVE • ${minute}` : "LIVE";
   if (status === "finished") return "FINAL";
   if (status === "scheduled") return "SCHEDULED";
   return "—";
@@ -367,30 +379,59 @@ function pickBadge(event: any, meta: any, side: "home" | "away"): string | null 
 }
 
 function liveLabel(event: any): string {
-  const m = event?.raw?.intProgress || event?.raw?.minute || event?.minute;
+  const m =
+    event?.score?.minute ??
+    event?.score?.elapsed ??
+    event?.raw?.intProgress ??
+    event?.raw?.minute ??
+    event?.minute;
   if (m != null && String(m).trim() !== "" && m !== 0 && m !== "0") return `${m}'`;
   return "";
+}
+
+function isLiveProviderStatus(status: string): boolean {
+  const s = String(status || "").toLowerCase();
+  return s === "live" || s === "in_play" || s === "inplay";
+}
+
+function nextScorePollDelayMs(status: string, consecutiveFailures: number): number {
+  if (!isLiveProviderStatus(status)) return 90_000;
+  if (consecutiveFailures <= 0) return 15_000;
+  if (consecutiveFailures === 1) return 30_000;
+  return 60_000;
+}
+
+function predefinedSportDurationMs(sport: string): number {
+  const s = String(sport || "").toLowerCase();
+  if (s === "soccer" || s === "football") return 110 * 60_000;
+  if (s === "basketball" || s === "nba") return 150 * 60_000;
+  return NaN;
 }
 
 function SportScoreCard({
   event,
   meta,
-  refreshing,
-  onRefresh,
+  displayStatus,
+  minute,
+  polling,
+  stale,
+  lastPolledAt,
 }: {
   event: SportEvent;
   meta?: any;
-  refreshing: boolean;
-  onRefresh: () => void;
+  displayStatus: DisplayStatus;
+  minute: string;
+  polling: boolean;
+  stale: boolean;
+  lastPolledAt: number | null;
 }) {
-  const displayStatus = resolveDisplayStatus(event);
   const isLive = displayStatus === "live";
-  const isTerminal = displayStatus === "finished" || ["cancelled", "postponed"].includes(String(event.status || "").toLowerCase());
   const banner = pickEventBanner(event, meta);
   const homeBadge = pickBadge(event, meta, "home");
   const awayBadge = pickBadge(event, meta, "away");
-  const minute = liveLabel(event);
   const hasScore = event.score && (event.score.home != null || event.score.away != null);
+  const fallbackUpdatedAt = event.last_update ? new Date(event.last_update).getTime() : NaN;
+  const updatedAt = typeof lastPolledAt === "number" && Number.isFinite(lastPolledAt) ? lastPolledAt : fallbackUpdatedAt;
 
   return (
     <div className={`rounded-xl border overflow-hidden bg-black ${
@@ -406,7 +447,7 @@ function SportScoreCard({
       )}
 
       <div className={`px-4 ${banner ? "pt-2 pb-4" : "py-4"}`}>
-        {/* Status + league + refresh */}
+        {/* Status + league */}
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <span className={`px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wide ${sportStatusColor(displayStatus)}`}>
@@ -419,15 +460,7 @@ function SportScoreCard({
               <span className="text-xs text-gray-500 truncate max-w-[140px]">{event.league}</span>
             )}
           </div>
-          {!isTerminal && (
-            <button
-              onClick={onRefresh}
-              disabled={refreshing}
-              className="text-xs text-gray-400 hover:text-white transition disabled:opacity-40"
-            >
-              {refreshing ? "..." : "↻"}
-            </button>
-          )}
+          {polling && <span className="inline-block w-3 h-3 border border-gray-500 border-t-transparent rounded-full animate-spin" />}
         </div>
 
         {/* Teams + Score */}
@@ -484,9 +517,10 @@ function SportScoreCard({
         )}
 
         {/* Last updated */}
-        {event.last_update && (
+        {Number.isFinite(updatedAt) && (
           <div className="text-center mt-1 text-[10px] text-gray-600">
-            Updated {new Date(event.last_update).toLocaleTimeString()}
+            Updated {new Date(updatedAt).toLocaleTimeString()}
+            {stale && <span className="ml-1 text-gray-500">(stale)</span>}
           </div>
         )}
       </div>
@@ -748,11 +782,13 @@ console.log("[SNAPSHOT] marketAddress =", marketAddress);
 // Live session for this market (for banner CTA)
 const [activeLiveSession, setActiveLiveSession] = useState<{ id: string; title: string; status: LiveSessionStatus } | null>(null);
 const [sportEvent, setSportEvent] = useState<SportEvent | null>(null);
-const [sportRefreshing, setSportRefreshing] = useState(false);
 const [liveScore, setLiveScore] = useState<{
   home_score: number | null; away_score: number | null;
   minute: number | null; status: string;
 } | null>(null);
+const [liveScorePolling, setLiveScorePolling] = useState(false);
+const [liveScoreFailures, setLiveScoreFailures] = useState(0);
+const [liveScoreLastSuccessAt, setLiveScoreLastSuccessAt] = useState<number | null>(null);
 
 // Related block (RIGHT column under TradingPanel)
 const [relatedTab, setRelatedTab] = useState<RelatedTab>("related");
@@ -909,78 +945,157 @@ if (snap?.posAcc?.shares) {
       return () => clearInterval(iv);
     }, [sportEvent?.status, market?.sportEventId]);
 
-    // Poll /api/sports/live for thesportsdb-linked markets with adaptive interval.
+    // Poll /api/sports/live for thesportsdb-linked markets with adaptive interval + stale handling.
     useEffect(() => {
       const meta = market?.sportMeta as any;
-      const provider = meta?.provider;
-      const providerEventId = meta?.provider_event_id;
-      if (provider !== "thesportsdb" || !providerEventId) return;
-      // Only poll when market is in sport mode and could be live
-      if (market?.marketMode !== "sport") return;
+      const provider = String(meta?.provider || "");
+      const providerEventId = String(meta?.provider_event_id || "");
+      if (provider !== "thesportsdb" || !providerEventId || market?.marketMode !== "sport") {
+        setLiveScore(null);
+        setLiveScorePolling(false);
+        setLiveScoreFailures(0);
+        setLiveScoreLastSuccessAt(null);
+        return;
+      }
 
       let cancelled = false;
       let timeoutId: ReturnType<typeof setTimeout> | null = null;
+      let consecutiveFailures = 0;
+      let latestKnownStatus = String(sportEvent?.status || "scheduled").toLowerCase();
+
+      setLiveScoreFailures(0);
+
       const poll = async () => {
+        if (cancelled) return;
+        setLiveScorePolling(true);
+
         try {
           const res = await fetch(
             `/api/sports/live?provider=thesportsdb&event_id=${encodeURIComponent(providerEventId)}`,
-            { cache: "no-store" }
+            { cache: "no-store" },
           );
-          if (!res.ok || cancelled) return;
+          if (!res.ok) throw new Error(`live score fetch failed: ${res.status}`);
+
           const data = await res.json();
-          if (!cancelled) {
-            const nextStatus = data.status ?? "unknown";
-            setLiveScore({
-              home_score: data.home_score ?? null,
-              away_score: data.away_score ?? null,
-              minute: data.minute ?? null,
-              status: nextStatus,
-            });
-            const nextMs = (nextStatus === "live" || nextStatus === "in_play") ? 15_000 : 90_000;
-            timeoutId = setTimeout(poll, nextMs);
-          }
-        } catch { /* ignore */ }
+          if (cancelled) return;
+
+          const nextStatus = String(data?.status || latestKnownStatus || "unknown").toLowerCase();
+          latestKnownStatus = nextStatus;
+          consecutiveFailures = 0;
+          setLiveScoreFailures(0);
+          setLiveScoreLastSuccessAt(Date.now());
+
+          setLiveScore((prev) => ({
+            home_score: data?.home_score ?? prev?.home_score ?? null,
+            away_score: data?.away_score ?? prev?.away_score ?? null,
+            minute: data?.minute ?? prev?.minute ?? null,
+            status: nextStatus || prev?.status || "unknown",
+          }));
+        } catch {
+          if (cancelled) return;
+          consecutiveFailures += 1;
+          setLiveScoreFailures(consecutiveFailures);
+        } finally {
+          if (!cancelled) setLiveScorePolling(false);
+        }
+
+        if (cancelled) return;
+        timeoutId = setTimeout(
+          poll,
+          nextScorePollDelayMs(latestKnownStatus, consecutiveFailures),
+        );
       };
 
-      poll(); // initial fetch
+      void poll();
       return () => {
         cancelled = true;
+        setLiveScorePolling(false);
         if (timeoutId) clearTimeout(timeoutId);
       };
-    }, [market?.sportMeta, market?.marketMode]);
+    }, [market?.marketMode, market?.sportMeta, sportEvent?.status]);
 
-    const handleSportRefresh = useCallback(async () => {
-      if (!market?.sportEventId || sportRefreshing) return;
-      setSportRefreshing(true);
-      try {
-        const updated = await refreshSportEvent(market.sportEventId);
-        if (updated) setSportEvent(updated);
-      } finally {
-        setSportRefreshing(false);
-      }
-    }, [market?.sportEventId, sportRefreshing]);
-
+    // Realtime market updates: websocket subscription on this trade page only.
     useEffect(() => {
-      if (!id) return;
-      if (!connection) return;
-    
-      (async () => {
-        console.log("🔥 loading pool snapshot...");
-        try {
-          const marketPk = new PublicKey(id);
-          const acc = await connection.getAccountInfo(marketPk, "confirmed");
-          const lamports = acc?.lamports ?? null;
-    
-          console.log("✅ pool lamports =", lamports);
-    
-          if (lamports != null) setMarketBalanceLamports(lamports);
-        } catch (e) {
-          console.warn("❌ pool snapshot failed:", e);
-        }
-      })();
-    }, [id, connection]);
+      if (!id || !connection) return;
 
-  // Merge liveScore into sportEvent for display (card shows live data even if event.score empty)
+      let cancelled = false;
+      let subId: number | null = null;
+      let pollId: ReturnType<typeof setInterval> | null = null;
+      const marketPk = new PublicKey(id);
+      const coder = (program as any)?.coder;
+
+      const applyFromInfo = (info: any) => {
+        if (!info || cancelled) return;
+        if (info.lamports != null) setMarketBalanceLamports(Number(info.lamports));
+        if (!coder?.accounts?.decode) return;
+
+        try {
+          const marketAcc = coder.accounts.decode("market", info.data);
+          const rawSupplies = Array.isArray(marketAcc?.q)
+            ? marketAcc.q
+            : Array.isArray(marketAcc?.outcomeSupplies)
+            ? marketAcc.outcomeSupplies
+            : [];
+
+          const decodedSupplies = rawSupplies.map((x: any) => toFiniteNumber(x));
+          if (!decodedSupplies.length) return;
+
+          setMarket((prev) => {
+            if (!prev) return prev;
+            const targetLen = prev.outcomeNames?.length || decodedSupplies.length;
+            const nextSupplies = decodedSupplies.slice(0, targetLen);
+            while (nextSupplies.length < targetLen) nextSupplies.push(0);
+            return {
+              ...prev,
+              outcomeSupplies: nextSupplies.slice(0, 10),
+              yesSupply: targetLen >= 1 ? nextSupplies[0] || 0 : prev.yesSupply,
+              noSupply: targetLen >= 2 ? nextSupplies[1] || 0 : prev.noSupply,
+              resolved: prev.resolved || !!marketAcc?.resolved,
+            };
+          });
+        } catch {
+          // Keep fallback polling for environments where decode shape differs.
+        }
+      };
+
+      const refreshFromRpc = async () => {
+        try {
+          const info = await connection.getAccountInfo(marketPk, "confirmed");
+          if (!cancelled) applyFromInfo(info);
+        } catch {
+          // ignore rpc errors; fallback loop continues
+        }
+      };
+
+      void refreshFromRpc();
+
+      try {
+        subId = connection.onAccountChange(marketPk, applyFromInfo, "confirmed");
+      } catch {
+        subId = null;
+      }
+
+      if (subId == null || !coder?.accounts?.decode) {
+        pollId = setInterval(() => {
+          if (document.visibilityState !== "visible") return;
+          if (program && coder?.accounts?.decode) {
+            void refreshFromRpc();
+            return;
+          }
+          if (!submitting) void loadMarket(id);
+        }, 10_000);
+      }
+
+      return () => {
+        cancelled = true;
+        if (pollId) clearInterval(pollId);
+        if (subId != null) {
+          connection.removeAccountChangeListener(subId).catch(() => {});
+        }
+      };
+    }, [id, connection, program, loadMarket, submitting]);
+
+  // Merge liveScore into sportEvent for display while keeping last known values on fetch errors.
   const sportEventForUi = useMemo(() => {
     if (!sportEvent) return null;
     const ev: any = {
@@ -989,12 +1104,26 @@ if (snap?.posAcc?.shares) {
       raw: { ...(sportEvent.raw || {}) },
     };
     if (liveScore) {
-      if (liveScore.home_score != null && ev.score.home == null) ev.score.home = liveScore.home_score;
-      if (liveScore.away_score != null && ev.score.away == null) ev.score.away = liveScore.away_score;
-      if (liveScore.minute != null) ev.raw.intProgress = liveScore.minute;
+      if (liveScore.home_score != null) ev.score.home = liveScore.home_score;
+      if (liveScore.away_score != null) ev.score.away = liveScore.away_score;
+      if (liveScore.minute != null) {
+        ev.score.minute = liveScore.minute;
+        ev.raw.intProgress = liveScore.minute;
+      }
+      if (liveScore.status) ev.status = liveScore.status;
+      if (liveScoreLastSuccessAt) ev.last_update = new Date(liveScoreLastSuccessAt).toISOString();
     }
     return ev as SportEvent;
-  }, [sportEvent, liveScore]);
+  }, [sportEvent, liveScore, liveScoreLastSuccessAt]);
+
+  const sharedSportDisplayStatus: DisplayStatus = useMemo(
+    () => (sportEventForUi ? resolveDisplayStatus(sportEventForUi) : "unknown"),
+    [sportEventForUi],
+  );
+  const sharedSportMinute = useMemo(
+    () => (sportEventForUi ? liveLabel(sportEventForUi) : ""),
+    [sportEventForUi],
+  );
 
   const derived: Derived | null = useMemo(() => {
     if (!market) return null;
@@ -1447,7 +1576,9 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
 
   const nowSec = Math.floor(nowMs / 1000);
   const hasValidEnd = Number.isFinite(market.resolutionTime) && market.resolutionTime > 0;
-  const ended = hasValidEnd ? nowSec >= market.resolutionTime : false;
+  const endedByTime = hasValidEnd ? nowSec >= market.resolutionTime : false;
+  const sportIsLive = market.marketMode === "sport" && sharedSportDisplayStatus === "live";
+  const sportIsFinished = market.marketMode === "sport" && sharedSportDisplayStatus === "finished";
 
   const status = market.resolutionStatus ?? "open";
   const isResolvedOnChain = !!market.resolved;
@@ -1466,27 +1597,42 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
   // Sport status: scheduled → live → locked → finished
   // Read sportStartTime from sportMeta or sportEvent
   const sportStartMs = (() => {
-    const raw = sportEvent?.start_time || (market.sportMeta as any)?.start_time;
+    const raw = sportEventForUi?.start_time || sportEvent?.start_time || (market.sportMeta as any)?.start_time;
     if (!raw) return NaN;
     const t = new Date(raw).getTime();
     return Number.isFinite(t) ? t : NaN;
   })();
+  const sportKey = String(sportEventForUi?.sport || (market.sportMeta as any)?.sport || "").toLowerCase();
+  const sportDurationMs = predefinedSportDurationMs(sportKey);
+  const sportPredefinedEndMs = Number.isFinite(sportStartMs) && Number.isFinite(sportDurationMs)
+    ? sportStartMs + sportDurationMs
+    : NaN;
+  const hardSportLockMs = Number.isFinite(sportPredefinedEndMs)
+    ? sportPredefinedEndMs - 2 * 60_000
+    : NaN;
+  const hardSportLockReached = Number.isFinite(hardSportLockMs) && nowMs >= hardSportLockMs;
 
-  const sportFinished = sportEvent?.status === "finished" || market.sportTradingState === "ended_by_sport";
-  const sportEndMs = sportEvent?.end_time ? new Date(sportEvent.end_time).getTime() : NaN;
+  const ended = market.marketMode === "sport"
+    ? (!sportIsLive && endedByTime)
+    : endedByTime;
+
+  const sportFinished = sportIsFinished || market.sportTradingState === "ended_by_sport";
+  const sportEndMs = sportEventForUi?.end_time ? new Date(sportEventForUi.end_time).getTime() : NaN;
   const sportLockMs = Number.isFinite(sportEndMs) ? sportEndMs - 2 * 60_000 : NaN;
-  const sportLocked = !sportFinished && Number.isFinite(sportLockMs) && nowMs >= sportLockMs;
+  const sportLocked = !sportFinished && (
+    hardSportLockReached ||
+    (!sportIsLive && Number.isFinite(sportLockMs) && nowMs >= sportLockMs)
+  );
 
-  // Compute sport phase: scheduled | live | locked | finished
-  // GUARD: if now < sportStartMs, the match hasn't started — force "scheduled"
-  // regardless of what the API status says. This prevents premature "ended".
+  // Compute sport phase: scheduled | live | locked | finished.
+  // Provider live status has priority over early time-based checks before predefined end.
   const sportPhase: "scheduled" | "live" | "locked" | "finished" | null = (() => {
     if (!market.marketMode || market.marketMode !== "sport") return null;
+    if (sportFinished) return "finished";
+    if (sportIsLive && !hardSportLockReached) return "live";
     // Hard guard: match hasn't started yet → always scheduled
     if (Number.isFinite(sportStartMs) && nowMs < sportStartMs) return "scheduled";
-    if (sportFinished) return "finished";
     if (sportLocked) return "locked";
-    if (Number.isFinite(sportStartMs) && nowMs >= sportStartMs) return "live";
     // Fallback: if we have end but no start, use ended check
     if (ended) return "finished";
     return "scheduled";
@@ -1496,7 +1642,8 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
   // if match hasn't started, sport-related locks don't apply
   const sportBeforeStart = Number.isFinite(sportStartMs) && nowMs < sportStartMs;
   const marketClosed = isResolvedOnChain || isProposed || ended || !!market.isBlocked
-    || (!sportBeforeStart && (sportFinished || sportLocked));
+    || sportFinished
+    || (!sportBeforeStart && sportLocked);
 
   const endLabel = hasValidEnd
     ? new Date(market.resolutionTime * 1000).toLocaleString("en-US", {
@@ -1521,6 +1668,11 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
   const deadlineMs = market.contestDeadline ? new Date(market.contestDeadline).getTime() : NaN;
   const contestRemainingMs = Number.isFinite(deadlineMs) ? deadlineMs - Date.now() : NaN;
   const contestOpen = Number.isFinite(contestRemainingMs) ? contestRemainingMs > 0 : false;
+  const marketBadgeScore = sportEventForUi?.score &&
+    (sportEventForUi.score as any).home != null &&
+    (sportEventForUi.score as any).away != null
+    ? `${(sportEventForUi.score as any).home}–${(sportEventForUi.score as any).away}`
+    : null;
 
   const openMobileTrade = (idx: number) => {
     if (!isMobile) return;
@@ -1580,15 +1732,18 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                 <SportScoreCard
                   event={sportEventForUi}
                   meta={market?.sportMeta}
-                  refreshing={sportRefreshing}
-                  onRefresh={handleSportRefresh}
+                  displayStatus={sharedSportDisplayStatus}
+                  minute={sharedSportMinute}
+                  polling={liveScorePolling}
+                  stale={liveScoreFailures >= 3}
+                  lastPolledAt={liveScoreLastSuccessAt}
                 />
               )}
 
               {/* Sport trading state banners */}
               {sportPhase === "locked" && (
                 <div className="rounded-xl border border-yellow-500/40 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-200 flex items-center gap-2">
-                  <span className="text-yellow-400 font-bold">Trading closed (T-2)</span> — Match ending soon, trading locked
+                  Match ending soon, trading locked
                 </div>
               )}
               {sportPhase === "finished" && (
@@ -1659,26 +1814,31 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                     )}
 
                     {/* Sport phase badges */}
-                    {!market.isBlocked && sportPhase === "scheduled" && !showProposedBox && !showResolvedProofBox && (
+                    {!market.isBlocked && sportPhase !== "locked" && sharedSportDisplayStatus === "scheduled" && !showProposedBox && !showResolvedProofBox && (
                       <span className="px-2 py-1 rounded-full border border-blue-500/40 bg-blue-500/10 text-blue-400">
                         Scheduled
                       </span>
                     )}
-                    {!market.isBlocked && sportPhase === "live" && !showProposedBox && !showResolvedProofBox && (
+                    {!market.isBlocked && sportPhase !== "locked" && sharedSportDisplayStatus === "live" && !showProposedBox && !showResolvedProofBox && (
                       <span className="px-2 py-1 rounded-full border border-red-500/40 bg-red-500/10 text-red-400 flex items-center gap-1">
                         <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
                         Live
-                        {liveScore && liveScore.home_score != null && liveScore.away_score != null && (
+                        {sharedSportMinute && <span className="text-red-300">• {sharedSportMinute}</span>}
+                        {marketBadgeScore && (
                           <span className="ml-1 font-mono text-white">
-                            {liveScore.home_score}–{liveScore.away_score}
+                            {marketBadgeScore}
                           </span>
                         )}
                       </span>
                     )}
-                    {!market.isBlocked && sportPhase === "locked" && !showProposedBox && !showResolvedProofBox && (
-                      <span className="px-2 py-1 rounded-full border border-yellow-500/40 bg-yellow-500/10 text-yellow-400">
-                        Trading closed (T-2)
+                    {!market.isBlocked && sportPhase !== "locked" && sharedSportDisplayStatus === "finished" && !showProposedBox && !showResolvedProofBox && (
+                      <span className="px-2 py-1 rounded-full border border-gray-500/40 bg-gray-700/30 text-gray-200 flex items-center gap-1">
+                        Final
+                        {marketBadgeScore && <span className="ml-1 font-mono text-white">{marketBadgeScore}</span>}
                       </span>
+                    )}
+                    {!market.isBlocked && sportPhase !== "locked" && sharedSportDisplayStatus === "unknown" && !showProposedBox && !showResolvedProofBox && (
+                      <span className="px-2 py-1 rounded-full border border-gray-600/40 bg-gray-700/20 text-gray-300">—</span>
                     )}
 
                     {showProposedBox && !market.isBlocked && (

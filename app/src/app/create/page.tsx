@@ -248,6 +248,7 @@ function MatchPickerModal({
             >
               <option value="soccer">Soccer</option>
               <option value="basketball">Basketball</option>
+              <option value="baseball">Baseball</option>
               <option value="tennis">Tennis</option>
               <option value="mma">MMA</option>
               <option value="american_football">American Football</option>
@@ -535,6 +536,7 @@ export default function CreateMarketPage() {
 
   // Should we show match-specific fields? (match picker, sport type, teams, match end time)
   const isMatchMode = isSportsMarket && !(isSportsGeneral && sportsMode === "general");
+  const hasLinkedFixture = isMatchMode && sportProviderEventId.trim().length > 0;
 
   // On-chain defaults (hidden from user)
   const DEFAULT_B_SOL = 0.01;
@@ -1322,6 +1324,7 @@ export default function CreateMarketPage() {
               selected={isMatchMode && sportEndTime ? sportEndTime : resolutionDate}
               onChange={(date: Date | null) => {
                 if (!date) return;
+                if (hasLinkedFixture) return;
                 if (isMatchMode) {
                   setSportEndTime(date);
                   // Also push resolution date forward if needed
@@ -1337,6 +1340,7 @@ export default function CreateMarketPage() {
               timeIntervals={15}
               dateFormat="MMMM d, yyyy h:mm aa"
               minDate={new Date()}
+              readOnly={hasLinkedFixture}
               className="input-pump w-full pl-10"
               placeholderText={isMatchMode ? "Select match end time" : "Select end date and time"}
             />

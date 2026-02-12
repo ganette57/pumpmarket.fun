@@ -102,6 +102,7 @@ export function isAvailable(): boolean {
 const DURATION_MS: Record<string, number> = {
   soccer: 110 * 60_000,                          // 1h50m
   basketball: 2 * 3600_000 + 30 * 60_000,        // 2h30m
+  baseball: 3 * 3600_000,                        // 3h
   tennis: 3 * 3600_000,                           // 3h
   mma: 2 * 3600_000,                              // 2h
   american_football: 3 * 3600_000 + 30 * 60_000,  // 3h30m
@@ -377,6 +378,19 @@ function buildMockMatches(): NormalizedMatch[] {
       league: "NBA", home_team: "Dallas Mavericks", away_team: "New York Knicks",
       start_time: futureISO(106), end_time: futureEndISO(106, "basketball"),
       status: "scheduled", label: "Dallas Mavericks vs New York Knicks", raw: {},
+    },
+    // Baseball
+    {
+      provider: "mock-fixtures", provider_event_id: "mock_yankees_redsox", sport: "baseball",
+      league: "MLB", home_team: "Yankees", away_team: "Red Sox",
+      start_time: futureISO(26), end_time: futureEndISO(26, "baseball"),
+      status: "scheduled", label: "Yankees vs Red Sox", raw: {},
+    },
+    {
+      provider: "mock-fixtures", provider_event_id: "mock_dodgers_giants", sport: "baseball",
+      league: "MLB", home_team: "Dodgers", away_team: "Giants",
+      start_time: futureISO(98), end_time: futureEndISO(98, "baseball"),
+      status: "scheduled", label: "Dodgers vs Giants", raw: {},
     },
     // Tennis
     {

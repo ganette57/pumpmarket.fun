@@ -7,6 +7,12 @@ import { listUpcomingMatches } from "@/lib/sportsProviders/fixturesProvider";
 
 const CACHE_TTL_MS = 10 * 60_000; // 10 minutes
 const cache = new Map<string, { ts: number; data: any[] }>();
+const DEBUG_SPORT_SCORES = process.env.DEBUG_SPORT_SCORES === "1";
+
+function scoreDbg(payload: Record<string, unknown>) {
+  if (!DEBUG_SPORT_SCORES) return;
+  console.log("[sports-search-debug]", JSON.stringify(payload));
+}
 
 function getCached(key: string): any[] | null {
   const entry = cache.get(key);
@@ -35,18 +41,30 @@ function setCache(key: string, data: any[]) {
 // ---------------------------------------------------------------------------
 
 async function handleList(sport: string, base_date?: string, q?: string) {
+  const requestedSport = sport;
   // Check route-level cache
   const cacheKey = `list:${sport}:${base_date || "today"}:q:${(q || "").toLowerCase()}`;
   const cached = getCached(cacheKey);
   if (cached) {
+    scoreDbg({ requested_sport: requestedSport, cached: true, returned_count: cached.length });
     return NextResponse.json({ matches: cached });
   }
 
-  const matches = await listUpcomingMatches({
-    sport,
+  let effectiveSport = requestedSport;
+  let matches = await listUpcomingMatches({
+    sport: effectiveSport,
     days: 7,
     base_date: base_date || undefined,
   });
+
+  if (requestedSport === "mma" && matches.length === 0) {
+    effectiveSport = "baseball";
+    matches = await listUpcomingMatches({
+      sport: effectiveSport,
+      days: 7,
+      base_date: base_date || undefined,
+    });
+  }
 
   // Optional server-side text filter (min 3 chars)
   const trimmed = (q || "").trim().toLowerCase();
@@ -56,6 +74,13 @@ async function handleList(sport: string, base_date?: string, q?: string) {
         return haystack.includes(trimmed);
       })
     : matches;
+
+  scoreDbg({
+    requested_sport: requestedSport,
+    effective_sport: effectiveSport,
+    raw_count: matches.length,
+    returned_count: filtered.length,
+  });
 
   setCache(cacheKey, filtered);
   return NextResponse.json({ matches: filtered });

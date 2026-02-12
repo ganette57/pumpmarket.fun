@@ -46,6 +46,7 @@ function v1Url(endpoint: string): string {
 const DURATION_MS: Record<string, number> = {
   soccer: 110 * 60_000,                           // 1h50m
   basketball: 2 * 3600_000 + 30 * 60_000,         // 2h30m
+  baseball: 3 * 3600_000,                          // 3h
   tennis: 3 * 3600_000,                            // 3h
   american_football: 3 * 3600_000 + 30 * 60_000,   // 3h30m
   mma: 2 * 3600_000,                               // 2h
@@ -212,6 +213,8 @@ const TARGET_LEAGUES: LeagueConfig[] = [
   { id: 4429, name: "FIFA World Cup",           sport: "soccer",            keywords: ["world cup", "fifa"],                   tz: "UTC" },
   // Basketball
   { id: 4387, name: "NBA",                      sport: "basketball",        keywords: ["nba", "national basketball"],           tz: "America/New_York" },
+  // Baseball
+  { id: 4424, name: "MLB",                      sport: "baseball",          keywords: ["mlb", "major league baseball"],         tz: "America/New_York" },
   // American Football
   { id: 4391, name: "NFL",                      sport: "american_football", keywords: ["nfl", "national football league"],      tz: "America/New_York" },
   // Tennis — tournament locations vary; UTC is a safe baseline
@@ -310,6 +313,7 @@ function mapSport(strSport: string | null): string {
   const s = (strSport || "").toLowerCase();
   if (s.includes("soccer") || s.includes("football") && !s.includes("american")) return "soccer";
   if (s.includes("basketball")) return "basketball";
+  if (s.includes("baseball")) return "baseball";
   if (s.includes("tennis")) return "tennis";
   if (s.includes("american football") || s.includes("gridiron")) return "american_football";
   if (s.includes("ice hockey")) return "basketball"; // fallback
