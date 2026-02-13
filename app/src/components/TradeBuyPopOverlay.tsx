@@ -32,6 +32,8 @@ function randInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+const ENABLE_BUY_POP_OVERLAY = true;
+
 export default function TradeBuyPopOverlay({
   marketAddress,
   marketId,
@@ -45,6 +47,8 @@ export default function TradeBuyPopOverlay({
   const timeoutsRef = useRef<Set<number>>(new Set());
 
   useEffect(() => {
+    if (!ENABLE_BUY_POP_OVERLAY) return;
+
     const addr = String(marketAddress || "").trim();
     const dbId = String(marketId || "").trim();
     if (!addr && !dbId) return;
@@ -71,7 +75,7 @@ export default function TradeBuyPopOverlay({
       const timeoutId = window.setTimeout(() => {
         setPops((prev) => prev.filter((p) => p.id !== popId));
         timeoutsRef.current.delete(timeoutId);
-      }, 3800);
+      }, 3000);
 
       timeoutsRef.current.add(timeoutId);
     };
@@ -147,7 +151,7 @@ export default function TradeBuyPopOverlay({
     };
   }, [marketAddress, marketId]);
 
-  if (!pops.length) return null;
+  if (!ENABLE_BUY_POP_OVERLAY || !pops.length) return null;
 
   return (
     <>
@@ -155,11 +159,11 @@ export default function TradeBuyPopOverlay({
         {pops.map((pop) => (
           <div
             key={pop.id}
-            className="rounded-full bg-black/35 px-3 py-1.5 text-xs font-semibold text-green-200 backdrop-blur-md"
+            className="px-2 py-1 text-l font-semibold text-green-300"
             style={
               {
                 "--buy-pop-x": `${pop.x}px`,
-                animation: "buy-pop-float 3.8s ease-out forwards",
+                animation: "buy-pop-float 3s ease-out forwards",
                 willChange: "transform, opacity",
               } as CSSProperties
             }
@@ -181,7 +185,7 @@ export default function TradeBuyPopOverlay({
           }
           100% {
             opacity: 0;
-            transform: translateX(var(--buy-pop-x)) translateY(-120px) scale(1);
+            transform: translateX(var(--buy-pop-x)) translateY(-280px) scale(1);
           }
         }
       `}</style>

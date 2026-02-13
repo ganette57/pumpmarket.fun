@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ResponsiveContainer,
   LineChart,
@@ -20,6 +21,10 @@ interface Props {
   points: OddsPoint[];
   outcomeNames: string[];
   height?: number;
+  livePct?: number[]; // current percentages [0..100] for each outcome
+  liveEnabled?: boolean;
+  liveMaxPoints?: number;
+  liveMinIntervalMs?: number;
 }
 
 const PALETTE = [
@@ -38,8 +43,61 @@ function formatTimeLabel(t: number) {
   });
 }
 
-export default function OddsHistoryChart({ points, outcomeNames, height = 200 }: Props) {
-  if (!points.length) {
+function normalizePct(arr: number[]): number[] {
+  return arr.map((v) => {
+    const n = Number(v);
+    const safe = Number.isFinite(n) ? n : 0;
+    const clamped = Math.max(0, Math.min(100, safe));
+    return Number(clamped.toFixed(2));
+  });
+}
+
+function approxEqualArr(a: number[], b: number[], eps = 0.15): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (Math.abs((a[i] ?? 0) - (b[i] ?? 0)) > eps) return false;
+  }
+  return true;
+}
+
+export default function OddsHistoryChart({
+  points,
+  outcomeNames,
+  height = 200,
+  livePct,
+  liveEnabled = true,
+  liveMaxPoints = 60,
+  liveMinIntervalMs = 1500,
+}: Props) {
+  const [livePoints, setLivePoints] = useState<OddsPoint[]>([]);
+  const lastPushRef = useRef<number>(0);
+  const lastPctRef = useRef<number[] | null>(null);
+
+  useEffect(() => {
+    if (!liveEnabled) return;
+    if (!livePct || livePct.length !== outcomeNames.length) return;
+
+    const now = Date.now();
+    if (now - lastPushRef.current < liveMinIntervalMs) return;
+
+    const curr = normalizePct(livePct);
+    if (lastPctRef.current && approxEqualArr(lastPctRef.current, curr)) return;
+
+    setLivePoints((prev) => {
+      const next = [...prev, { t: now, pct: curr }];
+      return next.length > liveMaxPoints ? next.slice(next.length - liveMaxPoints) : next;
+    });
+
+    lastPushRef.current = now;
+    lastPctRef.current = curr;
+  }, [liveEnabled, livePct, outcomeNames.length, liveMinIntervalMs, liveMaxPoints]);
+
+  const mergedPoints = useMemo(() => {
+    const merged = [...points, ...livePoints];
+    return merged.length > 600 ? merged.slice(merged.length - 600) : merged;
+  }, [points, livePoints]);
+
+  if (!mergedPoints.length) {
     return (
       <div className="h-[170px] flex items-center justify-center text-xs text-gray-500">
         No trading history yet
@@ -48,7 +106,7 @@ export default function OddsHistoryChart({ points, outcomeNames, height = 200 }:
   }
 
   // Transforme les points en data Recharts
-  const data = points.map((p) => {
+  const data = mergedPoints.map((p) => {
     const row: any = { time: formatTimeLabel(p.t) };
     outcomeNames.forEach((name, idx) => {
       row[name] = Number.isFinite(p.pct[idx]) ? Number(p.pct[idx].toFixed(2)) : null;

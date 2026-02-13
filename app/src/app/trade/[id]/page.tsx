@@ -398,9 +398,12 @@ function nextScorePollDelayMs(status: string, consecutiveFailures: number): numb
   return 60_000;
 }
 
+const SOCCER_BASE_DURATION_MS = 110 * 60_000;
+const SOCCER_GRACE_MS = 10 * 60_000;
+
 function predefinedSportDurationMs(sport: string): number {
   const s = String(sport || "").toLowerCase();
-  if (s === "soccer" || s === "football") return 110 * 60_000;
+  if (s === "soccer" || s === "football") return SOCCER_BASE_DURATION_MS;
   if (s === "basketball" || s === "nba") return 150 * 60_000;
   return NaN;
 }
@@ -1609,9 +1612,13 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
     return Number.isFinite(t) ? t : NaN;
   })();
   const sportKey = String(sportEventForUi?.sport || (market.sportMeta as any)?.sport || "").toLowerCase();
+  const isSoccerLike = sportKey === "soccer" || sportKey === "football";
   const sportDurationMs = predefinedSportDurationMs(sportKey);
+  const sportHeuristicEndMs = Number.isFinite(sportStartMs) && Number.isFinite(sportDurationMs)
+    ? sportStartMs + sportDurationMs
+    : NaN;
   const sportPredefinedEndMs = Number.isFinite(resolvedSportEndMs)
-    ? resolvedSportEndMs
+    ? (isSoccerLike && Number.isFinite(sportHeuristicEndMs) ? sportHeuristicEndMs : resolvedSportEndMs)
     : Number.isFinite(sportStartMs) && Number.isFinite(sportDurationMs)
     ? sportStartMs + sportDurationMs
     : NaN;
@@ -1619,12 +1626,15 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
     ? sportPredefinedEndMs - 2 * 60_000
     : NaN;
   const hardSportLockReached = Number.isFinite(hardSportLockMs) && nowMs >= hardSportLockMs;
+  const sportGraceEndMs = Number.isFinite(sportPredefinedEndMs)
+    ? sportPredefinedEndMs + (isSoccerLike ? SOCCER_GRACE_MS : 0)
+    : NaN;
+  const sportFinishedByTiming = Number.isFinite(sportGraceEndMs) && nowMs >= sportGraceEndMs;
 
+  const sportFinished = sportIsFinished || market.sportTradingState === "ended_by_sport" || sportFinishedByTiming;
   const ended = market.marketMode === "sport"
-    ? (!sportIsLive && endedByTime)
+    ? (sportFinished || (!isSoccerLike && !sportIsLive && endedByTime))
     : endedByTime;
-
-  const sportFinished = sportIsFinished || market.sportTradingState === "ended_by_sport";
   const sportEndMs = sportPredefinedEndMs;
   const sportLockMs = Number.isFinite(sportEndMs) ? sportEndMs - 2 * 60_000 : NaN;
   const sportLocked = !sportFinished && (
@@ -1668,8 +1678,8 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
   const sportEndsLabel = Number.isFinite(sportPredefinedEndMs)
     ? new Date(sportPredefinedEndMs).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })
     : null;
-  const sportLocksLabel = hasValidEnd
-    ? new Date(market.resolutionTime * 1000).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })
+  const sportLocksLabel = Number.isFinite(sportLockMs)
+    ? new Date(sportLockMs).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })
     : null;
 
   const winningLabel =
