@@ -23,7 +23,12 @@ import BlockedMarketBanner from "@/components/BlockedMarketBanner";
 
 import { supabase } from "@/lib/supabaseClient";
 import { buildOddsSeries, downsample } from "@/lib/marketHistory";
-import { getMarketByAddress, recordTransaction, applyTradeToMarketInSupabase } from "@/lib/markets";
+import {
+  getMarketByAddress,
+  recordTransaction,
+  applyTradeToMarketInSupabase,
+  parseSupabaseEndDateToResolutionTime,
+} from "@/lib/markets";
 
 import { lamportsToSol, solToLamports, getUserPositionPDA, PLATFORM_WALLET } from "@/utils/solana";
 import { getActiveLiveSessionForMarket, type LiveSessionStatus } from "@/lib/liveSessions";
@@ -234,33 +239,12 @@ function parseIsoUtc(s: string | null | undefined): Date | null {
 }
 
 /**
- * Parse end_date safely:
- * - "YYYY-MM-DD" => end of day UTC
- * - ISO with timezone => parse as-is
- * - ISO without timezone => parse as local
- * - Postgres "YYYY-MM-DD HH:mm:ss" => local
+ * Parse end_date via shared UTC-safe parser from markets.ts:
+ * - if timezone suffix is missing, parser appends "Z"
  */
 function parseEndDateMs(raw: any): number {
-  if (!raw) return NaN;
-
-  if (raw instanceof Date) {
-    const t = raw.getTime();
-    return Number.isFinite(t) ? t : NaN;
-  }
-
-  const s = String(raw).trim();
-  if (!s) return NaN;
-
-  const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(s);
-
-  if (isDateOnly) {
-    const t = new Date(`${s}T23:59:59Z`).getTime();
-    return Number.isFinite(t) ? t : NaN;
-  }
-
-  const normalized = /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(:\d{2})?/.test(s) ? s.replace(" ", "T") : s;
-  const t = new Date(normalized).getTime();
-  return Number.isFinite(t) ? t : NaN;
+  const sec = parseSupabaseEndDateToResolutionTime(raw);
+  return sec > 0 ? sec * 1000 : NaN;
 }
 
 function parseBLamports(m: any): number | null {
@@ -829,8 +813,8 @@ const [relatedMarkets, setRelatedMarkets] = useState<any[]>([]);
         }
 
         // ✅ fallback DB
-const endMs = parseEndDateMs(supabaseMarket?.end_date);
-let resolutionTime = Number.isFinite(endMs) ? Math.floor(endMs / 1000) : 0;
+        const endMs = parseEndDateMs(supabaseMarket?.end_date);
+        let resolutionTime = Number.isFinite(endMs) ? Math.floor(endMs / 1000) : 0;
 
   
         const mt = (typeof supabaseMarket.market_type === "number" ? supabaseMarket.market_type : 0) as 0 | 1;
@@ -1677,6 +1661,15 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
         minute: "2-digit",
       })
     : "No end date";
+  const sportKickoffLabel = Number.isFinite(sportStartMs)
+    ? new Date(sportStartMs).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })
+    : null;
+  const sportEndsLabel = Number.isFinite(sportPredefinedEndMs)
+    ? new Date(sportPredefinedEndMs).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })
+    : null;
+  const sportLocksLabel = hasValidEnd
+    ? new Date(market.resolutionTime * 1000).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })
+    : null;
 
   const winningLabel =
     market.winningOutcome != null && Number.isFinite(Number(market.winningOutcome))
@@ -1826,7 +1819,19 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                     </span>
                   </div>
   
-                  <div>{endLabel}</div>
+                  {market.marketMode === "sport" ? (
+                    <div className="leading-tight">
+                      <div>
+                        {sportKickoffLabel ? `Kickoff ${sportKickoffLabel}` : "Kickoff —"}
+                        {sportEndsLabel ? ` • Ends ~ ${sportEndsLabel}` : ""}
+                      </div>
+                      {sportLocksLabel && (
+                        <div className="text-[11px] text-gray-500">Locks at {sportLocksLabel}</div>
+                      )}
+                    </div>
+                  ) : (
+                    <div>{endLabel}</div>
+                  )}
   
                   <div className="ml-auto text-xs text-gray-500 flex items-center gap-2">
                     {/* Blocked badge */}

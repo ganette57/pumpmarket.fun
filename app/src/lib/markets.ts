@@ -118,6 +118,23 @@ export function toResolutionStatus(x: any): ResolutionStatus {
   return "open";
 }
 
+export function parseSupabaseEndDateToResolutionTime(endDate: any): number {
+  if (!endDate) return 0;
+  if (endDate instanceof Date) {
+    const ms = endDate.getTime();
+    return Number.isFinite(ms) ? Math.floor(ms / 1000) : 0;
+  }
+
+  const raw = String(endDate).trim();
+  if (!raw) return 0;
+
+  const normalized = raw.includes(" ") ? raw.replace(" ", "T") : raw;
+  const hasTimezone = /(?:Z|[+-]\d{2}:\d{2})$/i.test(normalized);
+  const utcSafe = hasTimezone ? normalized : `${normalized}Z`;
+  const ms = Date.parse(utcSafe);
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : 0;
+}
+
 /* -------------------------------------------------------------------------- */
 /*  READ                                                                        */
 /* -------------------------------------------------------------------------- */
