@@ -42,6 +42,7 @@ type Market = {
   } | null;
 
   sportMeta?: Record<string, unknown> | null;
+  sport?: string | null;
 };
 
 type MarketStatusFilter = "all" | "open" | "resolved" | "ending_soon" | "top_volume";
@@ -213,6 +214,7 @@ export default function Home() {
             creator: row.creator ?? null,
             socialLinks: row.social_links ?? null,
             sportMeta: row.sport_meta ?? null,
+            sport: typeof row.sport_meta?.sport === "string" ? row.sport_meta.sport : null,
           } as Market;
         }) ?? [];
 
@@ -239,21 +241,14 @@ export default function Home() {
     // "all" = no filter
     if (selectedCategory === "all") return markets;
 
-    // "sports" = all sport subcategories + markets with category "sports"
+    // "sports" = only markets with a concrete sport marker
     if (selectedCategory === "sports") {
-      return markets.filter((m) => {
-        const cat = m.category?.toLowerCase();
-        return cat === "sports" || isSportSubcategory(cat) || !!m.sportMeta;
-      });
+      return markets.filter((m) => m.sport != null);
     }
 
-    // Sport subcategory (soccer, basketball, etc.) — match by sport_meta.sport
+    // Sport subcategory (soccer, basketball, etc.) — match by sport marker only
     if (isSportSubcategory(selectedCategory)) {
-      return markets.filter((m) => {
-        const metaSport = (m.sportMeta as any)?.sport;
-        if (metaSport && metaSport === selectedCategory) return true;
-        return m.category?.toLowerCase() === selectedCategory;
-      });
+      return markets.filter((m) => m.sport === selectedCategory);
     }
 
     // Regular category

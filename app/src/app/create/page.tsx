@@ -828,6 +828,9 @@ export default function CreateMarketPage() {
       let sportMeta: Record<string, unknown> | undefined;
       let dbStartTimeIso: string | undefined;
       let dbEndTimeIso: string | undefined;
+      const selectedSport = String(sportType || "").trim().toLowerCase();
+      const hasRealSportsFixture = isMatchMode && hasLinkedFixture;
+      const persistedSport = hasRealSportsFixture ? selectedSport : null;
       if (isMatchMode && sportHomeTeam.trim() && sportAwayTeam.trim()) {
         // Store real match end_time on sport_events (UTC ISO), while market end_date stays T-2.
         const matchStart = persistedMatchStart || sportStartTime || resolutionDate;
@@ -848,7 +851,7 @@ export default function CreateMarketPage() {
         });
         sportEventId = evt.id;
         sportMeta = {
-          sport: sportType,
+          sport: persistedSport,
           provider: sportProviderEventId ? (sportProviderName || "thesportsdb") : "manual",
           provider_event_id: sportProviderEventId || undefined,
           home_team: sportHomeTeam.trim(),
