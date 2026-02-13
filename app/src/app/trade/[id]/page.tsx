@@ -20,6 +20,7 @@ import MarketActivityTab from "@/components/MarketActivity";
 import ResolutionPanel from "@/components/ResolutionPanel";
 import MarketCard from "@/components/MarketCard";
 import BlockedMarketBanner from "@/components/BlockedMarketBanner";
+import TradeBuyPopOverlay from "@/components/TradeBuyPopOverlay";
 
 import { supabase } from "@/lib/supabaseClient";
 import { buildOddsSeries, downsample } from "@/lib/marketHistory";
@@ -2241,6 +2242,11 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
           </div>
         </div>
       )}
+
+      <TradeBuyPopOverlay
+        marketAddress={market.publicKey}
+        marketId={market.dbId ?? null}
+      />
     </>
   );
 }
