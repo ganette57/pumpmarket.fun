@@ -221,6 +221,16 @@ function addHoursIso(ms: number, hours: number): string | null {
   return d.toISOString();
 }
 
+function parseIsoUtc(s: string | null | undefined): Date | null {
+  if (!s) return null;
+  const raw = String(s).trim();
+  if (!raw) return null;
+  const hasTimezone = /(?:Z|[+-]\d{2}:\d{2})$/i.test(raw);
+  const parsed = new Date(hasTimezone ? raw : `${raw}Z`);
+  if (!Number.isFinite(parsed.getTime())) return null;
+  return parsed;
+}
+
 /**
  * Parse end_date safely:
  * - "YYYY-MM-DD" => end of day UTC
@@ -430,8 +440,9 @@ function SportScoreCard({
   const homeBadge = pickBadge(event, meta, "home");
   const awayBadge = pickBadge(event, meta, "away");
   const hasScore = event.score && (event.score.home != null || event.score.away != null);
-  const fallbackUpdatedAt = event.last_update ? new Date(event.last_update).getTime() : NaN;
+  const fallbackUpdatedAt = parseIsoUtc(event.last_update)?.getTime() ?? NaN;
   const updatedAt = typeof lastPolledAt === "number" && Number.isFinite(lastPolledAt) ? lastPolledAt : fallbackUpdatedAt;
+  const kickoffDate = parseIsoUtc(event.start_time);
 
   return (
     <div className={`rounded-xl border overflow-hidden bg-black ${
@@ -508,9 +519,9 @@ function SportScoreCard({
         </div>
 
         {/* Kickoff time */}
-        {event.start_time && (
+        {kickoffDate && (
           <div className="text-center mt-3 text-xs text-gray-500">
-            {new Date(event.start_time).toLocaleString("en-US", {
+            {kickoffDate.toLocaleString("en-US", {
               month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
             })}
           </div>
@@ -1598,8 +1609,7 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
   // Read sportStartTime from sportMeta or sportEvent
   const sportStartMs = (() => {
     const raw = sportEventForUi?.start_time || sportEvent?.start_time || (market.sportMeta as any)?.start_time;
-    if (!raw) return NaN;
-    const t = new Date(raw).getTime();
+    const t = parseIsoUtc(raw)?.getTime() ?? NaN;
     return Number.isFinite(t) ? t : NaN;
   })();
   const sportKey = String(sportEventForUi?.sport || (market.sportMeta as any)?.sport || "").toLowerCase();
@@ -1617,7 +1627,7 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
     : endedByTime;
 
   const sportFinished = sportIsFinished || market.sportTradingState === "ended_by_sport";
-  const sportEndMs = sportEventForUi?.end_time ? new Date(sportEventForUi.end_time).getTime() : NaN;
+  const sportEndMs = parseIsoUtc(sportEventForUi?.end_time)?.getTime() ?? NaN;
   const sportLockMs = Number.isFinite(sportEndMs) ? sportEndMs - 2 * 60_000 : NaN;
   const sportLocked = !sportFinished && (
     hardSportLockReached ||
