@@ -87,6 +87,8 @@ type UiMarket = {
   sportEventId?: string | null;
   sportMeta?: Record<string, unknown> | null;
   sportTradingState?: string | null;
+  startTime?: string | null;
+  endTime?: string | null;
 };
 
 type Derived = {
@@ -898,6 +900,8 @@ let resolutionTime = Number.isFinite(endMs) ? Math.floor(endMs / 1000) : 0;
           sportEventId: (supabaseMarket as any).sport_event_id ?? null,
           sportMeta: (supabaseMarket as any).sport_meta ?? null,
           sportTradingState: (supabaseMarket as any).sport_trading_state ?? null,
+          startTime: (supabaseMarket as any).start_time ?? null,
+          endTime: (supabaseMarket as any).end_time ?? null,
         };
   
 // --- On-chain snapshot merge (fast)
@@ -1114,6 +1118,8 @@ if (snap?.posAcc?.shares) {
       score: { ...(sportEvent.score || {}) },
       raw: { ...(sportEvent.raw || {}) },
     };
+    if (market?.startTime) ev.start_time = market.startTime;
+    if (market?.endTime) ev.end_time = market.endTime;
     if (liveScore) {
       if (liveScore.home_score != null) ev.score.home = liveScore.home_score;
       if (liveScore.away_score != null) ev.score.away = liveScore.away_score;
@@ -1125,7 +1131,7 @@ if (snap?.posAcc?.shares) {
       if (liveScoreLastSuccessAt) ev.last_update = new Date(liveScoreLastSuccessAt).toISOString();
     }
     return ev as SportEvent;
-  }, [sportEvent, liveScore, liveScoreLastSuccessAt]);
+  }, [sportEvent, liveScore, liveScoreLastSuccessAt, market?.startTime, market?.endTime]);
 
   const sharedSportDisplayStatus: DisplayStatus = useMemo(
     () => (sportEventForUi ? resolveDisplayStatus(sportEventForUi) : "unknown"),
@@ -1608,13 +1614,20 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
   // Sport status: scheduled → live → locked → finished
   // Read sportStartTime from sportMeta or sportEvent
   const sportStartMs = (() => {
-    const raw = sportEventForUi?.start_time || sportEvent?.start_time || (market.sportMeta as any)?.start_time;
+    const raw = market?.startTime || sportEventForUi?.start_time || sportEvent?.start_time || (market.sportMeta as any)?.start_time;
+    const t = parseIsoUtc(raw)?.getTime() ?? NaN;
+    return Number.isFinite(t) ? t : NaN;
+  })();
+  const resolvedSportEndMs = (() => {
+    const raw = market?.endTime || sportEventForUi?.end_time || sportEvent?.end_time || (market.sportMeta as any)?.end_time;
     const t = parseIsoUtc(raw)?.getTime() ?? NaN;
     return Number.isFinite(t) ? t : NaN;
   })();
   const sportKey = String(sportEventForUi?.sport || (market.sportMeta as any)?.sport || "").toLowerCase();
   const sportDurationMs = predefinedSportDurationMs(sportKey);
-  const sportPredefinedEndMs = Number.isFinite(sportStartMs) && Number.isFinite(sportDurationMs)
+  const sportPredefinedEndMs = Number.isFinite(resolvedSportEndMs)
+    ? resolvedSportEndMs
+    : Number.isFinite(sportStartMs) && Number.isFinite(sportDurationMs)
     ? sportStartMs + sportDurationMs
     : NaN;
   const hardSportLockMs = Number.isFinite(sportPredefinedEndMs)
@@ -1627,7 +1640,7 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
     : endedByTime;
 
   const sportFinished = sportIsFinished || market.sportTradingState === "ended_by_sport";
-  const sportEndMs = parseIsoUtc(sportEventForUi?.end_time)?.getTime() ?? NaN;
+  const sportEndMs = sportPredefinedEndMs;
   const sportLockMs = Number.isFinite(sportEndMs) ? sportEndMs - 2 * 60_000 : NaN;
   const sportLocked = !sportFinished && (
     hardSportLockReached ||

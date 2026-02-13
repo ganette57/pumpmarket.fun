@@ -21,6 +21,8 @@ export type DbMarket = {
 
   total_volume?: number | null; // lamports
   end_date?: string | null;
+  start_time?: string | null;
+  end_time?: string | null;
 
   resolved?: boolean | null;
 
@@ -137,6 +139,8 @@ export async function getMarketByAddress(marketAddress: string): Promise<DbMarke
       "image_url",
       "total_volume",
       "end_date",
+      "start_time",
+      "end_time",
       "resolved",
       "market_type",
       "outcome_names",
@@ -369,6 +373,8 @@ export type IndexMarketInput = {
   image_url?: string | null;
 
   end_date?: string | null;
+  start_time?: string | null;
+  end_time?: string | null;
   market_type?: number | null; // 0 binary, 1 multi
   outcome_names?: any;
   outcome_supplies?: any;
@@ -400,6 +406,8 @@ export async function indexMarket(input: IndexMarketInput): Promise<void> {
     image_url: input.image_url ?? null,
 
     end_date: input.end_date ?? null,
+    start_time: input.start_time ?? null,
+    end_time: input.end_time ?? null,
 
     market_type: input.market_type ?? null,
     outcome_names: input.outcome_names ?? null,
