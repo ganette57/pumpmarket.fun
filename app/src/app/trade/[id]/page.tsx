@@ -1746,6 +1746,14 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
     (sportEventForUi.score as any).away != null
     ? `${(sportEventForUi.score as any).home}–${(sportEventForUi.score as any).away}`
     : null;
+  const effectiveVol =
+    Number.isFinite(marketBalanceLamports)
+      ? (marketBalanceLamports as number)
+      : Number(
+          (market as any)?.totalVolume ??
+          (market as any)?.total_volume ??
+          0
+        );
 
   const openMobileTrade = (idx: number) => {
     if (!isMobile) return;
@@ -1872,7 +1880,7 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                   <div>
                     <span className="text-xs text-gray-400">Vol</span>{" "}
                     <span className="text-base md:text-lg font-semibold text-white">
-                      {formatVol(market.totalVolume)} SOL
+                      {formatVol(effectiveVol)} SOL
                     </span>
                   </div>
   

@@ -44,9 +44,12 @@ type Market = {
   sportMeta?: Record<string, unknown> | null;
   sport?: string | null;
   sportTradingState?: string | null;
+  resolutionStatus?: string | null;
 };
 
 type MarketStatusFilter = "all" | "open" | "resolved" | "ending_soon" | "top_volume";
+const CAROUSEL_LIMIT = 5;
+const MIN_VOL_LAMPORTS = 50_000_000; // 0.05 SOL
 
 const DEBUG_SPORT_OPEN_FILTER = false;
 
@@ -88,18 +91,71 @@ function isSportMarket(m: Market): boolean {
   return !!m.sport || !!m.sportMeta;
 }
 
-function isMarketResolved(m: Market) {
+function parseUtcMs(raw: any): number {
+  if (!raw) return NaN;
+  const s = String(raw).trim();
+  if (!s) return NaN;
+  const hasTz = /(?:Z|[+-]\d{2}:\d{2})$/i.test(s);
+  const normalized = s.includes(" ") ? s.replace(" ", "T") : s;
+  const ms = Date.parse(hasTz ? normalized : `${normalized}Z`);
+  return Number.isFinite(ms) ? ms : NaN;
+}
+
+function homeSportDurationMs(sport: string | null | undefined): number {
+  const s = String(sport || "").toLowerCase();
+  if (s === "soccer" || s === "football") return 110 * 60_000;
+  if (s === "basketball" || s === "nba") return 150 * 60_000;
+  return NaN;
+}
+
+function isMarketOpenForHome(m: Market): boolean {
+  const nowMs = Date.now();
   const nowSec = Date.now() / 1000;
   const endedByTime = !!m.resolutionTime && nowSec >= m.resolutionTime;
-  if (isSportMarket(m)) {
-    const onchainOrSportEnded = !!m.resolved || String(m.sportTradingState || "").toLowerCase() === "ended_by_sport";
-    if (onchainOrSportEnded) return true;
-    if (isSportOpenByProvider(m)) return false;
-    if (isSportFinishedByProvider(m)) return true;
-    // Fallback to existing heuristic when provider state is unavailable.
-    return endedByTime;
+  const resolutionStatus = String(m.resolutionStatus || "open").toLowerCase();
+
+  // Home "Open" must reflect tradable status.
+  if (resolutionStatus === "proposed" || resolutionStatus === "finalized" || resolutionStatus === "cancelled") {
+    return false;
   }
-  return !!m.resolved || endedByTime;
+  if (!!m.resolved) return false;
+
+  if (!isSportMarket(m)) {
+    return !endedByTime;
+  }
+
+  const meta = (m.sportMeta || {}) as any;
+  const sportKey = String(m.sport || meta?.sport || "").toLowerCase();
+  const startMs = parseUtcMs(meta?.start_time);
+  const explicitEndMs = parseUtcMs(meta?.end_time);
+  const durationMs = homeSportDurationMs(sportKey);
+  const sportPredefinedEndMs = Number.isFinite(explicitEndMs)
+    ? explicitEndMs
+    : Number.isFinite(startMs) && Number.isFinite(durationMs)
+    ? startMs + durationMs
+    : NaN;
+  const sportLockMs = Number.isFinite(sportPredefinedEndMs)
+    ? sportPredefinedEndMs - 2 * 60_000
+    : Number.isFinite(m.resolutionTime)
+    ? m.resolutionTime * 1000
+    : NaN;
+  const homeLocked = Number.isFinite(sportLockMs) && nowMs >= sportLockMs;
+  const homeSportEnded =
+    isSportFinishedByProvider(m) ||
+    String(m.sportTradingState || "").toLowerCase() === "ended_by_sport" ||
+    (Number.isFinite(sportPredefinedEndMs) && nowMs >= sportPredefinedEndMs);
+
+  if (homeSportEnded || homeLocked) return false;
+  if (isSportOpenByProvider(m)) return true;
+  if (isSportFinishedByProvider(m)) return false;
+
+  // Missing provider data: keep open unless strong finished/locked signal exists.
+  if (Number.isFinite(sportPredefinedEndMs)) return nowMs < sportPredefinedEndMs;
+  return !endedByTime;
+}
+
+function isMarketResolved(m: Market) {
+  return !isMarketOpenForHome(m);
 }
 
 function StatusFilterDropdown({
@@ -207,6 +263,7 @@ export default function Home() {
           no_supply,
           total_volume,
           resolved,
+          resolution_status,
           market_type,
           outcome_names,
           outcome_supplies,
@@ -266,6 +323,7 @@ export default function Home() {
             sportMeta: row.sport_meta ?? null,
             sport: typeof row.sport_meta?.sport === "string" ? row.sport_meta.sport : null,
             sportTradingState: row.sport_trading_state ?? null,
+            resolutionStatus: row.resolution_status ?? "open",
           } as Market;
         }) ?? [];
 
@@ -344,18 +402,26 @@ export default function Home() {
     return filtered;
   }, [categoryFiltered, statusFilter]);
 
-  // ------- FEATURED (top 3 by volume, prefer open + binary-like) -------
+  // ------- FEATURED (open pool: top volume, fallback to latest created) -------
   const featuredMarkets = useMemo(() => {
-    const openOnly = categoryFiltered.filter((m) => !isMarketResolved(m));
-    const base = openOnly.length ? openOnly : categoryFiltered;
+    const pool = categoryFiltered.filter((m) => !isMarketResolved(m));
+    if (!pool.length) return [];
 
-    const binaryLike = base.filter((m) => (m.marketType ?? 0) === 0 || (m.outcomeNames?.length ?? 0) === 2);
-    const featuredBase = binaryLike.length ? binaryLike : base;
+    const byVol = [...pool].sort((a, b) => Number(b.totalVolume || 0) - Number(a.totalVolume || 0));
+    const countWithVol = byVol.filter((m) => Number(m.totalVolume || 0) >= MIN_VOL_LAMPORTS).length;
+    const pickedBase = (countWithVol >= 2 ? byVol : pool).slice(0, CAROUSEL_LIMIT);
 
-    return [...featuredBase]
-      .sort((a, b) => Number(b.totalVolume || 0) - Number(a.totalVolume || 0))
-      .slice(0, 3)
-      .map((market) => {
+    const seen = new Set<string>();
+    const picked: Market[] = [];
+    for (const m of pickedBase) {
+      const key = String(m.id || m.publicKey);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      picked.push(m);
+      if (picked.length >= CAROUSEL_LIMIT) break;
+    }
+
+    return picked.map((market) => {
         const now = Date.now() / 1000;
         const daysLeft = Math.max(0, Math.floor((market.resolutionTime - now) / 86400));
 
