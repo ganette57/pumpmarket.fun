@@ -1024,13 +1024,58 @@ if (snap?.posAcc?.shares) {
       let cancelled = false;
       let subId: number | null = null;
       let pollId: ReturnType<typeof setInterval> | null = null;
+      let volumeFetchInFlight = false;
       const marketPk = new PublicKey(id);
       const coder = (program as any)?.coder;
+      const marketDbId = market?.dbId ?? null;
+      const marketAddress = market?.publicKey || id;
+
+      const refreshDbVolume = async () => {
+        if (cancelled || volumeFetchInFlight) return;
+        if (!marketDbId && !marketAddress) return;
+
+        volumeFetchInFlight = true;
+        try {
+          let nextVolume: number | null = null;
+
+          if (marketDbId) {
+            const { data, error } = await supabase
+              .from("markets")
+              .select("total_volume")
+              .eq("id", marketDbId)
+              .maybeSingle();
+            if (!error && data?.total_volume != null) {
+              const n = Number(data.total_volume);
+              if (Number.isFinite(n)) nextVolume = n;
+            }
+          }
+
+          if ((nextVolume == null || !Number.isFinite(nextVolume)) && marketAddress) {
+            const { data, error } = await supabase
+              .from("markets")
+              .select("total_volume")
+              .eq("market_address", marketAddress)
+              .maybeSingle();
+            if (!error && data?.total_volume != null) {
+              const n = Number(data.total_volume);
+              if (Number.isFinite(n)) nextVolume = n;
+            }
+          }
+
+          if (cancelled || nextVolume == null || !Number.isFinite(nextVolume)) return;
+          setMarket((prev) => (prev ? { ...prev, totalVolume: nextVolume as number } : prev));
+        } finally {
+          volumeFetchInFlight = false;
+        }
+      };
 
       const applyFromInfo = (info: any) => {
         if (!info || cancelled) return;
         if (info.lamports != null) setMarketBalanceLamports(Number(info.lamports));
-        if (!coder?.accounts?.decode) return;
+        if (!coder?.accounts?.decode) {
+          void refreshDbVolume();
+          return;
+        }
 
         try {
           const marketAcc = coder.accounts.decode("market", info.data);
@@ -1059,6 +1104,7 @@ if (snap?.posAcc?.shares) {
         } catch {
           // Keep fallback polling for environments where decode shape differs.
         }
+        void refreshDbVolume();
       };
 
       const refreshFromRpc = async () => {
@@ -1096,7 +1142,7 @@ if (snap?.posAcc?.shares) {
           connection.removeAccountChangeListener(subId).catch(() => {});
         }
       };
-    }, [id, connection, program, loadMarket, submitting]);
+    }, [id, connection, program, loadMarket, submitting, market?.dbId, market?.publicKey]);
 
   // Merge liveScore into sportEvent for display while keeping last known values on fetch errors.
   const sportEventForUi = useMemo(() => {

@@ -43,13 +43,62 @@ type Market = {
 
   sportMeta?: Record<string, unknown> | null;
   sport?: string | null;
+  sportTradingState?: string | null;
 };
 
 type MarketStatusFilter = "all" | "open" | "resolved" | "ending_soon" | "top_volume";
 
+const DEBUG_SPORT_OPEN_FILTER = false;
+
+function sportStatusSignals(m: Market): string[] {
+  const meta = (m.sportMeta || {}) as any;
+  const raw = (meta.raw || {}) as any;
+  const fixtureShort = raw?.fixture?.status?.short;
+  const vals = [
+    m.sportTradingState,
+    meta?.status,
+    raw?.status,
+    raw?.state,
+    fixtureShort,
+  ];
+  return vals
+    .map((v) => String(v || "").trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function isSportOpenByProvider(m: Market): boolean {
+  const status = sportStatusSignals(m);
+  const isLive = status.some((s) =>
+    ["live", "in_play", "inplay", "open", "locked_by_sport", "1h", "ht", "2h", "et", "p", "q1", "q2", "q3", "q4", "ot"].includes(s)
+  );
+  if (DEBUG_SPORT_OPEN_FILTER && isLive) {
+    console.debug("[sport-open-filter] treating as open by provider", m.publicKey, status);
+  }
+  return isLive;
+}
+
+function isSportFinishedByProvider(m: Market): boolean {
+  const status = sportStatusSignals(m);
+  return status.some((s) =>
+    ["finished", "final", "ended", "ended_by_sport", "resolved", "cancelled", "postponed", "ft", "aet", "pen"].includes(s)
+  );
+}
+
+function isSportMarket(m: Market): boolean {
+  return !!m.sport || !!m.sportMeta;
+}
+
 function isMarketResolved(m: Market) {
   const nowSec = Date.now() / 1000;
   const endedByTime = !!m.resolutionTime && nowSec >= m.resolutionTime;
+  if (isSportMarket(m)) {
+    const onchainOrSportEnded = !!m.resolved || String(m.sportTradingState || "").toLowerCase() === "ended_by_sport";
+    if (onchainOrSportEnded) return true;
+    if (isSportOpenByProvider(m)) return false;
+    if (isSportFinishedByProvider(m)) return true;
+    // Fallback to existing heuristic when provider state is unavailable.
+    return endedByTime;
+  }
   return !!m.resolved || endedByTime;
 }
 
@@ -162,6 +211,7 @@ export default function Home() {
           outcome_names,
           outcome_supplies,
           sport_meta,
+          sport_trading_state,
           created_at
         `
         )
@@ -215,6 +265,7 @@ export default function Home() {
             socialLinks: row.social_links ?? null,
             sportMeta: row.sport_meta ?? null,
             sport: typeof row.sport_meta?.sport === "string" ? row.sport_meta.sport : null,
+            sportTradingState: row.sport_trading_state ?? null,
           } as Market;
         }) ?? [];
 
