@@ -404,12 +404,18 @@ export default function Home() {
 
   // ------- FEATURED (open pool: top volume, fallback to latest created) -------
   const featuredMarkets = useMemo(() => {
-    const pool = categoryFiltered.filter((m) => !isMarketResolved(m));
-    if (!pool.length) return [];
+    const openTradable = categoryFiltered.filter((m) => isMarketOpenForHome(m));
+    const openNotFinal = categoryFiltered.filter((m) => {
+      const rs = String(m.resolutionStatus || "open").toLowerCase();
+      if (rs !== "open") return false;
+      if (m.resolved) return false;
+      return true;
+    });
+    if (!openTradable.length && !openNotFinal.length) return [];
 
-    const byVol = [...pool].sort((a, b) => Number(b.totalVolume || 0) - Number(a.totalVolume || 0));
+    const byVol = [...openTradable].sort((a, b) => Number(b.totalVolume || 0) - Number(a.totalVolume || 0));
     const countWithVol = byVol.filter((m) => Number(m.totalVolume || 0) >= MIN_VOL_LAMPORTS).length;
-    const pickedBase = (countWithVol >= 2 ? byVol : pool).slice(0, CAROUSEL_LIMIT);
+    const pickedBase = (countWithVol >= 2 && openTradable.length > 0 ? byVol : openNotFinal).slice(0, CAROUSEL_LIMIT);
 
     const seen = new Set<string>();
     const picked: Market[] = [];
