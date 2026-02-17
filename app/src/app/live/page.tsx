@@ -3,7 +3,9 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useWallet } from "@solana/wallet-adapter-react";
+import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import {
   listLiveSessions,
   subscribeLiveSessionsList,
@@ -105,9 +107,19 @@ function SessionCard({ session }: { session: LiveSession }) {
 
 export default function LivePage() {
   const { publicKey } = useWallet();
+  const { setVisible } = useWalletModal();
+  const router = useRouter();
   const [tab, setTab] = useState<FeedTab>("live");
   const [sessions, setSessions] = useState<LiveSession[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const handleGoLive = useCallback(() => {
+    if (!publicKey) {
+      setVisible(true);
+      return;
+    }
+    router.push("/live/new");
+  }, [publicKey, router, setVisible]);
 
   const loadSessions = useCallback(async () => {
     setLoading(true);
@@ -175,19 +187,18 @@ export default function LivePage() {
           </button>
         </div>
 
-        {/* Create button - visible to connected wallets */}
-        {publicKey && (
-          <Link
-            href="/live/new"
-            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-pump-green text-black text-sm font-semibold hover:bg-[#74ffb8] transition"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-4 h-4">
-              <path d="M12 5v14" />
-              <path d="M5 12h14" />
-            </svg>
-            Go Live
-          </Link>
-        )}
+        {/* Create button */}
+        <button
+          type="button"
+          onClick={handleGoLive}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-pump-green text-black text-sm font-semibold hover:bg-[#74ffb8] transition"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-4 h-4">
+            <path d="M12 5v14" />
+            <path d="M5 12h14" />
+          </svg>
+          {publicKey ? "Go Live" : "Connect to Go Live"}
+        </button>
       </div>
 
       {/* Content */}
@@ -218,14 +229,13 @@ export default function LivePage() {
               ? "No one is streaming right now. Be the first to go live!"
               : "Sessions will appear here once created."}
           </p>
-          {publicKey && (
-            <Link
-              href="/live/new"
-              className="mt-4 px-6 py-2 rounded-lg bg-pump-green text-black text-sm font-semibold hover:bg-[#74ffb8] transition"
-            >
-              Start a session
-            </Link>
-          )}
+          <button
+            type="button"
+            onClick={handleGoLive}
+            className="mt-4 px-6 py-2 rounded-lg bg-pump-green text-black text-sm font-semibold hover:bg-[#74ffb8] transition"
+          >
+            {publicKey ? "Start a session" : "Connect wallet to start"}
+          </button>
         </div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
