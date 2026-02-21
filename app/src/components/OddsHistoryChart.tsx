@@ -63,7 +63,7 @@ function approxEqualArr(a: number[], b: number[], eps = 0.15): boolean {
 export default function OddsHistoryChart({
   points,
   outcomeNames,
-  height = 200,
+  height = 280,
   livePct,
   liveEnabled = true,
   liveMaxPoints = 60,
@@ -99,7 +99,7 @@ export default function OddsHistoryChart({
 
   if (!mergedPoints.length) {
     return (
-      <div className="h-[170px] flex items-center justify-center text-xs text-gray-500">
+      <div style={{ width: "100%", height: Math.max(170, height - 60) }} className="flex items-center justify-center text-xs text-gray-500">
         No trading history yet
       </div>
     );
@@ -119,7 +119,7 @@ export default function OddsHistoryChart({
       <ResponsiveContainer>
         <LineChart
           data={data}
-          margin={{ top: 8, right: 8, bottom: 0, left: 0 }}
+          margin={{ top: 14, right: 14, bottom: 8, left: 6 }}
         >
           {/* Grid très light, pas de frame */}
           <CartesianGrid
@@ -130,13 +130,13 @@ export default function OddsHistoryChart({
           {/* Axes sans bordures ni ticks agressifs */}
           <XAxis
             dataKey="time"
-            tick={{ fontSize: 10, fill: "#6b7280" }}
+            tick={{ fontSize: 11, fill: "#6b7280" }}
             axisLine={false}
             tickLine={false}
-            minTickGap={30}
+            minTickGap={36}
           />
           <YAxis
-            tick={{ fontSize: 10, fill: "#6b7280" }}
+            tick={{ fontSize: 11, fill: "#6b7280" }}
             axisLine={false}
             tickLine={false}
             domain={[0, 100]}

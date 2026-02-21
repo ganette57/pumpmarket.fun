@@ -724,7 +724,7 @@ export default function TradePage() {
   const [positionShares, setPositionShares] = useState<number[] | null>(null);
   const [marketBalanceLamports, setMarketBalanceLamports] = useState<number | null>(null);
 
-  const [oddsRange, setOddsRange] = useState<OddsRange>("24h");
+  const [oddsRange, setOddsRange] = useState<OddsRange>("all");
   const [oddsPoints, setOddsPoints] = useState<{ t: number; pct: number[] }[]>([]);
   const [bottomTab, setBottomTab] = useState<BottomTab>("discussion");
 
@@ -2053,17 +2053,17 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
               </div>
   
               {/* Odds history */}
-              <div className="bg-black border border-gray-800 rounded-xl p-4 md:p-5">
-                <div className="mb-4">
-                  <h2 className="text-xl font-bold text-white">Odds history</h2>
-                </div>
+              <div className="bg-black border border-gray-800 rounded-xl p-5 md:p-6">
   
                 {filteredOddsPoints.length ? (
                   <>
-                    <OddsHistoryChart
-                      points={filteredOddsPoints}
-                      outcomeNames={names}
-                    />
+                    <div className="py-1 md:py-2">
+                      <OddsHistoryChart
+                        points={filteredOddsPoints}
+                        outcomeNames={names}
+                        height={isMobile ? 240 : 320}
+                      />
+                    </div>
   
                     <div className="mt-4 flex items-center justify-center gap-2">
                       {(["24h", "7d", "30d", "all"] as OddsRange[]).map((r) => (

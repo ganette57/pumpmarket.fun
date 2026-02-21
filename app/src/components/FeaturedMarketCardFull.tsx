@@ -180,17 +180,17 @@ export default function FeaturedMarketCardFull({ market, liveSessionId }: Featur
             </div>
 
             {/* RIGHT SIDE - Chart */}
-            <div className="w-[55%] p-6 pl-2 flex flex-col justify-center">
+            <div className="w-[55%] p-4 pl-1 flex flex-col justify-center">
               <div className="h-full flex items-center">
-                <div className="w-full h-[300px]">
+                <div className="w-full h-[320px] py-1">
                   <OddsHistoryFromTrades
                     marketId={market.dbId}
                     marketAddress={market.id}
                     outcomeNames={outcomes}
                     outcomeSupplies={supplies}
                     outcomesCount={outcomes.length}
-                    hours={24}
-                    height={300}
+                    hours={0}
+                    height={320}
                   />
                 </div>
               </div>
@@ -281,15 +281,15 @@ export default function FeaturedMarketCardFull({ market, liveSessionId }: Featur
               </div>
 
               {/* Mobile chart */}
-              <div className="pt-2">
+              <div className="pt-3">
                 <OddsHistoryFromTrades
                   marketId={market.dbId}
                   marketAddress={market.id}
                   outcomeNames={outcomes}
                   outcomeSupplies={supplies}
                   outcomesCount={outcomes.length}
-                  hours={24}
-                  height={160}
+                  hours={0}
+                  height={170}
                 />
               </div>
             </div>

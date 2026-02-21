@@ -68,16 +68,18 @@ export default function OddsHistoryFromTrades({
 
       setLoading(true);
       try {
-        const since = new Date(Date.now() - hours * 3600 * 1000).toISOString();
-
         let q = supabase
           .from("transactions")
           .select(
             "created_at,is_buy,is_yes,outcome_index,outcome_name,shares,amount,market_id,market_address"
           )
-          .gte("created_at", since)
           .order("created_at", { ascending: true })
           .limit(400);
+
+        if (Number.isFinite(hours) && hours > 0) {
+          const since = new Date(Date.now() - hours * 3600 * 1000).toISOString();
+          q = q.gte("created_at", since);
+        }
 
         // Match par uuid OU par address selon ce qu’on a en base
         if (marketId && marketAddress) {
@@ -185,7 +187,7 @@ export default function OddsHistoryFromTrades({
   return (
     <div className="w-full">
       {loading ? (
-        <div className="h-[170px] flex items-center justify-center text-xs text-gray-500">
+        <div style={{ height }} className="flex items-center justify-center text-xs text-gray-500">
           Loading…
         </div>
       ) : (
