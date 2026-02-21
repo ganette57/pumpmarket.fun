@@ -7,6 +7,7 @@ import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { useProgram } from "@/hooks/useProgram";
 import { sendSignedTx } from "@/lib/solanaSend";
 import AdminReportsTab from "@/components/AdminReportsTab";
+import { solanaExplorerAddressUrl } from "@/utils/explorer";
 
 /* ========= Constants ========= */
 
@@ -1086,7 +1087,7 @@ export default function AdminOverviewPage() {
                 value={`${platformFeesSol.toFixed(4)} SOL`}
                 hint="1% of volume"
                 link={{
-                  href: `https://explorer.solana.com/address/${PLATFORM_WALLET}?cluster=devnet`,
+                  href: solanaExplorerAddressUrl(PLATFORM_WALLET),
                   text: "Verify on Explorer",
                 }}
               />

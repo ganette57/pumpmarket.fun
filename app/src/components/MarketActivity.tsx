@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import { solanaExplorerTxUrl } from "@/utils/explorer";
 
 type Props = {
   marketDbId?: string;
@@ -137,7 +138,7 @@ export default function MarketActivityTab({ marketDbId, marketAddress, outcomeNa
                 {tx.tx_signature ? (
                   <a
                     className="text-pump-green underline"
-                    href={`https://explorer.solana.com/tx/${tx.tx_signature}?cluster=devnet`}
+                    href={solanaExplorerTxUrl(tx.tx_signature)}
                     target="_blank"
                     rel="noreferrer"
                   >

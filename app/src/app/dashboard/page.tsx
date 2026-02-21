@@ -12,6 +12,7 @@ import { outcomeLabelFromMarket } from "@/utils/outcomes";
 import { uploadResolutionProofImage } from "@/lib/proofs";
 import { proposeResolution as proposeResolutionDb } from "@/lib/markets";
 import { sendSignedTx } from "@/lib/solanaSend";
+import { solanaExplorerAddressUrl, solanaExplorerTxUrl } from "@/utils/explorer";
 import { Coins, X, CheckCircle, AlertCircle, Loader2 } from "lucide-react";
 
 /* -------------------------------------------------------------------------- */
@@ -530,7 +531,7 @@ function ActionModal({
             </div>
             {modal.txSignature && (
               <a
-                href={`https://explorer.solana.com/tx/${modal.txSignature}?cluster=devnet`}
+                href={solanaExplorerTxUrl(modal.txSignature)}
                 target="_blank"
                 rel="noreferrer"
                 className="text-pump-green text-sm hover:underline"
@@ -1260,7 +1261,7 @@ export default function DashboardPage() {
             <div className="text-[10px] md:text-xs text-gray-500 mt-1 hidden sm:block">
               {totalCreatorFeesSol > 0 ? <span className="text-amber-400">{totalCreatorFeesSol.toFixed(4)} SOL claimable</span> : `Fees ~${stats.creatorFeesSol.toFixed(3)} SOL`}
             </div>
-            {stats.created > 0 && <a href={`https://explorer.solana.com/address/${walletBase58}?cluster=devnet`} target="_blank" rel="noreferrer" className="text-[10px] text-pump-green hover:underline mt-1 hidden sm:inline-block">Verify on Explorer ↗</a>}
+            {stats.created > 0 && <a href={solanaExplorerAddressUrl(walletBase58)} target="_blank" rel="noreferrer" className="text-[10px] text-pump-green hover:underline mt-1 hidden sm:inline-block">Verify on Explorer ↗</a>}
           </div>
         </div>
       </div>
@@ -1360,7 +1361,7 @@ export default function DashboardPage() {
                     </div>
                     <div className="text-[10px] text-gray-500 mt-1 flex flex-wrap items-center gap-2">
                       <span>{h.created_at ? new Date(h.created_at).toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}</span>
-                      {h.tx_signature && <><span className="opacity-40">•</span><a href={`https://explorer.solana.com/tx/${h.tx_signature}?cluster=devnet`} target="_blank" rel="noreferrer" className="text-pump-green hover:underline">tx: {shortSig(h.tx_signature)}</a></>}
+                      {h.tx_signature && <><span className="opacity-40">•</span><a href={solanaExplorerTxUrl(h.tx_signature)} target="_blank" rel="noreferrer" className="text-pump-green hover:underline">tx: {shortSig(h.tx_signature)}</a></>}
                     </div>
                   </div>
                   <div className={`text-sm font-bold ${typeColor} mt-2 sm:mt-0`}>+{h.amount_sol.toFixed(4)} SOL</div>
@@ -1397,7 +1398,7 @@ export default function DashboardPage() {
                         <div className="text-xs text-gray-400 mt-1 truncate">{r.marketQuestion || shortAddr(r.marketAddress)}</div>
                         <div className="text-[10px] text-gray-500 mt-1 flex flex-wrap items-center gap-1 md:gap-2">
                           <span>{r.createdAt ? r.createdAt.toLocaleString("fr-FR") : ""}</span>
-                          {r.sig && <><span className="opacity-40">•</span><a href={`https://explorer.solana.com/tx/${r.sig}?cluster=devnet`} target="_blank" rel="noreferrer" className="text-pump-green hover:underline">tx: {shortSig(r.sig)}</a></>}
+                          {r.sig && <><span className="opacity-40">•</span><a href={solanaExplorerTxUrl(r.sig)} target="_blank" rel="noreferrer" className="text-pump-green hover:underline">tx: {shortSig(r.sig)}</a></>}
                         </div>
                       </div>
                       <div className="flex items-center justify-between sm:justify-end gap-3">

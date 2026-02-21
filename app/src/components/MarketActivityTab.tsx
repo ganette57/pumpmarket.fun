@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { lamportsToSol } from "@/utils/solana";
+import { solanaExplorerTxUrl } from "@/utils/explorer";
 
 type TxRow = {
   id: string;
@@ -172,7 +173,7 @@ export default function MarketActivityTab({
                       {it.sig && (
                         <a
                           className="hover:text-pump-green transition"
-                          href={`https://explorer.solana.com/tx/${it.sig}?cluster=devnet`}
+                          href={solanaExplorerTxUrl(it.sig)}
                           target="_blank"
                           rel="noreferrer"
                         >

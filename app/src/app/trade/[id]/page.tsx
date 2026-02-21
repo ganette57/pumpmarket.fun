@@ -32,6 +32,7 @@ import {
 } from "@/lib/markets";
 
 import { lamportsToSol, solToLamports, getUserPositionPDA, PLATFORM_WALLET } from "@/utils/solana";
+import { solanaExplorerTxUrl } from "@/utils/explorer";
 import { getActiveLiveSessionForMarket, type LiveSessionStatus } from "@/lib/liveSessions";
 import { getSportEvent, refreshSportEvent, type SportEvent } from "@/lib/sportEvents";
 
@@ -657,7 +658,7 @@ function TradeProgressModal({
                 <div className="flex justify-between text-sm items-center">
                   <span className="text-gray-400">Tx</span>
                   <a
-                    href={`https://explorer.solana.com/tx/${result.txSig}?cluster=devnet`}
+                    href={solanaExplorerTxUrl(result.txSig)}
                     target="_blank"
                     rel="noreferrer"
                     className="text-pump-green hover:underline font-mono text-xs"
