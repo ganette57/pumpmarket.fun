@@ -2,29 +2,32 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { AnchorProvider } from "@coral-xyz/anchor";
 import type { AnchorWallet } from "@solana/wallet-adapter-react";
 
-/**
- * ✅ Single source of truth
- * Accept both env names to avoid regressions.
- */
-export const PROGRAM_ID = new PublicKey(
-  process.env.NEXT_PUBLIC_PROGRAM_ID ??
-    process.env.NEXT_PUBLIC_FUNMARKET_PROGRAM_ID ??
-    // dev fallback (your old one)
-    "A2EqnLDYW1WAi8mhR12ncGVvt92G3jisJqCe46YoV7SJ"
-);
+// ✅ Require env variables (no dangerous fallbacks)
+if (!process.env.NEXT_PUBLIC_PROGRAM_ID) {
+  throw new Error("Missing NEXT_PUBLIC_PROGRAM_ID");
+}
+if (!process.env.NEXT_PUBLIC_SOLANA_RPC_URL) {
+  throw new Error("Missing NEXT_PUBLIC_SOLANA_RPC_URL");
+}
+if (!process.env.NEXT_PUBLIC_PLATFORM_WALLET) {
+  throw new Error("Missing NEXT_PUBLIC_PLATFORM_WALLET");
+}
 
-export const NETWORK =
-process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? "https://api.devnet.solana.com";
-export const PLATFORM_WALLET = new PublicKey(
-  process.env.NEXT_PUBLIC_PLATFORM_WALLET ??
-    "6szhvTU23WtiKXqPs8vuX5G7JXu2TcUdVJNByNwVGYMV"
-);
+// ✅ Runtime config comes ONLY from env
+export const PROGRAM_ID = new PublicKey(process.env.NEXT_PUBLIC_PROGRAM_ID);
+export const NETWORK = process.env.NEXT_PUBLIC_SOLANA_RPC_URL;
+export const PLATFORM_WALLET = new PublicKey(process.env.NEXT_PUBLIC_PLATFORM_WALLET);
 
+// Connection helper
 export function getConnection(): Connection {
   return new Connection(NETWORK, "confirmed");
 }
 
-export function getProvider(wallet: AnchorWallet, connection: Connection): AnchorProvider {
+// Provider helper
+export function getProvider(
+  wallet: AnchorWallet,
+  connection: Connection
+): AnchorProvider {
   return new AnchorProvider(connection, wallet, {
     commitment: "confirmed",
     preflightCommitment: "confirmed",

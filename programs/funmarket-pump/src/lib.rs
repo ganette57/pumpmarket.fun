@@ -2,7 +2,7 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::{program::invoke, system_instruction};
 
-declare_id!("A2EqnLDYW1WAi8mhR12ncGVvt92G3jisJqCe46YoV7SJ");
+declare_id!("DADaDENa6gPZjy92BjctBDKGqNBHhqPokpr5uY2UY3uJ");
 
 /* ============================== CONSTANTS ============================== */
 
@@ -26,7 +26,7 @@ pub const SLOPE_LAMPORTS_PER_SUPPLY: u64 = 1_000; // +0.000001 SOL per share sup
 
 use anchor_lang::prelude::pubkey;
 pub const PLATFORM_WALLET: Pubkey =
-    pubkey!("6szhvTU23WtiKXqPs8vuX5G7JXu2TcUdVJNByNwVGYMV");
+    pubkey!("xBaRohQaEKaYm57K6yB6pGBVMPiD4jdJkykx5knU3xr");
 
 // Admin key (ONLY used if disputes > 0)
 pub const ADMIN_AUTHORITY: Pubkey =

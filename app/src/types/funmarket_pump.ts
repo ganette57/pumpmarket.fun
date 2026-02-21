@@ -176,7 +176,7 @@ export type FunmarketPump = {
         {
           "name": "platformWallet",
           "writable": true,
-          "address": "6szhvTU23WtiKXqPs8vuX5G7JXu2TcUdVJNByNwVGYMV"
+          "address": "xBaRohQaEKaYm57K6yB6pGBVMPiD4jdJkykx5knU3xr"
         },
         {
           "name": "creator",
@@ -520,7 +520,7 @@ export type FunmarketPump = {
         {
           "name": "platformWallet",
           "writable": true,
-          "address": "6szhvTU23WtiKXqPs8vuX5G7JXu2TcUdVJNByNwVGYMV"
+          "address": "xBaRohQaEKaYm57K6yB6pGBVMPiD4jdJkykx5knU3xr"
         },
         {
           "name": "creator",

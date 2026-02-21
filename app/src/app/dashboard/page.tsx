@@ -18,7 +18,7 @@ import { Coins, X, CheckCircle, AlertCircle, Loader2 } from "lucide-react";
 /* Constants                                                                  */
 /* -------------------------------------------------------------------------- */
 
-const PLATFORM_WALLET = "6szhvTU23WtiKXqPs8vuX5G7JXu2TcUdVJNByNwVGYMV";
+const PLATFORM_WALLET = "xBaRohQaEKaYm57K6yB6pGBVMPiD4jdJkykx5knU3xr";
 
 /* -------------------------------------------------------------------------- */
 /* Helpers                                                                    */

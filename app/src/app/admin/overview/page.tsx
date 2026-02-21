@@ -10,7 +10,7 @@ import AdminReportsTab from "@/components/AdminReportsTab";
 
 /* ========= Constants ========= */
 
-const PLATFORM_WALLET = "6szhvTU23WtiKXqPs8vuX5G7JXu2TcUdVJNByNwVGYMV";
+const PLATFORM_WALLET = "xBaRohQaEKaYm57K6yB6pGBVMPiD4jdJkykx5knU3xr";
 
 /* ========= Types ========= */
 
