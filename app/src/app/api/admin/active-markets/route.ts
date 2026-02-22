@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+const NO_STORE_HEADERS = {
+  "Cache-Control": "no-store, no-cache, max-age=0, must-revalidate",
+};
+
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -37,16 +44,29 @@ export async function GET(req: NextRequest) {
 
     if (error) {
       console.error("active-markets error:", error);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json(
+        { error: error.message },
+        { status: 500, headers: NO_STORE_HEADERS }
+      );
     }
 
-    return NextResponse.json({
-      ok: true,
-      count: data?.length || 0,
-      markets: data || [],
-    });
+    if (process.env.NODE_ENV !== "production") {
+      console.debug(`[admin active-markets] returned=${data?.length || 0}`);
+    }
+
+    return NextResponse.json(
+      {
+        ok: true,
+        count: data?.length || 0,
+        markets: data || [],
+      },
+      { headers: NO_STORE_HEADERS }
+    );
   } catch (e: any) {
     console.error("active-markets error:", e);
-    return NextResponse.json({ error: e?.message || "Internal error" }, { status: 500 });
+    return NextResponse.json(
+      { error: e?.message || "Internal error" },
+      { status: 500, headers: NO_STORE_HEADERS }
+    );
   }
 }

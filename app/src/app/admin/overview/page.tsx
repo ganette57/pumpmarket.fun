@@ -308,7 +308,10 @@ export default function AdminOverviewPage() {
     setLoading(true);
     setErr(null);
     try {
-      const r = await fetch("/api/admin/overview", { credentials: "include" });
+      const r = await fetch(`/api/admin/overview?t=${Date.now()}`, {
+        credentials: "include",
+        cache: "no-store",
+      });
       if (!r.ok) {
         const t = await r.text().catch(() => "");
         throw new Error(t || `HTTP ${r.status}`);

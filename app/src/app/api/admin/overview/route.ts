@@ -2,6 +2,13 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { isAdminRequest } from "@/lib/admin";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+const NO_STORE_HEADERS = {
+  "Cache-Control": "no-store, no-cache, max-age=0, must-revalidate",
+};
+
 function env(name: string) {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env: ${name}`);
@@ -27,7 +34,12 @@ type ActionableMarket = {
 
 export async function GET(req: Request) {
   const ok = await isAdminRequest(req);
-  if (!ok) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!ok) {
+    return NextResponse.json(
+      { error: "Unauthorized" },
+      { status: 401, headers: NO_STORE_HEADERS }
+    );
+  }
 
   const supabase = createClient(env("SUPABASE_URL"), env("SUPABASE_SERVICE_ROLE_KEY"), {
     auth: { persistSession: false },
@@ -152,24 +164,30 @@ export async function GET(req: Request) {
       if (contestOpen && count > 0) disputes_open += count;
     }
 
-    return NextResponse.json({
-      kpi: {
-        markets_total,
-        markets_open,
-        markets_ended,
-        markets_proposed,
-        markets_finalized,
-        markets_cancelled,
-        volume_sol_total: Number(volume_sol_total.toFixed(4)),
-        tx_count: tx_count || 0,
-        unique_traders,
-        disputes_open,
-        disputes_total,
+    return NextResponse.json(
+      {
+        kpi: {
+          markets_total,
+          markets_open,
+          markets_ended,
+          markets_proposed,
+          markets_finalized,
+          markets_cancelled,
+          volume_sol_total: Number(volume_sol_total.toFixed(4)),
+          tx_count: tx_count || 0,
+          unique_traders,
+          disputes_open,
+          disputes_total,
+        },
+        actionable_markets: actionable_markets.slice(0, 50),
       },
-      actionable_markets: actionable_markets.slice(0, 50),
-    });
+      { headers: NO_STORE_HEADERS }
+    );
   } catch (e: any) {
     console.error("admin overview error", e);
-    return NextResponse.json({ error: e?.message || "Failed" }, { status: 500 });
+    return NextResponse.json(
+      { error: e?.message || "Failed" },
+      { status: 500, headers: NO_STORE_HEADERS }
+    );
   }
 }
