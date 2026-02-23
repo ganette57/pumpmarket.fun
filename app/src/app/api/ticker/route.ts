@@ -6,8 +6,8 @@ const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const sb = createClient(supabaseUrl, supabaseKey, { auth: { persistSession: false } });
 
-// ISR: Vercel serves cached response for 15s, then revalidates in background
-export const revalidate = 15;
+// force-dynamic: skip ISR pre-render. CDN caching via Cache-Control header.
+export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
