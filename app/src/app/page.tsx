@@ -12,7 +12,6 @@ import CategoryFilters from "@/components/CategoryFilters";
 import type { SelectedCategory } from "@/components/CategoryFilters";
 import { SkeletonCard, SkeletonFeaturedCard } from "@/components/SkeletonCard";
 import { isSportSubcategory } from "@/utils/categories";
-import { listActiveLiveSessionsMap } from "@/lib/liveSessions";
 
 type Market = {
   id?: string;
@@ -43,11 +42,14 @@ type Market = {
   resolutionStatus?: string | null;
 };
 
-type HomeMarketsResponse = {
-  kind: "featured" | "grid";
+type HomeFeaturedResponse = {
   items: any[];
-  offset?: number;
-  limit?: number;
+  error?: string;
+};
+
+type HomeGridResponse = {
+  items: any[];
+  nextCursor?: string | null;
   hasMore?: boolean;
   error?: string;
 };
@@ -181,6 +183,7 @@ export default function Home() {
   const [featuredLoading, setFeaturedLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [gridError, setGridError] = useState<string | null>(null);
   const [featuredError, setFeaturedError] = useState<string | null>(null);
 
@@ -196,8 +199,10 @@ export default function Home() {
 
   const observerTarget = useRef<HTMLDivElement>(null);
   const hasLoadedRef = useRef(false);
+  const lastGridQueryRef = useRef<string>("");
   const initialLoadAbortRef = useRef<AbortController | null>(null);
   const loadMoreAbortRef = useRef<AbortController | null>(null);
+  const liveMapWarnedRef = useRef(false);
 
   // ✅ used only on mobile to detect which slide is centered
   const mobileFeaturedRef = useRef<HTMLDivElement | null>(null);
@@ -240,20 +245,45 @@ export default function Home() {
     };
   }, [mapGridRow]);
 
-  const fetchHomeMarkets = useCallback(
-    async (
-      kind: "featured" | "grid",
-      opts: { offset?: number; limit?: number; signal?: AbortSignal } = {}
-    ): Promise<HomeMarketsResponse> => {
+  const fetchFeaturedMarkets = useCallback(
+    async (opts: { limit?: number; signal?: AbortSignal; category?: SelectedCategory } = {}): Promise<HomeFeaturedResponse> => {
       const qs = new URLSearchParams();
-      qs.set("kind", kind);
-      if (Number.isFinite(opts.offset)) qs.set("offset", String(opts.offset));
       if (Number.isFinite(opts.limit)) qs.set("limit", String(opts.limit));
+      if (opts.category && opts.category !== "all") qs.set("category", String(opts.category));
+      const res = await fetch(`/api/home/featured?${qs.toString()}`, {
+        signal: opts.signal,
+        cache: "no-store",
+      });
+      const json = (await res.json().catch(() => ({}))) as HomeFeaturedResponse;
+      if (!res.ok) {
+        throw new Error(json?.error || `HTTP ${res.status}`);
+      }
+      return json;
+    },
+    []
+  );
+
+  const fetchGridMarkets = useCallback(
+    async (
+      opts: {
+        cursor?: string | null;
+        limit?: number;
+        signal?: AbortSignal;
+        status?: MarketStatusFilter;
+        category?: SelectedCategory;
+      } = {}
+    ): Promise<HomeGridResponse> => {
+      const qs = new URLSearchParams();
+      if (opts.cursor) qs.set("cursor", String(opts.cursor));
+      if (Number.isFinite(opts.limit)) qs.set("limit", String(opts.limit));
+      if (opts.status) qs.set("status", String(opts.status));
+      if (opts.category) qs.set("category", String(opts.category));
 
       const res = await fetch(`/api/home/markets?${qs.toString()}`, {
         signal: opts.signal,
+        cache: "no-store",
       });
-      const json = (await res.json().catch(() => ({}))) as HomeMarketsResponse;
+      const json = (await res.json().catch(() => ({}))) as HomeGridResponse;
       if (!res.ok) {
         throw new Error(json?.error || `HTTP ${res.status}`);
       }
@@ -266,7 +296,7 @@ export default function Home() {
     setFeaturedLoading(true);
     setFeaturedError(null);
     try {
-      const payload = await fetchHomeMarkets("featured", {
+      const payload = await fetchFeaturedMarkets({
         limit: FEATURED_POOL_LIMIT,
         signal,
       });
@@ -279,47 +309,56 @@ export default function Home() {
     } finally {
       setFeaturedLoading(false);
     }
-  }, [fetchHomeMarkets, mapFeaturedRow]);
+  }, [fetchFeaturedMarkets, mapFeaturedRow]);
 
-  const loadGridFirstPage = useCallback(async (signal?: AbortSignal) => {
+  const loadGridFirstPage = useCallback(async (
+    opts: { signal?: AbortSignal; status?: MarketStatusFilter; category?: SelectedCategory } = {}
+  ) => {
     setLoading(true);
     setGridError(null);
     try {
-      const payload = await fetchHomeMarkets("grid", {
-        offset: 0,
+      const payload = await fetchGridMarkets({
+        cursor: null,
         limit: GRID_PAGE_SIZE,
-        signal,
+        signal: opts.signal,
+        status: opts.status ?? statusFilter,
+        category: opts.category ?? selectedCategory,
       });
       const rows = (payload.items || []).map(mapGridRow);
       setGridMarkets(rows);
-      setHasMore(!!payload.hasMore);
+      setNextCursor(payload.nextCursor ?? null);
+      setHasMore(!!payload.hasMore && !!payload.nextCursor);
     } catch (err) {
       if ((err as any)?.name === "AbortError") return;
       console.error("loadGridFirstPage fatal error:", err);
       setGridMarkets([]);
+      setNextCursor(null);
       setHasMore(false);
       setGridError((err as any)?.message || "Failed to load markets");
     } finally {
       setLoading(false);
     }
-  }, [fetchHomeMarkets, mapGridRow]);
+  }, [fetchGridMarkets, mapGridRow, selectedCategory, statusFilter]);
 
   const loadMore = useCallback(async () => {
-    if (loadingMore || loading || !hasMore) return;
+    if (loadingMore || loading || !hasMore || !nextCursor) return;
     loadMoreAbortRef.current?.abort();
     const controller = new AbortController();
     loadMoreAbortRef.current = controller;
     setLoadingMore(true);
     setGridError(null);
     try {
-      const payload = await fetchHomeMarkets("grid", {
-        offset: gridMarkets.length,
+      const payload = await fetchGridMarkets({
+        cursor: nextCursor,
         limit: GRID_PAGE_SIZE,
         signal: controller.signal,
+        status: statusFilter,
+        category: selectedCategory,
       });
       const nextRows = (payload.items || []).map(mapGridRow);
       setGridMarkets((prev) => [...prev, ...nextRows]);
-      setHasMore(!!payload.hasMore);
+      setNextCursor(payload.nextCursor ?? null);
+      setHasMore(!!payload.hasMore && !!payload.nextCursor);
     } catch (err) {
       if ((err as any)?.name === "AbortError") return;
       console.error("loadMore markets fatal error:", err);
@@ -330,7 +369,7 @@ export default function Home() {
         loadMoreAbortRef.current = null;
       }
     }
-  }, [fetchHomeMarkets, gridMarkets.length, hasMore, loading, loadingMore, mapGridRow]);
+  }, [fetchGridMarkets, hasMore, loading, loadingMore, mapGridRow, nextCursor, selectedCategory, statusFilter]);
 
   // ------- LOAD MARKETS FROM HOME API -------
   useEffect(() => {
@@ -339,10 +378,18 @@ export default function Home() {
 
     const controller = new AbortController();
     initialLoadAbortRef.current = controller;
+    const urlStatus = sp.get("status") as MarketStatusFilter | null;
+    const initialStatus =
+      urlStatus && ["all", "open", "resolved", "ending_soon", "top_volume"].includes(urlStatus)
+        ? urlStatus
+        : statusFilter;
 
     void loadFeaturedMarkets(controller.signal);
-    void loadGridFirstPage(controller.signal);
-    listActiveLiveSessionsMap().then(setLiveMap).catch(() => {});
+    void loadGridFirstPage({ signal: controller.signal, status: initialStatus, category: selectedCategory });
+    lastGridQueryRef.current = `${selectedCategory}|${initialStatus}`;
+    if (initialStatus !== statusFilter) {
+      setStatusFilter(initialStatus);
+    }
 
     return () => {
       controller.abort();
@@ -350,7 +397,85 @@ export default function Home() {
       loadMoreAbortRef.current?.abort();
       loadMoreAbortRef.current = null;
     };
-  }, [loadFeaturedMarkets, loadGridFirstPage]);
+  }, [loadFeaturedMarkets, loadGridFirstPage, selectedCategory, sp, statusFilter]);
+
+  useEffect(() => {
+    if (!hasLoadedRef.current) return;
+    const key = `${selectedCategory}|${statusFilter}`;
+    if (lastGridQueryRef.current === key) return;
+    lastGridQueryRef.current = key;
+
+    initialLoadAbortRef.current?.abort();
+    const controller = new AbortController();
+    initialLoadAbortRef.current = controller;
+    void loadGridFirstPage({ signal: controller.signal, status: statusFilter, category: selectedCategory });
+
+    return () => {
+      controller.abort();
+    };
+  }, [loadGridFirstPage, selectedCategory, statusFilter]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timeoutId: number | null = null;
+    let failCount = 0;
+    let controller: AbortController | null = null;
+
+    const schedule = (ms: number) => {
+      if (cancelled) return;
+      if (timeoutId != null) window.clearTimeout(timeoutId);
+      timeoutId = window.setTimeout(() => {
+        void poll();
+      }, ms);
+    };
+
+    const poll = async () => {
+      if (cancelled) return;
+      if (document.hidden) {
+        schedule(5_000);
+        return;
+      }
+
+      controller?.abort();
+      controller = new AbortController();
+      try {
+        const res = await fetch("/api/live/sessions-map", {
+          signal: controller.signal,
+          cache: "no-store",
+        });
+        const json = (await res.json().catch(() => ({}))) as { map?: Record<string, string> };
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (cancelled) return;
+        setLiveMap(json.map || {});
+        failCount = 0;
+        liveMapWarnedRef.current = false;
+        schedule(5_000);
+      } catch (e: any) {
+        if (e?.name === "AbortError") return;
+        if (!liveMapWarnedRef.current) {
+          console.debug("home live map fetch failed:", e?.message || e);
+          liveMapWarnedRef.current = true;
+        }
+        failCount += 1;
+        const backoff = Math.min(30_000, 5_000 * Math.pow(2, failCount));
+        schedule(backoff);
+      }
+    };
+
+    const onVisibility = () => {
+      if (!document.hidden) void poll();
+    };
+
+    void poll();
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      cancelled = true;
+      controller?.abort();
+      if (timeoutId != null) window.clearTimeout(timeoutId);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
 
   // ✅ read status from URL (keeps last selected when coming back)
   useEffect(() => {

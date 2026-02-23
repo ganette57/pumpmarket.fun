@@ -6,8 +6,8 @@ import { getServerSupabase } from "@/lib/supabaseServer";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const GRID_DEFAULT_LIMIT = 24;
-const GRID_MAX_LIMIT = 50;
+const FEATURED_POOL_LIMIT = 20;
+const FEATURED_MAX_LIMIT = 50;
 const CACHE_TTL_MS = 5_000;
 
 function clampInt(value: string | null, fallback: number, min: number, max: number): number {
@@ -55,21 +55,11 @@ function normalizeCategory(raw: string) {
   return category;
 }
 
-function normalizeStatus(raw: string) {
-  const status = String(raw || "open").trim().toLowerCase();
-  if (status === "all" || status === "open" || status === "resolved" || status === "ending_soon" || status === "top_volume") {
-    return status;
-  }
-  return "open";
-}
-
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
-  const limit = clampInt(sp.get("limit"), GRID_DEFAULT_LIMIT, 1, GRID_MAX_LIMIT);
-  const cursor = String(sp.get("cursor") || "").trim();
-  const status = normalizeStatus(String(sp.get("status") || "open"));
+  const limit = clampInt(sp.get("limit"), FEATURED_POOL_LIMIT, 1, FEATURED_MAX_LIMIT);
   const category = normalizeCategory(String(sp.get("category") || "all"));
-  const cacheKey = `home:markets:${limit}:${cursor}:${status}:${category}`;
+  const cacheKey = `home:featured:${limit}:${category}`;
 
   try {
     const payload = await cachedWithTtl(cacheKey, CACHE_TTL_MS, async () => {
@@ -84,6 +74,8 @@ export async function GET(req: NextRequest) {
           category,
           image_url,
           end_date,
+          creator,
+          social_links,
           yes_supply,
           no_supply,
           total_volume,
@@ -91,42 +83,29 @@ export async function GET(req: NextRequest) {
           resolution_status,
           market_type,
           outcome_names,
+          outcome_supplies,
           sport_trading_state,
           created_at
         `
         )
         .order("created_at", { ascending: false })
-        .limit(limit + 1);
+        .limit(limit);
 
-      if (cursor) {
-        q = q.lt("created_at", cursor);
-      }
       if (category !== "all") {
         q = q.eq("category", category);
-      }
-
-      if (status === "open") {
-        q = q.eq("resolved", false).eq("resolution_status", "open");
-      } else if (status === "resolved") {
-        q = q.or("resolved.eq.true,resolution_status.eq.proposed,resolution_status.eq.finalized,resolution_status.eq.cancelled");
       }
 
       const { data, error } = await runWithRetry<any[]>(async () => await q);
       if (error) {
         throw error;
       }
-
-      const rows = data || [];
-      const hasMore = rows.length > limit;
-      const items = hasMore ? rows.slice(0, limit) : rows;
-      const nextCursor = hasMore ? String(items[items.length - 1]?.created_at || "") : null;
-      return { items, nextCursor, hasMore };
+      return { items: data || [] };
     });
 
     return NextResponse.json(payload, { headers: cacheHeaders() });
   } catch (e: any) {
     return NextResponse.json(
-      { error: e?.message || "Failed to load home markets", items: [], nextCursor: null, hasMore: false },
+      { error: e?.message || "Failed to load featured markets", items: [] },
       { status: 500, headers: cacheHeaders() }
     );
   }

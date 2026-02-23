@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type TxRow = {
   id: string;
@@ -10,11 +9,7 @@ type TxRow = {
   shares: number | string | null;
   outcome_name: string | null;
   market_address: string | null;
-};
-
-type MarketRow = {
-  market_address: string;
-  question: string | null;
+  market_question?: string | null;
 };
 
 type Variant = "default" | "breaking";
@@ -30,69 +25,73 @@ export default function LiveBuysTicker({
   refreshMs?: number;
   className?: string;
 }) {
-  const [rows, setRows] = useState<(TxRow & { __market_question?: string })[]>([]);
+  const [rows, setRows] = useState<TxRow[]>([]);
   const [loadedOnce, setLoadedOnce] = useState(false);
-
-  async function fetchLatest() {
-    const { data: txs, error: txErr } = await supabase
-      .from("transactions")
-      .select("id,created_at,is_buy,shares,outcome_name,market_address")
-      .eq("is_buy", true)
-      .order("created_at", { ascending: false })
-      .limit(limit);
-
-    if (txErr) {
-      console.error("LiveBuysTicker tx fetch error:", txErr);
-      setRows([]);
-      setLoadedOnce(true);
-      return;
-    }
-
-    const cleanTxs = (((txs as any[]) || []) as TxRow[]).filter((r) => r.is_buy);
-
-    const addresses = Array.from(
-      new Set(cleanTxs.map((r) => r.market_address).filter((x): x is string => !!x))
-    );
-
-    const marketMap = new Map<string, string>();
-
-    if (addresses.length) {
-      const { data: mkts, error: mErr } = await supabase
-        .from("markets")
-        .select("market_address,question")
-        .in("market_address", addresses);
-
-      if (mErr) {
-        console.warn("LiveBuysTicker markets fetch error:", mErr);
-      } else {
-        (((mkts as any[]) || []) as MarketRow[]).forEach((m) => {
-          if (m?.market_address) marketMap.set(m.market_address, m.question || "a market");
-        });
-      }
-    }
-
-    setRows(
-      cleanTxs.map((r) => ({
-        ...r,
-        __market_question: r.market_address
-          ? marketMap.get(r.market_address) || "a market"
-          : "a market",
-      }))
-    );
-
-    setLoadedOnce(true);
-  }
+  const warnedRef = useRef(false);
 
   useEffect(() => {
-    fetchLatest();
-    const t = setInterval(fetchLatest, refreshMs);
-    return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    let cancelled = false;
+    let timeoutId: number | null = null;
+    let failCount = 0;
+
+    const schedule = (ms: number) => {
+      if (cancelled) return;
+      if (timeoutId != null) window.clearTimeout(timeoutId);
+      timeoutId = window.setTimeout(() => {
+        void poll();
+      }, ms);
+    };
+
+    const poll = async () => {
+      if (cancelled) return;
+      if (document.hidden) {
+        schedule(refreshMs);
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/live/ticker?limit=${limit}`, {
+          cache: "no-store",
+        });
+        const json = (await res.json().catch(() => ({}))) as { items?: TxRow[] };
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (cancelled) return;
+        setRows(((json.items || []) as TxRow[]).filter((r) => r.is_buy));
+        setLoadedOnce(true);
+        failCount = 0;
+        warnedRef.current = false;
+        schedule(refreshMs);
+      } catch (e: any) {
+        if (!warnedRef.current) {
+          console.debug("LiveBuysTicker API fetch failed:", e?.message || e);
+          warnedRef.current = true;
+        }
+        setLoadedOnce(true);
+        failCount += 1;
+        const backoff = Math.min(30_000, refreshMs * Math.pow(2, failCount));
+        schedule(backoff);
+      }
+    };
+
+    const onVisibility = () => {
+      if (!document.hidden) {
+        void poll();
+      }
+    };
+
+    void poll();
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      cancelled = true;
+      if (timeoutId != null) window.clearTimeout(timeoutId);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [refreshMs, limit]);
 
   const items = useMemo(() => {
     return rows.map((r) => {
-      const marketName = r.__market_question || "a market";
+      const marketName = r.market_question || "a market";
       const outcome = r.outcome_name || "an outcome";
       const shares = Math.max(0, Math.floor(Number(r.shares || 0)));
       return { marketName, outcome, shares };

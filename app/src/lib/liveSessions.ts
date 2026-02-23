@@ -193,25 +193,14 @@ const ACTIVE_STATUSES: LiveSessionStatus[] = ["live", "locked"];
  * Used by the home feed to render LIVE badges without N+1 queries.
  */
 export async function listActiveLiveSessionsMap(): Promise<Record<string, string>> {
-  const { data, error } = await supabase
-    .from("live_sessions")
-    .select("id,market_address,status,created_at")
-    .in("status", ACTIVE_STATUSES)
-    .order("created_at", { ascending: false })
-    .limit(100);
-
-  if (error) {
-    console.error("listActiveLiveSessionsMap error:", error);
+  try {
+    const res = await fetch("/api/live/sessions-map", { cache: "no-store" });
+    const json = (await res.json().catch(() => ({}))) as { map?: Record<string, string> };
+    if (!res.ok) return {};
+    return json.map || {};
+  } catch {
     return {};
   }
-
-  const map: Record<string, string> = {};
-  for (const row of (data || []) as { id: string; market_address: string }[]) {
-    if (!map[row.market_address]) {
-      map[row.market_address] = row.id;
-    }
-  }
-  return map;
 }
 
 /**
