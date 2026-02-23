@@ -33,10 +33,9 @@ interface FeaturedMarket {
 interface FeaturedMarketCardFullProps {
   market: FeaturedMarket;
   liveSessionId?: string | null;
-  preloadedTxs?: any[];
 }
 
-export default function FeaturedMarketCardFull({ market, liveSessionId, preloadedTxs }: FeaturedMarketCardFullProps) {
+export default function FeaturedMarketCardFull({ market, liveSessionId }: FeaturedMarketCardFullProps) {
   const [imageError, setImageError] = useState(false);
 
   const outcomes = useMemo(() => {
@@ -192,7 +191,7 @@ export default function FeaturedMarketCardFull({ market, liveSessionId, preloade
                     outcomesCount={outcomes.length}
                     hours={0}
                     height={320}
-                    preloadedTxs={preloadedTxs}
+
                   />
                 </div>
               </div>
@@ -292,7 +291,6 @@ export default function FeaturedMarketCardFull({ market, liveSessionId, preloade
                   outcomesCount={outcomes.length}
                   hours={0}
                   height={170}
-                  preloadedTxs={preloadedTxs}
                 />
               </div>
             </div>

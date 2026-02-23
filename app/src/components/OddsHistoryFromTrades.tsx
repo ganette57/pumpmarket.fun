@@ -42,7 +42,6 @@ interface Props {
   outcomeSupplies?: number[];
   hours?: number;
   height?: number;
-  preloadedTxs?: any[];
 }
 
 export default function OddsHistoryFromTrades({
@@ -53,18 +52,11 @@ export default function OddsHistoryFromTrades({
   outcomeSupplies, // baseline fallback (SUPER useful on homepage)
   hours = 24,
   height = 170,
-  preloadedTxs,
 }: Props) {
   const [txs, setTxs] = useState<TxRow[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    // If preloaded data is available, skip the Supabase call entirely
-    if (preloadedTxs) {
-      setTxs(preloadedTxs as TxRow[]);
-      return;
-    }
-
     let cancelled = false;
 
     async function load() {
@@ -114,7 +106,7 @@ export default function OddsHistoryFromTrades({
     return () => {
       cancelled = true;
     };
-  }, [marketId, marketAddress, hours, preloadedTxs]);
+  }, [marketId, marketAddress, hours]);
 
   const points: OddsPoint[] = useMemo(() => {
     const names = (outcomeNames || []).filter(Boolean);

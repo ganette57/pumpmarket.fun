@@ -229,8 +229,6 @@ export default function Home() {
 
   // Live session map: market_address -> session id
   const [liveMap, setLiveMap] = useState<Record<string, string>>({});
-  // Pre-loaded transactions for featured market charts
-  const [featuredTxs, setFeaturedTxs] = useState<Record<string, any[]>>({});
 
   const observerTarget = useRef<HTMLDivElement>(null);
 
@@ -254,10 +252,8 @@ export default function Home() {
       const json = await res.json();
       const data = json.markets || [];
       const liveMapData = json.liveMap || {};
-      const featuredTxsData = json.featuredTxs || {};
 
       setLiveMap(liveMapData);
-      setFeaturedTxs(featuredTxsData);
 
       const mapped: Market[] =
         (data || []).map((row: any) => {
@@ -593,7 +589,7 @@ export default function Home() {
                 >
                   {featuredMarkets.map((market) => (
                     <div key={market.id} className="w-full flex-shrink-0">
-                      <FeaturedMarketCardFull market={market} liveSessionId={liveMap[market.id] || null} preloadedTxs={featuredTxs[market.id]} />
+                      <FeaturedMarketCardFull market={market} liveSessionId={liveMap[market.id] || null} />
                     </div>
                   ))}
                 </div>
@@ -630,7 +626,7 @@ export default function Home() {
                 >
                   {featuredMarkets.map((market) => (
                     <div key={market.id} className="min-w-[92%] snap-center">
-                      <FeaturedMarketCardFull market={market} liveSessionId={liveMap[market.id] || null} preloadedTxs={featuredTxs[market.id]} />
+                      <FeaturedMarketCardFull market={market} liveSessionId={liveMap[market.id] || null} />
                     </div>
                   ))}
                 </div>
