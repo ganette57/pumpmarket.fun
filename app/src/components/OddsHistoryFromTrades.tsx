@@ -42,6 +42,7 @@ interface Props {
   outcomeSupplies?: number[];
   hours?: number;
   height?: number;
+  preloadedTxs?: any[];
 }
 
 export default function OddsHistoryFromTrades({
@@ -52,15 +53,22 @@ export default function OddsHistoryFromTrades({
   outcomeSupplies, // baseline fallback (SUPER useful on homepage)
   hours = 24,
   height = 170,
+  preloadedTxs,
 }: Props) {
   const [txs, setTxs] = useState<TxRow[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    // If preloaded data is available, skip the Supabase call entirely
+    if (preloadedTxs) {
+      setTxs(preloadedTxs as TxRow[]);
+      return;
+    }
+
     let cancelled = false;
 
     async function load() {
-      // Pas d’ID → pas de chart
+      // Pas d'ID → pas de chart
       if (!marketId && !marketAddress) {
         setTxs([]);
         return;
@@ -81,7 +89,7 @@ export default function OddsHistoryFromTrades({
           q = q.gte("created_at", since);
         }
 
-        // Match par uuid OU par address selon ce qu’on a en base
+        // Match par uuid OU par address selon ce qu'on a en base
         if (marketId && marketAddress) {
           q = q.or(`market_id.eq.${marketId},market_address.eq.${marketAddress}`);
         } else if (marketId) {
@@ -106,7 +114,7 @@ export default function OddsHistoryFromTrades({
     return () => {
       cancelled = true;
     };
-  }, [marketId, marketAddress, hours]);
+  }, [marketId, marketAddress, hours, preloadedTxs]);
 
   const points: OddsPoint[] = useMemo(() => {
     const names = (outcomeNames || []).filter(Boolean);

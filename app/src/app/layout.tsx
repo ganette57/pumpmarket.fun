@@ -34,13 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <GeoGateController />
             {children}
 
-            {/* Desktop ticker (bottom of screen) */}
-            <LiveBuysTicker
-              variant="breaking"
-              className="hidden md:block bottom-0"
-            />
-
-            {/* Mobile ticker (above mobile nav) */}
+            {/* Single ticker: bottom-14 on mobile (above nav), bottom-0 on desktop */}
             <LiveBuysTicker variant="breaking" className="bottom-14 md:bottom-0" />
           </AppShell>
         </WalletContextProvider>

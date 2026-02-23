@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
 
 type TxRow = {
   id: string;
@@ -10,11 +9,7 @@ type TxRow = {
   shares: number | string | null;
   outcome_name: string | null;
   market_address: string | null;
-};
-
-type MarketRow = {
-  market_address: string;
-  question: string | null;
+  __market_question?: string;
 };
 
 type Variant = "default" | "breaking";
@@ -34,53 +29,22 @@ export default function LiveBuysTicker({
   const [loadedOnce, setLoadedOnce] = useState(false);
 
   async function fetchLatest() {
-    const { data: txs, error: txErr } = await supabase
-      .from("transactions")
-      .select("id,created_at,is_buy,shares,outcome_name,market_address")
-      .eq("is_buy", true)
-      .order("created_at", { ascending: false })
-      .limit(limit);
-
-    if (txErr) {
-      console.error("LiveBuysTicker tx fetch error:", txErr);
-      setRows([]);
-      setLoadedOnce(true);
-      return;
-    }
-
-    const cleanTxs = (((txs as any[]) || []) as TxRow[]).filter((r) => r.is_buy);
-
-    const addresses = Array.from(
-      new Set(cleanTxs.map((r) => r.market_address).filter((x): x is string => !!x))
-    );
-
-    const marketMap = new Map<string, string>();
-
-    if (addresses.length) {
-      const { data: mkts, error: mErr } = await supabase
-        .from("markets")
-        .select("market_address,question")
-        .in("market_address", addresses);
-
-      if (mErr) {
-        console.warn("LiveBuysTicker markets fetch error:", mErr);
-      } else {
-        (((mkts as any[]) || []) as MarketRow[]).forEach((m) => {
-          if (m?.market_address) marketMap.set(m.market_address, m.question || "a market");
-        });
+    try {
+      const res = await fetch("/api/ticker");
+      if (!res.ok) {
+        console.error("LiveBuysTicker fetch error:", res.status);
+        setRows([]);
+        setLoadedOnce(true);
+        return;
       }
+      const json = await res.json();
+      setRows((json.items || []) as TxRow[]);
+    } catch (err) {
+      console.error("LiveBuysTicker fetch error:", err);
+      setRows([]);
+    } finally {
+      setLoadedOnce(true);
     }
-
-    setRows(
-      cleanTxs.map((r) => ({
-        ...r,
-        __market_question: r.market_address
-          ? marketMap.get(r.market_address) || "a market"
-          : "a market",
-      }))
-    );
-
-    setLoadedOnce(true);
   }
 
   useEffect(() => {

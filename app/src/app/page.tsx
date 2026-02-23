@@ -12,8 +12,6 @@ import CategoryFilters from "@/components/CategoryFilters";
 import type { SelectedCategory } from "@/components/CategoryFilters";
 import { SkeletonCard, SkeletonFeaturedCard } from "@/components/SkeletonCard";
 import { isSportSubcategory } from "@/utils/categories";
-import { supabase } from "@/lib/supabaseClient";
-import { listActiveLiveSessionsMap } from "@/lib/liveSessions";
 
 type Market = {
   id?: string;
@@ -231,55 +229,35 @@ export default function Home() {
 
   // Live session map: market_address -> session id
   const [liveMap, setLiveMap] = useState<Record<string, string>>({});
+  // Pre-loaded transactions for featured market charts
+  const [featuredTxs, setFeaturedTxs] = useState<Record<string, any[]>>({});
 
   const observerTarget = useRef<HTMLDivElement>(null);
 
   // ✅ used only on mobile to detect which slide is centered
   const mobileFeaturedRef = useRef<HTMLDivElement | null>(null);
 
-  // ------- LOAD MARKETS FROM SUPABASE -------
+  // ------- LOAD MARKETS FROM SERVER API (cached) -------
   useEffect(() => {
     void loadMarkets();
-    listActiveLiveSessionsMap().then(setLiveMap).catch(() => {});
   }, []);
 
   async function loadMarkets() {
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from("markets")
-        .select(
-          `
-          id,
-          market_address,
-          question,
-          description,
-          category,
-          image_url,
-          end_date,
-          creator,
-          social_links,
-          yes_supply,
-          no_supply,
-          total_volume,
-          resolved,
-          resolution_status,
-          market_type,
-          outcome_names,
-          outcome_supplies,
-          sport_meta,
-          sport_trading_state,
-          created_at
-        `
-        )
-        .order("created_at", { ascending: false })
-        .limit(200);
-
-      if (error) {
-        console.error("Error loading markets:", error);
+      const res = await fetch("/api/home");
+      if (!res.ok) {
+        console.error("Error loading markets:", res.status);
         setMarkets([]);
         return;
       }
+      const json = await res.json();
+      const data = json.markets || [];
+      const liveMapData = json.liveMap || {};
+      const featuredTxsData = json.featuredTxs || {};
+
+      setLiveMap(liveMapData);
+      setFeaturedTxs(featuredTxsData);
 
       const mapped: Market[] =
         (data || []).map((row: any) => {
@@ -615,7 +593,7 @@ export default function Home() {
                 >
                   {featuredMarkets.map((market) => (
                     <div key={market.id} className="w-full flex-shrink-0">
-                      <FeaturedMarketCardFull market={market} liveSessionId={liveMap[market.id] || null} />
+                      <FeaturedMarketCardFull market={market} liveSessionId={liveMap[market.id] || null} preloadedTxs={featuredTxs[market.id]} />
                     </div>
                   ))}
                 </div>
@@ -652,7 +630,7 @@ export default function Home() {
                 >
                   {featuredMarkets.map((market) => (
                     <div key={market.id} className="min-w-[92%] snap-center">
-                      <FeaturedMarketCardFull market={market} liveSessionId={liveMap[market.id] || null} />
+                      <FeaturedMarketCardFull market={market} liveSessionId={liveMap[market.id] || null} preloadedTxs={featuredTxs[market.id]} />
                     </div>
                   ))}
                 </div>
