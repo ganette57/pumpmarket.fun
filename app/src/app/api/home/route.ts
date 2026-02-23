@@ -22,10 +22,18 @@ export async function GET() {
             question,
             category,
             image_url,
+            end_date,
             yes_supply,
             no_supply,
             total_volume,
-            created_at
+            created_at,
+            resolved,
+            resolution_status,
+            cancelled,
+            is_blocked,
+            market_type,
+            outcome_names,
+            outcome_supplies
           `
         )
         .order("created_at", { ascending: false })
@@ -33,7 +41,7 @@ export async function GET() {
 
       sb
         .from("live_sessions")
-        .select("id,market_address")
+        .select("id,market_address,status,created_at")
         .in("status", ["live", "locked"])
         .order("created_at", { ascending: false })
         .limit(100),
@@ -57,7 +65,13 @@ export async function GET() {
       }
     }
 
-    const markets = (marketsRes.data as any[]) || [];
+    const markets = ((marketsRes.data as any[]) || []).map((m: any) => ({
+      ...m,
+      image_url:
+        typeof m.image_url === "string" && m.image_url.startsWith("data:")
+          ? null
+          : m.image_url,
+    }));
 
     return NextResponse.json(
       { markets, liveMap },

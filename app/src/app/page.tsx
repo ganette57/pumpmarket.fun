@@ -27,6 +27,8 @@ type Market = {
 
   resolutionTime: number;
   resolved: boolean;
+  cancelled?: boolean;
+  isBlocked?: boolean;
 
   marketType: 0 | 1;
   outcomeNames?: string[];
@@ -116,6 +118,7 @@ function isMarketOpenForHome(m: Market): boolean {
   if (resolutionStatus === "proposed" || resolutionStatus === "finalized" || resolutionStatus === "cancelled") {
     return false;
   }
+  if (m.cancelled || m.isBlocked) return false;
   if (!!m.resolved) return false;
 
   if (!isSportMarket(m)) {
@@ -299,6 +302,8 @@ export default function Home() {
             totalVolume: Number(row.total_volume || 0),
             resolutionTime: Math.floor(endDate.getTime() / 1000),
             resolved: !!row.resolved,
+            cancelled: !!row.cancelled,
+            isBlocked: !!row.is_blocked,
             marketType: mt,
             outcomeNames,
             outcomeSupplies,
@@ -312,6 +317,9 @@ export default function Home() {
         }) ?? [];
 
       setMarkets(mapped);
+      if (process.env.NODE_ENV !== "production") {
+        console.log("home markets loaded", mapped.length);
+      }
     } catch (err) {
       console.error("loadMarkets fatal error:", err);
       setMarkets([]);
@@ -336,12 +344,12 @@ export default function Home() {
 
     // "sports" = only markets with a concrete sport marker
     if (selectedCategory === "sports") {
-      return markets.filter((m) => m.sport != null);
+      return markets.filter((m) => m.category === "sports");
     }
 
     // Sport subcategory (soccer, basketball, etc.) — match by sport marker only
     if (isSportSubcategory(selectedCategory)) {
-      return markets.filter((m) => m.sport === selectedCategory);
+      return markets.filter((m) => m.category === "sports");
     }
 
     // Regular category
