@@ -2,12 +2,13 @@
   "name": "funmarket-pump",
   "version": "0.1.0",
   "private": true,
-  "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "next lint"
-  },
+"scripts": {
+  "dev": "next dev",
+  "build": "next build",
+  "start": "next start",
+  "lint": "next lint",
+  "migrate:images": "ts-node scripts/migrateBase64ImagesToStorage.ts"
+},
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
     "@solana/wallet-adapter-base": "^0.9.23",
