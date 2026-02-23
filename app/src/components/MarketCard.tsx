@@ -15,6 +15,7 @@ interface MarketCardProps {
     imageUrl?: string | null;
     yesSupply: number;
     noSupply: number;
+    marketType?: number;
     outcomeNames?: string[];
     outcomeSupplies?: number[];
     resolutionTime: number;
@@ -46,9 +47,15 @@ export default function MarketCard({ market, liveSessionId }: MarketCardProps) {
       ? market.outcomeNames
       : ['YES', 'NO'];
 
+  const hasOutcomeSupplies = !!(market.outcomeSupplies && market.outcomeSupplies.length >= 2);
+  const isMultiWithoutSupplies =
+    Number(market.marketType ?? 0) === 1 &&
+    outcomes.length > 2 &&
+    !hasOutcomeSupplies;
+
   let supplies =
-    market.outcomeSupplies && market.outcomeSupplies.length >= 2
-      ? market.outcomeSupplies.map(Number)
+    hasOutcomeSupplies
+      ? (market.outcomeSupplies as number[]).map(Number)
       : [market.yesSupply || 0, market.noSupply || 0];
 
   const totalSupply = supplies.reduce((a, b) => a + b, 0);
@@ -125,7 +132,7 @@ export default function MarketCard({ market, liveSessionId }: MarketCardProps) {
                 {outcomes[0].length > 10 ? outcomes[0].slice(0, 8) + '…' : outcomes[0]}
               </span>
               <span className="text-[18px] md:text-[20px] font-semibold text-green-400">
-                {percents[0]}%
+                {isMultiWithoutSupplies ? "Multi" : `${percents[0]}%`}
               </span>
             </div>
 
@@ -135,10 +142,15 @@ export default function MarketCard({ market, liveSessionId }: MarketCardProps) {
                 {outcomes[1].length > 10 ? outcomes[1].slice(0, 8) + '…' : outcomes[1]}
               </span>
               <span className="text-[18px] md:text-[20px] font-semibold text-red-400">
-                {percents[1]}%
+                {isMultiWithoutSupplies ? "Multi" : `${percents[1]}%`}
               </span>
             </div>
           </div>
+          {isMultiWithoutSupplies && outcomes.length > 2 && (
+            <div className="text-[10px] text-gray-500 mt-1 text-center">
+              +{outcomes.length - 2} outcomes
+            </div>
+          )}
 
           {/* FOOTER */}
           <div className="flex items-center justify-between text-[11px] text-gray-400 mt-3">

@@ -19,7 +19,6 @@ type Market = {
   id?: string;
   publicKey: string;
   question: string;
-  description: string;
   category: string;
   imageUrl?: string | null;
 
@@ -41,8 +40,6 @@ type Market = {
     website?: string;
   } | null;
 
-  sportMeta?: Record<string, unknown> | null;
-  sport?: string | null;
   sportTradingState?: string | null;
   resolutionStatus?: string | null;
 };
@@ -50,20 +47,13 @@ type Market = {
 type MarketStatusFilter = "all" | "open" | "resolved" | "ending_soon" | "top_volume";
 const CAROUSEL_LIMIT = 5;
 const MIN_VOL_LAMPORTS = 50_000_000; // 0.05 SOL
+const FEATURED_POOL_LIMIT = 20;
+const GRID_PAGE_SIZE = 24;
 
 const DEBUG_SPORT_OPEN_FILTER = false;
 
 function sportStatusSignals(m: Market): string[] {
-  const meta = (m.sportMeta || {}) as any;
-  const raw = (meta.raw || {}) as any;
-  const fixtureShort = raw?.fixture?.status?.short;
-  const vals = [
-    m.sportTradingState,
-    meta?.status,
-    raw?.status,
-    raw?.state,
-    fixtureShort,
-  ];
+  const vals = [m.sportTradingState];
   return vals
     .map((v) => String(v || "").trim().toLowerCase())
     .filter(Boolean);
@@ -72,7 +62,7 @@ function sportStatusSignals(m: Market): string[] {
 function isSportOpenByProvider(m: Market): boolean {
   const status = sportStatusSignals(m);
   const isLive = status.some((s) =>
-    ["live", "in_play", "inplay", "open", "locked_by_sport", "1h", "ht", "2h", "et", "p", "q1", "q2", "q3", "q4", "ot"].includes(s)
+    ["live", "in_play", "inplay", "open", "1h", "ht", "2h", "et", "p", "q1", "q2", "q3", "q4", "ot"].includes(s)
   );
   if (DEBUG_SPORT_OPEN_FILTER && isLive) {
     console.debug("[sport-open-filter] treating as open by provider", m.publicKey, status);
@@ -88,28 +78,12 @@ function isSportFinishedByProvider(m: Market): boolean {
 }
 
 function isSportMarket(m: Market): boolean {
-  return !!m.sport || !!m.sportMeta;
-}
-
-function parseUtcMs(raw: any): number {
-  if (!raw) return NaN;
-  const s = String(raw).trim();
-  if (!s) return NaN;
-  const hasTz = /(?:Z|[+-]\d{2}:\d{2})$/i.test(s);
-  const normalized = s.includes(" ") ? s.replace(" ", "T") : s;
-  const ms = Date.parse(hasTz ? normalized : `${normalized}Z`);
-  return Number.isFinite(ms) ? ms : NaN;
-}
-
-function homeSportDurationMs(sport: string | null | undefined): number {
-  const s = String(sport || "").toLowerCase();
-  if (s === "soccer" || s === "football") return 110 * 60_000;
-  if (s === "basketball" || s === "nba") return 150 * 60_000;
-  return NaN;
+  if (m.category === "sports") return true;
+  const st = String(m.sportTradingState || "").trim().toLowerCase();
+  return st.length > 0;
 }
 
 function isMarketOpenForHome(m: Market): boolean {
-  const nowMs = Date.now();
   const nowSec = Date.now() / 1000;
   const endedByTime = !!m.resolutionTime && nowSec >= m.resolutionTime;
   const resolutionStatus = String(m.resolutionStatus || "open").toLowerCase();
@@ -123,34 +97,10 @@ function isMarketOpenForHome(m: Market): boolean {
   if (!isSportMarket(m)) {
     return !endedByTime;
   }
-
-  const meta = (m.sportMeta || {}) as any;
-  const sportKey = String(m.sport || meta?.sport || "").toLowerCase();
-  const startMs = parseUtcMs(meta?.start_time);
-  const explicitEndMs = parseUtcMs(meta?.end_time);
-  const durationMs = homeSportDurationMs(sportKey);
-  const sportPredefinedEndMs = Number.isFinite(explicitEndMs)
-    ? explicitEndMs
-    : Number.isFinite(startMs) && Number.isFinite(durationMs)
-    ? startMs + durationMs
-    : NaN;
-  const sportLockMs = Number.isFinite(sportPredefinedEndMs)
-    ? sportPredefinedEndMs - 2 * 60_000
-    : Number.isFinite(m.resolutionTime)
-    ? m.resolutionTime * 1000
-    : NaN;
-  const homeLocked = Number.isFinite(sportLockMs) && nowMs >= sportLockMs;
-  const homeSportEnded =
-    isSportFinishedByProvider(m) ||
-    String(m.sportTradingState || "").toLowerCase() === "ended_by_sport" ||
-    (Number.isFinite(sportPredefinedEndMs) && nowMs >= sportPredefinedEndMs);
-
-  if (homeSportEnded || homeLocked) return false;
-  if (isSportOpenByProvider(m)) return true;
+  const status = sportStatusSignals(m);
   if (isSportFinishedByProvider(m)) return false;
-
-  // Missing provider data: keep open unless strong finished/locked signal exists.
-  if (Number.isFinite(sportPredefinedEndMs)) return nowMs < sportPredefinedEndMs;
+  if (status.some((s) => ["locked", "locked_by_sport"].includes(s))) return false;
+  if (isSportOpenByProvider(m)) return true;
   return !endedByTime;
 }
 
@@ -217,15 +167,17 @@ function StatusFilterDropdown({
 }
 
 export default function Home() {
-  const [markets, setMarkets] = useState<Market[]>([]);
+  const [gridMarkets, setGridMarkets] = useState<Market[]>([]);
+  const [featuredSource, setFeaturedSource] = useState<Market[]>([]);
   const [loading, setLoading] = useState(true);
+  const [featuredLoading, setFeaturedLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
 
   const [selectedCategory, setSelectedCategory] = useState<SelectedCategory>("all");
   const [statusFilter, setStatusFilter] = useState<MarketStatusFilter>("open");
 
   const [currentFeaturedIndex, setCurrentFeaturedIndex] = useState(0);
-  const [displayedCount, setDisplayedCount] = useState(12);
   const router = useRouter();
   const sp = useSearchParams();
 
@@ -237,14 +189,46 @@ export default function Home() {
   // ✅ used only on mobile to detect which slide is centered
   const mobileFeaturedRef = useRef<HTMLDivElement | null>(null);
 
-  // ------- LOAD MARKETS FROM SUPABASE -------
-  useEffect(() => {
-    void loadMarkets();
-    listActiveLiveSessionsMap().then(setLiveMap).catch(() => {});
+  const mapGridRow = useCallback((row: any): Market => {
+    const mt = (row.market_type ?? 0) as 0 | 1;
+    const outcomeNames: string[] | undefined = Array.isArray(row.outcome_names)
+      ? row.outcome_names.map((x: any) => String(x)).filter(Boolean)
+      : undefined;
+    const endDate = row.end_date ? new Date(row.end_date) : new Date();
+
+    return {
+      id: row.id,
+      publicKey: row.market_address,
+      question: row.question || "",
+      category: row.category || "other",
+      imageUrl: row.image_url ?? null,
+      yesSupply: Number(row.yes_supply || 0),
+      noSupply: Number(row.no_supply || 0),
+      totalVolume: Number(row.total_volume || 0),
+      resolutionTime: Math.floor(endDate.getTime() / 1000),
+      resolved: !!row.resolved,
+      marketType: mt,
+      outcomeNames,
+      sportTradingState: row.sport_trading_state ?? null,
+      resolutionStatus: row.resolution_status ?? "open",
+    };
   }, []);
 
-  async function loadMarkets() {
-    setLoading(true);
+  const mapFeaturedRow = useCallback((row: any): Market => {
+    const base = mapGridRow(row);
+    const outcomeSupplies: number[] | undefined = Array.isArray(row.outcome_supplies)
+      ? row.outcome_supplies.map((x: any) => Number(x) || 0)
+      : undefined;
+    return {
+      ...base,
+      creator: row.creator ?? null,
+      socialLinks: row.social_links ?? null,
+      outcomeSupplies,
+    };
+  }, [mapGridRow]);
+
+  const loadFeaturedMarkets = useCallback(async () => {
+    setFeaturedLoading(true);
     try {
       const { data, error } = await supabase
         .from("markets")
@@ -253,7 +237,6 @@ export default function Home() {
           id,
           market_address,
           question,
-          description,
           category,
           image_url,
           end_date,
@@ -267,74 +250,109 @@ export default function Home() {
           market_type,
           outcome_names,
           outcome_supplies,
-          sport_meta,
           sport_trading_state,
           created_at
         `
         )
         .order("created_at", { ascending: false })
-        .limit(200);
+        .limit(FEATURED_POOL_LIMIT);
 
       if (error) {
-        console.error("Error loading markets:", error);
-        setMarkets([]);
+        console.error("Error loading featured markets:", error);
+        setFeaturedSource([]);
         return;
       }
 
-      const mapped: Market[] =
-        (data || []).map((row: any) => {
-          const mt = (row.market_type ?? 0) as 0 | 1;
-
-          const outcomeNames: string[] | undefined = Array.isArray(row.outcome_names)
-            ? row.outcome_names.map((x: any) => String(x)).filter(Boolean)
-            : undefined;
-
-          const outcomeSupplies: number[] | undefined = Array.isArray(row.outcome_supplies)
-            ? row.outcome_supplies.map((x: any) => Number(x) || 0)
-            : undefined;
-
-          let yesSupply = Number(row.yes_supply || 0);
-          let noSupply = Number(row.no_supply || 0);
-
-          if (mt === 1 && Array.isArray(outcomeSupplies) && outcomeSupplies.length >= 2) {
-            yesSupply = Number(outcomeSupplies[0] || 0);
-            noSupply = Number(outcomeSupplies[1] || 0);
-          }
-
-          const endDate = row.end_date ? new Date(row.end_date) : new Date();
-
-          return {
-            id: row.id,
-            publicKey: row.market_address,
-            question: row.question || "",
-            description: row.description || "",
-            category: row.category || "other",
-            imageUrl: row.image_url ?? null,
-            yesSupply,
-            noSupply,
-            totalVolume: Number(row.total_volume || 0),
-            resolutionTime: Math.floor(endDate.getTime() / 1000),
-            resolved: !!row.resolved,
-            marketType: mt,
-            outcomeNames,
-            outcomeSupplies,
-            creator: row.creator ?? null,
-            socialLinks: row.social_links ?? null,
-            sportMeta: row.sport_meta ?? null,
-            sport: typeof row.sport_meta?.sport === "string" ? row.sport_meta.sport : null,
-            sportTradingState: row.sport_trading_state ?? null,
-            resolutionStatus: row.resolution_status ?? "open",
-          } as Market;
-        }) ?? [];
-
-      setMarkets(mapped);
+      setFeaturedSource(((data || []) as any[]).map(mapFeaturedRow));
     } catch (err) {
-      console.error("loadMarkets fatal error:", err);
-      setMarkets([]);
+      console.error("loadFeaturedMarkets fatal error:", err);
+      setFeaturedSource([]);
+    } finally {
+      setFeaturedLoading(false);
+    }
+  }, [mapFeaturedRow]);
+
+  const loadGridPage = useCallback(
+    async (from: number, to: number) => {
+      return supabase
+        .from("markets")
+        .select(
+          `
+          id,
+          market_address,
+          question,
+          category,
+          image_url,
+          end_date,
+          yes_supply,
+          no_supply,
+          total_volume,
+          resolved,
+          resolution_status,
+          market_type,
+          outcome_names,
+          sport_trading_state,
+          created_at
+        `
+        )
+        .order("created_at", { ascending: false })
+        .range(from, to);
+    },
+    []
+  );
+
+  const loadGridFirstPage = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await loadGridPage(0, GRID_PAGE_SIZE - 1);
+      if (error) {
+        console.error("Error loading grid markets:", error);
+        setGridMarkets([]);
+        setHasMore(false);
+        return;
+      }
+
+      const rows = ((data || []) as any[]).map(mapGridRow);
+      setGridMarkets(rows);
+      setHasMore(rows.length >= GRID_PAGE_SIZE);
+    } catch (err) {
+      console.error("loadGridFirstPage fatal error:", err);
+      setGridMarkets([]);
+      setHasMore(false);
     } finally {
       setLoading(false);
     }
-  }
+  }, [loadGridPage, mapGridRow]);
+
+  const loadMore = useCallback(async () => {
+    if (loadingMore || loading || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      const from = gridMarkets.length;
+      const to = from + GRID_PAGE_SIZE - 1;
+      const { data, error } = await loadGridPage(from, to);
+      if (error) {
+        console.error("Error loading more markets:", error);
+        setHasMore(false);
+        return;
+      }
+
+      const nextRows = ((data || []) as any[]).map(mapGridRow);
+      setGridMarkets((prev) => [...prev, ...nextRows]);
+      if (nextRows.length < GRID_PAGE_SIZE) setHasMore(false);
+    } catch (err) {
+      console.error("loadMore markets fatal error:", err);
+      setHasMore(false);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [gridMarkets.length, hasMore, loadGridPage, loading, loadingMore, mapGridRow]);
+
+  // ------- LOAD MARKETS FROM SUPABASE -------
+  useEffect(() => {
+    void Promise.allSettled([loadFeaturedMarkets(), loadGridFirstPage()]);
+    listActiveLiveSessionsMap().then(setLiveMap).catch(() => {});
+  }, [loadFeaturedMarkets, loadGridFirstPage]);
 
   // ✅ read status from URL (keeps last selected when coming back)
   useEffect(() => {
@@ -348,21 +366,28 @@ export default function Home() {
   // ------- FILTERS -------
   const categoryFiltered = useMemo(() => {
     // "all" = no filter
-    if (selectedCategory === "all") return markets;
+    if (selectedCategory === "all") return gridMarkets;
 
     // "sports" = only markets with a concrete sport marker
     if (selectedCategory === "sports") {
-      return markets.filter((m) => m.sport != null);
+      return gridMarkets.filter((m) => isSportMarket(m));
     }
 
-    // Sport subcategory (soccer, basketball, etc.) — match by sport marker only
+    // Sport subcategory fallback: no sport_meta on Home, keep sports category.
     if (isSportSubcategory(selectedCategory)) {
-      return markets.filter((m) => m.sport === selectedCategory);
+      return gridMarkets.filter((m) => m.category === "sports");
     }
 
     // Regular category
-    return markets.filter((m) => m.category === selectedCategory);
-  }, [markets, selectedCategory]);
+    return gridMarkets.filter((m) => m.category === selectedCategory);
+  }, [gridMarkets, selectedCategory]);
+
+  const featuredCategoryFiltered = useMemo(() => {
+    if (selectedCategory === "all") return featuredSource;
+    if (selectedCategory === "sports") return featuredSource.filter((m) => isSportMarket(m));
+    if (isSportSubcategory(selectedCategory)) return featuredSource.filter((m) => m.category === "sports");
+    return featuredSource.filter((m) => m.category === selectedCategory);
+  }, [featuredSource, selectedCategory]);
 
   const statusFiltered = useMemo(() => {
     const nowSec = Date.now() / 1000;
@@ -404,8 +429,8 @@ export default function Home() {
 
   // ------- FEATURED (open pool: top volume, fallback to latest created) -------
   const featuredMarkets = useMemo(() => {
-    const openTradable = categoryFiltered.filter((m) => isMarketOpenForHome(m));
-    const openNotFinal = categoryFiltered.filter((m) => {
+    const openTradable = featuredCategoryFiltered.filter((m) => isMarketOpenForHome(m));
+    const openNotFinal = featuredCategoryFiltered.filter((m) => {
       const rs = String(m.resolutionStatus || "open").toLowerCase();
       if (rs !== "open") return false;
       if (m.resolved) return false;
@@ -448,7 +473,7 @@ export default function Home() {
           outcomeSupplies: market.outcomeSupplies,
         };
       });
-  }, [categoryFiltered]);
+  }, [featuredCategoryFiltered]);
 
   // reset index when list changes
   useEffect(() => {
@@ -459,13 +484,11 @@ export default function Home() {
   }, [featuredMarkets.length]);
 
   // ------- INFINITE SCROLL -------
-  const displayedMarkets = useMemo(() => statusFiltered.slice(0, displayedCount), [statusFiltered, displayedCount]);
-
   useEffect(() => {
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0]?.isIntersecting && !loading && statusFiltered.length > displayedCount) {
-          loadMore();
+        if (entries[0]?.isIntersecting && !loading && hasMore) {
+          void loadMore();
         }
       },
       { threshold: 0.1 }
@@ -476,20 +499,7 @@ export default function Home() {
     return () => {
       if (t) observer.unobserve(t);
     };
-  }, [displayedCount, loading, statusFiltered.length]);
-
-  const loadMore = useCallback(() => {
-    if (loadingMore) return;
-    setLoadingMore(true);
-    setTimeout(() => {
-      setDisplayedCount((prev) => prev + 12);
-      setLoadingMore(false);
-    }, 400);
-  }, [loadingMore]);
-
-  useEffect(() => {
-    setDisplayedCount(12);
-  }, [selectedCategory, statusFilter]);
+  }, [hasMore, loadMore, loading]);
 
   // ✅ persist status in URL
   useEffect(() => {
@@ -603,7 +613,7 @@ export default function Home() {
             </div>
           </div>
 
-          {loading ? (
+          {featuredLoading ? (
             <SkeletonFeaturedCard />
           ) : featuredMarkets.length > 0 ? (
             <div className="relative">
@@ -705,7 +715,7 @@ export default function Home() {
                 <SkeletonCard key={i} />
               ))}
             </div>
-          ) : displayedMarkets.length === 0 ? (
+          ) : statusFiltered.length === 0 ? (
             <div className="text-center py-20">
               <div className="text-6xl mb-4">
                 {statusFilter === "ending_soon" ? "⏰" : statusFilter === "top_volume" ? "📊" : "🤷"}
@@ -724,7 +734,7 @@ export default function Home() {
           ) : (
             <>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 auto-rows-fr">
-                {displayedMarkets.map((market, index) => (
+                {statusFiltered.map((market, index) => (
                   <motion.div
                     key={market.publicKey}
                     initial={{ opacity: 0, y: 40 }}
@@ -738,14 +748,14 @@ export default function Home() {
                 ))}
               </div>
 
-              {displayedCount < statusFiltered.length && (
+              {hasMore && (
                 <div ref={observerTarget} className="text-center py-12">
                   {loadingMore ? (
                     <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-pump-green" />
                   ) : (
                     <button
                       type="button"
-                      onClick={loadMore}
+                      onClick={() => void loadMore()}
                       className="px-8 py-3 bg-pump-gray hover:bg-pump-dark border border-gray-700 hover:border-pump-green rounded-lg text-white font-semibold transition"
                     >
                       Load More Markets
@@ -754,7 +764,7 @@ export default function Home() {
                 </div>
               )}
 
-              {displayedCount >= statusFiltered.length && statusFiltered.length > 12 && (
+              {!hasMore && statusFiltered.length > 12 && (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-center py-8 text-gray-500 text-sm">
                   You&apos;ve reached the end 🎉
                 </motion.div>
