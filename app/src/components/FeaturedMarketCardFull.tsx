@@ -8,6 +8,8 @@ import { TrendingUp, Clock } from 'lucide-react';
 import CategoryImagePlaceholder from './CategoryImagePlaceholder';
 import { lamportsToSol } from '@/utils/solana';
 import OddsHistoryFromTrades from '@/components/OddsHistoryFromTrades';
+import { useIsMountedNextFrame } from '@/hooks/useIsMountedNextFrame';
+import { useInViewOnce } from '@/hooks/useInViewOnce';
 
 interface FeaturedMarket {
   id: string;
@@ -37,6 +39,9 @@ interface FeaturedMarketCardFullProps {
 
 export default function FeaturedMarketCardFull({ market, liveSessionId }: FeaturedMarketCardFullProps) {
   const [imageError, setImageError] = useState(false);
+  const mounted = useIsMountedNextFrame();
+  const { ref: desktopChartRef, inView: desktopChartInView } = useInViewOnce<HTMLDivElement>({ rootMargin: '300px' });
+  const { ref: mobileChartRef, inView: mobileChartInView } = useInViewOnce<HTMLDivElement>({ rootMargin: '150px' });
 
   const outcomes = useMemo(() => {
     const names = (market.outcomeNames || []).filter(Boolean);
@@ -182,16 +187,20 @@ export default function FeaturedMarketCardFull({ market, liveSessionId }: Featur
             {/* RIGHT SIDE - Chart */}
             <div className="w-[55%] p-4 pl-1 flex flex-col justify-center">
               <div className="h-full flex items-center">
-                <div className="w-full h-[320px] py-1">
-                  <OddsHistoryFromTrades
-                    marketId={market.dbId}
-                    marketAddress={market.id}
-                    outcomeNames={outcomes}
-                    outcomeSupplies={supplies}
-                    outcomesCount={outcomes.length}
-                    hours={0}
-                    height={320}
-                  />
+                <div ref={desktopChartRef} className="w-full h-[320px] py-1">
+                  {mounted && desktopChartInView ? (
+                    <OddsHistoryFromTrades
+                      marketId={market.dbId}
+                      marketAddress={market.id}
+                      outcomeNames={outcomes}
+                      outcomeSupplies={supplies}
+                      outcomesCount={outcomes.length}
+                      hours={0}
+                      height={320}
+                    />
+                  ) : (
+                    <div className="w-full h-full rounded-xl border border-white/10 bg-white/5" />
+                  )}
                 </div>
               </div>
             </div>
@@ -281,16 +290,20 @@ export default function FeaturedMarketCardFull({ market, liveSessionId }: Featur
               </div>
 
               {/* Mobile chart */}
-              <div className="pt-3">
-                <OddsHistoryFromTrades
-                  marketId={market.dbId}
-                  marketAddress={market.id}
-                  outcomeNames={outcomes}
-                  outcomeSupplies={supplies}
-                  outcomesCount={outcomes.length}
-                  hours={0}
-                  height={170}
-                />
+              <div ref={mobileChartRef} className="pt-3">
+                {mounted && mobileChartInView ? (
+                  <OddsHistoryFromTrades
+                    marketId={market.dbId}
+                    marketAddress={market.id}
+                    outcomeNames={outcomes}
+                    outcomeSupplies={supplies}
+                    outcomesCount={outcomes.length}
+                    hours={0}
+                    height={170}
+                  />
+                ) : (
+                  <div className="h-[170px] w-full rounded-xl border border-white/10 bg-white/5" />
+                )}
               </div>
             </div>
           </div>

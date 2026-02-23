@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   ResponsiveContainer,
   LineChart,
@@ -60,7 +60,7 @@ function approxEqualArr(a: number[], b: number[], eps = 0.15): boolean {
   return true;
 }
 
-export default function OddsHistoryChart({
+function OddsHistoryChart({
   points,
   outcomeNames,
   height = 280,
@@ -188,3 +188,5 @@ export default function OddsHistoryChart({
     </div>
   );
 }
+
+export default memo(OddsHistoryChart);
