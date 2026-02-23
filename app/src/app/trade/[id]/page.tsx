@@ -800,7 +800,7 @@ const [liveScoreLastSuccessAt, setLiveScoreLastSuccessAt] = useState<number | nu
 
   useEffect(() => {
     setDescriptionExpanded(false);
-  }, [id]);
+  }, [market?.publicKey]);
 
   // Mobile drawer state
   const [mobileTradeOpen, setMobileTradeOpen] = useState(false);
@@ -1760,12 +1760,15 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
           (market as any)?.total_volume ??
           0
         );
-  const descriptionText = String(market.description || "").trim();
-  const descriptionLimit = isMobile ? 190 : 280;
-  const descriptionTruncated = descriptionText.length > descriptionLimit;
-  const descriptionPreview = descriptionTruncated && !descriptionExpanded
-    ? `${descriptionText.slice(0, descriptionLimit).trimEnd()}...`
-    : descriptionText;
+  function truncateWords(text: string, wordCount: number): string {
+    if (!text) return "";
+    const words = text.trim().split(/\s+/);
+    if (words.length <= wordCount) return text;
+    return words.slice(0, wordCount).join(" ");
+  }
+  const fullDescription = market?.description || "";
+  const truncatedDescription = truncateWords(fullDescription, 4);
+  const shouldTruncate = fullDescription.split(/\s+/).length > 4;
 
   const openMobileTrade = (idx: number) => {
     if (!isMobile) return;
@@ -1960,19 +1963,39 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                   </div>
                 </div>
   
-                {descriptionText && (
-                  <p className="text-gray-400 text-sm leading-6 mt-3 mb-3">
-                    {descriptionPreview}
-                    {descriptionTruncated && (
-                      <button
-                        type="button"
-                        onClick={() => setDescriptionExpanded((v) => !v)}
-                        className="ml-1 text-xs text-pump-green hover:underline"
-                      >
-                        {descriptionExpanded ? "See less" : "See more"}
-                      </button>
-                    )}
-                  </p>
+                {fullDescription && (
+                  <div className="mt-2 relative">
+                    <p className="text-sm text-white/70 leading-relaxed inline">
+                      {descriptionExpanded || !shouldTruncate
+                        ? fullDescription
+                        : truncatedDescription}
+
+                      {!descriptionExpanded && shouldTruncate && (
+                        <>
+                          <span className="relative inline-block">
+                            <span className="absolute inset-y-0 right-0 w-12 bg-gradient-to-r from-transparent to-black pointer-events-none" />
+                            ...
+                          </span>
+
+                          <button
+                            onClick={() => setDescriptionExpanded(true)}
+                            className="ml-2 text-[#00FF88] hover:text-[#66FFAA] transition-colors font-medium"
+                          >
+                            See more
+                          </button>
+                        </>
+                      )}
+
+                      {descriptionExpanded && shouldTruncate && (
+                        <button
+                          onClick={() => setDescriptionExpanded(false)}
+                          className="ml-2 text-[#00FF88] hover:text-[#66FFAA] transition-colors font-medium"
+                        >
+                          See less
+                        </button>
+                      )}
+                    </p>
+                  </div>
                 )}
   
                 {missingOutcomes && (
