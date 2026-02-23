@@ -58,7 +58,8 @@ export async function GET() {
       { items },
       {
         headers: {
-          "Cache-Control": "public, s-maxage=15, stale-while-revalidate=30",
+          "Cache-Control": "public, s-maxage=10, stale-while-revalidate=60",
+          "Content-Type": "application/json; charset=utf-8",
         },
       }
     );
