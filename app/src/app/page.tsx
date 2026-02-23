@@ -243,7 +243,17 @@ export default function Home() {
   async function loadMarkets() {
     setLoading(true);
     try {
+      const reqStart = performance.now();
       const res = await fetch("/api/home");
+      if (process.env.NODE_ENV !== "production") {
+        const sinceNavMs = performance.now();
+        const apiDurationMs = sinceNavMs - reqStart;
+        console.debug("[home-perf] /api/home", {
+          sinceNavigationMs: Math.round(sinceNavMs),
+          requestDurationMs: Math.round(apiDurationMs),
+          status: res.status,
+        });
+      }
       if (!res.ok) {
         console.error("Error loading markets:", res.status);
         setMarkets([]);

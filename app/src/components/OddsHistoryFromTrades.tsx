@@ -42,6 +42,7 @@ interface Props {
   outcomeSupplies?: number[];
   hours?: number;
   height?: number;
+  skipRender?: boolean;
 }
 
 export default function OddsHistoryFromTrades({
@@ -52,6 +53,7 @@ export default function OddsHistoryFromTrades({
   outcomeSupplies, // baseline fallback (SUPER useful on homepage)
   hours = 24,
   height = 170,
+  skipRender = false,
 }: Props) {
   const [txs, setTxs] = useState<TxRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -60,6 +62,11 @@ export default function OddsHistoryFromTrades({
     let cancelled = false;
 
     async function load() {
+      if (skipRender) {
+        setLoading(false);
+        return;
+      }
+
       // Pas d'ID → pas de chart
       if (!marketId && !marketAddress) {
         setTxs([]);
@@ -106,7 +113,7 @@ export default function OddsHistoryFromTrades({
     return () => {
       cancelled = true;
     };
-  }, [marketId, marketAddress, hours]);
+  }, [marketId, marketAddress, hours, skipRender]);
 
   const points: OddsPoint[] = useMemo(() => {
     const names = (outcomeNames || []).filter(Boolean);
@@ -186,7 +193,9 @@ export default function OddsHistoryFromTrades({
 
   return (
     <div className="w-full">
-      {loading ? (
+      {skipRender ? (
+        <div style={{ height }} className="w-full rounded-xl border border-white/8 bg-white/5" />
+      ) : loading ? (
         <div style={{ height }} className="flex items-center justify-center text-xs text-gray-500">
           Loading…
         </div>
