@@ -20,6 +20,7 @@ import { useProgram } from "@/hooks/useProgram";
 import { indexMarket } from "@/lib/markets";
 import { createSportEventServer } from "@/lib/sportEvents";
 import { sendSignedTx } from "@/lib/solanaSend";
+import { supabase } from "@/lib/supabaseClient";
 
 // Combined category type for create page
 type CreateCategoryId = CategoryId | SportSubcategoryId | "";
@@ -249,8 +250,6 @@ function MatchPickerModal({
               <option value="soccer">Soccer</option>
               <option value="basketball">Basketball</option>
               <option value="baseball">Baseball</option>
-              <option value="tennis">Tennis</option>
-              <option value="mma">MMA</option>
               <option value="american_football">American Football</option>
             </select>
             <button
@@ -862,12 +861,56 @@ export default function CreateMarketPage() {
         };
       }
 
+      let uploadedImageUrl: string | undefined;
+      if (imageFile) {
+        const mime = String(imageFile.type || "image/jpeg").toLowerCase();
+        const ext =
+          mime === "image/png"
+            ? "png"
+            : mime === "image/webp"
+            ? "webp"
+            : mime === "image/gif"
+            ? "gif"
+            : "jpg";
+        const fileName = `${marketKeypair.publicKey.toBase58()}.${ext}`;
+
+        const { error: uploadErr } = await supabase.storage
+          .from("market-images")
+          .upload(fileName, imageFile, {
+            contentType: mime,
+            upsert: true,
+          });
+
+        if (uploadErr) {
+          throw new Error(`Image upload failed: ${uploadErr.message}`);
+        }
+
+        const { data: publicData } = supabase.storage
+          .from("market-images")
+          .getPublicUrl(fileName);
+
+        if (!publicData?.publicUrl) {
+          throw new Error("Image upload failed: missing public URL");
+        }
+
+        uploadedImageUrl = publicData.publicUrl;
+      }
+
+      if (imagePreview && imagePreview.startsWith("data:image/") && !uploadedImageUrl) {
+        console.warn("[create] blocked base64 image_url");
+        throw new Error("Image must be uploaded to storage. Base64 image URLs are not allowed.");
+      }
+
+      const persistedImageUrl =
+        uploadedImageUrl ||
+        (imagePreview && !imagePreview.startsWith("data:image/") ? imagePreview : undefined);
+
       await indexMarket({
         market_address: marketKeypair.publicKey.toBase58(),
         question: question.slice(0, 200),
         description: fullDescription || undefined,
         category: category || "other",
-        image_url: imagePreview || undefined,
+        image_url: persistedImageUrl,
         end_date: effectiveEndDate.toISOString(),
         start_time: dbStartTimeIso,
         end_time: dbEndTimeIso,
@@ -1081,27 +1124,27 @@ export default function CreateMarketPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-white font-semibold mb-2">
-                  {sportType === "mma" || sportType === "tennis" ? "Player A *" : "Home Team *"}
+                  Home Team *
                 </label>
                 <input
                   type="text"
                   value={sportHomeTeam}
                   onChange={(e) => setSportHomeTeam(e.target.value)}
                   className="input-pump w-full"
-                  placeholder={sportType === "mma" || sportType === "tennis" ? "e.g. Alcaraz" : "e.g. Real Madrid"}
+                  placeholder="e.g. Real Madrid"
                   maxLength={100}
                 />
               </div>
               <div>
                 <label className="block text-white font-semibold mb-2">
-                  {sportType === "mma" || sportType === "tennis" ? "Player B *" : "Away Team *"}
+                  Away Team *
                 </label>
                 <input
                   type="text"
                   value={sportAwayTeam}
                   onChange={(e) => setSportAwayTeam(e.target.value)}
                   className="input-pump w-full"
-                  placeholder={sportType === "mma" || sportType === "tennis" ? "e.g. Zverev" : "e.g. Barcelona"}
+                  placeholder="e.g. Barcelona"
                   maxLength={100}
                 />
               </div>
