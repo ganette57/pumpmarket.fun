@@ -100,8 +100,10 @@ export default function FeaturedMarketCardFull({ market, liveSessionId }: Featur
                     <Image
                       src={market.imageUrl}
                       alt={market.question}
-                      width={96}
-                      height={96}
+                      width={400}
+                      height={300}
+                      loading="lazy"
+                      quality={75}
                       className="object-cover w-full h-full"
                       onError={() => setImageError(true)}
                     />
@@ -226,8 +228,10 @@ export default function FeaturedMarketCardFull({ market, liveSessionId }: Featur
                     <Image
                       src={market.imageUrl}
                       alt={market.question}
-                      width={80}
-                      height={80}
+                      width={400}
+                      height={300}
+                      loading="lazy"
+                      quality={75}
                       className="object-cover w-full h-full"
                       onError={() => setImageError(true)}
                     />

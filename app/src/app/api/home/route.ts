@@ -16,9 +16,17 @@ export async function GET() {
       sb
         .from("markets")
         .select(
-          `id,market_address,question,category,image_url,end_date,created_at,
-           yes_supply,no_supply,total_volume,resolved,resolution_status,market_type,
-           outcome_names,outcome_supplies`
+          `
+            id,
+            market_address,
+            question,
+            category,
+            image_url,
+            yes_supply,
+            no_supply,
+            total_volume,
+            created_at
+          `
         )
         .order("created_at", { ascending: false })
         .limit(48),
@@ -49,19 +57,7 @@ export async function GET() {
       }
     }
 
-    const markets = ((marketsRes.data as any[]) || []).map((m: any) => ({
-      ...m,
-      image_url:
-        typeof m.image_url === "string" && m.image_url.startsWith("data:")
-          ? null
-          : m.image_url,
-      outcome_names: Array.isArray(m.outcome_names)
-        ? m.outcome_names.slice(0, 6)
-        : m.outcome_names,
-      outcome_supplies: Array.isArray(m.outcome_supplies)
-        ? m.outcome_supplies.slice(0, 6)
-        : m.outcome_supplies,
-    }));
+    const markets = (marketsRes.data as any[]) || [];
 
     return NextResponse.json(
       { markets, liveMap },
