@@ -113,18 +113,12 @@ export default function MarketCard({ market, liveSessionId }: MarketCardProps) {
         {/* CONTENT */}
         <div className="p-4 flex flex-col justify-between h-[170px]">
           {/* TITLE REMONTÉ */}
-          <h3 className="font-semibold text-white text-[15px] leading-tight line-clamp-2 group-hover:text-pump-green transition mb-1">
+          <h3 className="font-semibold text-white text-[15px] leading-tight line-clamp-2 group-hover:text-pump-green transition mb-2">
             {market.question}
           </h3>
 
-          {market.description && (
-            <p className="text-[11px] text-gray-500 line-clamp-1 mb-2">
-              {market.description}
-            </p>
-          )}
-
           {/* OUTCOMES GREEN / RED */}
-          <div className="flex mt-1 gap-2">
+          <div className="flex gap-2">
             {/* OUTCOME 1 (GREEN) */}
             <div className="flex-1 bg-green-500/15 border border-green-500/30 rounded-lg p-2 flex flex-col justify-center items-center text-center">
               <span className="text-[11px] uppercase text-green-400 font-semibold tracking-wide">

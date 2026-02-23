@@ -728,6 +728,7 @@ export default function TradePage() {
   const [oddsRange, setOddsRange] = useState<OddsRange>("all");
   const [oddsPoints, setOddsPoints] = useState<{ t: number; pct: number[] }[]>([]);
   const [bottomTab, setBottomTab] = useState<BottomTab>("discussion");
+  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
 
   // Trade modal state
   const [tradeStep, setTradeStep] = useState<TradeStep>("idle");
@@ -793,9 +794,13 @@ const [liveScoreFailures, setLiveScoreFailures] = useState(0);
 const [liveScoreLastSuccessAt, setLiveScoreLastSuccessAt] = useState<number | null>(null);
 
 // Related block (RIGHT column under TradingPanel)
-const [relatedTab, setRelatedTab] = useState<RelatedTab>("related");
-const [relatedLoading, setRelatedLoading] = useState(false);
-const [relatedMarkets, setRelatedMarkets] = useState<any[]>([]);
+  const [relatedTab, setRelatedTab] = useState<RelatedTab>("related");
+  const [relatedLoading, setRelatedLoading] = useState(false);
+  const [relatedMarkets, setRelatedMarkets] = useState<any[]>([]);
+
+  useEffect(() => {
+    setDescriptionExpanded(false);
+  }, [id]);
 
   // Mobile drawer state
   const [mobileTradeOpen, setMobileTradeOpen] = useState(false);
@@ -1755,6 +1760,12 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
           (market as any)?.total_volume ??
           0
         );
+  const descriptionText = String(market.description || "").trim();
+  const descriptionLimit = isMobile ? 190 : 280;
+  const descriptionTruncated = descriptionText.length > descriptionLimit;
+  const descriptionPreview = descriptionTruncated && !descriptionExpanded
+    ? `${descriptionText.slice(0, descriptionLimit).trimEnd()}...`
+    : descriptionText;
 
   const openMobileTrade = (idx: number) => {
     if (!isMobile) return;
@@ -1949,7 +1960,20 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                   </div>
                 </div>
   
-                <p className="text-gray-400 text-sm mt-3 mb-3">{market.description}</p>
+                {descriptionText && (
+                  <p className="text-gray-400 text-sm leading-6 mt-3 mb-3">
+                    {descriptionPreview}
+                    {descriptionTruncated && (
+                      <button
+                        type="button"
+                        onClick={() => setDescriptionExpanded((v) => !v)}
+                        className="ml-1 text-xs text-pump-green hover:underline"
+                      >
+                        {descriptionExpanded ? "See less" : "See more"}
+                      </button>
+                    )}
+                  </p>
+                )}
   
                 {missingOutcomes && (
                   <div className="mb-4 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-yellow-200">
