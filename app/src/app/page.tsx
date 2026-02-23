@@ -12,7 +12,6 @@ import CategoryFilters from "@/components/CategoryFilters";
 import type { SelectedCategory } from "@/components/CategoryFilters";
 import { SkeletonCard, SkeletonFeaturedCard } from "@/components/SkeletonCard";
 import { isSportSubcategory } from "@/utils/categories";
-import { supabase } from "@/lib/supabaseClient";
 import { listActiveLiveSessionsMap } from "@/lib/liveSessions";
 
 type Market = {
@@ -42,6 +41,15 @@ type Market = {
 
   sportTradingState?: string | null;
   resolutionStatus?: string | null;
+};
+
+type HomeMarketsResponse = {
+  kind: "featured" | "grid";
+  items: any[];
+  offset?: number;
+  limit?: number;
+  hasMore?: boolean;
+  error?: string;
 };
 
 type MarketStatusFilter = "all" | "open" | "resolved" | "ending_soon" | "top_volume";
@@ -173,6 +181,8 @@ export default function Home() {
   const [featuredLoading, setFeaturedLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
+  const [gridError, setGridError] = useState<string | null>(null);
+  const [featuredError, setFeaturedError] = useState<string | null>(null);
 
   const [selectedCategory, setSelectedCategory] = useState<SelectedCategory>("all");
   const [statusFilter, setStatusFilter] = useState<MarketStatusFilter>("open");
@@ -185,6 +195,9 @@ export default function Home() {
   const [liveMap, setLiveMap] = useState<Record<string, string>>({});
 
   const observerTarget = useRef<HTMLDivElement>(null);
+  const hasLoadedRef = useRef(false);
+  const initialLoadAbortRef = useRef<AbortController | null>(null);
+  const loadMoreAbortRef = useRef<AbortController | null>(null);
 
   // ✅ used only on mobile to detect which slide is centered
   const mobileFeaturedRef = useRef<HTMLDivElement | null>(null);
@@ -227,131 +240,116 @@ export default function Home() {
     };
   }, [mapGridRow]);
 
-  const loadFeaturedMarkets = useCallback(async () => {
-    setFeaturedLoading(true);
-    try {
-      const { data, error } = await supabase
-        .from("markets")
-        .select(
-          `
-          id,
-          market_address,
-          question,
-          category,
-          image_url,
-          end_date,
-          creator,
-          social_links,
-          yes_supply,
-          no_supply,
-          total_volume,
-          resolved,
-          resolution_status,
-          market_type,
-          outcome_names,
-          outcome_supplies,
-          sport_trading_state,
-          created_at
-        `
-        )
-        .order("created_at", { ascending: false })
-        .limit(FEATURED_POOL_LIMIT);
+  const fetchHomeMarkets = useCallback(
+    async (
+      kind: "featured" | "grid",
+      opts: { offset?: number; limit?: number; signal?: AbortSignal } = {}
+    ): Promise<HomeMarketsResponse> => {
+      const qs = new URLSearchParams();
+      qs.set("kind", kind);
+      if (Number.isFinite(opts.offset)) qs.set("offset", String(opts.offset));
+      if (Number.isFinite(opts.limit)) qs.set("limit", String(opts.limit));
 
-      if (error) {
-        console.error("Error loading featured markets:", error);
-        setFeaturedSource([]);
-        return;
+      const res = await fetch(`/api/home/markets?${qs.toString()}`, {
+        signal: opts.signal,
+      });
+      const json = (await res.json().catch(() => ({}))) as HomeMarketsResponse;
+      if (!res.ok) {
+        throw new Error(json?.error || `HTTP ${res.status}`);
       }
-
-      setFeaturedSource(((data || []) as any[]).map(mapFeaturedRow));
-    } catch (err) {
-      console.error("loadFeaturedMarkets fatal error:", err);
-      setFeaturedSource([]);
-    } finally {
-      setFeaturedLoading(false);
-    }
-  }, [mapFeaturedRow]);
-
-  const loadGridPage = useCallback(
-    async (from: number, to: number) => {
-      return supabase
-        .from("markets")
-        .select(
-          `
-          id,
-          market_address,
-          question,
-          category,
-          image_url,
-          end_date,
-          yes_supply,
-          no_supply,
-          total_volume,
-          resolved,
-          resolution_status,
-          market_type,
-          outcome_names,
-          sport_trading_state,
-          created_at
-        `
-        )
-        .order("created_at", { ascending: false })
-        .range(from, to);
+      return json;
     },
     []
   );
 
-  const loadGridFirstPage = useCallback(async () => {
-    setLoading(true);
+  const loadFeaturedMarkets = useCallback(async (signal?: AbortSignal) => {
+    setFeaturedLoading(true);
+    setFeaturedError(null);
     try {
-      const { data, error } = await loadGridPage(0, GRID_PAGE_SIZE - 1);
-      if (error) {
-        console.error("Error loading grid markets:", error);
-        setGridMarkets([]);
-        setHasMore(false);
-        return;
-      }
-
-      const rows = ((data || []) as any[]).map(mapGridRow);
-      setGridMarkets(rows);
-      setHasMore(rows.length >= GRID_PAGE_SIZE);
+      const payload = await fetchHomeMarkets("featured", {
+        limit: FEATURED_POOL_LIMIT,
+        signal,
+      });
+      setFeaturedSource((payload.items || []).map(mapFeaturedRow));
     } catch (err) {
+      if ((err as any)?.name === "AbortError") return;
+      console.error("loadFeaturedMarkets fatal error:", err);
+      setFeaturedSource([]);
+      setFeaturedError((err as any)?.message || "Failed to load featured markets");
+    } finally {
+      setFeaturedLoading(false);
+    }
+  }, [fetchHomeMarkets, mapFeaturedRow]);
+
+  const loadGridFirstPage = useCallback(async (signal?: AbortSignal) => {
+    setLoading(true);
+    setGridError(null);
+    try {
+      const payload = await fetchHomeMarkets("grid", {
+        offset: 0,
+        limit: GRID_PAGE_SIZE,
+        signal,
+      });
+      const rows = (payload.items || []).map(mapGridRow);
+      setGridMarkets(rows);
+      setHasMore(!!payload.hasMore);
+    } catch (err) {
+      if ((err as any)?.name === "AbortError") return;
       console.error("loadGridFirstPage fatal error:", err);
       setGridMarkets([]);
       setHasMore(false);
+      setGridError((err as any)?.message || "Failed to load markets");
     } finally {
       setLoading(false);
     }
-  }, [loadGridPage, mapGridRow]);
+  }, [fetchHomeMarkets, mapGridRow]);
 
   const loadMore = useCallback(async () => {
     if (loadingMore || loading || !hasMore) return;
+    loadMoreAbortRef.current?.abort();
+    const controller = new AbortController();
+    loadMoreAbortRef.current = controller;
     setLoadingMore(true);
+    setGridError(null);
     try {
-      const from = gridMarkets.length;
-      const to = from + GRID_PAGE_SIZE - 1;
-      const { data, error } = await loadGridPage(from, to);
-      if (error) {
-        console.error("Error loading more markets:", error);
-        setHasMore(false);
-        return;
-      }
-
-      const nextRows = ((data || []) as any[]).map(mapGridRow);
+      const payload = await fetchHomeMarkets("grid", {
+        offset: gridMarkets.length,
+        limit: GRID_PAGE_SIZE,
+        signal: controller.signal,
+      });
+      const nextRows = (payload.items || []).map(mapGridRow);
       setGridMarkets((prev) => [...prev, ...nextRows]);
-      if (nextRows.length < GRID_PAGE_SIZE) setHasMore(false);
+      setHasMore(!!payload.hasMore);
     } catch (err) {
+      if ((err as any)?.name === "AbortError") return;
       console.error("loadMore markets fatal error:", err);
-      setHasMore(false);
+      setGridError((err as any)?.message || "Failed to load more markets");
     } finally {
       setLoadingMore(false);
+      if (loadMoreAbortRef.current === controller) {
+        loadMoreAbortRef.current = null;
+      }
     }
-  }, [gridMarkets.length, hasMore, loadGridPage, loading, loadingMore, mapGridRow]);
+  }, [fetchHomeMarkets, gridMarkets.length, hasMore, loading, loadingMore, mapGridRow]);
 
-  // ------- LOAD MARKETS FROM SUPABASE -------
+  // ------- LOAD MARKETS FROM HOME API -------
   useEffect(() => {
-    void Promise.allSettled([loadFeaturedMarkets(), loadGridFirstPage()]);
+    if (hasLoadedRef.current) return;
+    hasLoadedRef.current = true;
+
+    const controller = new AbortController();
+    initialLoadAbortRef.current = controller;
+
+    void loadFeaturedMarkets(controller.signal);
+    void loadGridFirstPage(controller.signal);
     listActiveLiveSessionsMap().then(setLiveMap).catch(() => {});
+
+    return () => {
+      controller.abort();
+      initialLoadAbortRef.current = null;
+      loadMoreAbortRef.current?.abort();
+      loadMoreAbortRef.current = null;
+    };
   }, [loadFeaturedMarkets, loadGridFirstPage]);
 
   // ✅ read status from URL (keeps last selected when coming back)
@@ -612,6 +610,11 @@ export default function Home() {
               </button>
             </div>
           </div>
+          {!featuredLoading && featuredError && (
+            <div className="mb-3 text-xs text-yellow-300">
+              Featured markets unavailable right now.
+            </div>
+          )}
 
           {featuredLoading ? (
             <SkeletonFeaturedCard />
@@ -708,6 +711,18 @@ export default function Home() {
 
             <StatusFilterDropdown value={statusFilter} onChange={setStatusFilter} />
           </div>
+          {!loading && gridError && (
+            <div className="mb-4 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-yellow-200 flex items-center justify-between gap-3">
+              <span>Some markets could not be loaded.</span>
+              <button
+                type="button"
+                onClick={() => void loadGridFirstPage()}
+                className="px-3 py-1.5 rounded-lg bg-black/40 border border-yellow-500/40 text-yellow-200 text-xs hover:bg-black/60 transition"
+              >
+                Retry
+              </button>
+            </div>
+          )}
 
           {loading ? (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 auto-rows-fr">
@@ -730,6 +745,28 @@ export default function Home() {
               <Link href="/create">
                 <button className="btn-pump">Create the first one!</button>
               </Link>
+              {hasMore && (
+                <div className="mt-4">
+                  <button
+                    type="button"
+                    onClick={() => void loadMore()}
+                    className="px-5 py-2 rounded-lg bg-pump-gray hover:bg-pump-dark border border-gray-700 hover:border-pump-green text-white text-sm font-semibold transition"
+                  >
+                    Load More Markets
+                  </button>
+                </div>
+              )}
+              {gridError && (
+                <div className="mt-3">
+                  <button
+                    type="button"
+                    onClick={() => void loadGridFirstPage()}
+                    className="px-5 py-2 rounded-lg bg-black/40 border border-yellow-500/40 text-yellow-200 text-sm font-semibold hover:bg-black/60 transition"
+                  >
+                    Retry loading
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             <>
