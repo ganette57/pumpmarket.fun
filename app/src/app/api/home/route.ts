@@ -16,12 +16,12 @@ export async function GET() {
       sb
         .from("markets")
         .select(
-          `id,market_address,question,description,category,image_url,end_date,creator,social_links,
+          `id,market_address,question,category,image_url,end_date,created_at,
            yes_supply,no_supply,total_volume,resolved,resolution_status,market_type,
-           outcome_names,outcome_supplies,sport_meta,sport_trading_state,created_at`
+           outcome_names,outcome_supplies`
         )
         .order("created_at", { ascending: false })
-        .limit(200),
+        .limit(48),
 
       sb
         .from("live_sessions")
@@ -49,8 +49,22 @@ export async function GET() {
       }
     }
 
+    const markets = ((marketsRes.data as any[]) || []).map((m: any) => ({
+      ...m,
+      image_url:
+        typeof m.image_url === "string" && m.image_url.startsWith("data:")
+          ? null
+          : m.image_url,
+      outcome_names: Array.isArray(m.outcome_names)
+        ? m.outcome_names.slice(0, 6)
+        : m.outcome_names,
+      outcome_supplies: Array.isArray(m.outcome_supplies)
+        ? m.outcome_supplies.slice(0, 6)
+        : m.outcome_supplies,
+    }));
+
     return NextResponse.json(
-      { markets: marketsRes.data || [], liveMap },
+      { markets, liveMap },
       {
         headers: {
           "Cache-Control": "public, s-maxage=30, stale-while-revalidate=120",
