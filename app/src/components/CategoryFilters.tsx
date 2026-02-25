@@ -8,7 +8,7 @@ export const SPORT_SUBCATEGORIES = [
   { id: "soccer", label: "Soccer" },
   { id: "basketball", label: "Basketball" },
   { id: "tennis", label: "Tennis" },
-  { id: "mma", label: "MMA" },
+  { id: "baseball", label: "Baseball" },
   { id: "american_football", label: "American Football" },
 ] as const;
 
@@ -16,12 +16,14 @@ export type SportSubcategoryId = (typeof SPORT_SUBCATEGORIES)[number]["id"];
 
 export const CATEGORIES = [
   { id: "all", label: "All" },
-  { id: "trending", label: "Trending" },
-  { id: "breaking", label: "Breaking news" },
   { id: "politics", label: "Politics" },
   { id: "sports", label: "Sports", hasSubmenu: true },
   { id: "finance", label: "Finance" },
   { id: "crypto", label: "Crypto" },
+  { id: "celebrity", label: "Celebrity" },
+  { id: "gaming", label: "Gaming" },
+  { id: "esport", label: "Esport" },
+  { id: "fun", label: "Fun" },
   { id: "culture", label: "Culture" },
   { id: "tech", label: "Tech" },
   { id: "science", label: "Science" },

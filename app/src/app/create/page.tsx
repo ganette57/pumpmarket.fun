@@ -1096,7 +1096,7 @@ export default function CreateMarketPage() {
     options.push({ value: "", label: "Choose a category...", disabled: true });
 
     for (const cat of CATEGORIES) {
-      if (cat.id === "all" || cat.id === "trending") continue;
+      if (cat.id === "all") continue;
 
       if (cat.id === "sports") {
         options.push({ value: "sports", label: "🏆 Sports (General)" });
