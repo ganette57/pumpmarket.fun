@@ -38,11 +38,34 @@ const RESOLUTION_SOURCES = [
 ] as const;
 
 const T2_MS = 2 * 60_000;
-const DEFAULT_MATCH_DURATION_MS = 4 * 60 * 60_000;
+const SPORT_TIMING_MINUTES: Record<string, { durationMin: number; graceMin: number }> = {
+  soccer: { durationMin: 115, graceMin: 10 },
+  football: { durationMin: 115, graceMin: 10 },
+  basketball: { durationMin: 175, graceMin: 15 },
+  nba: { durationMin: 175, graceMin: 15 },
+  baseball: { durationMin: 240, graceMin: 30 },
+  tennis: { durationMin: 240, graceMin: 60 },
+  mma: { durationMin: 60, graceMin: 30 },
+  american_football: { durationMin: 210, graceMin: 30 },
+};
+
+const DEFAULT_SPORT_TIMING = { durationMin: 240, graceMin: 30 };
+
+function getSportTiming(sport: string) {
+  const key = String(sport || "").trim().toLowerCase();
+  return SPORT_TIMING_MINUTES[key] || DEFAULT_SPORT_TIMING;
+}
+
+function estimateMatchTimes(startDate: Date, sport: string) {
+  const timing = getSportTiming(sport);
+  const endTime = new Date(startDate.getTime() + timing.durationMin * 60_000);
+  const lockAt = new Date(endTime.getTime() - T2_MS);
+  const endedTime = new Date(endTime.getTime() + timing.graceMin * 60_000);
+  return { endTime, lockAt, endedTime, timing };
+}
 
 function estimateMatchEnd(startDate: Date, sport: string): Date {
-  void sport;
-  return new Date(startDate.getTime() + DEFAULT_MATCH_DURATION_MS);
+  return estimateMatchTimes(startDate, sport).endTime;
 }
 
 function isValidIanaTimeZone(tz?: string | null): tz is string {
@@ -827,9 +850,9 @@ export default function CreateMarketPage() {
     // Keep trading close at T-2 while storing event end_time as actual match end.
     if (matchStart) {
       const sport = String(m.sport || sportType || "").toLowerCase();
-      const estimatedMatchEnd = estimateMatchEnd(matchStart, sport);
-      setSportEndTime(estimatedMatchEnd);
-      setResolutionDate(new Date(estimatedMatchEnd.getTime() - T2_MS));
+      const estimatedTimes = estimateMatchTimes(matchStart, sport);
+      setSportEndTime(estimatedTimes.endTime);
+      setResolutionDate(estimatedTimes.lockAt);
     } else if (m.end_time) {
       const endDate = new Date(m.end_time);
       if (Number.isFinite(endDate.getTime())) {
@@ -886,11 +909,12 @@ export default function CreateMarketPage() {
       let persistedMatchEnd: Date | null = null;
       if (hasLinkedProviderFixture && sportStartTime) {
         persistedMatchStart = sportStartTime;
-        persistedMatchEnd = estimateMatchEnd(sportStartTime, sportType);
-        effectiveEndDate = new Date(persistedMatchEnd.getTime() - T2_MS);
+        const estimatedTimes = estimateMatchTimes(sportStartTime, sportType);
+        persistedMatchEnd = estimatedTimes.endTime;
+        effectiveEndDate = estimatedTimes.lockAt;
       } else if (isMatchMode && sportStartTime && resolutionDate.getTime() <= sportStartTime.getTime()) {
-        const estimatedMatchEnd = estimateMatchEnd(sportStartTime, sportType);
-        effectiveEndDate = new Date(estimatedMatchEnd.getTime() - T2_MS);
+        const estimatedTimes = estimateMatchTimes(sportStartTime, sportType);
+        effectiveEndDate = estimatedTimes.lockAt;
         console.warn("[create] resolutionDate <= sportStartTime, recomputed to", effectiveEndDate.toISOString());
       }
 
