@@ -38,17 +38,132 @@ const RESOLUTION_SOURCES = [
 ] as const;
 
 const T2_MS = 2 * 60_000;
-const SPORT_DURATION_MS: Record<string, number> = {
-  soccer: 115 * 60_000,
-  basketball: 150 * 60_000,
-  tennis: 3 * 3600_000,
-  american_football: 3 * 3600_000 + 30 * 60_000,
-  mma: 2 * 3600_000,
-};
+const DEFAULT_MATCH_DURATION_MS = 4 * 60 * 60_000;
 
 function estimateMatchEnd(startDate: Date, sport: string): Date {
-  const dur = SPORT_DURATION_MS[sport] || SPORT_DURATION_MS.soccer;
-  return new Date(startDate.getTime() + dur);
+  void sport;
+  return new Date(startDate.getTime() + DEFAULT_MATCH_DURATION_MS);
+}
+
+function isValidIanaTimeZone(tz?: string | null): tz is string {
+  if (!tz) return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hasExplicitTimeZone(input: string): boolean {
+  return /(?:Z|[+-]\d{2}:\d{2})$/i.test(input.trim());
+}
+
+function zonedLocalToUtcMs(localDateTime: string, timeZone: string): number {
+  const m = localDateTime
+    .trim()
+    .match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s])(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!m) return NaN;
+
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  const hour = Number(m[4]);
+  const minute = Number(m[5]);
+  const second = Number(m[6] || "0");
+
+  const guessUtcMs = Date.UTC(year, month - 1, day, hour, minute, second);
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+
+  const parts = dtf.formatToParts(new Date(guessUtcMs));
+  const byType = (t: string) => parts.find((p) => p.type === t)?.value ?? "00";
+  const interpretedMs = Date.UTC(
+    Number(byType("year")),
+    Number(byType("month")) - 1,
+    Number(byType("day")),
+    Number(byType("hour")),
+    Number(byType("minute")),
+    Number(byType("second"))
+  );
+
+  const offsetMs = interpretedMs - guessUtcMs;
+  return guessUtcMs - offsetMs;
+}
+
+function extractEventTimeZone(m: any): string | null {
+  const candidates = [
+    m?.event_timezone,
+    m?.timezone,
+    m?.raw?.timezone,
+    m?.raw?.tz,
+    m?.raw?.fixture?.timezone,
+  ];
+  for (const tz of candidates) {
+    const next = String(tz || "").trim();
+    if (isValidIanaTimeZone(next)) return next;
+  }
+  return null;
+}
+
+function parseEventStartDate(startTime: unknown, eventTimeZone?: string | null): Date | null {
+  if (typeof startTime === "number") {
+    const ms = startTime > 1_000_000_000_000 ? startTime : startTime * 1000;
+    const d = new Date(ms);
+    return Number.isFinite(d.getTime()) ? d : null;
+  }
+
+  if (typeof startTime !== "string" || !startTime.trim()) return null;
+  const raw = startTime.trim();
+
+  if (hasExplicitTimeZone(raw)) {
+    const d = new Date(raw);
+    return Number.isFinite(d.getTime()) ? d : null;
+  }
+
+  if (isValidIanaTimeZone(eventTimeZone)) {
+    const utcMs = zonedLocalToUtcMs(raw, eventTimeZone);
+    if (Number.isFinite(utcMs)) return new Date(utcMs);
+  }
+
+  const utcGuess = new Date(`${raw}Z`);
+  return Number.isFinite(utcGuess.getTime()) ? utcGuess : null;
+}
+
+function formatYourTime(utcDate: Date): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(utcDate);
+}
+
+function formatMatchTime(utcDate: Date, eventTimeZone?: string | null): string {
+  if (!isValidIanaTimeZone(eventTimeZone)) {
+    return new Intl.DateTimeFormat("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZone: "UTC",
+      timeZoneName: "short",
+    }).format(utcDate);
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: eventTimeZone,
+    timeZoneName: "short",
+  }).format(utcDate);
 }
 
 // ---------- helpers ----------
@@ -209,7 +324,8 @@ function MatchPickerModal({
     const groups: { label: string; matches: any[] }[] = [];
     const dayMap = new Map<string, any[]>();
     for (const m of filtered) {
-      const d = new Date(m.start_time);
+      const d = parseEventStartDate(m.start_time, extractEventTimeZone(m));
+      if (!d) continue;
       const key = d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
       if (!dayMap.has(key)) dayMap.set(key, []);
       dayMap.get(key)!.push(m);
@@ -316,8 +432,15 @@ function MatchPickerModal({
                     </span>
                   </div>
                   {group.matches.map((m: any) => {
-                    const d = new Date(m.start_time);
-                    const timeStr = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+                    const eventTz = extractEventTimeZone(m);
+                    const d = parseEventStartDate(m.start_time, eventTz);
+                    const yourTime = d ? formatYourTime(d) : "--:--";
+                    const matchTime = d ? formatMatchTime(d, eventTz) : "Time unavailable";
+                    const timezoneUnknown =
+                      !isValidIanaTimeZone(eventTz) &&
+                      typeof m.start_time === "string" &&
+                      m.start_time.trim().length > 0 &&
+                      !hasExplicitTimeZone(m.start_time);
                     return (
                       <button
                         key={m.provider_event_id}
@@ -333,11 +456,16 @@ function MatchPickerModal({
                             {m.home_team} vs {m.away_team}
                           </span>
                           <span className="text-[10px] font-mono text-gray-500 flex-shrink-0 bg-white/5 px-1.5 py-0.5 rounded">
-                            {timeStr}
+                            {d ? yourTime : "N/A"}
                           </span>
                         </div>
                         <div className="flex items-center gap-2 mt-0.5">
                           <span className="text-xs text-gray-400 truncate">{m.league}</span>
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-500">
+                          <span>Your time: {yourTime}</span>
+                          <span>{isValidIanaTimeZone(eventTz) ? `Match time: ${matchTime}` : `UTC: ${matchTime}`}</span>
+                          {timezoneUnknown && <span className="text-yellow-400">timezone unknown</span>}
                         </div>
                       </button>
                     );
@@ -518,6 +646,7 @@ export default function CreateMarketPage() {
   const [sportProviderEventId, setSportProviderEventId] = useState("");
   const [sportProviderName, setSportProviderName] = useState("");
   const [sportRaw, setSportRaw] = useState<any>(null);
+  const [sportEventTimezone, setSportEventTimezone] = useState<string>("");
 
   // Match picker modal
   const [matchPickerOpen, setMatchPickerOpen] = useState(false);
@@ -681,6 +810,7 @@ export default function CreateMarketPage() {
   }
 
   function selectMatch(m: any) {
+    const eventTimeZone = extractEventTimeZone(m);
     setSportType(m.sport || sportType);
     setSportHomeTeam(m.home_team);
     setSportAwayTeam(m.away_team);
@@ -688,10 +818,10 @@ export default function CreateMarketPage() {
     setSportProviderEventId(m.provider_event_id || "");
     setSportProviderName(m.provider || "");
     setSportRaw(m.raw ?? null);
+    setSportEventTimezone(eventTimeZone || "");
 
-    // Track match start_time separately for sport_meta
-    const parsedStart = m.start_time ? new Date(m.start_time) : null;
-    const matchStart = parsedStart && Number.isFinite(parsedStart.getTime()) ? parsedStart : null;
+    // Track match start_time from absolute UTC or timezone-aware conversion (never local-guess from raw local string).
+    const matchStart = parseEventStartDate(m.start_time, eventTimeZone);
     if (matchStart) setSportStartTime(matchStart);
 
     // Keep trading close at T-2 while storing event end_time as actual match end.
@@ -717,6 +847,7 @@ export default function CreateMarketPage() {
   function clearSelectedMatch() {
     setSportProviderEventId("");
     setSportProviderName("");
+    setSportEventTimezone("");
     setSportHomeTeam("");
     setSportAwayTeam("");
     setSportLeague("");
@@ -1076,10 +1207,21 @@ export default function CreateMarketPage() {
             {/* Selected match banner */}
             {sportProviderEventId ? (
               <div className="flex items-center justify-between p-3 mb-3 rounded-lg bg-pump-green/10 border border-pump-green/30">
-                <span className="text-sm text-white font-medium">
-                  {sportHomeTeam} vs {sportAwayTeam}
-                  {sportLeague ? <span className="text-gray-400 ml-2">({sportLeague})</span> : null}
-                </span>
+                <div className="flex-1 min-w-0">
+                  <span className="text-sm text-white font-medium">
+                    {sportHomeTeam} vs {sportAwayTeam}
+                    {sportLeague ? <span className="text-gray-400 ml-2">({sportLeague})</span> : null}
+                  </span>
+                  {sportStartTime && (
+                    <p className="mt-1 text-xs text-gray-400">
+                      Your time: {formatYourTime(sportStartTime)} ·{" "}
+                      {isValidIanaTimeZone(sportEventTimezone)
+                        ? `Match time: ${formatMatchTime(sportStartTime, sportEventTimezone)}`
+                        : `UTC: ${formatMatchTime(sportStartTime)}`}
+                      {!isValidIanaTimeZone(sportEventTimezone) && " (timezone unknown)"}
+                    </p>
+                  )}
+                </div>
                 <div className="flex items-center gap-2 ml-3">
                   <button
                     type="button"
@@ -1407,7 +1549,18 @@ export default function CreateMarketPage() {
             <Calendar className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-500 pointer-events-none" />
           </div>
           {isMatchMode && (
-            <p className="text-xs text-gray-500 mt-2">Live trading enabled. Trading auto-locks 2 minutes before end time.</p>
+            <>
+              {sportEndTime && (
+                <p className="text-xs text-gray-500 mt-2">
+                  Your time: {formatYourTime(sportEndTime)} ·{" "}
+                  {isValidIanaTimeZone(sportEventTimezone)
+                    ? `Match time: ${formatMatchTime(sportEndTime, sportEventTimezone)}`
+                    : `UTC: ${formatMatchTime(sportEndTime)}`}
+                  {!isValidIanaTimeZone(sportEventTimezone) && " (timezone unknown)"}
+                </p>
+              )}
+              <p className="text-xs text-gray-500 mt-2">Live trading enabled. Trading auto-locks 2 minutes before end time.</p>
+            </>
           )}
         </div>
 
