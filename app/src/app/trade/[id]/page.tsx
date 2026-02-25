@@ -109,7 +109,7 @@ type Derived = {
 };
 
 type OddsRange = "24h" | "7d" | "30d" | "all";
-type BottomTab = "discussion" | "activity";
+type BottomTab = "discussion" | "activity" | "rules";
 
 type RelatedTab = "related" | "trending" | "popular";
 
@@ -1760,15 +1760,9 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
           (market as any)?.total_volume ??
           0
         );
-  function truncateWords(text: string, wordCount: number): string {
-    if (!text) return "";
-    const words = text.trim().split(/\s+/);
-    if (words.length <= wordCount) return text;
-    return words.slice(0, wordCount).join(" ");
-  }
   const fullDescription = market?.description || "";
-  const truncatedDescription = truncateWords(fullDescription, 4);
-  const shouldTruncate = fullDescription.split(/\s+/).length > 4;
+  const truncatedDescription = fullDescription.slice(0, 300);
+  const shouldTruncate = fullDescription.length > 300;
 
   const openMobileTrade = (idx: number) => {
     if (!isMobile) return;
@@ -1963,41 +1957,6 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                   </div>
                 </div>
   
-                {fullDescription && (
-                  <div className="mt-2 relative">
-                    <p className="text-sm text-white/70 leading-relaxed inline">
-                      {descriptionExpanded || !shouldTruncate
-                        ? fullDescription
-                        : truncatedDescription}
-
-                      {!descriptionExpanded && shouldTruncate && (
-                        <>
-                          <span className="relative inline-block">
-                            <span className="absolute inset-y-0 right-0 w-12 bg-gradient-to-r from-transparent to-black pointer-events-none" />
-                            ...
-                          </span>
-
-                          <button
-                            onClick={() => setDescriptionExpanded(true)}
-                            className="ml-2 text-[#00FF88] hover:text-[#66FFAA] transition-colors font-medium"
-                          >
-                            See more
-                          </button>
-                        </>
-                      )}
-
-                      {descriptionExpanded && shouldTruncate && (
-                        <button
-                          onClick={() => setDescriptionExpanded(false)}
-                          className="ml-2 text-[#00FF88] hover:text-[#66FFAA] transition-colors font-medium"
-                        >
-                          See less
-                        </button>
-                      )}
-                    </p>
-                  </div>
-                )}
-  
                 {missingOutcomes && (
                   <div className="mb-4 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-yellow-200">
                     Outcomes are still indexing… (Supabase/outcomes not ready yet)
@@ -2136,7 +2095,7 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                 )}
               </div>
   
-              {/* Discussion / Activity */}
+              {/* Discussion / Activity / Rules */}
               <div className="mt-2 pb-8">
                 <div className="flex items-center gap-2 mb-4">
                   <button
@@ -2160,16 +2119,50 @@ await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
                   >
                     Activity
                   </button>
+
+                  <button
+                    onClick={() => setBottomTab("rules")}
+                    className={`px-4 py-2 rounded-lg border text-sm font-semibold transition ${
+                      bottomTab === "rules"
+                        ? "bg-pump-green/15 border-pump-green text-pump-green"
+                        : "bg-pump-dark/40 border-gray-800 text-gray-300 hover:border-gray-600"
+                    }`}
+                  >
+                    Rules
+                  </button>
                 </div>
-  
+
                 {bottomTab === "discussion" ? (
                   <CommentsSection marketId={market.publicKey} />
-                ) : (
+                ) : bottomTab === "activity" ? (
                   <MarketActivityTab
                     marketDbId={market.dbId}
                     marketAddress={market.publicKey}
                     outcomeNames={names}
                   />
+                ) : (
+                  <div className="mt-4">
+                    <div className="text-sm text-gray-300 whitespace-pre-wrap">
+                      {fullDescription ? (
+                        <>
+                          {descriptionExpanded || !shouldTruncate
+                            ? fullDescription
+                            : truncatedDescription}
+
+                          {shouldTruncate && (
+                            <button
+                              onClick={() => setDescriptionExpanded(!descriptionExpanded)}
+                              className="ml-2 text-[#00FF88] hover:underline"
+                            >
+                              {descriptionExpanded ? "See less" : "See more"}
+                            </button>
+                          )}
+                        </>
+                      ) : (
+                        <span className="text-gray-500">No rules provided.</span>
+                      )}
+                    </div>
+                  </div>
                 )}
               </div>
             </div>

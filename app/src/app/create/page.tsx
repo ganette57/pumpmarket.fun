@@ -1184,7 +1184,7 @@ export default function CreateMarketPage() {
           <textarea
             value={description}
             onChange={(e) => handleDescriptionChange(e.target.value)}
-            maxLength={500}
+            maxLength={5000}
             rows={3}
             className={`input-pump w-full ${descriptionError ? "input-error" : ""}`}
             placeholder={isMatchMode ? "Any additional context about the match..." : "Describe the resolution conditions..."}
