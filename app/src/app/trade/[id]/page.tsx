@@ -767,6 +767,7 @@ export default function TradePage() {
   const [oddsPoints, setOddsPoints] = useState<{ t: number; pct: number[] }[]>([]);
   const [bottomTab, setBottomTab] = useState<BottomTab>("discussion");
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+  const lastDbVolumeFetchAtRef = useRef(0);
 
   // Trade modal state
   const [tradeStep, setTradeStep] = useState<TradeStep>("idle");
@@ -1076,7 +1077,11 @@ if (snap?.posAcc?.shares) {
 
       const refreshDbVolume = async () => {
         if (cancelled || volumeFetchInFlight) return;
+        if (document.visibilityState !== "visible") return;
         if (!marketDbId && !marketAddress) return;
+        const now = Date.now();
+        if (now - lastDbVolumeFetchAtRef.current < 60_000) return;
+        lastDbVolumeFetchAtRef.current = now;
 
         volumeFetchInFlight = true;
         try {
@@ -1168,14 +1173,11 @@ if (snap?.posAcc?.shares) {
         subId = null;
       }
 
-      if (subId == null || !coder?.accounts?.decode) {
+      if (subId == null) {
         pollId = setInterval(() => {
           if (document.visibilityState !== "visible") return;
-          if (program && coder?.accounts?.decode) {
-            void refreshFromRpc();
-            return;
-          }
-          if (!submitting) void loadMarket(id);
+          if (submitting) return;
+          void refreshFromRpc();
         }, 10_000);
       }
 
@@ -1186,7 +1188,7 @@ if (snap?.posAcc?.shares) {
           connection.removeAccountChangeListener(subId).catch(() => {});
         }
       };
-    }, [id, connection, program, loadMarket, submitting, market?.dbId, market?.publicKey]);
+    }, [id, connection, program, submitting, market?.dbId, market?.publicKey]);
 
   // Merge liveScore into sportEvent for display while keeping last known values on fetch errors.
   const sportEventForUi = useMemo(() => {
