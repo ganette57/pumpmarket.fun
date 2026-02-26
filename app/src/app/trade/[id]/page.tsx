@@ -806,6 +806,7 @@ export default function TradePage() {
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const lastDbVolumeFetchAtRef = useRef(0);
   const lastDbResolutionFetchAtRef = useRef(0);
+  const lastWsUpdateAtRef = useRef(0);
 
   // Trade modal state
   const [tradeStep, setTradeStep] = useState<TradeStep>("idle");
@@ -1183,6 +1184,7 @@ if (snap?.posAcc?.shares) {
 
           const decodedSupplies = rawSupplies.map((x: any) => toFiniteNumber(x));
           if (!decodedSupplies.length) return;
+          lastWsUpdateAtRef.current = Date.now();
 
           setMarket((prev) => {
             if (!prev) return prev;
@@ -1228,9 +1230,18 @@ if (snap?.posAcc?.shares) {
         }, 10_000);
       }
 
+      const wsWatchdogId = setInterval(() => {
+        if (document.visibilityState !== "visible") return;
+        if (submitting) return;
+        if (Date.now() - lastWsUpdateAtRef.current > 20_000) {
+          void refreshFromRpc();
+        }
+      }, 15_000);
+
       return () => {
         cancelled = true;
         if (pollId) clearInterval(pollId);
+        clearInterval(wsWatchdogId);
         if (subId != null) {
           connection.removeAccountChangeListener(subId).catch(() => {});
         }
@@ -1243,7 +1254,6 @@ if (snap?.posAcc?.shares) {
     if (!market?.publicKey) return;
 
     let cancelled = false;
-    let sawRealtimeEvent = false;
 
     const marketDbId = market.dbId ?? null;
     const marketAddress = market.publicKey;
@@ -1266,7 +1276,6 @@ if (snap?.posAcc?.shares) {
         { event: "UPDATE", schema: "public", table: "markets", filter },
         (payload) => {
           if (cancelled || !payload?.new) return;
-          sawRealtimeEvent = true;
           applyPatch(payload.new);
         },
       )
@@ -1277,7 +1286,7 @@ if (snap?.posAcc?.shares) {
       if (document.visibilityState !== "visible") return;
       if (submitting) return;
       const now = Date.now();
-      if (now - lastDbResolutionFetchAtRef.current < 60_000) return;
+      if (now - lastDbResolutionFetchAtRef.current < 12_000) return;
       lastDbResolutionFetchAtRef.current = now;
 
       try {
@@ -1292,9 +1301,8 @@ if (snap?.posAcc?.shares) {
 
     void fetchDbPatch();
     const fallbackId = window.setInterval(() => {
-      if (sawRealtimeEvent) return;
       void fetchDbPatch();
-    }, 75_000);
+    }, 15_000);
 
     return () => {
       cancelled = true;
