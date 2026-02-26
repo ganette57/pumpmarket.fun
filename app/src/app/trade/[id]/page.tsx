@@ -214,6 +214,43 @@ function toResolutionStatus(x: any): "open" | "proposed" | "finalized" | "cancel
   return "open";
 }
 
+function applyMarketDbPatch(prev: UiMarket, row: any): UiMarket {
+  if (!row || typeof row !== "object") return prev;
+  const has = (k: string) => Object.prototype.hasOwnProperty.call(row, k);
+  const next: UiMarket = { ...prev };
+
+  if (has("resolution_status")) next.resolutionStatus = toResolutionStatus(row.resolution_status);
+  if (has("proposed_winning_outcome")) {
+    next.proposedOutcome =
+      row.proposed_winning_outcome == null ? null : Number(row.proposed_winning_outcome);
+  }
+  if (has("resolution_proposed_at")) next.proposedAt = row.resolution_proposed_at ?? null;
+  if (has("contest_deadline")) next.contestDeadline = row.contest_deadline ?? null;
+  if (has("contested")) next.contested = !!row.contested;
+  if (has("contest_count")) next.contestCount = row.contest_count == null ? 0 : Number(row.contest_count) || 0;
+
+  if (has("proposed_proof_url")) next.proposedProofUrl = row.proposed_proof_url ?? null;
+  if (has("proposed_proof_image")) next.proposedProofImage = row.proposed_proof_image ?? null;
+  if (has("proposed_proof_note")) next.proposedProofNote = row.proposed_proof_note ?? null;
+
+  if (has("resolved")) next.resolved = !!row.resolved;
+  if (has("resolved_at")) next.resolvedAt = row.resolved_at ?? null;
+  if (has("winning_outcome")) next.winningOutcome = row.winning_outcome == null ? null : Number(row.winning_outcome);
+  if (has("resolution_proof_url")) next.resolutionProofUrl = row.resolution_proof_url ?? null;
+  if (has("resolution_proof_image")) next.resolutionProofImage = row.resolution_proof_image ?? null;
+  if (has("resolution_proof_note")) next.resolutionProofNote = row.resolution_proof_note ?? null;
+
+  if (has("is_blocked")) next.isBlocked = !!row.is_blocked;
+  if (has("blocked_reason")) next.blockedReason = row.blocked_reason ?? null;
+  if (has("blocked_at")) next.blockedAt = row.blocked_at ?? null;
+
+  if (has("sport_trading_state")) next.sportTradingState = row.sport_trading_state ?? null;
+  if (has("start_time")) next.startTime = row.start_time ?? null;
+  if (has("end_time")) next.endTime = row.end_time ?? null;
+
+  return next;
+}
+
 function formatMsToHhMm(ms: number) {
   const totalMin = Math.max(0, Math.floor(ms / (60 * 1000)));
   const h = Math.floor(totalMin / 60);
@@ -768,6 +805,7 @@ export default function TradePage() {
   const [bottomTab, setBottomTab] = useState<BottomTab>("discussion");
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const lastDbVolumeFetchAtRef = useRef(0);
+  const lastDbResolutionFetchAtRef = useRef(0);
 
   // Trade modal state
   const [tradeStep, setTradeStep] = useState<TradeStep>("idle");
@@ -1198,6 +1236,72 @@ if (snap?.posAcc?.shares) {
         }
       };
     }, [id, connection, program, submitting, market?.dbId, market?.publicKey]);
+
+  // DB realtime sync for this market row (resolution/contest/proofs/block/sport state),
+  // with slow polling fallback when realtime is unavailable or silent.
+  useEffect(() => {
+    if (!market?.publicKey) return;
+
+    let cancelled = false;
+    let sawRealtimeEvent = false;
+
+    const marketDbId = market.dbId ?? null;
+    const marketAddress = market.publicKey;
+    const filter = marketDbId ? `id=eq.${marketDbId}` : `market_address=eq.${marketAddress}`;
+    const dbSelect =
+      "resolution_status,proposed_winning_outcome,resolution_proposed_at,contest_deadline,contested,contest_count," +
+      "proposed_proof_url,proposed_proof_image,proposed_proof_note," +
+      "resolved,resolved_at,winning_outcome,resolution_proof_url,resolution_proof_image,resolution_proof_note," +
+      "is_blocked,blocked_reason,blocked_at,sport_trading_state,start_time,end_time";
+
+    const applyPatch = (row: any) => {
+      if (!row || cancelled) return;
+      setMarket((prev) => (prev ? applyMarketDbPatch(prev, row) : prev));
+    };
+
+    const channel = supabase
+      .channel(`trade_market_sync_${marketDbId || marketAddress}`)
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "markets", filter },
+        (payload) => {
+          if (cancelled || !payload?.new) return;
+          sawRealtimeEvent = true;
+          applyPatch(payload.new);
+        },
+      )
+      .subscribe();
+
+    const fetchDbPatch = async () => {
+      if (cancelled) return;
+      if (document.visibilityState !== "visible") return;
+      if (submitting) return;
+      const now = Date.now();
+      if (now - lastDbResolutionFetchAtRef.current < 60_000) return;
+      lastDbResolutionFetchAtRef.current = now;
+
+      try {
+        let query = supabase.from("markets").select(dbSelect).limit(1);
+        query = marketDbId ? query.eq("id", marketDbId) : query.eq("market_address", marketAddress);
+        const { data, error } = await query.maybeSingle();
+        if (!cancelled && !error && data) applyPatch(data);
+      } catch {
+        // silent fallback
+      }
+    };
+
+    void fetchDbPatch();
+    const fallbackId = window.setInterval(() => {
+      if (sawRealtimeEvent) return;
+      void fetchDbPatch();
+    }, 75_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(fallbackId);
+      supabase.removeChannel(channel);
+    };
+  }, [market?.dbId, market?.publicKey, submitting]);
 
   // Merge liveScore into sportEvent for display while keeping last known values on fetch errors.
   const sportEventForUi = useMemo(() => {
