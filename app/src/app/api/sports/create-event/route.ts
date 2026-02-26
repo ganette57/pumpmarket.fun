@@ -3,19 +3,18 @@ import { supabaseServer } from "@/lib/supabaseServer";
 
 // Optional: keep API-Sports enrichment if still wired in your repo.
 // If you no longer use it, you can remove these imports + the enrichment block.
-import {
-  isAvailable as isApiSportsAvailable,
-  fetchEvent,
-} from "@/lib/sportsProviders/apiSportsProvider";
+import { isAvailable as isApiSportsAvailable, fetchEvent } from "@/lib/sportsProviders/apiSportsProvider";
 
-type Enriched = {
-  status?: string;
-  score?: Record<string, unknown>;
-  raw?: Record<string, unknown>;
-  league?: string | null;
-  start_time?: string | null;
-  end_time?: string | null;
-} | null;
+type Enriched =
+  | {
+      status?: string;
+      score?: Record<string, unknown>;
+      raw?: Record<string, unknown>;
+      league?: string | null;
+      start_time?: string | null;
+      end_time?: string | null;
+    }
+  | null;
 
 function cleanStr(v: any): string {
   return String(v ?? "").trim();
@@ -30,6 +29,53 @@ function isNonEmptyObject(x: any) {
   return x && typeof x === "object" && !Array.isArray(x) && Object.keys(x).length > 0;
 }
 
+/**
+ * Normalize sport values so they pass the DB CHECK constraint.
+ * Adjust return values to match exactly what your Supabase constraint allows.
+ */
+function normalizeSport(raw: any): string {
+  const s = String(raw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+
+  // Must match EXACTLY your Supabase CHECK constraint values
+
+  // soccer
+  if (["soccer", "football", "futbol"].includes(s)) {
+    return "soccer";
+  }
+
+  // basketball
+  if (["basketball", "nba"].includes(s)) {
+    return "basketball";
+  }
+
+  // american football
+  if (["nfl", "american_football", "football_american", "us_football"].includes(s)) {
+    return "american_football";
+  }
+
+  // baseball (requires Supabase CHECK updated to include 'baseball')
+  if (["baseball", "mlb"].includes(s)) {
+    return "baseball";
+  }
+
+  // mma
+  if (["mma", "ufc"].includes(s)) {
+    return "mma";
+  }
+
+  // tennis
+  if (["tennis"].includes(s)) {
+    return "tennis";
+  }
+
+  // Fail fast instead of breaking DB constraint silently
+  console.error("[normalizeSport] Unsupported sport:", raw);
+  return "";
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json();
@@ -37,7 +83,10 @@ export async function POST(req: Request) {
     // Base payload
     const provider = cleanStr(body.provider || "manual") || "manual";
     const provider_event_id_in = cleanOpt(body.provider_event_id);
-    const sport = cleanStr(body.sport);
+
+    // ✅ normalized sport (fixes sport_events_sport_check failures)
+    const sport = normalizeSport(body.sport);
+
     const home_team = cleanStr(body.home_team);
     const away_team = cleanStr(body.away_team);
     const start_time_in = cleanStr(body.start_time);
@@ -48,9 +97,12 @@ export async function POST(req: Request) {
     if (!sport || !home_team || !away_team || !start_time_in) {
       return NextResponse.json(
         { error: "sport, home_team, away_team, and start_time are required" },
-        { status: 400 },
+        { status: 400 }
       );
     }
+
+    // Debug (optional, can remove later)
+    // console.log("[create-event] sport raw =", body.sport, "=> normalized =", sport);
 
     // If no provider_event_id, make a stable manual id (still unique)
     const provider_event_id = provider_event_id_in || `manual_${Date.now()}`;
@@ -78,10 +130,7 @@ export async function POST(req: Request) {
           };
         }
       } catch (e: any) {
-        console.error(
-          "create-event enrichment error (continuing with basic data):",
-          e?.message,
-        );
+        console.error("create-event enrichment error (continuing with basic data):", e?.message);
       }
     }
 
@@ -111,16 +160,19 @@ export async function POST(req: Request) {
 
       if (enriched?.status && existing.status !== enriched.status) patch.status = enriched.status;
       if (enriched?.score && isNonEmptyObject(enriched.score)) patch.score = enriched.score;
+
       if (raw_in || enriched?.raw) {
-        const merged = { ...(existing.raw || {}), ...(raw_in || {}), ...((enriched?.raw as any) || {}) };
+        const merged = {
+          ...(existing.raw || {}),
+          ...(raw_in || {}),
+          ...(((enriched?.raw as any) || {}) as any),
+        };
         patch.raw = merged;
       }
+
       if (Object.keys(patch).length) {
         patch.last_update = new Date().toISOString();
-        await supabase
-          .from("sport_events")
-          .update(patch)
-          .eq("id", existing.id);
+        await supabase.from("sport_events").update(patch).eq("id", existing.id);
       }
 
       return NextResponse.json({ ok: true, event: existing, reused: true });
@@ -130,7 +182,7 @@ export async function POST(req: Request) {
     const insertPayload = {
       provider,
       provider_event_id,
-      sport,
+      sport, // ✅ normalized value stored in DB
       league: enriched?.league ?? league_in,
       home_team,
       away_team,
@@ -138,9 +190,10 @@ export async function POST(req: Request) {
       end_time: enriched?.end_time ?? end_time_in,
       status: enriched?.status ?? "scheduled",
       score: enriched?.score ?? {},
-      raw: (raw_in || enriched?.raw)
-  ? { ...(raw_in || {}), ...((enriched?.raw ?? body.raw as any) || {}) }
-  : null,
+      raw:
+        raw_in || enriched?.raw
+          ? { ...(raw_in || {}), ...(((enriched?.raw ?? (body.raw as any)) || {}) as any) }
+          : null,
       last_update: enriched ? new Date().toISOString() : null,
     };
 
@@ -173,9 +226,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, event: created, reused: false });
   } catch (e: any) {
     console.error("sports/create-event crash:", e);
-    return NextResponse.json(
-      { error: e?.message || "Unknown error" },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: e?.message || "Unknown error" }, { status: 500 });
   }
 }
