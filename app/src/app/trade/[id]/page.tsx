@@ -1699,13 +1699,32 @@ useEffect(() => {
 
       // Always refresh UI state
       // Refresh fast on-chain first (instant UI), then DB (eventual consistency)
-const snap = await loadOnchainSnapshot(id);
-if (snap?.marketLamports != null) setMarketBalanceLamports(snap.marketLamports);
-if (snap?.posAcc?.shares) {
-  const sharesArr = Array.isArray(snap.posAcc.shares) ? snap.posAcc.shares.map((x: any) => Number(x) || 0) : [];
-  setPositionShares(sharesArr);
-}
-await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
+      const waitForSigConfirmed = async (sig: string) => {
+        const deadline = Date.now() + 12_000;
+        while (Date.now() < deadline) {
+          try {
+            const { value } = await connection.getSignatureStatuses([sig], {
+              searchTransactionHistory: true,
+            });
+            const st = value?.[0];
+            const cs = String(st?.confirmationStatus || "").toLowerCase();
+            if (cs === "confirmed" || cs === "finalized") return;
+          } catch {
+            // keep retrying until timeout
+          }
+          await new Promise((resolve) => setTimeout(resolve, 800));
+        }
+      };
+
+      await waitForSigConfirmed(txSig);
+
+      const snap = await loadOnchainSnapshot(id);
+      if (snap?.marketLamports != null) setMarketBalanceLamports(snap.marketLamports);
+      if (snap?.posAcc?.shares) {
+        const sharesArr = Array.isArray(snap.posAcc.shares) ? snap.posAcc.shares.map((x: any) => Number(x) || 0) : [];
+        setPositionShares(sharesArr);
+      }
+      await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
 
       // close drawer on success (mobile)
       if (isMobile) setMobileTradeOpen(false);
