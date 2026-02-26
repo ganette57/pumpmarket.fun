@@ -45,6 +45,8 @@ type Market = {
   sport?: string | null;
   sportTradingState?: string | null;
   resolutionStatus?: string | null;
+  startTime?: string | null;
+  endTime?: string | null;
 };
 
 type MarketStatusFilter = "all" | "open" | "resolved" | "ending_soon" | "top_volume";
@@ -128,6 +130,27 @@ function isSportFinishedByProvider(m: Market): boolean {
 
 function isSportMarket(m: Market): boolean {
   return normalizeCategoryId(m.category) === "sports" || normalizeSportSubcategoryFromMarket(m) !== null;
+}
+
+function isSportLiveInProgress(m: Market): boolean {
+  if (!isSportMarket(m)) return false;
+  const status = sportStatusSignals(m);
+  const liveSignals = ["live", "in_play", "inplay", "1h", "ht", "2h", "et", "p", "q1", "q2", "q3", "q4", "ot"];
+  const finishedSignals = ["finished", "final", "ended", "ended_by_sport", "resolved", "cancelled", "postponed", "ft", "aet", "pen"];
+
+  if (status.some((s) => liveSignals.includes(s))) return true;
+  if (status.some((s) => finishedSignals.includes(s))) return false;
+
+  const meta = (m.sportMeta || {}) as any;
+  const startMs = parseUtcMs(m.startTime ?? meta?.start_time);
+  let endMs = parseUtcMs(m.endTime ?? meta?.end_time);
+  if (!Number.isFinite(endMs) && Number.isFinite(startMs)) {
+    const sportKey = normalizeSportSubcategoryFromMarket(m) || String(m.sport || meta?.sport || "").toLowerCase();
+    const durationMs = homeSportDurationMs(sportKey);
+    if (Number.isFinite(durationMs)) endMs = startMs + durationMs;
+  }
+  const nowMs = Date.now();
+  return Number.isFinite(startMs) && Number.isFinite(endMs) && nowMs >= startMs && nowMs < endMs;
 }
 
 function parseUtcMs(raw: any): number {
@@ -349,9 +372,16 @@ export default function Home() {
             creator: row.creator ?? null,
             socialLinks: row.social_links ?? null,
             sportMeta: row.sport_meta ?? null,
-            sport: typeof row.sport_meta?.sport === "string" ? row.sport_meta.sport : null,
+            sport:
+              typeof row.sport === "string"
+                ? row.sport
+                : typeof row.sport_meta?.sport === "string"
+                ? row.sport_meta.sport
+                : null,
             sportTradingState: row.sport_trading_state ?? null,
             resolutionStatus: row.resolution_status ?? "open",
+            startTime: row.start_time ?? null,
+            endTime: row.end_time ?? null,
           } as Market;
         }) ?? [];
 
@@ -480,6 +510,7 @@ export default function Home() {
           marketType: market.marketType,
           outcomeNames: market.outcomeNames,
           outcomeSupplies: market.outcomeSupplies,
+          isLive: isSportLiveInProgress(market),
         };
       });
   }, [categoryFiltered]);
@@ -767,7 +798,11 @@ export default function Home() {
                     transition={{ duration: 0.35, delay: index * 0.03 }}
                     className="h-full"
                   >
-                    <MarketCard market={market as any} liveSessionId={liveMap[market.publicKey] || null} />
+                    <MarketCard
+                      market={market as any}
+                      liveSessionId={liveMap[market.publicKey] || null}
+                      liveMatch={isSportLiveInProgress(market)}
+                    />
                   </motion.div>
                 ))}
               </div>

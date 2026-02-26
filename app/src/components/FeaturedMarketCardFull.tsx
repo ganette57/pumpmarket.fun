@@ -29,6 +29,7 @@ interface FeaturedMarket {
   marketType?: number;
   outcomeNames?: string[];
   outcomeSupplies?: number[];
+  isLive?: boolean;
 }
 
 interface FeaturedMarketCardFullProps {
@@ -66,22 +67,30 @@ export default function FeaturedMarketCardFull({ market, liveSessionId }: Featur
   const volSol = lamportsToSol(market.volume);
   const volLabel = volSol >= 1000 ? `${(volSol / 1000).toFixed(1)}k` : volSol.toFixed(2);
 
+  const showLiveBadge = !!market.isLive || !!liveSessionId;
+
   return (
     <div className="w-full">
       <Link href={`/trade/${market.id}`}>
         {/* Single clean card - no extra borders */}
         <div className="bg-[#0a0b0d] border border-gray-800 hover:border-pump-green/60 rounded-2xl transition-all duration-300 hover:shadow-[0_0_40px_rgba(16,185,129,0.15)] cursor-pointer overflow-hidden relative">
           {/* LIVE badge */}
-          {liveSessionId && (
-            <a
-              href={`/live/${liveSessionId}`}
-              onClick={(e) => e.stopPropagation()}
-              className="absolute top-3 right-3 z-10 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-600/90 hover:bg-red-500 text-white text-xs font-bold shadow-lg transition"
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
-              LIVE
-            </a>
-          )}
+          {showLiveBadge &&
+            (liveSessionId ? (
+              <a
+                href={`/live/${liveSessionId}`}
+                onClick={(e) => e.stopPropagation()}
+                className="absolute top-3 right-3 z-10 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-600/90 hover:bg-red-500 text-white text-xs font-bold shadow-lg transition"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                LIVE
+              </a>
+            ) : (
+              <span className="absolute top-3 right-3 z-10 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-600/90 text-white text-xs font-bold shadow-lg">
+                <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                LIVE
+              </span>
+            ))}
 
           {/* DESKTOP */}
           <div className="hidden md:flex min-h-[400px]">

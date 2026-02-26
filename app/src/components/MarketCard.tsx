@@ -23,11 +23,15 @@ interface MarketCardProps {
   };
   /** If set, shows a LIVE badge linking to /live/[liveSessionId] */
   liveSessionId?: string | null;
+  /** Sports live signal from already-loaded home payload (no extra fetch). */
+  liveMatch?: boolean;
 }
 
-export default function MarketCard({ market, liveSessionId }: MarketCardProps) {
+export default function MarketCard({ market, liveSessionId, liveMatch = false }: MarketCardProps) {
   const now = Date.now() / 1000;
   const daysLeft = Math.max(0, Math.floor((market.resolutionTime - now) / 86400));
+  const isEnded = market.resolved || now >= market.resolutionTime;
+  const showLiveBadge = !isEnded && (liveMatch || !!liveSessionId);
 
   // ✅ sanitize category (évite crash quand null/undefined)
   const safeCategoryRaw = (market.category ?? 'other').toString().trim();
@@ -76,22 +80,30 @@ export default function MarketCard({ market, liveSessionId }: MarketCardProps) {
               <CategoryImagePlaceholder category={safeCategoryKey} />
             </div>
           )}
-          {/* LIVE BADGE — links to /live/[id], stops propagation to keep card link safe */}
-          {liveSessionId && !(market.resolved || now >= market.resolutionTime) && (
-            <Link
-              href={`/live/${liveSessionId}`}
-              onClick={(e) => e.stopPropagation()}
-              className="absolute top-3 right-3 z-10"
-            >
-              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide bg-red-600 text-white shadow-lg hover:bg-red-500 transition">
-                <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
-                Live
-              </span>
-            </Link>
-          )}
+          {/* LIVE BADGE */}
+          {showLiveBadge &&
+            (liveSessionId ? (
+              <Link
+                href={`/live/${liveSessionId}`}
+                onClick={(e) => e.stopPropagation()}
+                className="absolute top-3 right-3 z-10"
+              >
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide bg-red-600 text-white shadow-lg hover:bg-red-500 transition">
+                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                  LIVE
+                </span>
+              </Link>
+            ) : (
+              <div className="absolute top-3 right-3 z-10">
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide bg-red-600 text-white shadow-lg">
+                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                  LIVE
+                </span>
+              </div>
+            ))}
 
           {/* ENDED BADGE */}
-          {!liveSessionId && (market.resolved || now >= market.resolutionTime) && (
+          {!showLiveBadge && isEnded && (
             <div className="absolute top-3 right-3 z-10">
               <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wide bg-black/80 border border-gray-700 text-gray-200">
                 Ended
@@ -153,7 +165,7 @@ export default function MarketCard({ market, liveSessionId }: MarketCardProps) {
             {/* time left */}
             <div className="flex items-center gap-1">
               <Clock className="w-3 h-3" />
-              <span>{(market.resolved || now >= market.resolutionTime) ? "Ended" : `${daysLeft}d left`}</span>
+              <span>{isEnded ? "Ended" : `${daysLeft}d left`}</span>
             </div>
           </div>
         </div>

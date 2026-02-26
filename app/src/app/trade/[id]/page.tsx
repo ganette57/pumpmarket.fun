@@ -333,6 +333,39 @@ function statusBadgeLabel(status: DisplayStatus, minute: string): string {
   return "—";
 }
 
+function formatLiveScore(scoreLike: unknown): string | null {
+  let score: any = scoreLike;
+  if (typeof score === "string") {
+    try {
+      score = JSON.parse(score);
+    } catch {
+      return null;
+    }
+  }
+  if (!score || typeof score !== "object") return null;
+
+  const toNum = (v: unknown): number | null => {
+    if (v == null) return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const pairs: Array<[unknown, unknown]> = [
+    [score.home, score.away],
+    [score.home_score, score.away_score],
+    [score.local, score.visitor],
+    [score.h, score.a],
+  ];
+
+  for (const [homeRaw, awayRaw] of pairs) {
+    const home = toNum(homeRaw);
+    const away = toNum(awayRaw);
+    if (home != null && away != null) return `${home} – ${away}`;
+  }
+
+  return null;
+}
+
 function formatScore(score: Record<string, unknown>, sport: string): string {
   if (!score || !Object.keys(score).length) return "—";
   if (sport === "tennis" && Array.isArray(score.sets)) {
@@ -344,10 +377,7 @@ function formatScore(score: Record<string, unknown>, sport: string): string {
     if (score.method) parts.push(String(score.method));
     return parts.join(" · ") || "—";
   }
-  if (score.home != null && score.away != null) {
-    return `${score.home} – ${score.away}`;
-  }
-  return JSON.stringify(score);
+  return formatLiveScore(score) || "—";
 }
 
 function pickEventBanner(event: any, meta?: any): string | null {
