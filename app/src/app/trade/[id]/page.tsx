@@ -214,7 +214,7 @@ function toResolutionStatus(x: any): "open" | "proposed" | "finalized" | "cancel
   return "open";
 }
 
-function applyMarketDbPatch(prev: UiMarket, row: any): UiMarket {
+function applyMarketDbPatch(prev: UiMarket, row: any, allowSupplyPatch = false): UiMarket {
   if (!row || typeof row !== "object") return prev;
   const has = (k: string) => Object.prototype.hasOwnProperty.call(row, k);
   const next: UiMarket = { ...prev };
@@ -247,6 +247,26 @@ function applyMarketDbPatch(prev: UiMarket, row: any): UiMarket {
   if (has("sport_trading_state")) next.sportTradingState = row.sport_trading_state ?? null;
   if (has("start_time")) next.startTime = row.start_time ?? null;
   if (has("end_time")) next.endTime = row.end_time ?? null;
+
+  if (allowSupplyPatch) {
+    const dbSupplies = toNumberArray(row.outcome_supplies);
+    if (dbSupplies && dbSupplies.length > 0) {
+      const clipped = dbSupplies.slice(0, 10);
+      next.outcomeSupplies = clipped;
+      if (next.marketType === 0) {
+        if (clipped.length >= 2) {
+          next.yesSupply = Number(clipped[0]) || 0;
+          next.noSupply = Number(clipped[1]) || 0;
+        } else {
+          if (has("yes_supply")) next.yesSupply = Number(row.yes_supply) || 0;
+          if (has("no_supply")) next.noSupply = Number(row.no_supply) || 0;
+        }
+      }
+    } else if (next.marketType === 0) {
+      if (has("yes_supply")) next.yesSupply = Number(row.yes_supply) || 0;
+      if (has("no_supply")) next.noSupply = Number(row.no_supply) || 0;
+    }
+  }
 
   return next;
 }
@@ -1262,11 +1282,17 @@ if (snap?.posAcc?.shares) {
       "resolution_status,proposed_winning_outcome,resolution_proposed_at,contest_deadline,contested,contest_count," +
       "proposed_proof_url,proposed_proof_image,proposed_proof_note," +
       "resolved,resolved_at,winning_outcome,resolution_proof_url,resolution_proof_image,resolution_proof_note," +
-      "is_blocked,blocked_reason,blocked_at,sport_trading_state,start_time,end_time";
+      "is_blocked,blocked_reason,blocked_at,sport_trading_state,start_time,end_time," +
+      "outcome_supplies,yes_supply,no_supply";
 
     const applyPatch = (row: any) => {
       if (!row || cancelled) return;
-      setMarket((prev) => (prev ? applyMarketDbPatch(prev, row) : prev));
+      setMarket((prev) => {
+        if (!prev) return prev;
+        const wsStale = Date.now() - lastWsUpdateAtRef.current > 20_000;
+        const allowSupplyPatch = wsStale || !(prev.outcomeSupplies?.length);
+        return applyMarketDbPatch(prev, row, allowSupplyPatch);
+      });
     };
 
     const channel = supabase
