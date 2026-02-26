@@ -350,17 +350,25 @@ function formatLiveScore(scoreLike: unknown): string | null {
     return Number.isFinite(n) ? n : null;
   };
 
-  const pairs: Array<[unknown, unknown]> = [
-    [score.home, score.away],
-    [score.home_score, score.away_score],
-    [score.local, score.visitor],
-    [score.h, score.a],
+  const status = String(score.status ?? score.state ?? "").toLowerCase();
+  const statusText = typeof score?.raw?.status_text === "string" ? score.raw.status_text.trim() : "";
+  const isLive = ["live", "in_play", "inplay"].includes(status);
+  const suffix = isLive && statusText ? ` · ${statusText}` : "";
+
+  const pairs: Array<{ home: unknown; away: unknown; allowPartial: boolean }> = [
+    { home: score.home, away: score.away, allowPartial: true },
+    { home: score.home_score, away: score.away_score, allowPartial: true },
+    { home: score.local, away: score.visitor, allowPartial: true },
+    { home: score.h, away: score.a, allowPartial: true },
   ];
 
-  for (const [homeRaw, awayRaw] of pairs) {
-    const home = toNum(homeRaw);
-    const away = toNum(awayRaw);
-    if (home != null && away != null) return `${home} – ${away}`;
+  for (const pair of pairs) {
+    const home = toNum(pair.home);
+    const away = toNum(pair.away);
+    if (home != null && away != null) return `${home} – ${away}${suffix}`;
+    if (pair.allowPartial && (home != null || away != null)) {
+      return `${home ?? 0} – ${away ?? 0}${suffix}`;
+    }
   }
 
   return null;
