@@ -53,6 +53,45 @@ const MIN_VOL_LAMPORTS = 50_000_000; // 0.05 SOL
 
 const DEBUG_SPORT_OPEN_FILTER = false;
 
+function normalizeCategoryId(raw: unknown): string {
+  const s = String(raw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  if (s === "sports_general" || s === "sport" || s === "sports") return "sports";
+  if (s === "breaking_news") return "breaking";
+  return s;
+}
+
+function normalizeSportSubcategoryValue(raw: unknown): "soccer" | "basketball" | "baseball" | "american_football" | "tennis" | null {
+  const s = normalizeCategoryId(raw);
+  if (!s) return null;
+  if (s === "soccer" || s === "football") return "soccer";
+  if (s === "basketball" || s === "nba") return "basketball";
+  if (s === "baseball" || s === "mlb") return "baseball";
+  if (s === "american_football" || s === "nfl" || s === "football_american") return "american_football";
+  if (s === "tennis") return "tennis";
+  // TODO: legacy data mapped some baseball fixtures to "mma"; keep UI mapping stable.
+  if (s === "mma") return "baseball";
+  return null;
+}
+
+function normalizeSportSubcategoryFromMarket(m: Market): "soccer" | "basketball" | "baseball" | "american_football" | "tennis" | null {
+  const meta = (m.sportMeta || {}) as any;
+  const candidates = [
+    m.sport,
+    meta?.sport,
+    meta?.sport_type,
+    meta?.raw?.sport,
+    m.category,
+  ];
+  for (const c of candidates) {
+    const normalized = normalizeSportSubcategoryValue(c);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
 function sportStatusSignals(m: Market): string[] {
   const meta = (m.sportMeta || {}) as any;
   const raw = (meta.raw || {}) as any;
@@ -88,7 +127,7 @@ function isSportFinishedByProvider(m: Market): boolean {
 }
 
 function isSportMarket(m: Market): boolean {
-  return !!m.sport || !!m.sportMeta;
+  return normalizeCategoryId(m.category) === "sports" || normalizeSportSubcategoryFromMarket(m) !== null;
 }
 
 function parseUtcMs(raw: any): number {
@@ -126,7 +165,7 @@ function isMarketOpenForHome(m: Market): boolean {
   }
 
   const meta = (m.sportMeta || {}) as any;
-  const sportKey = String(m.sport || meta?.sport || "").toLowerCase();
+  const sportKey = normalizeSportSubcategoryFromMarket(m) || String(m.sport || meta?.sport || "").toLowerCase();
   const startMs = parseUtcMs(meta?.start_time);
   const explicitEndMs = parseUtcMs(meta?.end_time);
   const durationMs = homeSportDurationMs(sportKey);
@@ -342,18 +381,21 @@ export default function Home() {
     // "all" = no filter
     if (selectedCategory === "all") return markets;
 
-    // "sports" = only markets with a concrete sport marker
+    // "sports" = superset of all sports markets
     if (selectedCategory === "sports") {
-      return markets.filter((m) => m.category === "sports");
+      return markets.filter((m) => isSportMarket(m));
     }
 
-    // Sport subcategory (soccer, basketball, etc.) — match by sport marker only
+    // Sport subcategory (soccer, basketball, baseball, american football...)
     if (isSportSubcategory(selectedCategory)) {
-      return markets.filter((m) => m.category === "sports");
+      const wanted = normalizeSportSubcategoryValue(selectedCategory);
+      if (!wanted) return markets.filter((m) => isSportMarket(m));
+      return markets.filter((m) => normalizeSportSubcategoryFromMarket(m) === wanted);
     }
 
     // Regular category
-    return markets.filter((m) => m.category === selectedCategory);
+    const selectedNorm = normalizeCategoryId(selectedCategory);
+    return markets.filter((m) => normalizeCategoryId(m.category) === selectedNorm);
   }, [markets, selectedCategory]);
 
   const statusFiltered = useMemo(() => {

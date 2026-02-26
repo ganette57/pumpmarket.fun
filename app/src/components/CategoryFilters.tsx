@@ -145,7 +145,7 @@ export default function CategoryFilters({ selectedCategory, onSelectCategory }: 
             <div className="w-px h-4 bg-gray-700 flex-shrink-0" />
 
             {/* Sport subcategories */}
-            {SPORT_SUBCATEGORIES.map((sport) => (
+            {SPORT_SUBCATEGORIES.filter((sport) => sport.id !== "tennis").map((sport) => (
               <button
                 key={sport.id}
                 type="button"
