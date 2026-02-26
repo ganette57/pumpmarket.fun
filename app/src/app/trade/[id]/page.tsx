@@ -867,9 +867,18 @@ const [liveScoreLastSuccessAt, setLiveScoreLastSuccessAt] = useState<number | nu
 
   
         const mt = (typeof supabaseMarket.market_type === "number" ? supabaseMarket.market_type : 0) as 0 | 1;
-  
+
         const names = toStringArray(supabaseMarket.outcome_names) ?? [];
-        const supplies = toNumberArray(supabaseMarket.outcome_supplies) ?? [];
+        const dbSupplies = toNumberArray(supabaseMarket.outcome_supplies) ?? [];
+        const onchainRawSupplies = Array.isArray(snap?.marketAcc?.q)
+          ? snap.marketAcc.q
+          : Array.isArray((snap?.marketAcc as any)?.outcomeSupplies)
+          ? (snap?.marketAcc as any).outcomeSupplies
+          : [];
+        const onchainSupplies = onchainRawSupplies.map((x: any) => toFiniteNumber(x));
+        const supplies = onchainSupplies.length ? onchainSupplies : dbSupplies;
+        const onchainYes = onchainSupplies.length >= 1 ? onchainSupplies[0] || 0 : null;
+        const onchainNo = onchainSupplies.length >= 2 ? onchainSupplies[1] || 0 : null;
 
         const creatorResolveDeadline = addHoursIso(endMs, 24);
   
@@ -919,9 +928,9 @@ const [liveScoreLastSuccessAt, setLiveScoreLastSuccessAt] = useState<number | nu
           marketType: mt,
           outcomeNames: names.slice(0, 10),
           outcomeSupplies: supplies.slice(0, 10),
-  
-          yesSupply: Number(supabaseMarket.yes_supply) || 0,
-          noSupply: Number(supabaseMarket.no_supply) || 0,
+
+          yesSupply: mt === 0 && onchainYes != null ? onchainYes : Number(supabaseMarket.yes_supply) || 0,
+          noSupply: mt === 0 && onchainNo != null ? onchainNo : Number(supabaseMarket.no_supply) || 0,
 
           // ✅ Block fields
           isBlocked: !!supabaseMarket.is_blocked,
