@@ -535,6 +535,34 @@ function predefinedSportDurationMs(sport: string): number {
   return NaN;
 }
 
+/** Per-sport UI trading lock offset (before estimated end_time).
+ *  This is UI-only for user comfort; the real lock is on-chain end_ts. */
+function getTradingLockOffsetMs(sport: string): number {
+  const s = String(sport || "").toLowerCase();
+  switch (s) {
+    case "baseball":
+    case "mlb":
+      return 10 * 60_000; // 10 min
+    case "basketball":
+    case "nba":
+    case "ncaamb":
+    case "ncaawb":
+    case "wnba":
+      return 5 * 60_000; // 5 min
+    case "football":
+    case "soccer":
+    case "epl":
+    case "la_liga":
+    case "serie_a":
+    case "bundesliga":
+    case "ligue_1":
+    case "mls":
+    case "champions_league":
+    default:
+      return 2 * 60_000; // 2 min (existing behavior)
+  }
+}
+
 function SportScoreCard({
   event,
   meta,
@@ -940,8 +968,8 @@ const [liveScoreLastSuccessAt, setLiveScoreLastSuccessAt] = useState<number | nu
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
   const loadMarket = useCallback(
-    async (marketAddress: string) => {
-      setLoading(true);
+    async (marketAddress: string, silent = false) => {
+      if (!silent) setLoading(true);
       try {
         const [supabaseMarket, snap] = await Promise.all([
           getMarketByAddress(marketAddress),
@@ -1314,8 +1342,11 @@ if (snap?.posAcc?.shares) {
       if (subId == null) {
         pollId = setInterval(() => {
           if (document.visibilityState !== "visible") return;
-          if (submitting) return;
-          void refreshFromRpc();
+          if (program && coder?.accounts?.decode) {
+            void refreshFromRpc();
+            return;
+          }
+          if (!submitting) void loadMarket(id, true);
         }, 10_000);
       }
 
@@ -1532,7 +1563,7 @@ useEffect(() => {
     if (cancelled) return;
     if (document.visibilityState !== "visible") return;
     if (submitting) return;
-    await loadMarket(id);
+    await loadMarket(id, true);
   };
 
   void tick();
@@ -1543,6 +1574,30 @@ useEffect(() => {
     window.clearInterval(t);
   };
 }, [id, market?.resolutionStatus, submitting, loadMarket]);
+
+// Poll full market state from Supabase during live sport events (every 60s).
+// Live score polling (existing, ~15-30s) only updates scores.
+// This poll keeps Supabase-sourced data fresh (sport_trading_state, outcome_supplies, etc.).
+useEffect(() => {
+  if (!id) return;
+  if (market?.marketMode !== "sport") return;
+  // Only poll while provider says live (display status)
+  const isLive = sharedSportDisplayStatus === "live";
+  if (!isLive) return;
+
+  let cancelled = false;
+
+  const tick = async () => {
+    if (cancelled || document.visibilityState !== "visible" || submitting) return;
+    await loadMarket(id, true);
+  };
+
+  const iv = window.setInterval(() => void tick(), 60_000);
+  return () => {
+    cancelled = true;
+    window.clearInterval(iv);
+  };
+}, [id, market?.marketMode, sharedSportDisplayStatus, submitting, loadMarket]);
 
   // Related block
   useEffect(() => {
@@ -1856,7 +1911,7 @@ useEffect(() => {
       if (errMsg.toLowerCase().includes("already been processed")) {
         // treat as success-ish
         if (isMobile) setMobileTradeOpen(false);
-        await loadMarket(id);
+        await loadMarket(id, true);
         setTradeStep("idle");
         setTradeResult(null);
         return;
@@ -1865,14 +1920,14 @@ useEffect(() => {
       // Handle user rejection
       if (errMsg.toLowerCase().includes("user rejected")) {
         // Revert optimistic UI
-        await loadMarket(id);
+        await loadMarket(id, true);
         setTradeStep("idle");
         setTradeResult(null);
         return;
       }
 
       // Revert optimistic UI on any error
-      await loadMarket(id);
+      await loadMarket(id, true);
       
       setTradeStep("error");
       setTradeResult({
@@ -1962,8 +2017,9 @@ useEffect(() => {
     : Number.isFinite(sportStartMs) && Number.isFinite(sportDurationMs)
     ? sportStartMs + sportDurationMs
     : NaN;
+  const sportLockOffsetMs = getTradingLockOffsetMs(sportKey);
   const hardSportLockMs = Number.isFinite(sportPredefinedEndMs)
-    ? sportPredefinedEndMs - 2 * 60_000
+    ? sportPredefinedEndMs - sportLockOffsetMs
     : NaN;
   const hardSportLockReached = Number.isFinite(hardSportLockMs) && nowMs >= hardSportLockMs;
   const sportBeforeStart = Number.isFinite(sportStartMs) && nowMs < sportStartMs;
@@ -1973,13 +2029,11 @@ useEffect(() => {
   const sportFinishedByTiming = !sportBeforeStart && Number.isFinite(sportGraceEndMs) && nowMs >= sportGraceEndMs;
 
   const sportFinished = sportBeforeStart
-    ? false
-    : sportIsFinished || market.sportTradingState === "ended_by_sport" || sportFinishedByTiming;
-  const ended = market.marketMode === "sport"
-    ? (sportBeforeStart ? false : (sportFinished || (!isSoccerLike && !sportIsLive && endedByTime)))
-    : endedByTime;
+  ? false
+  : sportIsFinished || market.sportTradingState === "ended_by_sport" || sportFinishedByTiming;
+const ended = endedByTime;
   const sportEndMs = sportPredefinedEndMs;
-  const sportLockMs = Number.isFinite(sportEndMs) ? sportEndMs - 2 * 60_000 : NaN;
+  const sportLockMs = Number.isFinite(sportEndMs) ? sportEndMs - sportLockOffsetMs : NaN;
   const sportLocked = !sportFinished && (
     hardSportLockReached ||
     (!sportIsLive && Number.isFinite(sportLockMs) && nowMs >= sportLockMs)
@@ -2002,7 +2056,6 @@ useEffect(() => {
   // marketClosed also respects the start_time guard:
   // if match hasn't started, sport-related locks don't apply
   const marketClosed = isResolvedOnChain || isProposed || ended || !!market.isBlocked
-    || sportFinished
     || (!sportBeforeStart && sportLocked);
 
   const endLabel = hasValidEnd
