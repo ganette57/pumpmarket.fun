@@ -827,6 +827,7 @@ export default function TradePage() {
   const lastDbVolumeFetchAtRef = useRef(0);
   const lastDbResolutionFetchAtRef = useRef(0);
   const lastWsUpdateAtRef = useRef(0);
+  const lastMobileSnapAtRef = useRef(0);
 
   // Trade modal state
   const [tradeStep, setTradeStep] = useState<TradeStep>("idle");
@@ -1051,15 +1052,51 @@ if (snap?.posAcc?.shares) {
       getSportEvent(market.sportEventId).then(setSportEvent).catch(() => {});
     }, [market?.sportEventId]);
 
-    // Auto-refresh sport event every 30s while live
+    // Auto-refresh sport event after kickoff (even if provider status lags behind "live").
     useEffect(() => {
-      if (!sportEvent || sportEvent.status !== "live" || !market?.sportEventId) return;
-      const iv = setInterval(async () => {
+      if (market?.marketMode !== "sport" || !market?.sportEventId) return;
+
+      const eventStartMs =
+        parseIsoUtc(market?.startTime)?.getTime() ??
+        parseIsoUtc((sportEvent as any)?.start_time)?.getTime() ??
+        parseIsoUtc((market?.sportMeta as any)?.start_time)?.getTime() ??
+        NaN;
+      const nowMs = Date.now();
+      const statusRaw = String(liveScore?.status || sportEvent?.status || "").toLowerCase();
+      const isFinished =
+        statusRaw === "finished" ||
+        statusRaw === "final" ||
+        statusRaw === "ended" ||
+        statusRaw === "completed";
+      const isLiveLike = statusRaw === "live" || statusRaw === "in_play";
+      const afterKickoffWindow =
+        Number.isFinite(eventStartMs) && nowMs >= (eventStartMs as number) - 2 * 60_000;
+      if ((!afterKickoffWindow && !isLiveLike) || isFinished) return;
+
+      let cancelled = false;
+      const poll = async () => {
+        if (cancelled) return;
         const updated = await refreshSportEvent(market.sportEventId!).catch(() => null);
-        if (updated) setSportEvent(updated);
-      }, 30_000);
-      return () => clearInterval(iv);
-    }, [sportEvent?.status, market?.sportEventId]);
+        if (!cancelled && updated) setSportEvent(updated);
+      };
+
+      void poll();
+      const iv = setInterval(async () => {
+        await poll();
+      }, 25_000);
+      return () => {
+        cancelled = true;
+        clearInterval(iv);
+      };
+    }, [
+      market?.marketMode,
+      market?.sportEventId,
+      market?.startTime,
+      market?.sportMeta,
+      sportEvent?.start_time,
+      sportEvent?.status,
+      liveScore?.status,
+    ]);
 
     // Poll /api/sports/live for thesportsdb-linked markets with adaptive interval + stale handling.
     useEffect(() => {
@@ -1137,6 +1174,7 @@ if (snap?.posAcc?.shares) {
       let cancelled = false;
       let subId: number | null = null;
       let pollId: ReturnType<typeof setInterval> | null = null;
+      let mobilePollId: ReturnType<typeof setInterval> | null = null;
       let volumeFetchInFlight = false;
       const marketPk = new PublicKey(id);
       const coder = (program as any)?.coder;
@@ -1258,15 +1296,28 @@ if (snap?.posAcc?.shares) {
         }
       }, 15_000);
 
+      if (isMobile) {
+        mobilePollId = setInterval(() => {
+          if (document.visibilityState !== "visible") return;
+          if (submitting) return;
+          const now = Date.now();
+          if (now - lastMobileSnapAtRef.current < 3_500) return;
+          if (now - lastWsUpdateAtRef.current <= 6_000) return;
+          lastMobileSnapAtRef.current = now;
+          void refreshFromRpc();
+        }, 5_000);
+      }
+
       return () => {
         cancelled = true;
         if (pollId) clearInterval(pollId);
+        if (mobilePollId) clearInterval(mobilePollId);
         clearInterval(wsWatchdogId);
         if (subId != null) {
           connection.removeAccountChangeListener(subId).catch(() => {});
         }
       };
-    }, [id, connection, program, submitting, market?.dbId, market?.publicKey]);
+    }, [id, connection, program, submitting, market?.dbId, market?.publicKey, isMobile]);
 
   // DB realtime sync for this market row (resolution/contest/proofs/block/sport state),
   // with slow polling fallback when realtime is unavailable or silent.
