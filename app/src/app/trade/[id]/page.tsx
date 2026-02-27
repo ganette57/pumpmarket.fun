@@ -369,17 +369,12 @@ function sportStatusColor(s: string) {
 
 function resolveDisplayStatus(event: any): DisplayStatus {
   const raw = String(event?.status || "").toLowerCase();
-  const hasFinalScore = event?.score?.home != null && event?.score?.away != null;
-
-  if (["finished", "final", "ended", "ft"].includes(raw)) return "finished";
+  if (["finished", "final", "ended", "ft", "completed"].includes(raw)) return "finished";
   if (["live", "in_play", "inplay"].includes(raw)) return "live";
-  if (["scheduled", "not_started", "notstarted", "ns"].includes(raw)) {
-    // Some providers lag status updates; final score should still render as terminal.
-    return hasFinalScore ? "finished" : "scheduled";
-  }
+  if (["scheduled", "not_started", "notstarted", "ns"].includes(raw)) return "scheduled";
 
-  // Keep unknown statuses neutral instead of forcing scheduled/live.
-  if (hasFinalScore) return "finished";
+  const minute = extractMinuteNumber(event);
+  if (Number.isFinite(minute) && minute > 0) return "live";
   return "unknown";
 }
 
@@ -472,14 +467,50 @@ function pickBadge(event: any, meta: any, side: "home" | "away"): string | null 
 }
 
 function liveLabel(event: any): string {
+  const m = extractMinuteNumber(event);
+  if (Number.isFinite(m) && m > 0) return `${m}'`;
+  return "";
+}
+
+function extractMinuteNumber(event: any): number {
   const m =
     event?.score?.minute ??
     event?.score?.elapsed ??
     event?.raw?.intProgress ??
     event?.raw?.minute ??
     event?.minute;
-  if (m != null && String(m).trim() !== "" && m !== 0 && m !== "0") return `${m}'`;
-  return "";
+  const n = Number(m);
+  return Number.isFinite(n) ? n : NaN;
+}
+
+function hasMeaningfulScore(event: any): boolean {
+  const toNum = (v: unknown): number | null => {
+    if (v == null) return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const home = toNum(
+    event?.score?.home ??
+      event?.score?.home_score ??
+      event?.score?.local ??
+      event?.score?.h,
+  );
+  const away = toNum(
+    event?.score?.away ??
+      event?.score?.away_score ??
+      event?.score?.visitor ??
+      event?.score?.a,
+  );
+  if (home == null || away == null) return false;
+
+  const minute = extractMinuteNumber(event);
+  return (
+    home !== 0 ||
+    away !== 0 ||
+    (Number.isFinite(minute) && minute > 0) ||
+    isLiveProviderStatus(event?.status)
+  );
 }
 
 function isLiveProviderStatus(status: string): boolean {
@@ -525,7 +556,7 @@ function SportScoreCard({
   const banner = pickEventBanner(event, meta);
   const homeBadge = pickBadge(event, meta, "home");
   const awayBadge = pickBadge(event, meta, "away");
-  const hasScore = event.score && (event.score.home != null || event.score.away != null);
+  const hasScore = hasMeaningfulScore(event);
   const fallbackUpdatedAt = parseIsoUtc(event.last_update)?.getTime() ?? NaN;
   const updatedAt = typeof lastPolledAt === "number" && Number.isFinite(lastPolledAt) ? lastPolledAt : fallbackUpdatedAt;
   const kickoffDate = parseIsoUtc(event.start_time);
@@ -1935,14 +1966,17 @@ useEffect(() => {
     ? sportPredefinedEndMs - 2 * 60_000
     : NaN;
   const hardSportLockReached = Number.isFinite(hardSportLockMs) && nowMs >= hardSportLockMs;
+  const sportBeforeStart = Number.isFinite(sportStartMs) && nowMs < sportStartMs;
   const sportGraceEndMs = Number.isFinite(sportPredefinedEndMs)
     ? sportPredefinedEndMs + (isSoccerLike ? SOCCER_GRACE_MS : 0)
     : NaN;
-  const sportFinishedByTiming = Number.isFinite(sportGraceEndMs) && nowMs >= sportGraceEndMs;
+  const sportFinishedByTiming = !sportBeforeStart && Number.isFinite(sportGraceEndMs) && nowMs >= sportGraceEndMs;
 
-  const sportFinished = sportIsFinished || market.sportTradingState === "ended_by_sport" || sportFinishedByTiming;
+  const sportFinished = sportBeforeStart
+    ? false
+    : sportIsFinished || market.sportTradingState === "ended_by_sport" || sportFinishedByTiming;
   const ended = market.marketMode === "sport"
-    ? (sportFinished || (!isSoccerLike && !sportIsLive && endedByTime))
+    ? (sportBeforeStart ? false : (sportFinished || (!isSoccerLike && !sportIsLive && endedByTime)))
     : endedByTime;
   const sportEndMs = sportPredefinedEndMs;
   const sportLockMs = Number.isFinite(sportEndMs) ? sportEndMs - 2 * 60_000 : NaN;
@@ -1967,7 +2001,6 @@ useEffect(() => {
 
   // marketClosed also respects the start_time guard:
   // if match hasn't started, sport-related locks don't apply
-  const sportBeforeStart = Number.isFinite(sportStartMs) && nowMs < sportStartMs;
   const marketClosed = isResolvedOnChain || isProposed || ended || !!market.isBlocked
     || sportFinished
     || (!sportBeforeStart && sportLocked);
@@ -2004,10 +2037,8 @@ useEffect(() => {
   const deadlineMs = market.contestDeadline ? new Date(market.contestDeadline).getTime() : NaN;
   const contestRemainingMs = Number.isFinite(deadlineMs) ? deadlineMs - Date.now() : NaN;
   const contestOpen = Number.isFinite(contestRemainingMs) ? contestRemainingMs > 0 : false;
-  const marketBadgeScore = sportEventForUi?.score &&
-    (sportEventForUi.score as any).home != null &&
-    (sportEventForUi.score as any).away != null
-    ? `${(sportEventForUi.score as any).home}–${(sportEventForUi.score as any).away}`
+  const marketBadgeScore = sportEventForUi && hasMeaningfulScore(sportEventForUi)
+    ? (formatLiveScore(sportEventForUi.score)?.split(" · ")[0] ?? null)
     : null;
   const effectiveVol =
     Number.isFinite(marketBalanceLamports)
