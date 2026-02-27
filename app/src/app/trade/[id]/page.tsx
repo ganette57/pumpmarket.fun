@@ -1887,7 +1887,7 @@ useEffect(() => {
         const sharesArr = Array.isArray(snap.posAcc.shares) ? snap.posAcc.shares.map((x: any) => Number(x) || 0) : [];
         setPositionShares(sharesArr);
       }
-      await loadMarket(id); // keeps DB in sync (question, proofs, contest, etc.)
+      await loadMarket(id, true); // keeps DB in sync (question, proofs, contest, etc.)
 
       // close drawer on success (mobile)
       if (isMobile) setMobileTradeOpen(false);
