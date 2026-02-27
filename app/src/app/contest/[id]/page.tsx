@@ -5,14 +5,20 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
 
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, SendTransactionError } from "@solana/web3.js";
 import { Program, type Idl } from "@coral-xyz/anchor";
 import { useConnection, useWallet, useAnchorWallet } from "@solana/wallet-adapter-react";
 
 import idl from "@/idl/funmarket_pump.json";
-import { getProvider, PROGRAM_ID } from "@/utils/solana";
+import { getProvider } from "@/utils/solana";
 import { supabase } from "@/lib/supabaseClient";
 import { sendSignedTx } from "@/lib/solanaSend";
+import {
+  getClusterFromContest,
+  getConnectionForCluster,
+  getProgramIdForCluster,
+  inferClusterFromRpcEndpoint,
+} from "@/lib/solanaCluster";
 
 type DbMarket = {
   market_address: string;
@@ -35,6 +41,8 @@ type DbMarket = {
 
   // outcomes labels
   outcome_names: string[] | null;
+  cluster?: string | null;
+  chain?: string | null;
 };
 
 type DbDispute = {
@@ -78,6 +86,13 @@ function parseDateMs(s?: string | null): number {
   if (!s) return NaN;
   const t = new Date(s).getTime();
   return Number.isFinite(t) ? t : NaN;
+}
+
+function clusterLabel(cluster: string): string {
+  const c = String(cluster || "").toLowerCase();
+  if (c === "devnet") return "Devnet";
+  if (c === "testnet") return "Testnet";
+  return "Mainnet";
 }
 
 export default function ContestPage() {
@@ -135,15 +150,41 @@ export default function ContestPage() {
   const proposedProofImg = market?.proposed_proof_image || "";
   const proposedProofUrl = market?.proposed_proof_url || "";
   const proposedProofNote = market?.proposed_proof_note || "";
+  const requiredCluster = useMemo(() => getClusterFromContest(market), [market]);
+  const requiredClusterLabel = useMemo(() => clusterLabel(requiredCluster), [requiredCluster]);
+  const programId = useMemo(() => {
+    try {
+      return getProgramIdForCluster(requiredCluster);
+    } catch {
+      return null;
+    }
+  }, [requiredCluster]);
+  const clusterConnection = useMemo(() => getConnectionForCluster(requiredCluster), [requiredCluster]);
+  const walletCluster = useMemo(
+    () => inferClusterFromRpcEndpoint(String((connection as any)?._rpcEndpoint || "")),
+    [connection],
+  );
+  const walletClusterMismatch = walletCluster != null && walletCluster !== requiredCluster;
 
   const proofIsLikelyAboveFold = true;
 
   // --- anchor program ---
   const getAnchorProgram = useCallback((): Program<Idl> | null => {
-    if (!anchorWallet) return null;
-    const provider = getProvider(anchorWallet, connection);
-    return new Program(idl as unknown as Idl, provider);
-  }, [anchorWallet, connection]);
+    if (!anchorWallet || !programId) return null;
+    const provider = getProvider(anchorWallet, clusterConnection);
+    const idlWithAddress = {
+      ...(idl as any),
+      address: programId.toBase58(),
+      metadata: {
+        ...((idl as any)?.metadata ?? {}),
+        address: programId.toBase58(),
+      },
+    } as Idl;
+    const use3Args = (Program as any).length >= 3;
+    return use3Args
+      ? new (Program as any)(idlWithAddress, programId, provider)
+      : new (Program as any)(idlWithAddress, provider);
+  }, [anchorWallet, clusterConnection, programId]);
 
   // --- data load ---
   const loadAll = useCallback(async (marketAddress: string) => {
@@ -151,26 +192,39 @@ export default function ContestPage() {
     setMsg(null);
 
     try {
-      const { data: mk, error: mkErr } = await supabase
+      const marketSelectBase = [
+        "market_address",
+        "question",
+        "resolution_status",
+        "proposed_winning_outcome",
+        "resolution_proposed_at",
+        "contest_deadline",
+        "contest_count",
+        "contested",
+        "proposed_proof_url",
+        "proposed_proof_image",
+        "proposed_proof_note",
+        "outcome_names",
+      ].join(",");
+
+      let { data: mk, error: mkErr } = await supabase
         .from("markets")
-        .select(
-          [
-            "market_address",
-            "question",
-            "resolution_status",
-            "proposed_winning_outcome",
-            "resolution_proposed_at",
-            "contest_deadline",
-            "contest_count",
-            "contested",
-            "proposed_proof_url",
-            "proposed_proof_image",
-            "proposed_proof_note",
-            "outcome_names",
-          ].join(",")
-        )
+        .select(`${marketSelectBase},cluster,chain`)
         .eq("market_address", marketAddress)
         .maybeSingle();
+
+      if (mkErr) {
+        const msg = String(mkErr?.message || "").toLowerCase();
+        if (msg.includes("column") && msg.includes("does not exist")) {
+          const fallback = await supabase
+            .from("markets")
+            .select(marketSelectBase)
+            .eq("market_address", marketAddress)
+            .maybeSingle();
+          mk = fallback.data as any;
+          mkErr = fallback.error as any;
+        }
+      }
 
       if (mkErr) throw mkErr;
 
@@ -245,6 +299,20 @@ if (!cleanNote) {
     inFlightRef.current[key] = true;
     setSubmitting(true);
     try {
+      if (walletClusterMismatch) {
+        setMsg(`Wrong network: switch wallet network to ${requiredClusterLabel}.`);
+        return;
+      }
+      if (!programId) {
+        setMsg(`Missing program configuration for ${requiredClusterLabel}.`);
+        return;
+      }
+      const programInfo = await clusterConnection.getAccountInfo(programId, "confirmed");
+      if (!programInfo) {
+        setMsg(`Wrong network or program not deployed on this cluster. Please switch wallet network to ${requiredClusterLabel}.`);
+        return;
+      }
+
       const program = getAnchorProgram();
       if (!program) throw new Error("Wallet provider not ready. Reconnect your wallet.");
 
@@ -259,7 +327,7 @@ if (!cleanNote) {
         .transaction();
 
       const txSig = await sendSignedTx({
-        connection,
+        connection: clusterConnection,
         tx,
         signTx: anchorWallet!.signTransaction,
         feePayer: publicKey,
@@ -302,14 +370,36 @@ if (!cleanNote) {
     } catch (e: any) {
       console.error("submitDispute error:", e);
       const errMsg = String(e?.message || "");
+      const errLower = errMsg.toLowerCase();
 
-      if (errMsg.toLowerCase().includes("already been processed")) {
+      if (process.env.NODE_ENV !== "production") {
+        const logs = Array.isArray(e?.logs) ? e.logs : null;
+        if (logs?.length) console.error("[contest dispute] tx logs:", logs);
+        if (!logs?.length && e instanceof SendTransactionError) {
+          try {
+            const fetchedLogs = await e.getLogs(clusterConnection);
+            if (fetchedLogs?.length) console.error("[contest dispute] tx logs:", fetchedLogs);
+          } catch {
+            // ignore log fetch errors
+          }
+        }
+      }
+
+      if (
+        errLower.includes("attempt to load a program that does not exist") ||
+        errLower.includes("program account not found")
+      ) {
+        setMsg(`Wrong network or program not deployed on this cluster. Please switch wallet network to ${requiredClusterLabel}.`);
+        return;
+      }
+
+      if (errLower.includes("already been processed")) {
         setMsg("Transaction already processed. Refreshing…");
         await loadAll(id);
         return;
       }
 
-      if (errMsg.toLowerCase().includes("user rejected")) {
+      if (errLower.includes("user rejected")) {
         setMsg("Transaction cancelled by user.");
         return;
       }
@@ -330,7 +420,10 @@ if (!cleanNote) {
     note,
     proofUrl,
     getAnchorProgram,
-    connection,
+    clusterConnection,
+    programId,
+    walletClusterMismatch,
+    requiredClusterLabel,
     anchorWallet,
     loadAll,
   ]);
@@ -477,6 +570,14 @@ if (!cleanNote) {
             )}
           </div>
         </div>
+        <div className="mb-3 text-xs text-gray-500">
+          Required network: <span className="text-white/80">{requiredClusterLabel}</span>
+        </div>
+        {walletClusterMismatch && (
+          <div className="mb-3 text-xs text-[#ff5c73]">
+            Wrong network: switch wallet network to {requiredClusterLabel}.
+          </div>
+        )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>
@@ -505,10 +606,10 @@ if (!cleanNote) {
 
             <button
               onClick={submitDispute}
-              disabled={!contestOpen || !connected || submitting || alreadyDisputedByMe || !note.trim()}
+              disabled={!contestOpen || !connected || submitting || alreadyDisputedByMe || !note.trim() || walletClusterMismatch}
               aria-busy={submitting}
               className={`mt-4 w-full px-4 py-3 rounded-xl font-semibold transition ${
-                !contestOpen || !connected || submitting || alreadyDisputedByMe
+                !contestOpen || !connected || submitting || alreadyDisputedByMe || walletClusterMismatch
                   ? "bg-gray-700 text-gray-300 cursor-not-allowed"
                   : "bg-[#ff5c73] text-black hover:opacity-90"
               }`}
