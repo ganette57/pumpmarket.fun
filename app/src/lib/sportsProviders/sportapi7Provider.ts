@@ -31,7 +31,7 @@ export function isAvailable(): boolean {
 
 // Default match durations in ms (for estimated end_time)
 const DURATION_MS: Record<string, number> = {
-  soccer: 2 * 3600_000 + 15 * 60_000,           // 2h15m
+  soccer: 120 * 60_000,                          // 2h
   basketball: 2 * 3600_000 + 30 * 60_000,        // 2h30m
   tennis: 3 * 3600_000,                           // 3h
   mma: 2 * 3600_000,                              // 2h

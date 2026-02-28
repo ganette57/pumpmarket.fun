@@ -100,7 +100,7 @@ export function isAvailable(): boolean {
 // ---------------------------------------------------------------------------
 
 const DURATION_MS: Record<string, number> = {
-  soccer: 110 * 60_000,                          // 1h50m
+  soccer: 120 * 60_000,                          // 2h
   basketball: 2 * 3600_000 + 30 * 60_000,        // 2h30m
   baseball: 3 * 3600_000,                        // 3h
   tennis: 3 * 3600_000,                           // 3h

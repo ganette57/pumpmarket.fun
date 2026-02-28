@@ -305,7 +305,16 @@ export default function TradingPanel({
     onTrade(s, selectedIndex, side, costSol);
   };
 
-  if (marketClosed) return null;
+  if (marketClosed) {
+    return (
+      <div className={mode === "drawer" ? "h-full flex flex-col" : "card-pump"}>
+        <div className="text-center py-8 px-4">
+          <div className="text-gray-400 text-sm font-semibold">Trading locked</div>
+          <p className="text-gray-500 text-xs mt-1">Trading is temporarily locked. It will resume or close at the scheduled end time.</p>
+        </div>
+      </div>
+    );
+  }
 
   const rootClass = mode === "drawer" ? "h-full flex flex-col" : "card-pump";
 

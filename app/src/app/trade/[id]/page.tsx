@@ -525,7 +525,7 @@ function nextScorePollDelayMs(status: string, consecutiveFailures: number): numb
   return 60_000;
 }
 
-const SOCCER_BASE_DURATION_MS = 110 * 60_000;
+const SOCCER_BASE_DURATION_MS = 120 * 60_000;
 const SOCCER_GRACE_MS = 10 * 60_000;
 
 function predefinedSportDurationMs(sport: string): number {
@@ -2158,13 +2158,13 @@ const ended = endedByTime;
                 </Link>
               )}
 
-              {/* Sport score card */}
+              {/* Sport score card — when ended (on-chain), badge shows FINAL regardless of provider */}
               {sportEventForUi && market.marketMode === "sport" && (
                 <SportScoreCard
                   event={sportEventForUi}
                   meta={market?.sportMeta}
-                  displayStatus={sharedSportDisplayStatus}
-                  minute={sharedSportMinute}
+                  displayStatus={ended ? "finished" : sharedSportDisplayStatus}
+                  minute={ended ? "" : sharedSportMinute}
                   polling={liveScorePolling}
                   stale={liveScoreFailures >= 3}
                   lastPolledAt={liveScoreLastSuccessAt}
@@ -2256,33 +2256,40 @@ const ended = endedByTime;
                       </span>
                     )}
 
-                    {/* Sport phase badges */}
-                    {!market.isBlocked && sportPhase !== "locked" && sharedSportDisplayStatus === "scheduled" && !showProposedBox && !showResolvedProofBox && (
-                      <span className="px-2 py-1 rounded-full border border-blue-500/40 bg-blue-500/10 text-blue-400">
-                        Scheduled
-                      </span>
-                    )}
-                    {!market.isBlocked && sportPhase !== "locked" && sharedSportDisplayStatus === "live" && !showProposedBox && !showResolvedProofBox && (
-                      <span className="px-2 py-1 rounded-full border border-red-500/40 bg-red-500/10 text-red-400 flex items-center gap-1">
-                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-                        Live
-                        {sharedSportMinute && <span className="text-red-300">• {sharedSportMinute}</span>}
-                        {marketBadgeScore && (
-                          <span className="ml-1 font-mono text-white">
-                            {marketBadgeScore}
-                          </span>
-                        )}
-                      </span>
-                    )}
-                    {!market.isBlocked && sportPhase !== "locked" && sharedSportDisplayStatus === "finished" && !showProposedBox && !showResolvedProofBox && (
-                      <span className="px-2 py-1 rounded-full border border-gray-500/40 bg-gray-700/30 text-gray-200 flex items-center gap-1">
-                        Final
-                        {marketBadgeScore && <span className="ml-1 font-mono text-white">{marketBadgeScore}</span>}
-                      </span>
-                    )}
-                    {!market.isBlocked && sportPhase !== "locked" && sharedSportDisplayStatus === "unknown" && !showProposedBox && !showResolvedProofBox && (
-                      <span className="px-2 py-1 rounded-full border border-gray-600/40 bg-gray-700/20 text-gray-300">—</span>
-                    )}
+                    {/* Sport phase badges — on-chain ended overrides provider status */}
+                    {(() => {
+                      const badgeStatus = ended ? "finished" as DisplayStatus : sharedSportDisplayStatus;
+                      return (
+                        <>
+                          {!market.isBlocked && sportPhase !== "locked" && badgeStatus === "scheduled" && !showProposedBox && !showResolvedProofBox && (
+                            <span className="px-2 py-1 rounded-full border border-blue-500/40 bg-blue-500/10 text-blue-400">
+                              Scheduled
+                            </span>
+                          )}
+                          {!market.isBlocked && sportPhase !== "locked" && badgeStatus === "live" && !showProposedBox && !showResolvedProofBox && (
+                            <span className="px-2 py-1 rounded-full border border-red-500/40 bg-red-500/10 text-red-400 flex items-center gap-1">
+                              <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                              Live
+                              {sharedSportMinute && <span className="text-red-300">• {sharedSportMinute}</span>}
+                              {marketBadgeScore && (
+                                <span className="ml-1 font-mono text-white">
+                                  {marketBadgeScore}
+                                </span>
+                              )}
+                            </span>
+                          )}
+                          {!market.isBlocked && sportPhase !== "locked" && badgeStatus === "finished" && !showProposedBox && !showResolvedProofBox && (
+                            <span className="px-2 py-1 rounded-full border border-gray-500/40 bg-gray-700/30 text-gray-200 flex items-center gap-1">
+                              Final
+                              {marketBadgeScore && <span className="ml-1 font-mono text-white">{marketBadgeScore}</span>}
+                            </span>
+                          )}
+                          {!market.isBlocked && sportPhase !== "locked" && badgeStatus === "unknown" && !showProposedBox && !showResolvedProofBox && (
+                            <span className="px-2 py-1 rounded-full border border-gray-600/40 bg-gray-700/20 text-gray-300">—</span>
+                          )}
+                        </>
+                      );
+                    })()}
 
                     {showProposedBox && !market.isBlocked && (
                       <span className="px-2 py-1 rounded-full border border-pump-green/40 bg-pump-green/10 text-pump-green">
@@ -2515,11 +2522,11 @@ const ended = endedByTime;
               <div className="lg:sticky lg:top-6 space-y-4 pb-8">
                 {/* ✅ Show BlockedMarketBanner instead of TradingPanel if blocked */}
                 {market.isBlocked ? (
-                  <BlockedMarketBanner 
-                    reason={market.blockedReason} 
-                    blockedAt={market.blockedAt} 
+                  <BlockedMarketBanner
+                    reason={market.blockedReason}
+                    blockedAt={market.blockedAt}
                   />
-                ) : !isMobile ? (
+                ) : !isMobile && !ended ? (
                   <TradingPanel
                     mode="desktop"
                     market={{

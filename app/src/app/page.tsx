@@ -165,7 +165,7 @@ function parseUtcMs(raw: any): number {
 
 function homeSportDurationMs(sport: string | null | undefined): number {
   const s = String(sport || "").toLowerCase();
-  if (s === "soccer" || s === "football") return 110 * 60_000;
+  if (s === "soccer" || s === "football") return 120 * 60_000;
   if (s === "basketball" || s === "nba") return 150 * 60_000;
   return NaN;
 }

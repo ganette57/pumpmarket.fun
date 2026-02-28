@@ -39,11 +39,11 @@ const RESOLUTION_SOURCES = [
 
 const T2_MS = 2 * 60_000;
 const SPORT_TIMING_MINUTES: Record<string, { durationMin: number; graceMin: number }> = {
-  soccer: { durationMin: 115, graceMin: 10 },
-  football: { durationMin: 115, graceMin: 10 },
+  soccer: { durationMin: 120, graceMin: 10 },
+  football: { durationMin: 120, graceMin: 10 },
   basketball: { durationMin: 175, graceMin: 15 },
   nba: { durationMin: 175, graceMin: 15 },
-  baseball: { durationMin: 240, graceMin: 30 },
+  baseball: { durationMin: 180, graceMin: 30 },
   tennis: { durationMin: 240, graceMin: 60 },
   mma: { durationMin: 60, graceMin: 30 },
   american_football: { durationMin: 210, graceMin: 30 },
