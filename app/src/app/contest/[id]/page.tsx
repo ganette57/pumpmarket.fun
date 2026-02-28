@@ -383,7 +383,9 @@ if (!cleanNote) {
       const errMsg = String(e?.message || "");
       const errLower = errMsg.toLowerCase();
 
-      if (process.env.NODE_ENV !== "production") {
+      const isLocalhost =
+        typeof window !== "undefined" && window.location.hostname === "localhost";
+      if (isLocalhost) {
         const logs = Array.isArray(e?.logs) ? e.logs : null;
         if (logs?.length) console.error("[contest dispute] tx logs:", logs);
         if (!logs?.length && e instanceof SendTransactionError) {

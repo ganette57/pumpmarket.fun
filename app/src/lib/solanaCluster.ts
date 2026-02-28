@@ -1,6 +1,17 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 import { getSolanaCluster, type SolanaCluster } from "@/utils/explorer";
 
+const NEXT_PUBLIC_PROGRAM_ID = process.env.NEXT_PUBLIC_PROGRAM_ID || "";
+const NEXT_PUBLIC_PROGRAM_ID_MAINNET = process.env.NEXT_PUBLIC_PROGRAM_ID_MAINNET || "";
+const NEXT_PUBLIC_PROGRAM_ID_DEVNET = process.env.NEXT_PUBLIC_PROGRAM_ID_DEVNET || "";
+const NEXT_PUBLIC_PROGRAM_ID_TESTNET = process.env.NEXT_PUBLIC_PROGRAM_ID_TESTNET || "";
+
+const NEXT_PUBLIC_SOLANA_RPC_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "";
+const NEXT_PUBLIC_SOLANA_RPC = process.env.NEXT_PUBLIC_SOLANA_RPC || "";
+const NEXT_PUBLIC_RPC_MAINNET = process.env.NEXT_PUBLIC_RPC_MAINNET || "";
+const NEXT_PUBLIC_RPC_DEVNET = process.env.NEXT_PUBLIC_RPC_DEVNET || "";
+const NEXT_PUBLIC_RPC_TESTNET = process.env.NEXT_PUBLIC_RPC_TESTNET || "";
+
 function normalizeCluster(raw: unknown): SolanaCluster | null {
   const s = String(raw || "").trim().toLowerCase();
   if (!s) return null;
@@ -8,10 +19,6 @@ function normalizeCluster(raw: unknown): SolanaCluster | null {
   if (s === "devnet") return "devnet";
   if (s === "testnet") return "testnet";
   return null;
-}
-
-function env(name: string): string {
-  return String((process.env as any)?.[name] || "").trim();
 }
 
 export function getClusterFromContest(contestOrMarket: any): SolanaCluster {
@@ -22,13 +29,13 @@ export function getClusterFromContest(contestOrMarket: any): SolanaCluster {
 }
 
 export function getProgramIdForCluster(cluster: SolanaCluster): PublicKey {
-  const fallback = env("NEXT_PUBLIC_PROGRAM_ID");
+  const fallback = NEXT_PUBLIC_PROGRAM_ID;
   const byCluster =
     cluster === "devnet"
-      ? env("NEXT_PUBLIC_PROGRAM_ID_DEVNET")
+      ? NEXT_PUBLIC_PROGRAM_ID_DEVNET
       : cluster === "mainnet-beta"
-      ? env("NEXT_PUBLIC_PROGRAM_ID_MAINNET")
-      : env("NEXT_PUBLIC_PROGRAM_ID_TESTNET");
+      ? NEXT_PUBLIC_PROGRAM_ID_MAINNET
+      : NEXT_PUBLIC_PROGRAM_ID_TESTNET;
   const value = byCluster || fallback;
   if (!value) throw new Error(`Missing program id for ${cluster}`);
   return new PublicKey(value);
@@ -37,10 +44,10 @@ export function getProgramIdForCluster(cluster: SolanaCluster): PublicKey {
 export function getRpcForCluster(cluster: SolanaCluster): string {
   const byCluster =
     cluster === "devnet"
-      ? env("NEXT_PUBLIC_RPC_DEVNET") || env("NEXT_PUBLIC_SOLANA_RPC")
+      ? NEXT_PUBLIC_RPC_DEVNET || NEXT_PUBLIC_SOLANA_RPC
       : cluster === "mainnet-beta"
-      ? env("NEXT_PUBLIC_RPC_MAINNET") || env("NEXT_PUBLIC_SOLANA_RPC_URL")
-      : env("NEXT_PUBLIC_RPC_TESTNET");
+      ? NEXT_PUBLIC_RPC_MAINNET || NEXT_PUBLIC_SOLANA_RPC_URL
+      : NEXT_PUBLIC_RPC_TESTNET;
 
   if (byCluster) return byCluster;
   if (cluster === "devnet") return "https://api.devnet.solana.com";
@@ -60,4 +67,3 @@ export function inferClusterFromRpcEndpoint(endpoint: string): SolanaCluster | n
   if (e.includes("mainnet")) return "mainnet-beta";
   return null;
 }
-
