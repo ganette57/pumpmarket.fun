@@ -88,10 +88,11 @@ function parseDateMs(s?: string | null): number {
   return Number.isFinite(t) ? t : NaN;
 }
 
-function clusterLabel(cluster: string): string {
+function clusterLabel(cluster: string | null): string {
   const c = String(cluster || "").toLowerCase();
   if (c === "devnet") return "Devnet";
   if (c === "testnet") return "Testnet";
+  if (!c) return "Unknown";
   return "Mainnet";
 }
 
@@ -150,27 +151,38 @@ export default function ContestPage() {
   const proposedProofImg = market?.proposed_proof_image || "";
   const proposedProofUrl = market?.proposed_proof_url || "";
   const proposedProofNote = market?.proposed_proof_note || "";
-  const requiredCluster = useMemo(() => getClusterFromContest(market), [market]);
+  const requiredCluster = useMemo(() => (market ? getClusterFromContest(market) : null), [market]);
   const requiredClusterLabel = useMemo(() => clusterLabel(requiredCluster), [requiredCluster]);
   const programId = useMemo(() => {
+    if (!requiredCluster) return null;
     try {
       return getProgramIdForCluster(requiredCluster);
     } catch {
       return null;
     }
   }, [requiredCluster]);
-  const clusterConnection = useMemo(() => getConnectionForCluster(requiredCluster), [requiredCluster]);
+  const clusterConnection = useMemo(
+    () => (requiredCluster ? getConnectionForCluster(requiredCluster) : null),
+    [requiredCluster],
+  );
   const walletCluster = useMemo(
-    () => inferClusterFromRpcEndpoint(String((connection as any)?._rpcEndpoint || "")),
+    () =>
+      inferClusterFromRpcEndpoint(
+        String((connection as any)?.rpcEndpoint ?? (connection as any)?._rpcEndpoint ?? ""),
+      ),
     [connection],
   );
-  const walletClusterMismatch = walletCluster != null && walletCluster !== requiredCluster;
+  const walletClusterMismatch = useMemo(
+    () => (requiredCluster && walletCluster ? walletCluster !== requiredCluster : false),
+    [requiredCluster, walletCluster],
+  );
+  const marketMisconfigured = !!market && (!requiredCluster || !programId || !clusterConnection);
 
   const proofIsLikelyAboveFold = true;
 
   // --- anchor program ---
   const getAnchorProgram = useCallback((): Program<Idl> | null => {
-    if (!anchorWallet || !programId) return null;
+    if (!anchorWallet || !programId || !clusterConnection) return null;
     const provider = getProvider(anchorWallet, clusterConnection);
     const idlWithAddress = {
       ...(idl as any),
@@ -268,7 +280,10 @@ export default function ContestPage() {
 
   // --- dispute submit ---
   const submitDispute = useCallback(async () => {
-    if (!id || !market) return;
+    if (!id || !market || !requiredCluster || !programId || !clusterConnection) {
+      setMsg("Market misconfigured: missing cluster/programId.");
+      return;
+    }
     setMsg(null);
 
     const key = "contest_submit";
@@ -301,10 +316,6 @@ if (!cleanNote) {
     try {
       if (walletClusterMismatch) {
         setMsg(`Wrong network: switch wallet network to ${requiredClusterLabel}.`);
-        return;
-      }
-      if (!programId) {
-        setMsg(`Missing program configuration for ${requiredClusterLabel}.`);
         return;
       }
       const programInfo = await clusterConnection.getAccountInfo(programId, "confirmed");
@@ -421,6 +432,7 @@ if (!cleanNote) {
     proofUrl,
     getAnchorProgram,
     clusterConnection,
+    requiredCluster,
     programId,
     walletClusterMismatch,
     requiredClusterLabel,
@@ -450,10 +462,10 @@ if (!cleanNote) {
 
   if (!market) {
     return (
-      <div className="max-w-3xl mx-auto px-4 py-10">
-        <div className="card-pump">
-          <div className="text-white font-semibold">Market not found</div>
-          <div className="text-sm text-gray-400 mt-1">This contest page needs a valid market address.</div>
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-pump-green" />
+          <p className="text-gray-400 mt-4">Loading market...</p>
         </div>
       </div>
     );
@@ -573,6 +585,11 @@ if (!cleanNote) {
         <div className="mb-3 text-xs text-gray-500">
           Required network: <span className="text-white/80">{requiredClusterLabel}</span>
         </div>
+        {marketMisconfigured && (
+          <div className="mb-3 text-xs text-[#ff5c73]">
+            Market misconfigured: missing cluster/programId.
+          </div>
+        )}
         {walletClusterMismatch && (
           <div className="mb-3 text-xs text-[#ff5c73]">
             Wrong network: switch wallet network to {requiredClusterLabel}.
@@ -606,10 +623,10 @@ if (!cleanNote) {
 
             <button
               onClick={submitDispute}
-              disabled={!contestOpen || !connected || submitting || alreadyDisputedByMe || !note.trim() || walletClusterMismatch}
+              disabled={!contestOpen || !connected || submitting || alreadyDisputedByMe || !note.trim() || walletClusterMismatch || marketMisconfigured}
               aria-busy={submitting}
               className={`mt-4 w-full px-4 py-3 rounded-xl font-semibold transition ${
-                !contestOpen || !connected || submitting || alreadyDisputedByMe || walletClusterMismatch
+                !contestOpen || !connected || submitting || alreadyDisputedByMe || walletClusterMismatch || marketMisconfigured
                   ? "bg-gray-700 text-gray-300 cursor-not-allowed"
                   : "bg-[#ff5c73] text-black hover:opacity-90"
               }`}
