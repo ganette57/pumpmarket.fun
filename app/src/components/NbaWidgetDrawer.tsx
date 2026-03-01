@@ -1,15 +1,21 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 interface NbaWidgetDrawerProps {
   isOpen: boolean;
   onClose: () => void;
-  gameId: string;
+  gameId: string; // TheSportsDB event ID — resolved to API-NBA ID via server route
   isMobile?: boolean;
 }
 
 const WIDGET_SCRIPT_SRC = "https://widgets.api-sports.io/2.0.3/widget.js";
+
+interface WidgetConfig {
+  apiKey: string;
+  gameId: string; // Resolved API-NBA game ID
+  host: string;
+}
 
 export default function NbaWidgetDrawer({
   isOpen,
@@ -19,19 +25,55 @@ export default function NbaWidgetDrawer({
 }: NbaWidgetDrawerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const scriptRef = useRef<HTMLScriptElement | null>(null);
+  const [config, setConfig] = useState<WidgetConfig | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Inject / cleanup the widget script + container when the drawer opens/closes.
+  // Fetch widget config (resolved API-NBA game ID + API key) from server
   useEffect(() => {
     if (!isOpen || !gameId) return;
 
-    const apiKey = process.env.NEXT_PUBLIC_APISPORTS_KEY || "";
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setConfig(null);
+
+    fetch(`/api/sports/widget-config?event_id=${encodeURIComponent(gameId)}`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`Config fetch failed (${res.status})`);
+        return res.json();
+      })
+      .then((data) => {
+        if (cancelled) return;
+        if (!data.apiKey || !data.gameId) {
+          throw new Error("Invalid config response");
+        }
+        setConfig(data);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error("[NbaWidgetDrawer] config error:", err);
+        setError("Could not load match stats. Try again later.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, gameId]);
+
+  // Inject the widget once we have the config
+  useEffect(() => {
+    if (!isOpen || !config) return;
 
     // Create the widget div inside our container
     const widgetDiv = document.createElement("div");
-    widgetDiv.id = `wg-nba-game-${gameId}`;
-    widgetDiv.setAttribute("data-host", "v2.nba.api-sports.io");
-    widgetDiv.setAttribute("data-key", apiKey);
-    widgetDiv.setAttribute("data-id", gameId);
+    widgetDiv.id = `wg-api-basketball-game-${config.gameId}`;
+    widgetDiv.setAttribute("data-host", config.host);
+    widgetDiv.setAttribute("data-key", config.apiKey);
+    widgetDiv.setAttribute("data-id", config.gameId);
     widgetDiv.setAttribute("data-theme", "dark");
     widgetDiv.setAttribute("data-show-errors", "true");
 
@@ -48,7 +90,6 @@ export default function NbaWidgetDrawer({
     scriptRef.current = script;
 
     return () => {
-      // Cleanup
       if (scriptRef.current && document.body.contains(scriptRef.current)) {
         document.body.removeChild(scriptRef.current);
         scriptRef.current = null;
@@ -57,12 +98,10 @@ export default function NbaWidgetDrawer({
         containerRef.current.innerHTML = "";
       }
     };
-  }, [isOpen, gameId]);
+  }, [isOpen, config]);
 
   if (!isOpen) return null;
 
-  // Mobile: full-screen drawer (same z-index pattern as TradingPanel mobile drawer)
-  // Desktop: modal overlay
   return (
     <div className="fixed inset-0 z-[250] flex items-stretch justify-end">
       {/* Backdrop */}
@@ -91,6 +130,21 @@ export default function NbaWidgetDrawer({
             </svg>
           </button>
         </div>
+
+        {/* Loading / Error / Widget */}
+        {loading && (
+          <div className="flex items-center justify-center p-8 text-gray-400 text-sm">
+            <svg className="animate-spin h-5 w-5 mr-2" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            Loading match stats...
+          </div>
+        )}
+
+        {error && (
+          <div className="p-6 text-center text-red-400 text-sm">{error}</div>
+        )}
 
         {/* Widget container */}
         <div ref={containerRef} className="p-4 min-h-[400px]" />
