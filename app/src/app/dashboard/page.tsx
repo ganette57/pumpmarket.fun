@@ -581,6 +581,7 @@ export default function DashboardPage() {
   const program = useProgram();
 
   const [tab, setTab] = useState<TabKey>("activity");
+  const [activeTab, setActiveTab] = useState<'overview' | 'markets' | 'activity' | 'saved'>('overview');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const [loadingMarkets, setLoadingMarkets] = useState(false);
@@ -1220,7 +1221,7 @@ export default function DashboardPage() {
       <div className="mb-6">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-3xl md:text-4xl font-bold text-white">Balance</h1>
+            <h1 className="text-3xl md:text-4xl font-bold text-white">Dashboard</h1>
             <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 mt-2">
               <span className="text-sm text-gray-400">Wallet: <span className="font-mono text-white/80">{walletLabel}</span></span>
               <span className="hidden sm:inline text-gray-600">•</span>
@@ -1242,7 +1243,7 @@ export default function DashboardPage() {
 
       {errorMsg && <div className="mb-5 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">{errorMsg}</div>}
 
-      {/* Summary cards */}
+      {/* Summary cards — always visible */}
       <div className="mb-6">
         <div className="grid grid-cols-3 gap-3 md:gap-4">
           <div className="card-pump p-3 md:p-4">
@@ -1266,131 +1267,186 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Creator Fees Claimable */}
-      {creatorFeeClaimables.length > 1 && (
-        <div className="card-pump mb-6">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-base md:text-xl font-bold text-white">💰 Creator Fees</h2>
-            <span className="text-xs text-gray-500">From your finalized markets</span>
-          </div>
-          <div className="space-y-2">
-            {creatorFeeClaimables.map((c) => (
-              <div key={c.marketAddress} className="flex items-center justify-between p-3 rounded-lg bg-amber-500/5 border border-amber-500/20">
-                <div className="min-w-0 flex-1">
-                  <div className="text-white text-sm truncate">{c.marketQuestion}</div>
-                  <div className="text-xs text-gray-500">{shortAddr(c.marketAddress)}</div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-amber-400 font-semibold">{lamportsToSol(c.feeLamports).toFixed(4)} SOL</span>
-                  <button onClick={() => openClaimFeesModal(c)} className="px-3 py-1.5 rounded-lg text-xs font-semibold transition bg-amber-500 text-black hover:bg-amber-400">
-                    Claim
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Claimables */}
-      <div className="card-pump mb-6">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-base md:text-xl font-bold text-white">🏆 Claimable winnings</h2>
-          <span className="hidden md:inline text-xs text-gray-500">Resolved on-chain markets where you hold winning shares</span>
-        </div>
-        {loadingClaimables ? <p className="text-gray-400 text-sm">Checking claimables…</p> : claimables.length === 0 ? <p className="text-gray-500 text-sm">No claimable winnings yet.</p> : (
-          <div className="space-y-3">
-            {claimables.map((c) => (
-              <div key={c.marketAddress} className="rounded-xl border border-pump-green/40 bg-pump-green/5 p-3 md:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <div className="text-white font-semibold text-sm md:text-base truncate">{c.marketQuestion}</div>
-                  <div className="text-xs text-gray-500 mt-1 truncate">{shortAddr(c.marketAddress)}{typeof c.estPayoutLamports === "number" && <> • <span className="text-pump-green font-semibold">~{lamportsToSol(c.estPayoutLamports).toFixed(4)} SOL</span></>}</div>
-                </div>
-                <button onClick={() => openClaimModal(c)} className="px-5 py-2 rounded-lg font-semibold transition w-full sm:w-auto bg-pump-green text-black hover:opacity-90">
-                  Claim
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
+      {/* ── Tab navigation ── */}
+      <div className="flex gap-1 border-b border-white/10 mb-6 overflow-x-auto" style={{ WebkitOverflowScrolling: "touch" } as any}>
+        {([
+          { id: "overview" as const, label: "Overview", icon: "🏠" },
+          { id: "markets" as const, label: "My Markets", icon: "📊" },
+          { id: "activity" as const, label: "Activity", icon: "📜" },
+          { id: "saved" as const, label: "Saved", icon: "⭐" },
+        ]).map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setActiveTab(t.id)}
+            className={`flex items-center gap-1.5 px-3 md:px-4 py-2 md:py-3 text-sm font-medium whitespace-nowrap transition border-b-2 ${
+              activeTab === t.id
+                ? "border-pump-green text-pump-green"
+                : "border-transparent text-gray-400 hover:text-white"
+            }`}
+          >
+            <span>{t.icon}</span>
+            <span>{t.label}</span>
+            {/* Badge on Overview if there are actionable items */}
+            {t.id === "overview" && (claimables.length + refundables.length + creatorFeeClaimables.length) > 0 && (
+              <span className="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-pump-green text-black rounded-full leading-none">
+                {claimables.length + refundables.length + creatorFeeClaimables.length}
+              </span>
+            )}
+            {/* Badge on My Markets if there are markets to resolve */}
+            {t.id === "markets" && (() => {
+              const count = myCreatedMarkets.filter((m) => {
+                if (!isMarketEnded(m.end_date)) return false;
+                const s = toResolutionStatus(m.resolution_status);
+                if (!!m.resolved || s === "finalized" || s === "proposed" || s === "cancelled") return false;
+                const endMs = m.end_date ? new Date(m.end_date).getTime() : NaN;
+                return Number.isFinite(endMs) && Date.now() <= endMs + 24 * 60 * 60 * 1000;
+              }).length;
+              return count > 0 ? (
+                <span className="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-yellow-500 text-black rounded-full leading-none">
+                  {count}
+                </span>
+              ) : null;
+            })()}
+          </button>
+        ))}
       </div>
 
-      {/* Refundables */}
-      <div className="card-pump mb-6">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-base md:text-xl font-bold text-white">💸 Refundable funds</h2>
-          <span className="hidden md:inline text-xs text-gray-500">Cancelled on-chain markets where you can claim a refund</span>
-        </div>
-        {loadingClaimables ? <p className="text-gray-400 text-sm">Checking refunds…</p> : refundables.length === 0 ? <p className="text-gray-500 text-sm">No refundable markets.</p> : (
-          <div className="space-y-3">
-            {refundables.map((r) => (
-              <div key={r.marketAddress} className="rounded-xl border border-[#ff5c73]/40 bg-[#ff5c73]/5 p-3 md:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <div className="text-white font-semibold text-sm md:text-base truncate">{r.marketQuestion}</div>
-                  <div className="text-xs text-gray-500 mt-1 truncate">{shortAddr(r.marketAddress)}{typeof r.estRefundLamports === "number" && <> • <span className="text-[#ff5c73] font-semibold">~{lamportsToSol(r.estRefundLamports).toFixed(4)} SOL</span></>}</div>
-                </div>
-                <button onClick={() => openRefundModal(r)} className="px-5 py-2 rounded-lg font-semibold transition w-full sm:w-auto bg-[#ff5c73] text-black hover:opacity-90">
-                  Refund
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {/* OVERVIEW TAB                                                           */}
+      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {activeTab === "overview" && (
+        <>
+          {/* ── Action Required ── */}
+          {(() => {
+            const resolvableMarkets = myCreatedMarkets.filter((m) => {
+              if (!isMarketEnded(m.end_date)) return false;
+              const s = toResolutionStatus(m.resolution_status);
+              if (!!m.resolved || s === "finalized" || s === "proposed" || s === "cancelled") return false;
+              const endMs = m.end_date ? new Date(m.end_date).getTime() : NaN;
+              return Number.isFinite(endMs) && Date.now() <= endMs + 24 * 60 * 60 * 1000;
+            });
+            const hasActions = claimables.length > 0 || refundables.length > 0 || creatorFeeClaimables.length > 0 || resolvableMarkets.length > 0;
 
-      {/* Claim & Refund History */}
-      {claimHistory.length > 0 && (
-        <div className="card-pump mb-6">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-base md:text-xl font-bold text-white">📜 Claim & Refund History</h2>
-            <span className="text-xs text-gray-500">Total received: <span className="text-pump-green font-semibold">{totalClaimedSol.toFixed(4)} SOL</span></span>
-          </div>
-          <div className="space-y-2">
-            {claimHistory.map((h) => {
-              const typeLabel = h.tx_type === "claim" ? "✅ Claim winnings" : h.tx_type === "refund" ? "💸 Refund" : "💰 Claim fees";
-              const typeColor = h.tx_type === "claim" ? "text-pump-green" : h.tx_type === "refund" ? "text-[#ff5c73]" : "text-amber-400";
-              const borderColor = h.tx_type === "claim" ? "border-pump-green/20" : h.tx_type === "refund" ? "border-[#ff5c73]/20" : "border-amber-500/20";
-              const bgColor = h.tx_type === "claim" ? "bg-pump-green/5" : h.tx_type === "refund" ? "bg-[#ff5c73]/5" : "bg-amber-500/5";
+            if (loadingClaimables) {
               return (
-                <div key={h.id} className={`flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg border ${borderColor} ${bgColor}`}>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className={`text-sm font-medium ${typeColor}`}>{typeLabel}</span>
-                      <span className="text-gray-500">•</span>
-                      <span className="text-white text-sm truncate">{h.market_question}</span>
-                    </div>
-                    <div className="text-[10px] text-gray-500 mt-1 flex flex-wrap items-center gap-2">
-                      <span>{h.created_at ? new Date(h.created_at).toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}</span>
-                      {h.tx_signature && <><span className="opacity-40">•</span><a href={solanaExplorerTxUrl(h.tx_signature)} target="_blank" rel="noreferrer" className="text-pump-green hover:underline">tx: {shortSig(h.tx_signature)}</a></>}
-                    </div>
-                  </div>
-                  <div className={`text-sm font-bold ${typeColor} mt-2 sm:mt-0`}>+{h.amount_sol.toFixed(4)} SOL</div>
+                <div className="mb-6">
+                  <h2 className="text-lg md:text-xl font-bold text-white mb-4 flex items-center gap-2">
+                    <span>⚡</span> Action Required
+                  </h2>
+                  <p className="text-gray-400 text-sm">Scanning on-chain positions…</p>
                 </div>
               );
-            })}
-          </div>
-        </div>
-      )}
+            }
 
-      {/* Tabs */}
-      <div className="flex items-center gap-2 mb-4">
-        <TabButton active={tab === "activity"} onClick={() => setTab("activity")}>Activity</TabButton>
-        <TabButton active={tab === "created"} onClick={() => setTab("created")}>My markets</TabButton>
-        <TabButton active={tab === "bookmarks"} onClick={() => setTab("bookmarks")}>Bookmarked</TabButton>
-        <div className="ml-auto text-xs text-gray-500">
-          {tab === "activity" && (loadingTxs ? "Loading…" : `${txRows.length} txs`)}
-          {tab === "created" && (loadingMarkets ? "Loading…" : `${myCreatedMarkets.length} markets`)}
-          {tab === "bookmarks" && (loadingBookmarks ? "Loading…" : `${bookmarkedMarkets.length} saved`)}
-        </div>
-      </div>
+            if (!hasActions) {
+              return (
+                <div className="mb-6 rounded-xl border border-white/5 bg-white/[0.02] p-6 text-center">
+                  <div className="text-gray-500 text-sm">No pending actions — you&apos;re all caught up 🎉</div>
+                </div>
+              );
+            }
 
-      <div className="card-pump">
-        {/* ACTIVITY */}
-        {tab === "activity" && (
-          <>
-            {loadingTxs ? <p className="text-gray-400 text-sm">Loading transactions…</p> : txRows.length === 0 ? <p className="text-gray-500 text-sm">No activity yet.</p> : (
-              <div className="space-y-3">
-                {txRows.map((r) => (
+            return (
+              <div className="mb-6">
+                <h2 className="text-lg md:text-xl font-bold text-white mb-4 flex items-center gap-2">
+                  <span>⚡</span> Action Required
+                </h2>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {/* Claimable winnings */}
+                  {claimables.map((c) => (
+                    <div key={`claim-${c.marketAddress}`} className="rounded-xl border border-pump-green/40 bg-pump-green/5 p-4 flex flex-col gap-3">
+                      <span className="self-start text-[10px] font-bold uppercase tracking-wider text-pump-green bg-pump-green/10 px-2 py-0.5 rounded">🏆 Claim</span>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-white font-semibold text-sm truncate">{c.marketQuestion}</div>
+                        <div className="text-xs text-gray-500 mt-1">{shortAddr(c.marketAddress)}</div>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 mt-auto">
+                        <span className="text-pump-green font-bold text-lg">{typeof c.estPayoutLamports === "number" ? `~${lamportsToSol(c.estPayoutLamports).toFixed(4)}` : "?"} SOL</span>
+                        <button onClick={() => openClaimModal(c)} className="px-4 py-2 rounded-lg font-semibold transition bg-pump-green text-black hover:opacity-90 text-sm shrink-0">
+                          Claim
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* Refundable */}
+                  {refundables.map((r) => (
+                    <div key={`refund-${r.marketAddress}`} className="rounded-xl border border-[#ff5c73]/40 bg-[#ff5c73]/5 p-4 flex flex-col gap-3">
+                      <span className="self-start text-[10px] font-bold uppercase tracking-wider text-[#ff5c73] bg-[#ff5c73]/10 px-2 py-0.5 rounded">💸 Refund</span>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-white font-semibold text-sm truncate">{r.marketQuestion}</div>
+                        <div className="text-xs text-gray-500 mt-1">{shortAddr(r.marketAddress)}</div>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 mt-auto">
+                        <span className="text-[#ff5c73] font-bold text-lg">{typeof r.estRefundLamports === "number" ? `~${lamportsToSol(r.estRefundLamports).toFixed(4)}` : "?"} SOL</span>
+                        <button onClick={() => openRefundModal(r)} className="px-4 py-2 rounded-lg font-semibold transition bg-[#ff5c73] text-black hover:opacity-90 text-sm shrink-0">
+                          Refund
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* Creator Fee Claims */}
+                  {creatorFeeClaimables.map((c) => (
+                    <div key={`fees-${c.marketAddress}`} className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-4 flex flex-col gap-3">
+                      <span className="self-start text-[10px] font-bold uppercase tracking-wider text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded">💰 Creator Fees</span>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-white font-semibold text-sm truncate">{c.marketQuestion}</div>
+                        <div className="text-xs text-gray-500 mt-1">{shortAddr(c.marketAddress)}</div>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 mt-auto">
+                        <span className="text-amber-400 font-bold text-lg">{lamportsToSol(c.feeLamports).toFixed(4)} SOL</span>
+                        <button onClick={() => openClaimFeesModal(c)} className="px-4 py-2 rounded-lg font-semibold transition bg-amber-500 text-black hover:bg-amber-400 text-sm shrink-0">
+                          Claim
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* Markets needing resolution */}
+                  {resolvableMarkets.map((m) => {
+                    const addr = String(m.market_address || "");
+                    return (
+                      <div key={`resolve-${addr}`} className="rounded-xl border border-yellow-500/40 bg-yellow-500/5 p-4 flex flex-col gap-3">
+                        <span className="self-start text-[10px] font-bold uppercase tracking-wider text-yellow-400 bg-yellow-500/10 px-2 py-0.5 rounded">⚖️ Resolve</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-white font-semibold text-sm truncate">{m.question || "Market"}</div>
+                          <div className="text-xs text-gray-500 mt-1">{shortAddr(addr)}</div>
+                        </div>
+                        <div className="flex items-center justify-between gap-2 mt-auto">
+                          <span className="text-yellow-400 text-xs">Ended — needs resolution</span>
+                          <button
+                            onClick={() => { setResolvingMarket(m); setSelectedOutcome(null); setMode("upload"); setProofNote(""); }}
+                            className="px-4 py-2 rounded-lg font-semibold transition bg-yellow-500 text-black hover:bg-yellow-400 text-sm shrink-0"
+                          >
+                            Propose
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* ── Recent Activity (last 5) ── */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-lg md:text-xl font-bold text-white">Recent Activity</h2>
+              {txRows.length > 5 && (
+                <button onClick={() => setActiveTab("activity")} className="text-sm text-pump-green hover:underline transition">
+                  See all →
+                </button>
+              )}
+            </div>
+            {loadingTxs ? (
+              <p className="text-gray-400 text-sm">Loading transactions…</p>
+            ) : txRows.length === 0 ? (
+              <p className="text-gray-500 text-sm">No activity yet.</p>
+            ) : (
+              <div className="space-y-2">
+                {txRows.slice(0, 5).map((r) => (
                   <div key={r.id} className="rounded-xl border border-white/10 bg-pump-dark/40 p-3 md:p-4">
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                       <div className="min-w-0 flex-1">
@@ -1410,37 +1466,49 @@ export default function DashboardPage() {
                 ))}
               </div>
             )}
-          </>
-        )}
+          </div>
+        </>
+      )}
 
-        {/* CREATED */}
-        {tab === "created" && (
-          <>
-            {loadingMarkets ? <p className="text-gray-400 text-sm">Loading markets…</p> : myCreatedMarkets.length === 0 ? <p className="text-gray-500 text-sm">You haven&apos;t created any markets yet.</p> : (
-              <div className="space-y-3">
-                {myCreatedMarkets.map((m, idx) => {
-                  const addr = String(m.market_address || "");
-                  const q = String(m.question || "Market");
-                  const volSol = lamportsToSol(toNum(m.total_volume));
-                  const ended = isMarketEnded(m.end_date);
-                  const status = toResolutionStatus(m.resolution_status);
-                  const timeStatus = formatTimeStatus(m.end_date);
-                  const isResolvedFinal = !!m.resolved || status === "finalized";
-                  const isProposed = status === "proposed";
-                  const isCancelled = status === "cancelled";
-                  const deadlineMs = m.contest_deadline ? new Date(m.contest_deadline).getTime() : NaN;
-                  const remainingMs = Number.isFinite(deadlineMs) ? deadlineMs - Date.now() : NaN;
-                  const endMs = m.end_date ? new Date(m.end_date).getTime() : NaN;
-                  const proposeCutoffMs = Number.isFinite(endMs) ? endMs + 24 * 60 * 60 * 1000 : NaN;
-                  const withinProposeWindow = Number.isFinite(proposeCutoffMs) ? Date.now() <= proposeCutoffMs : false;
-                  const canPropose = ended && withinProposeWindow && !isResolvedFinal && !isProposed && !isCancelled;
-                  const feeClaimable = creatorFeeClaimables.find((c) => c.marketAddress === addr);
-                  const boxCls = isResolvedFinal ? "border-gray-600 bg-gray-800/30" : isCancelled ? "border-[#ff5c73]/60 bg-[#ff5c73]/5" : isProposed ? "border-pump-green/60 bg-pump-green/5" : canPropose ? "border-yellow-500/60 bg-yellow-500/5" : "border-white/10 bg-pump-dark/40";
+      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {/* MY MARKETS TAB                                                         */}
+      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {activeTab === "markets" && (
+        <>
+          <div className="flex items-center justify-between mb-4">
+            <span className="text-xs text-gray-500">{loadingMarkets ? "Loading…" : `${myCreatedMarkets.length} markets`}</span>
+          </div>
+          {loadingMarkets ? (
+            <p className="text-gray-400 text-sm">Loading markets…</p>
+          ) : myCreatedMarkets.length === 0 ? (
+            <p className="text-gray-500 text-sm">You haven&apos;t created any markets yet.</p>
+          ) : (
+            <div className="space-y-3">
+              {myCreatedMarkets.map((m, idx) => {
+                const addr = String(m.market_address || "");
+                const q = String(m.question || "Market");
+                const volSol = lamportsToSol(toNum(m.total_volume));
+                const ended = isMarketEnded(m.end_date);
+                const status = toResolutionStatus(m.resolution_status);
+                const timeStatus = formatTimeStatus(m.end_date);
+                const isResolvedFinal = !!m.resolved || status === "finalized";
+                const isProposed = status === "proposed";
+                const isCancelled = status === "cancelled";
+                const deadlineMs = m.contest_deadline ? new Date(m.contest_deadline).getTime() : NaN;
+                const remainingMs = Number.isFinite(deadlineMs) ? deadlineMs - Date.now() : NaN;
+                const endMs = m.end_date ? new Date(m.end_date).getTime() : NaN;
+                const proposeCutoffMs = Number.isFinite(endMs) ? endMs + 24 * 60 * 60 * 1000 : NaN;
+                const withinProposeWindow = Number.isFinite(proposeCutoffMs) ? Date.now() <= proposeCutoffMs : false;
+                const canPropose = ended && withinProposeWindow && !isResolvedFinal && !isProposed && !isCancelled;
+                const feeClaimable = creatorFeeClaimables.find((c) => c.marketAddress === addr);
+                const boxCls = isResolvedFinal ? "border-gray-600 bg-gray-800/30" : isCancelled ? "border-[#ff5c73]/60 bg-[#ff5c73]/5" : isProposed ? "border-pump-green/60 bg-pump-green/5" : canPropose ? "border-yellow-500/60 bg-yellow-500/5" : "border-white/10 bg-pump-dark/40";
 
-                  return (
-                    <div key={String(m.id || addr || idx)} className={`rounded-xl border p-3 md:p-4 ${boxCls}`}>
-                      <div className="flex flex-col gap-3">
-                        <div className="min-w-0">
+                return (
+                  <div key={String(m.id || addr || idx)} className={`rounded-xl border p-3 md:p-4 ${boxCls}`}>
+                    <div className="flex flex-col gap-3">
+                      {/* Title row with status badge */}
+                      <div className="flex items-start justify-between gap-2 min-w-0">
+                        <div className="min-w-0 flex-1">
                           <div className="text-white font-semibold text-sm truncate">{q}</div>
                           <div className="text-[10px] text-gray-500 mt-1 flex flex-wrap items-center gap-1 md:gap-2">
                             <span>{addr ? shortAddr(addr) : ""}</span>
@@ -1449,64 +1517,161 @@ export default function DashboardPage() {
                             {feeClaimable && <><span className="opacity-40">•</span><span className="text-amber-400">💰 {lamportsToSol(feeClaimable.feeLamports).toFixed(4)} SOL</span></>}
                           </div>
                         </div>
-                        <div className="flex items-center justify-between gap-2">
-                          <div>
-                            <div className="text-white font-semibold text-sm">{volSol.toFixed(2)} SOL</div>
-                            <div className="text-[10px] text-gray-500">volume</div>
-                          </div>
-                          <div className="flex items-center gap-2 flex-wrap justify-end">
-                            {feeClaimable && <button onClick={() => openClaimFeesModal(feeClaimable)} className="px-3 py-1.5 rounded-lg text-xs font-semibold transition bg-amber-500 text-black hover:bg-amber-400">Claim fees</button>}
-                            {canPropose && <button onClick={() => { setResolvingMarket(m); setSelectedOutcome(null); setMode("upload"); setProofNote(""); }} className="px-3 py-1.5 rounded-lg bg-yellow-500 text-black text-xs font-semibold hover:bg-yellow-400 transition">⚖️ Propose</button>}
-                            {toResolutionStatus(m.resolution_status) === "proposed" && addr && <Link href={`/contest/${addr}`} className={["px-3 py-1.5 rounded-lg text-xs font-semibold transition border", Number(m.contest_count || 0) > 0 ? "bg-[#ff5c73]/15 border-[#ff5c73]/40 text-[#ff5c73] hover:bg-[#ff5c73]/20" : "bg-black/30 border-white/10 text-gray-300 hover:border-white/20"].join(" ")} title="Open contest / disputes">Disputes{Number(m.contest_count || 0) > 0 ? ` (${Number(m.contest_count)})` : ""}</Link>}
-                            {addr && <Link href={`/trade/${addr}`} className="px-3 py-1.5 rounded-lg bg-pump-green text-black text-xs font-semibold hover:opacity-90 transition">View</Link>}
-                          </div>
-                        </div>
+                        {/* Status badge */}
+                        {isResolvedFinal && (
+                          <span className="shrink-0 text-[10px] font-bold uppercase px-2 py-1 rounded-lg bg-gray-700/50 text-gray-400 border border-gray-600">Resolved</span>
+                        )}
+                        {isCancelled && (
+                          <span className="shrink-0 text-[10px] font-bold uppercase px-2 py-1 rounded-lg bg-[#ff5c73]/10 text-[#ff5c73] border border-[#ff5c73]/30">Cancelled</span>
+                        )}
+                        {isProposed && !isResolvedFinal && (
+                          <span className="shrink-0 text-[10px] font-bold uppercase px-2 py-1 rounded-lg bg-pump-green/15 text-pump-green border border-pump-green/30">Proposed</span>
+                        )}
+                        {canPropose && (
+                          <span className="shrink-0 text-[10px] font-bold uppercase px-2 py-1 rounded-lg bg-yellow-500/15 text-yellow-400 border border-yellow-500/30 animate-pulse">Needs Resolve</span>
+                        )}
+                        {!ended && !isResolvedFinal && !isCancelled && !isProposed && (
+                          <span className="shrink-0 text-[10px] font-bold uppercase px-2 py-1 rounded-lg bg-pump-green/15 text-pump-green border border-pump-green/30">Live</span>
+                        )}
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </>
-        )}
-
-        {/* BOOKMARKS */}
-        {tab === "bookmarks" && (
-          <>
-            {loadingBookmarks ? <p className="text-gray-400 text-sm">Loading bookmarks…</p> : bookmarkedMarkets.length === 0 ? <p className="text-gray-500 text-sm">No bookmarked markets yet.</p> : (
-              <div className="space-y-3">
-                {bookmarkedMarkets.map((m, idx) => {
-                  const addr = String(m.market_address || "");
-                  const q = String(m.question || "Market");
-                  const volSol = lamportsToSol(toNum(m.total_volume));
-                  const status = formatTimeStatus(m.end_date);
-                  return (
-                    <div key={String(m.id || addr || idx)} className="rounded-xl border border-white/10 bg-pump-dark/40 p-3 md:p-4">
-                      <div className="flex flex-col gap-3">
-                        <div className="min-w-0">
-                          <div className="text-white font-semibold text-sm truncate">{q}</div>
-                          <div className="text-[10px] text-gray-500 mt-1 flex flex-wrap items-center gap-1 md:gap-2">
-                            <span>{shortAddr(addr)}</span>
-                            <span className="opacity-40">•</span>
-                            <span className="text-gray-400">{status}</span>
-                          </div>
+                      {/* Bottom row: volume + actions */}
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <div className="text-white font-semibold text-sm">{volSol.toFixed(2)} SOL</div>
+                          <div className="text-[10px] text-gray-500">volume</div>
                         </div>
-                        <div className="flex items-center justify-between gap-2">
-                          <div>
-                            <div className="text-white font-semibold text-sm">{volSol.toFixed(2)} SOL</div>
-                            <div className="text-[10px] text-gray-500">volume</div>
-                          </div>
+                        <div className="flex items-center gap-2 flex-wrap justify-end">
+                          {feeClaimable && <button onClick={() => openClaimFeesModal(feeClaimable)} className="px-3 py-1.5 rounded-lg text-xs font-semibold transition bg-amber-500 text-black hover:bg-amber-400">Claim fees</button>}
+                          {canPropose && <button onClick={() => { setResolvingMarket(m); setSelectedOutcome(null); setMode("upload"); setProofNote(""); }} className="px-3 py-1.5 rounded-lg bg-yellow-500 text-black text-xs font-semibold hover:bg-yellow-400 transition">⚖️ Propose</button>}
+                          {toResolutionStatus(m.resolution_status) === "proposed" && addr && <Link href={`/contest/${addr}`} className={["px-3 py-1.5 rounded-lg text-xs font-semibold transition border", Number(m.contest_count || 0) > 0 ? "bg-[#ff5c73]/15 border-[#ff5c73]/40 text-[#ff5c73] hover:bg-[#ff5c73]/20" : "bg-black/30 border-white/10 text-gray-300 hover:border-white/20"].join(" ")} title="Open contest / disputes">Disputes{Number(m.contest_count || 0) > 0 ? ` (${Number(m.contest_count)})` : ""}</Link>}
                           {addr && <Link href={`/trade/${addr}`} className="px-3 py-1.5 rounded-lg bg-pump-green text-black text-xs font-semibold hover:opacity-90 transition">View</Link>}
                         </div>
                       </div>
                     </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {/* ACTIVITY TAB                                                           */}
+      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {activeTab === "activity" && (
+        <>
+          <div className="flex items-center justify-between mb-4">
+            <span className="text-xs text-gray-500">{loadingTxs ? "Loading…" : `${txRows.length} transactions`}</span>
+          </div>
+          {loadingTxs ? (
+            <p className="text-gray-400 text-sm">Loading transactions…</p>
+          ) : txRows.length === 0 ? (
+            <p className="text-gray-500 text-sm">No activity yet.</p>
+          ) : (
+            <div className="space-y-3">
+              {txRows.map((r) => (
+                <div key={r.id} className="rounded-xl border border-white/10 bg-pump-dark/40 p-3 md:p-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-white font-medium text-sm">{r.title}</div>
+                      <div className="text-xs text-gray-400 mt-1 truncate">{r.marketQuestion || shortAddr(r.marketAddress)}</div>
+                      <div className="text-[10px] text-gray-500 mt-1 flex flex-wrap items-center gap-1 md:gap-2">
+                        <span>{r.createdAt ? r.createdAt.toLocaleString("fr-FR") : ""}</span>
+                        {r.sig && <><span className="opacity-40">•</span><a href={solanaExplorerTxUrl(r.sig)} target="_blank" rel="noreferrer" className="text-pump-green hover:underline">tx: {shortSig(r.sig)}</a></>}
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between sm:justify-end gap-3">
+                      <div className="text-pump-green font-bold text-sm">{r.costSol > 0 ? `${r.costSol.toFixed(4)} SOL` : "0.0000 SOL"}</div>
+                      {r.marketAddress && <Link href={`/trade/${r.marketAddress}`} className="px-3 py-1.5 rounded-lg bg-pump-green text-black text-xs font-semibold hover:opacity-90 transition">View</Link>}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Claim & Refund History */}
+          {claimHistory.length > 0 && (
+            <div className="mt-6">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-base md:text-lg font-bold text-white">📜 Claim & Refund History</h2>
+                <span className="text-xs text-gray-500">Total received: <span className="text-pump-green font-semibold">{totalClaimedSol.toFixed(4)} SOL</span></span>
+              </div>
+              <div className="space-y-2">
+                {claimHistory.map((h) => {
+                  const typeLabel = h.tx_type === "claim" ? "✅ Claim winnings" : h.tx_type === "refund" ? "💸 Refund" : "💰 Claim fees";
+                  const typeColor = h.tx_type === "claim" ? "text-pump-green" : h.tx_type === "refund" ? "text-[#ff5c73]" : "text-amber-400";
+                  const borderColor = h.tx_type === "claim" ? "border-pump-green/20" : h.tx_type === "refund" ? "border-[#ff5c73]/20" : "border-amber-500/20";
+                  const bgColor = h.tx_type === "claim" ? "bg-pump-green/5" : h.tx_type === "refund" ? "bg-[#ff5c73]/5" : "bg-amber-500/5";
+                  return (
+                    <div key={h.id} className={`flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg border ${borderColor} ${bgColor}`}>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className={`text-sm font-medium ${typeColor}`}>{typeLabel}</span>
+                          <span className="text-gray-500">•</span>
+                          <span className="text-white text-sm truncate">{h.market_question}</span>
+                        </div>
+                        <div className="text-[10px] text-gray-500 mt-1 flex flex-wrap items-center gap-2">
+                          <span>{h.created_at ? new Date(h.created_at).toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}</span>
+                          {h.tx_signature && <><span className="opacity-40">•</span><a href={solanaExplorerTxUrl(h.tx_signature)} target="_blank" rel="noreferrer" className="text-pump-green hover:underline">tx: {shortSig(h.tx_signature)}</a></>}
+                        </div>
+                      </div>
+                      <div className={`text-sm font-bold ${typeColor} mt-2 sm:mt-0`}>+{h.amount_sol.toFixed(4)} SOL</div>
+                    </div>
                   );
                 })}
               </div>
-            )}
-          </>
-        )}
-      </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {/* SAVED TAB                                                              */}
+      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {activeTab === "saved" && (
+        <>
+          <div className="flex items-center justify-between mb-4">
+            <span className="text-xs text-gray-500">{loadingBookmarks ? "Loading…" : `${bookmarkedMarkets.length} saved`}</span>
+          </div>
+          {loadingBookmarks ? (
+            <p className="text-gray-400 text-sm">Loading bookmarks…</p>
+          ) : bookmarkedMarkets.length === 0 ? (
+            <p className="text-gray-500 text-sm">No bookmarked markets yet.</p>
+          ) : (
+            <div className="space-y-3">
+              {bookmarkedMarkets.map((m, idx) => {
+                const addr = String(m.market_address || "");
+                const q = String(m.question || "Market");
+                const volSol = lamportsToSol(toNum(m.total_volume));
+                const bmStatus = formatTimeStatus(m.end_date);
+                return (
+                  <div key={String(m.id || addr || idx)} className="rounded-xl border border-white/10 bg-pump-dark/40 p-3 md:p-4">
+                    <div className="flex flex-col gap-3">
+                      <div className="min-w-0">
+                        <div className="text-white font-semibold text-sm truncate">{q}</div>
+                        <div className="text-[10px] text-gray-500 mt-1 flex flex-wrap items-center gap-1 md:gap-2">
+                          <span>{shortAddr(addr)}</span>
+                          <span className="opacity-40">•</span>
+                          <span className="text-gray-400">{bmStatus}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <div className="text-white font-semibold text-sm">{volSol.toFixed(2)} SOL</div>
+                          <div className="text-[10px] text-gray-500">volume</div>
+                        </div>
+                        {addr && <Link href={`/trade/${addr}`} className="px-3 py-1.5 rounded-lg bg-pump-green text-black text-xs font-semibold hover:opacity-90 transition">View</Link>}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
 
       {/* Action Modal (Claim/Refund/Fees) */}
       {actionModal.type && (
