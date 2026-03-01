@@ -119,16 +119,18 @@ export async function GET(req: NextRequest) {
   // ------------------------------------------------------------------
   // All other sports → TheSportsDB
   // ------------------------------------------------------------------
-  if (!provider) {
+  const effectiveProvider = provider || (sport ? "thesportsdb" : "");
+
+  if (!effectiveProvider) {
     return NextResponse.json(
       { error: "Missing required param: provider (or sport for auto-routing)" },
       { status: 400 },
     );
   }
 
-  if (provider !== "thesportsdb" && provider !== "api-nba") {
+  if (effectiveProvider !== "thesportsdb" && effectiveProvider !== "api-nba") {
     return NextResponse.json(
-      { error: `Unsupported provider: ${provider}. Supported: thesportsdb, api-nba` },
+      { error: `Unsupported provider: ${effectiveProvider}. Supported: thesportsdb, api-nba` },
       { status: 400 },
     );
   }
@@ -138,7 +140,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(result, { headers: NO_STORE });
   } catch {
     return NextResponse.json({
-      provider: provider || "thesportsdb",
+      provider: effectiveProvider || "thesportsdb",
       provider_event_id: eventId,
       status: "unknown",
       home_team: "",
