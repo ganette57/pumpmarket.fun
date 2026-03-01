@@ -21,6 +21,7 @@ import ResolutionPanel from "@/components/ResolutionPanel";
 import MarketCard from "@/components/MarketCard";
 import BlockedMarketBanner from "@/components/BlockedMarketBanner";
 import TradeBuyPopOverlay from "@/components/TradeBuyPopOverlay";
+import NbaWidgetDrawer from "@/components/NbaWidgetDrawer";
 
 import { supabase } from "@/lib/supabaseClient";
 import { buildOddsSeries, downsample } from "@/lib/marketHistory";
@@ -536,19 +537,22 @@ function predefinedSportDurationMs(sport: string): number {
 }
 
 /** Per-sport UI trading lock offset (before estimated end_time).
- *  This is UI-only for user comfort; the real lock is on-chain end_ts. */
+ *  This is UI-only for user comfort; the real lock is on-chain end_ts.
+ *  Football: lock at kickoff+112min (end_time-8min)
+ *  NBA:      lock at kickoff+135min (end_time-40min)
+ *  MLB:      lock at kickoff+155min (end_time-55min) */
 function getTradingLockOffsetMs(sport: string): number {
   const s = String(sport || "").toLowerCase();
   switch (s) {
     case "baseball":
     case "mlb":
-      return 10 * 60_000; // 10 min
+      return 55 * 60_000; // 55 min before end_time → lock at kickoff + 155min
     case "basketball":
     case "nba":
     case "ncaamb":
     case "ncaawb":
     case "wnba":
-      return 5 * 60_000; // 5 min
+      return 40 * 60_000; // 40 min before end_time → lock at kickoff + 135min
     case "football":
     case "soccer":
     case "epl":
@@ -558,8 +562,9 @@ function getTradingLockOffsetMs(sport: string): number {
     case "ligue_1":
     case "mls":
     case "champions_league":
+      return 8 * 60_000; // 8 min before end_time → lock at kickoff + 112min
     default:
-      return 2 * 60_000; // 2 min (existing behavior)
+      return 2 * 60_000; // 2 min default
   }
 }
 
@@ -964,6 +969,8 @@ const [liveScoreLastSuccessAt, setLiveScoreLastSuccessAt] = useState<number | nu
   const [mobileTradeOpen, setMobileTradeOpen] = useState(false);
   const [mobileOutcomeIndex, setMobileOutcomeIndex] = useState(0);
   const [mobileDefaultSide, setMobileDefaultSide] = useState<"buy" | "sell">("buy");
+  // NBA widget drawer
+  const [nbaDrawerOpen, setNbaDrawerOpen] = useState(false);
 
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -1157,12 +1164,16 @@ if (snap?.posAcc?.shares) {
       liveScore?.status,
     ]);
 
-    // Poll /api/sports/live for thesportsdb-linked markets with adaptive interval + stale handling.
+    // Poll /api/sports/live for sport-linked markets with adaptive interval + stale handling.
+    // Basketball/NBA auto-routes to API-NBA via the sport param; others use TheSportsDB.
     useEffect(() => {
       const meta = market?.sportMeta as any;
       const provider = String(meta?.provider || "");
       const providerEventId = String(meta?.provider_event_id || "");
-      if (provider !== "thesportsdb" || !providerEventId || market?.marketMode !== "sport") {
+      const metaSport = String(meta?.sport || "").toLowerCase();
+      const isNba = metaSport === "basketball" || metaSport === "nba";
+      // Accept thesportsdb provider, or NBA markets (they auto-route on the server)
+      if ((!isNba && provider !== "thesportsdb") || !providerEventId || market?.marketMode !== "sport") {
         setLiveScore(null);
         setLiveScorePolling(false);
         setLiveScoreFailures(0);
@@ -1177,15 +1188,17 @@ if (snap?.posAcc?.shares) {
 
       setLiveScoreFailures(0);
 
+      // Build URL: for NBA, pass sport= so the API auto-routes to API-NBA
+      const liveUrl = isNba
+        ? `/api/sports/live?sport=basketball&event_id=${encodeURIComponent(providerEventId)}`
+        : `/api/sports/live?provider=thesportsdb&event_id=${encodeURIComponent(providerEventId)}`;
+
       const poll = async () => {
         if (cancelled) return;
         setLiveScorePolling(true);
 
         try {
-          const res = await fetch(
-            `/api/sports/live?provider=thesportsdb&event_id=${encodeURIComponent(providerEventId)}`,
-            { cache: "no-store" },
-          );
+          const res = await fetch(liveUrl, { cache: "no-store" });
           if (!res.ok) throw new Error(`live score fetch failed: ${res.status}`);
 
           const data = await res.json();
@@ -1225,6 +1238,39 @@ if (snap?.posAcc?.shares) {
         if (timeoutId) clearTimeout(timeoutId);
       };
     }, [market?.marketMode, market?.sportMeta, sportEvent?.status]);
+
+    // --- Confetti on score change during live matches ---
+    const prevScoreRef = useRef<{ home: number; away: number } | null>(null);
+    useEffect(() => {
+      const home = liveScore?.home_score ?? 0;
+      const away = liveScore?.away_score ?? 0;
+      const prev = prevScoreRef.current;
+
+      if (prev !== null) {
+        const totalNow = home + away;
+        const totalBefore = prev.home + prev.away;
+        // Only fire when score increases (not on reset/correction/initial load)
+        if (totalNow > totalBefore && market?.marketMode === "sport") {
+          void (async () => {
+            try {
+              const confetti = (await import("canvas-confetti")).default;
+              const defaults = {
+                spread: 60,
+                ticks: 100,
+                gravity: 0.8,
+                decay: 0.94,
+                startVelocity: 30,
+                colors: ["#61ff9a", "#ffffff", "#ff5c73"],
+              };
+              confetti({ ...defaults, particleCount: 40, origin: { x: 0.2, y: 0.6 }, angle: 60 });
+              confetti({ ...defaults, particleCount: 40, origin: { x: 0.8, y: 0.6 }, angle: 120 });
+            } catch { /* canvas-confetti load failure is non-critical */ }
+          })();
+        }
+      }
+
+      prevScoreRef.current = { home, away };
+    }, [liveScore?.home_score, liveScore?.away_score, market?.marketMode]);
 
     // Realtime market updates: websocket subscription on this trade page only.
     useEffect(() => {
@@ -2183,6 +2229,18 @@ const ended = endedByTime;
                 </div>
               )}
 
+              {/* NBA Match Stats button — basketball markets only */}
+              {market.marketMode === "sport" &&
+                ["basketball", "nba", "ncaamb", "ncaawb", "wnba"].includes(sportKey) &&
+                (market.sportMeta as any)?.provider_event_id && (
+                  <button
+                    onClick={() => setNbaDrawerOpen(true)}
+                    className="w-full rounded-xl border border-blue-500/40 bg-blue-500/10 hover:bg-blue-500/20 transition px-4 py-3 text-sm text-blue-300 font-semibold flex items-center justify-center gap-2"
+                  >
+                    <span>📊</span> Match Stats
+                  </button>
+              )}
+
               {/* Market card */}
               <div className="bg-black border border-gray-800 rounded-xl p-4 md:p-5 hover:border-pump-green/60 transition-all duration-200">
                 <div className="flex items-start gap-3">
@@ -2699,6 +2757,14 @@ const ended = endedByTime;
       <TradeBuyPopOverlay
         marketAddress={market.publicKey}
         marketId={market.dbId ?? null}
+      />
+
+      {/* NBA Widget Drawer — basketball match stats */}
+      <NbaWidgetDrawer
+        isOpen={nbaDrawerOpen}
+        onClose={() => setNbaDrawerOpen(false)}
+        gameId={String((market.sportMeta as any)?.provider_event_id || "")}
+        isMobile={isMobile}
       />
     </>
   );

@@ -43,7 +43,7 @@ const SPORT_TIMING_MINUTES: Record<string, { durationMin: number; graceMin: numb
   football: { durationMin: 120, graceMin: 10 },
   basketball: { durationMin: 175, graceMin: 15 },
   nba: { durationMin: 175, graceMin: 15 },
-  baseball: { durationMin: 180, graceMin: 30 },
+  baseball: { durationMin: 210, graceMin: 30 },
   tennis: { durationMin: 240, graceMin: 60 },
   mma: { durationMin: 60, graceMin: 30 },
   american_football: { durationMin: 210, graceMin: 30 },
