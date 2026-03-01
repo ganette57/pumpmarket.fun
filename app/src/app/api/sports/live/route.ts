@@ -14,8 +14,22 @@ import { fetchLiveScore } from "@/lib/sportsProviders/theSportsDbProvider";
 const APISPORTS_KEY = process.env.APISPORTS_KEY || "";
 const API_NBA_URL = process.env.API_NBA_URL || "https://v2.nba.api-sports.io";
 
-function mapApiNbaStatus(s: string): string {
-  const map: Record<string, string> = {
+/** Map API-NBA status to our normalized status.
+ *  API-NBA v2 may return status.short as a NUMBER (1-4 = quarters, 5 = OT, 10 = finished)
+ *  OR as a string ("Q1", "FT", "NS", etc.). We handle both.
+ */
+function mapApiNbaStatus(short: string | number | null | undefined, long?: string): string {
+  // Numeric codes (API-NBA v2)
+  if (typeof short === "number") {
+    if (short >= 1 && short <= 4) return "live";  // Q1–Q4
+    if (short === 5) return "live";                // OT
+    if (short === 10) return "finished";           // Game Finished
+    // Other numeric: fall through to long-string check
+  }
+
+  // String codes (API-NBA v1 style or mixed)
+  const s = String(short ?? "").toUpperCase();
+  const strMap: Record<string, string> = {
     NS: "scheduled",
     Q1: "live",
     Q2: "live",
@@ -32,7 +46,16 @@ function mapApiNbaStatus(s: string): string {
     AWD: "finished",
     ABD: "cancelled",
   };
-  return map[s] || "scheduled";
+  if (strMap[s]) return strMap[s];
+
+  // Fallback: use status_long text for detection
+  const lo = (long || "").toLowerCase();
+  if (lo.includes("play") || lo.includes("quarter") || lo.includes("half") || lo.includes("over time")) return "live";
+  if (lo.includes("finish") || lo.includes("after") || lo.includes("ended")) return "finished";
+  if (lo.includes("cancel") || lo.includes("abandon")) return "cancelled";
+  if (lo.includes("suspend") || lo.includes("postpone")) return "suspended";
+
+  return "scheduled";
 }
 
 type NbaGameResult = {
@@ -47,14 +70,37 @@ type NbaGameResult = {
 
 function parseNbaGame(game: any): NbaGameResult | null {
   if (!game) return null;
+
+  // Log full raw response for debugging
+  console.log("[api-nba] RAW game:", JSON.stringify(game));
+
+  // Scores: API-NBA v2 uses game.scores.home.points (or .total)
+  // Away team key can be "away" or "visitors"
+  const homeScores = game.scores?.home;
+  const awayScores = game.scores?.away ?? game.scores?.visitors;
+  const homeScore = homeScores?.points ?? homeScores?.total ?? 0;
+  const awayScore = awayScores?.points ?? awayScores?.total ?? 0;
+
+  // Status: can be number (1-4, 5, 10) or string ("Q1", "FT", etc.)
+  const statusShort = game.status?.short ?? game.status?.halftime ?? null;
+  const statusLong = game.status?.long ?? "";
+  const clock = game.status?.timer ?? game.status?.clock ?? null;
+
+  // Teams: away can be "away" or "visitors"
+  const homeTeam = game.teams?.home?.name ?? game.teams?.home?.nickname ?? "";
+  const awayTeam = game.teams?.visitors?.name ?? game.teams?.visitors?.nickname
+    ?? game.teams?.away?.name ?? game.teams?.away?.nickname ?? "";
+
+  console.log(`[api-nba] Parsed: ${homeTeam} ${homeScore}-${awayScore} ${awayTeam} | status: ${statusShort} (${statusLong}) | clock: ${clock}`);
+
   return {
-    home_score: game.scores?.home?.total ?? 0,
-    away_score: game.scores?.away?.total ?? 0,
-    status: game.status?.short ?? "NS",
-    status_long: game.status?.long ?? "Not Started",
-    clock: game.status?.timer ?? null,
-    home_team: game.teams?.home?.name ?? "",
-    away_team: game.teams?.visitors?.name ?? "",
+    home_score: typeof homeScore === "number" ? homeScore : parseInt(homeScore) || 0,
+    away_score: typeof awayScore === "number" ? awayScore : parseInt(awayScore) || 0,
+    status: String(statusShort ?? "NS"),
+    status_long: String(statusLong || "Not Started"),
+    clock: clock != null ? String(clock) : null,
+    home_team: homeTeam,
+    away_team: awayTeam,
   };
 }
 
@@ -237,7 +283,7 @@ export async function GET(req: NextRequest) {
         {
           provider: "api-nba",
           provider_event_id: eventId,
-          status: mapApiNbaStatus(nba.status),
+          status: mapApiNbaStatus(nba.status, nba.status_long),
           home_team: nba.home_team,
           away_team: nba.away_team,
           home_score: nba.home_score,
