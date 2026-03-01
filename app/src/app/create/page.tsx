@@ -38,18 +38,19 @@ const RESOLUTION_SOURCES = [
 ] as const;
 
 const T2_MS = 2 * 60_000;
-const SPORT_TIMING_MINUTES: Record<string, { durationMin: number; graceMin: number }> = {
-  soccer: { durationMin: 120, graceMin: 10 },
-  football: { durationMin: 120, graceMin: 10 },
-  basketball: { durationMin: 175, graceMin: 15 },
-  nba: { durationMin: 175, graceMin: 15 },
-  baseball: { durationMin: 210, graceMin: 30 },
-  tennis: { durationMin: 240, graceMin: 60 },
-  mma: { durationMin: 60, graceMin: 30 },
-  american_football: { durationMin: 210, graceMin: 30 },
+const SPORT_TIMING_MINUTES: Record<string, { durationMin: number; lockMin: number; graceMin: number }> = {
+  soccer: { durationMin: 120, lockMin: 112, graceMin: 10 },
+  football: { durationMin: 120, lockMin: 112, graceMin: 10 },
+  basketball: { durationMin: 175, lockMin: 135, graceMin: 15 },
+  nba: { durationMin: 175, lockMin: 135, graceMin: 15 },
+  baseball: { durationMin: 180, lockMin: 155, graceMin: 30 },
+  mlb: { durationMin: 180, lockMin: 155, graceMin: 30 },
+  tennis: { durationMin: 240, lockMin: 238, graceMin: 60 },
+  mma: { durationMin: 60, lockMin: 58, graceMin: 30 },
+  american_football: { durationMin: 210, lockMin: 208, graceMin: 30 },
 };
 
-const DEFAULT_SPORT_TIMING = { durationMin: 240, graceMin: 30 };
+const DEFAULT_SPORT_TIMING = { durationMin: 240, lockMin: 238, graceMin: 30 };
 
 function getSportTiming(sport: string) {
   const key = String(sport || "").trim().toLowerCase();
@@ -59,7 +60,7 @@ function getSportTiming(sport: string) {
 function estimateMatchTimes(startDate: Date, sport: string) {
   const timing = getSportTiming(sport);
   const endTime = new Date(startDate.getTime() + timing.durationMin * 60_000);
-  const lockAt = new Date(endTime.getTime() - T2_MS);
+  const lockAt = new Date(startDate.getTime() + timing.lockMin * 60_000);
   const endedTime = new Date(endTime.getTime() + timing.graceMin * 60_000);
   return { endTime, lockAt, endedTime, timing };
 }

@@ -532,7 +532,8 @@ const SOCCER_GRACE_MS = 10 * 60_000;
 function predefinedSportDurationMs(sport: string): number {
   const s = String(sport || "").toLowerCase();
   if (s === "soccer" || s === "football") return SOCCER_BASE_DURATION_MS;
-  if (s === "basketball" || s === "nba") return 150 * 60_000;
+  if (s === "basketball" || s === "nba") return 175 * 60_000;
+  if (s === "baseball" || s === "mlb") return 180 * 60_000;
   return NaN;
 }
 
@@ -540,13 +541,13 @@ function predefinedSportDurationMs(sport: string): number {
  *  This is UI-only for user comfort; the real lock is on-chain end_ts.
  *  Football: lock at kickoff+112min (end_time-8min)
  *  NBA:      lock at kickoff+135min (end_time-40min)
- *  MLB:      lock at kickoff+155min (end_time-55min) */
+ *  MLB:      lock at kickoff+155min (end_time-25min) */
 function getTradingLockOffsetMs(sport: string): number {
   const s = String(sport || "").toLowerCase();
   switch (s) {
     case "baseball":
     case "mlb":
-      return 55 * 60_000; // 55 min before end_time → lock at kickoff + 155min
+      return 25 * 60_000; // 25 min before end_time → lock at kickoff + 155min
     case "basketball":
     case "nba":
     case "ncaamb":
