@@ -9,7 +9,7 @@ interface NbaWidgetDrawerProps {
   isMobile?: boolean;
 }
 
-const WIDGET_SCRIPT_SRC = "https://widgets.api-sports.io/2.0.3/widget.js";
+const WIDGET_SCRIPT_SRC = "https://widgets.api-sports.io/widget.js";
 
 interface WidgetConfig {
   apiKey: string;
