@@ -24,7 +24,6 @@ export default function NbaWidgetDrawer({
   isMobile = false,
 }: NbaWidgetDrawerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const scriptRef = useRef<HTMLScriptElement | null>(null);
   const [config, setConfig] = useState<WidgetConfig | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,33 +66,47 @@ export default function NbaWidgetDrawer({
   // Inject the widget once we have the config
   useEffect(() => {
     if (!isOpen || !config) return;
+    if (!containerRef.current) return;
 
     // Create the widget div inside our container
     const widgetDiv = document.createElement("div");
-    widgetDiv.id = `wg-api-basketball-game-${config.gameId}`;
+    widgetDiv.id = "wg-api-basketball-game";
     widgetDiv.setAttribute("data-host", config.host);
     widgetDiv.setAttribute("data-key", config.apiKey);
     widgetDiv.setAttribute("data-id", config.gameId);
     widgetDiv.setAttribute("data-theme", "dark");
     widgetDiv.setAttribute("data-show-errors", "true");
 
-    if (containerRef.current) {
-      containerRef.current.innerHTML = "";
-      containerRef.current.appendChild(widgetDiv);
+    containerRef.current.innerHTML = "";
+    containerRef.current.appendChild(widgetDiv);
+
+    const existingScript = document.querySelector(
+      `script[src="${WIDGET_SCRIPT_SRC}"]`,
+    ) as HTMLScriptElement | null;
+
+    const isLocalhost =
+      typeof window !== "undefined" && window.location.hostname === "localhost";
+    if (isLocalhost) {
+      console.debug("[NbaWidgetDrawer] widget init", {
+        gameId: config.gameId,
+        host: config.host,
+        hasScript: !!existingScript,
+      });
     }
 
-    // Inject the widget script
-    const script = document.createElement("script");
-    script.src = WIDGET_SCRIPT_SRC;
-    script.async = true;
-    document.body.appendChild(script);
-    scriptRef.current = script;
+    if (!existingScript) {
+      const script = document.createElement("script");
+      script.src = WIDGET_SCRIPT_SRC;
+      script.async = true;
+      document.body.appendChild(script);
+    } else {
+      // Let existing widget runtime pick up the newly recreated container.
+      setTimeout(() => {
+        if (typeof window !== "undefined") window.dispatchEvent(new Event("resize"));
+      }, 0);
+    }
 
     return () => {
-      if (scriptRef.current && document.body.contains(scriptRef.current)) {
-        document.body.removeChild(scriptRef.current);
-        scriptRef.current = null;
-      }
       if (containerRef.current) {
         containerRef.current.innerHTML = "";
       }
