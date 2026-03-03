@@ -8,7 +8,18 @@ import { fetchLiveScore } from "@/lib/sportsProviders/theSportsDbProvider";
 const APISPORTS_KEY = process.env.APISPORTS_KEY || "";
 const API_BASKETBALL_URL =
   process.env.API_SPORTS_BASKETBALL_URL ||
+  process.env.API_BASKETBALL_URL ||
   "https://v1.basketball.api-sports.io";
+const API_BASKETBALL_HOST = (() => {
+  try {
+    return new URL(API_BASKETBALL_URL).host;
+  } catch {
+    return String(API_BASKETBALL_URL)
+      .replace(/^https?:\/\//i, "")
+      .split("/")[0]
+      .trim();
+  }
+})();
 const NBA_LEAGUE_ID = 12;
 const NO_STORE = { "Cache-Control": "no-store" };
 
@@ -102,7 +113,7 @@ export async function GET(req: NextRequest) {
             {
               apiKey: APISPORTS_KEY,
               gameId: String(directGame.id),
-              host: "v1.basketball.api-sports.io",
+              host: API_BASKETBALL_HOST,
             },
             { headers: NO_STORE },
           );
@@ -143,7 +154,7 @@ export async function GET(req: NextRequest) {
     {
       apiKey: APISPORTS_KEY,
       gameId: String(basketballGameId),
-      host: "v1.basketball.api-sports.io",
+      host: API_BASKETBALL_HOST,
     },
     { headers: NO_STORE },
   );
