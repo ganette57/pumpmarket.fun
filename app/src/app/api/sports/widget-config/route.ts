@@ -29,29 +29,31 @@ async function resolveApiBasketballGameId(
     : new Date().toISOString().slice(0, 10);
 
   try {
-    const res = await fetch(
-      `${API_BASKETBALL_URL}/games?date=${dateStr}&league=${NBA_LEAGUE_ID}`,
-      {
+    const res = await fetch(`${API_BASKETBALL_URL}/games?date=${dateStr}`, {
       headers: { "x-apisports-key": APISPORTS_KEY },
       cache: "no-store",
-      },
-    );
+    });
 
     if (!res.ok) return null;
 
     const data = await res.json();
-    const games: any[] = data?.response || [];
+    const allGames: any[] = data?.response || [];
+    const games = allGames.filter((g) => {
+      const leagueId = Number(g?.league?.id);
+      return !Number.isFinite(leagueId) || leagueId === NBA_LEAGUE_ID;
+    });
     if (games.length === 0) return null;
 
-    const teamMatch = (dbName: string, nbaName: string): boolean => {
+    const teamMatch = (dbName: string, apiName: string): boolean => {
       const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
       const a = norm(dbName);
-      const b = norm(nbaName);
+      const b = norm(apiName);
       if (!a || !b) return false;
       if (a === b) return true;
-      const wordsA = dbName.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
-      const wordsB = nbaName.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
-      return wordsA.some((wa) => wordsB.some((wb) => wa === wb || wa.includes(wb) || wb.includes(wa)));
+      if (a.includes(b) || b.includes(a)) return true;
+      const wordsA = dbName.toLowerCase().split(/\s+/).filter((w) => w.length >= 4);
+      const wordsB = apiName.toLowerCase().split(/\s+/).filter((w) => w.length >= 4);
+      return wordsA.some((wa) => wordsB.some((wb) => wa === wb));
     };
 
     for (const g of games) {
@@ -95,7 +97,7 @@ export async function GET(req: NextRequest) {
       if (directRes.ok) {
         const directData = await directRes.json();
         const directGame = directData?.response?.[0];
-        if (directGame?.id) {
+        if (directGame?.id && Number(directGame?.league?.id ?? NBA_LEAGUE_ID) === NBA_LEAGUE_ID) {
           return NextResponse.json(
             {
               apiKey: APISPORTS_KEY,
@@ -132,7 +134,7 @@ export async function GET(req: NextRequest) {
 
   if (!basketballGameId) {
     return NextResponse.json(
-      { error: "Could not find matching API-NBA game" },
+      { error: "Could not find matching API-BASKETBALL game" },
       { status: 404 },
     );
   }
