@@ -70,7 +70,7 @@ export default function NbaWidgetDrawer({
 
     // Create the widget div inside our container
     const widgetDiv = document.createElement("div");
-    widgetDiv.id = "wg-api-basketball-game";
+    widgetDiv.id = `wg-api-basketball-game-${config.gameId}`;
     widgetDiv.setAttribute("data-host", config.host);
     widgetDiv.setAttribute("data-key", config.apiKey);
     widgetDiv.setAttribute("data-id", config.gameId);
@@ -83,28 +83,15 @@ export default function NbaWidgetDrawer({
     const existingScript = document.querySelector(
       `script[src="${WIDGET_SCRIPT_SRC}"]`,
     ) as HTMLScriptElement | null;
+    if (existingScript) existingScript.remove();
 
-    const isLocalhost =
-      typeof window !== "undefined" && window.location.hostname === "localhost";
-    if (isLocalhost) {
-      console.debug("[NbaWidgetDrawer] widget init", {
-        gameId: config.gameId,
-        host: config.host,
-        hasScript: !!existingScript,
-      });
-    }
-
-    if (!existingScript) {
-      const script = document.createElement("script");
-      script.src = WIDGET_SCRIPT_SRC;
-      script.async = true;
-      document.body.appendChild(script);
-    } else {
-      // Let existing widget runtime pick up the newly recreated container.
-      setTimeout(() => {
-        if (typeof window !== "undefined") window.dispatchEvent(new Event("resize"));
-      }, 0);
-    }
+    const script = document.createElement("script");
+    script.src = WIDGET_SCRIPT_SRC;
+    script.async = true;
+    script.onload = () => {
+      if (typeof window !== "undefined") window.dispatchEvent(new Event("resize"));
+    };
+    document.body.appendChild(script);
 
     return () => {
       if (containerRef.current) {
