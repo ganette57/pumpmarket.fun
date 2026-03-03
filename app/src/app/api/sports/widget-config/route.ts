@@ -6,7 +6,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { fetchLiveScore } from "@/lib/sportsProviders/theSportsDbProvider";
 
 const APISPORTS_KEY = process.env.APISPORTS_KEY || "";
-const API_NBA_URL = process.env.API_NBA_URL || "https://v2.nba.api-sports.io";
+const API_BASKETBALL_URL =
+  process.env.API_SPORTS_BASKETBALL_URL ||
+  "https://v1.basketball.api-sports.io";
+const NBA_LEAGUE_ID = 12;
 const NO_STORE = { "Cache-Control": "no-store" };
 
 // ---------------------------------------------------------------------------
@@ -14,7 +17,7 @@ const NO_STORE = { "Cache-Control": "no-store" };
 // ---------------------------------------------------------------------------
 
 /** Search API-NBA games by date and fuzzy-match team names. Returns the game ID. */
-async function resolveApiNbaGameId(
+async function resolveApiBasketballGameId(
   homeTeam: string,
   awayTeam: string,
   dateHint: string | null,
@@ -26,10 +29,13 @@ async function resolveApiNbaGameId(
     : new Date().toISOString().slice(0, 10);
 
   try {
-    const res = await fetch(`${API_NBA_URL}/games?date=${dateStr}`, {
+    const res = await fetch(
+      `${API_BASKETBALL_URL}/games?date=${dateStr}&league=${NBA_LEAGUE_ID}`,
+      {
       headers: { "x-apisports-key": APISPORTS_KEY },
       cache: "no-store",
-    });
+      },
+    );
 
     if (!res.ok) return null;
 
@@ -50,7 +56,7 @@ async function resolveApiNbaGameId(
 
     for (const g of games) {
       const nbaHome = g.teams?.home?.name || "";
-      const nbaAway = g.teams?.visitors?.name || "";
+      const nbaAway = g.teams?.away?.name || "";
       const homeOk = teamMatch(homeTeam, nbaHome) || teamMatch(homeTeam, nbaAway);
       const awayOk = teamMatch(awayTeam, nbaHome) || teamMatch(awayTeam, nbaAway);
       if (homeOk && awayOk) return g.id;
@@ -82,7 +88,7 @@ export async function GET(req: NextRequest) {
   // 1) Try direct API-NBA ID lookup (eventId might already be an API-NBA ID)
   if (APISPORTS_KEY) {
     try {
-      const directRes = await fetch(`${API_NBA_URL}/games?id=${eventId}`, {
+      const directRes = await fetch(`${API_BASKETBALL_URL}/games?id=${eventId}`, {
         headers: { "x-apisports-key": APISPORTS_KEY },
         cache: "no-store",
       });
@@ -94,7 +100,7 @@ export async function GET(req: NextRequest) {
             {
               apiKey: APISPORTS_KEY,
               gameId: String(directGame.id),
-              host: "v2.nba.api-sports.io",
+              host: "v1.basketball.api-sports.io",
             },
             { headers: NO_STORE },
           );
@@ -122,9 +128,9 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const nbaGameId = await resolveApiNbaGameId(tsdbHome, tsdbAway, tsdbDate);
+  const basketballGameId = await resolveApiBasketballGameId(tsdbHome, tsdbAway, tsdbDate);
 
-  if (!nbaGameId) {
+  if (!basketballGameId) {
     return NextResponse.json(
       { error: "Could not find matching API-NBA game" },
       { status: 404 },
@@ -134,8 +140,8 @@ export async function GET(req: NextRequest) {
   return NextResponse.json(
     {
       apiKey: APISPORTS_KEY,
-      gameId: String(nbaGameId),
-      host: "v2.nba.api-sports.io",
+      gameId: String(basketballGameId),
+      host: "v1.basketball.api-sports.io",
     },
     { headers: NO_STORE },
   );
