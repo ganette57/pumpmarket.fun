@@ -806,6 +806,7 @@ export default function Home() {
                       market={market as any}
                       liveSessionId={liveMap[market.publicKey] || null}
                       liveMatch={isSportLiveInProgress(market)}
+                      finishedMatch={isSportFinishedByProvider(market)}
                     />
                   </motion.div>
                 ))}
