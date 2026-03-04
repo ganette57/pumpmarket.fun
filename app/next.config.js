@@ -6,6 +6,7 @@ const r2Host = process.env.NEXT_PUBLIC_R2_IMAGE_HOST || undefined;
 
 const nextConfig = {
   images: {
+    unoptimized: true,
     domains: [supabaseHost, r2Host].filter(Boolean),
     remotePatterns: [
       {
