@@ -202,15 +202,19 @@ function isMarketOpenForHome(m: Market): boolean {
     : Number.isFinite(m.resolutionTime)
     ? m.resolutionTime * 1000
     : NaN;
+  const providerLive = isSportOpenByProvider(m);
+  const providerFinished = isSportFinishedByProvider(m);
+
+  // Home listing override only: keep provider-live matches visible in "open".
+  if (providerFinished) return false;
+  if (providerLive) return true;
+
   const homeLocked = Number.isFinite(sportLockMs) && nowMs >= sportLockMs;
   const homeSportEnded =
-    isSportFinishedByProvider(m) ||
     String(m.sportTradingState || "").toLowerCase() === "ended_by_sport" ||
     (Number.isFinite(sportPredefinedEndMs) && nowMs >= sportPredefinedEndMs);
 
   if (homeSportEnded || homeLocked) return false;
-  if (isSportOpenByProvider(m)) return true;
-  if (isSportFinishedByProvider(m)) return false;
 
   // Missing provider data: keep open unless strong finished/locked signal exists.
   if (Number.isFinite(sportPredefinedEndMs)) return nowMs < sportPredefinedEndMs;
