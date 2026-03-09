@@ -258,6 +258,17 @@ function extractProviderMatchImageUrl(m: any): string | null {
   return null;
 }
 
+function pickerSportFromCategory(category: unknown): string | null {
+  const key = String(category || "").trim().toLowerCase();
+  if (!key) return null;
+  if (key === "soccer" || key === "football") return "soccer";
+  if (key === "basketball" || key === "nba") return "basketball";
+  if (key === "baseball" || key === "mlb") return "baseball";
+  if (key === "american_football" || key === "nfl") return "american_football";
+  if (key === "tennis") return "tennis";
+  return null;
+}
+
 function TypeCard({
   active,
   onClick,
@@ -944,10 +955,17 @@ export default function CreateMarketPage() {
     }
   }
 
+  function openMatchPicker() {
+    const mappedSport = pickerSportFromCategory(category);
+    if (mappedSport) setSportType(mappedSport);
+    setMatchPickerOpen(true);
+  }
+
   async function handleCreateMarket() {
     if (!canSubmit || !publicKey || !program) return;
     if (!signTransaction) {
-      alert("Wallet cannot sign transactions (signTransaction missing).");
+      setCreationError("Wallet cannot sign transactions");
+      setCreationStep("error");
       return;
     }
 
@@ -1216,7 +1234,12 @@ export default function CreateMarketPage() {
           <label className="block text-white font-semibold mb-2">Category *</label>
           <select
             value={category}
-            onChange={(e) => setCategory(e.target.value as CreateCategoryId)}
+            onChange={(e) => {
+              const nextCategory = e.target.value as CreateCategoryId;
+              setCategory(nextCategory);
+              const mappedSport = pickerSportFromCategory(nextCategory);
+              if (mappedSport) setSportType(mappedSport);
+            }}
             className={`input-pump w-full ${!category ? "text-gray-500" : ""}`}
           >
             {categoryOptions.map((opt) => (
@@ -1310,7 +1333,7 @@ export default function CreateMarketPage() {
                 <div className="flex items-center gap-2 ml-3">
                   <button
                     type="button"
-                    onClick={() => setMatchPickerOpen(true)}
+                    onClick={openMatchPicker}
                     className="text-xs text-gray-400 hover:text-white underline"
                   >
                     Change
@@ -1327,7 +1350,7 @@ export default function CreateMarketPage() {
             ) : (
               <button
                 type="button"
-                onClick={() => setMatchPickerOpen(true)}
+                onClick={openMatchPicker}
                 className="px-4 py-2.5 rounded-lg text-sm font-semibold transition flex items-center gap-2 bg-white/10 text-white border border-white/20 hover:bg-white/15 hover:border-white/30"
               >
                 <Trophy className="w-4 h-4 text-pump-green" />
