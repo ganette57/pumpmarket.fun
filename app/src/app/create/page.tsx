@@ -43,8 +43,8 @@ const SPORT_TIMING_MINUTES: Record<string, { durationMin: number; lockMin: numbe
   football: { durationMin: 120, lockMin: 112, graceMin: 10 },
   basketball: { durationMin: 175, lockMin: 135, graceMin: 15 },
   nba: { durationMin: 175, lockMin: 135, graceMin: 15 },
-  baseball: { durationMin: 180, lockMin: 155, graceMin: 30 },
-  mlb: { durationMin: 180, lockMin: 155, graceMin: 30 },
+  baseball: { durationMin: 180, lockMin: 125, graceMin: 30 },
+  mlb: { durationMin: 180, lockMin: 125, graceMin: 30 },
   tennis: { durationMin: 240, lockMin: 238, graceMin: 60 },
   mma: { durationMin: 60, lockMin: 58, graceMin: 30 },
   american_football: { durationMin: 210, lockMin: 208, graceMin: 30 },
@@ -1204,6 +1204,7 @@ export default function CreateMarketPage() {
       if (cat.id === "sports") {
         options.push({ value: "sports", label: "🏆 Sports (General)" });
         for (const sport of SPORT_SUBCATEGORIES) {
+          if (sport.id === "tennis") continue;
           options.push({
             value: sport.id,
             label: `    ${sport.label}`,

@@ -541,13 +541,13 @@ function predefinedSportDurationMs(sport: string): number {
  *  This is UI-only for user comfort; the real lock is on-chain end_ts.
  *  Football: lock at kickoff+112min (end_time-8min)
  *  NBA:      lock at kickoff+135min (end_time-40min)
- *  MLB:      lock at kickoff+155min (end_time-25min) */
+ *  MLB:      lock at kickoff+125min (end_time-55min) */
 function getTradingLockOffsetMs(sport: string): number {
   const s = String(sport || "").toLowerCase();
   switch (s) {
     case "baseball":
     case "mlb":
-      return 25 * 60_000; // 25 min before end_time → lock at kickoff + 155min
+      return 55 * 60_000; // 55 min before end_time → lock at kickoff + 125min
     case "basketball":
     case "nba":
     case "ncaamb":
