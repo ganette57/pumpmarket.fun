@@ -213,6 +213,51 @@ function outcomesToText(arr: string[]) {
     .join("\n");
 }
 
+function isSoccerLikeSport(sport: unknown): boolean {
+  const s = String(sport || "").trim().toLowerCase();
+  return s === "soccer" || s === "football";
+}
+
+function buildMatchOutcomes(homeTeam: unknown, awayTeam: unknown, sport: unknown): string[] {
+  const home = String(homeTeam || "").trim() || "Home";
+  const away = String(awayTeam || "").trim() || "Away";
+  const base = [home];
+  if (isSoccerLikeSport(sport)) {
+    base.push("Draw");
+  }
+  base.push(away);
+  const seen = new Set<string>();
+  return base.filter((name) => {
+    const key = name.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function extractProviderMatchImageUrl(m: any): string | null {
+  const candidates = [
+    m?.image_url,
+    m?.imageUrl,
+    m?.thumbnail,
+    m?.thumb,
+    m?.raw?.event_image,
+    m?.raw?.event_thumb,
+    m?.raw?.event_poster,
+    m?.raw?.event_banner,
+    m?.raw?.event_square,
+    m?.raw?.strThumb,
+    m?.raw?.strPoster,
+    m?.raw?.strBanner,
+    m?.raw?.strSquare,
+  ];
+  for (const candidate of candidates) {
+    const url = String(candidate || "").trim();
+    if (/^https?:\/\//i.test(url)) return url;
+  }
+  return null;
+}
+
 function TypeCard({
   active,
   onClick,
@@ -645,6 +690,7 @@ export default function CreateMarketPage() {
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string>("");
   const [imageError, setImageError] = useState<string>("");
+  const [imageManuallyEdited, setImageManuallyEdited] = useState(false);
 
   const [resolutionDate, setResolutionDate] = useState<Date>(() => {
     const d = new Date();
@@ -768,6 +814,7 @@ export default function CreateMarketPage() {
 
     setImageError("");
     setImageFile(file);
+    setImageManuallyEdited(true);
 
     const reader = new FileReader();
     reader.onloadend = () => setImagePreview(reader.result as string);
@@ -778,6 +825,7 @@ export default function CreateMarketPage() {
     setImageFile(null);
     setImagePreview("");
     setImageError("");
+    setImageManuallyEdited(true);
   };
 
   function updateOutcomeAt(i: number, value: string) {
@@ -835,6 +883,7 @@ export default function CreateMarketPage() {
 
   function selectMatch(m: any) {
     const eventTimeZone = extractEventTimeZone(m);
+    const selectedSport = String(m.sport || sportType || "").toLowerCase();
     setSportType(m.sport || sportType);
     setSportHomeTeam(m.home_team);
     setSportAwayTeam(m.away_team);
@@ -850,8 +899,7 @@ export default function CreateMarketPage() {
 
     // Keep trading close at T-2 while storing event end_time as actual match end.
     if (matchStart) {
-      const sport = String(m.sport || sportType || "").toLowerCase();
-      const estimatedTimes = estimateMatchTimes(matchStart, sport);
+      const estimatedTimes = estimateMatchTimes(matchStart, selectedSport);
       setSportEndTime(estimatedTimes.endTime);
       setResolutionDate(estimatedTimes.lockAt);
     } else if (m.end_time) {
@@ -863,8 +911,20 @@ export default function CreateMarketPage() {
     }
 
     setQuestion(`${m.home_team} vs ${m.away_team}${m.league ? ` - ${m.league}` : ""}`);
-    if (marketType === 0) {
-      setOutcomeInputs([m.home_team, m.away_team]);
+    if (!imageManuallyEdited) {
+      const providerImageUrl = extractProviderMatchImageUrl(m);
+      if (providerImageUrl) {
+        setImageFile(null);
+        setImageError("");
+        setImagePreview(providerImageUrl);
+      }
+    }
+
+    if (isSoccerLikeSport(selectedSport)) {
+      if (marketType === 0) setMarketType(1);
+      setOutcomeInputs(buildMatchOutcomes(m.home_team, m.away_team, selectedSport));
+    } else if (marketType === 0) {
+      setOutcomeInputs(buildMatchOutcomes(m.home_team, m.away_team, selectedSport).slice(0, 2));
     }
   }
 

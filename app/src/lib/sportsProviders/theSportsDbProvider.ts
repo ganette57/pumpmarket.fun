@@ -210,6 +210,7 @@ const TARGET_LEAGUES: LeagueConfig[] = [
   { id: 4335, name: "Spanish La Liga",          sport: "soccer",            keywords: ["la liga", "spanish", "primera"],        tz: "Europe/Madrid" },
   { id: 4328, name: "English Premier League",   sport: "soccer",            keywords: ["premier league", "english premier"],    tz: "Europe/London" },
   { id: 4332, name: "Italian Serie A",          sport: "soccer",            keywords: ["serie a", "italian"],                  tz: "Europe/Rome" },
+  { id: 4480, name: "UEFA Champions League",    sport: "soccer",            keywords: ["uefa champions league", "champions league", "ucl"], tz: "UTC" },
   { id: 4429, name: "FIFA World Cup",           sport: "soccer",            keywords: ["world cup", "fifa"],                   tz: "UTC" },
   // Basketball
   { id: 4387, name: "NBA",                      sport: "basketball",        keywords: ["nba", "national basketball"],           tz: "America/New_York" },
@@ -428,6 +429,18 @@ function eventToMatch(event: any, leagueCfg?: LeagueConfig): NormalizedMatch | n
       season: event.strSeason || null,
       home_badge: event.strHomeTeamBadge || null,
       away_badge: event.strAwayTeamBadge || null,
+      event_thumb: event.strThumb || null,
+      event_banner: event.strBanner || null,
+      event_poster: event.strPoster || null,
+      event_square: event.strSquare || null,
+      event_fanart: event.strFanart || null,
+      event_image:
+        event.strThumb ||
+        event.strPoster ||
+        event.strBanner ||
+        event.strSquare ||
+        event.strFanart ||
+        null,
       parsed_tz: leagueCfg?.tz || "UTC",
     },
   };
