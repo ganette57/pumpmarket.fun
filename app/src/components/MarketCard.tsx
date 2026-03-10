@@ -27,9 +27,16 @@ interface MarketCardProps {
   liveMatch?: boolean;
   /** Sports finished signal from already-loaded home payload (no extra fetch). */
   finishedMatch?: boolean;
+  /** Creator profile info (pre-fetched from profiles table). */
+  creatorProfile?: {
+    display_name?: string | null;
+    avatar_url?: string | null;
+  } | null;
+  /** Creator wallet address (fallback when no profile). */
+  creatorAddress?: string | null;
 }
 
-export default function MarketCard({ market, liveSessionId, liveMatch = false, finishedMatch = false }: MarketCardProps) {
+export default function MarketCard({ market, liveSessionId, liveMatch = false, finishedMatch = false, creatorProfile, creatorAddress }: MarketCardProps) {
   const now = Date.now() / 1000;
   const daysLeft = Math.max(0, Math.floor((market.resolutionTime - now) / 86400));
   const isEnded = market.resolved || now >= market.resolutionTime;
@@ -159,8 +166,26 @@ export default function MarketCard({ market, liveSessionId, liveMatch = false, f
 
           {/* FOOTER */}
           <div className="flex items-center justify-between text-[11px] text-gray-400 mt-3">
+            {/* creator */}
+            {(creatorProfile?.display_name || creatorAddress) && (
+              <div className="flex items-center gap-1 min-w-0 shrink truncate">
+                {creatorProfile?.avatar_url ? (
+                  <img src={creatorProfile.avatar_url} alt="" className="w-4 h-4 rounded-full object-cover flex-shrink-0" />
+                ) : (
+                  <div className="w-4 h-4 rounded-full bg-gray-700 flex-shrink-0" />
+                )}
+                <span className="truncate">
+                  {creatorProfile?.display_name
+                    ? creatorProfile.display_name
+                    : creatorAddress
+                    ? `${creatorAddress.slice(0, 4)}…${creatorAddress.slice(-4)}`
+                    : ""}
+                </span>
+              </div>
+            )}
+
             {/* volume */}
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 flex-shrink-0">
               <TrendingUp className="w-3 h-3 text-pump-green" />
               <span className="font-semibold text-white">
                 {volSol.toFixed(2)} SOL
@@ -168,7 +193,7 @@ export default function MarketCard({ market, liveSessionId, liveMatch = false, f
             </div>
 
             {/* time left */}
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 flex-shrink-0">
               <Clock className="w-3 h-3" />
               <span>{showEndedBadge ? "Ended" : `${daysLeft}d left`}</span>
             </div>

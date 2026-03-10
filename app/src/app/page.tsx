@@ -12,6 +12,7 @@ import CategoryFilters from "@/components/CategoryFilters";
 import type { SelectedCategory } from "@/components/CategoryFilters";
 import { SkeletonCard, SkeletonFeaturedCard } from "@/components/SkeletonCard";
 import { isSportSubcategory } from "@/utils/categories";
+import { getProfiles, type Profile } from "@/lib/profiles";
 
 type Market = {
   id?: string;
@@ -299,6 +300,9 @@ export default function Home() {
   // Live session map: market_address -> session id
   const [liveMap, setLiveMap] = useState<Record<string, string>>({});
 
+  // Creator profiles map: wallet_address -> Profile
+  const [profilesMap, setProfilesMap] = useState<Record<string, Profile>>({});
+
   const observerTarget = useRef<HTMLDivElement>(null);
 
   // ✅ used only on mobile to detect which slide is centered
@@ -400,6 +404,26 @@ export default function Home() {
       setLoading(false);
     }
   }
+
+  // Batch-fetch creator profiles when markets change
+  useEffect(() => {
+    const addrs = markets.map((m) => m.creator).filter((a): a is string => !!a);
+    if (!addrs.length) return;
+    const unique = Array.from(new Set(addrs));
+    // Only fetch addresses we don't have yet
+    const missing = unique.filter((a) => !profilesMap[a]);
+    if (!missing.length) return;
+    let cancelled = false;
+    getProfiles(missing).then((profiles) => {
+      if (cancelled) return;
+      setProfilesMap((prev) => {
+        const next = { ...prev };
+        for (const p of profiles) next[p.wallet_address] = p;
+        return next;
+      });
+    });
+    return () => { cancelled = true; };
+  }, [markets]);
 
   // ✅ read status from URL (keeps last selected when coming back)
   useEffect(() => {
@@ -684,7 +708,7 @@ export default function Home() {
                 >
                   {featuredMarkets.map((market) => (
                     <div key={market.id} className="w-full flex-shrink-0">
-                      <FeaturedMarketCardFull market={market} liveSessionId={liveMap[market.id] || null} />
+                      <FeaturedMarketCardFull market={market} liveSessionId={liveMap[market.id] || null} creatorProfile={market.creator ? profilesMap[market.creator] ?? null : null} />
                     </div>
                   ))}
                 </div>
@@ -721,7 +745,7 @@ export default function Home() {
                 >
                   {featuredMarkets.map((market) => (
                     <div key={market.id} className="min-w-[92%] snap-center">
-                      <FeaturedMarketCardFull market={market} liveSessionId={liveMap[market.id] || null} />
+                      <FeaturedMarketCardFull market={market} liveSessionId={liveMap[market.id] || null} creatorProfile={market.creator ? profilesMap[market.creator] ?? null : null} />
                     </div>
                   ))}
                 </div>
@@ -807,6 +831,8 @@ export default function Home() {
                       liveSessionId={liveMap[market.publicKey] || null}
                       liveMatch={isSportLiveInProgress(market)}
                       finishedMatch={isSportFinishedByProvider(market)}
+                      creatorAddress={market.creator}
+                      creatorProfile={market.creator ? profilesMap[market.creator] ?? null : null}
                     />
                   </motion.div>
                 ))}

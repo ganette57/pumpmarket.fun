@@ -13,7 +13,8 @@ import { uploadResolutionProofImage } from "@/lib/proofs";
 import { proposeResolution as proposeResolutionDb } from "@/lib/markets";
 import { sendSignedTx } from "@/lib/solanaSend";
 import { solanaExplorerAddressUrl, solanaExplorerTxUrl } from "@/utils/explorer";
-import { Coins, X, CheckCircle, AlertCircle, Loader2 } from "lucide-react";
+import { Coins, X, CheckCircle, AlertCircle, Loader2, Pencil, User } from "lucide-react";
+import { getProfile, upsertProfile, uploadAvatar } from "@/lib/profiles";
 
 /* -------------------------------------------------------------------------- */
 /* Constants                                                                  */
@@ -603,6 +604,14 @@ export default function DashboardPage() {
 
   const inFlightRef = useRef<Record<string, boolean>>({});
 
+  /* ---------- Profile ---------- */
+  const [profileAvatarUrl, setProfileAvatarUrl] = useState<string | null>(null);
+  const [profileDisplayName, setProfileDisplayName] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState("");
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+
   // Modal states
   const [actionModal, setActionModal] = useState<ModalState>({
     type: null,
@@ -768,6 +777,52 @@ export default function DashboardPage() {
     })();
     return () => { cancelled = true; };
   }, [connected, walletBase58]);
+
+  /* ---------- Load profile ---------- */
+  useEffect(() => {
+    if (!connected || !walletBase58) {
+      setProfileAvatarUrl(null);
+      setProfileDisplayName(null);
+      return;
+    }
+    let cancelled = false;
+    getProfile(walletBase58).then((p) => {
+      if (cancelled) return;
+      setProfileAvatarUrl(p?.avatar_url ?? null);
+      setProfileDisplayName(p?.display_name ?? null);
+    });
+    return () => { cancelled = true; };
+  }, [connected, walletBase58]);
+
+  async function handleAvatarUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !walletBase58) return;
+    setAvatarUploading(true);
+    try {
+      const url = await uploadAvatar(walletBase58, file);
+      if (url) {
+        await upsertProfile(walletBase58, { avatar_url: url });
+        setProfileAvatarUrl(url + "?t=" + Date.now());
+      }
+    } catch (err) {
+      console.error("Avatar upload failed:", err);
+    } finally {
+      setAvatarUploading(false);
+      if (avatarInputRef.current) avatarInputRef.current.value = "";
+    }
+  }
+
+  async function handleNameSave() {
+    const trimmed = nameInput.trim();
+    if (!walletBase58) return;
+    if (trimmed === (profileDisplayName || "")) {
+      setEditingName(false);
+      return;
+    }
+    await upsertProfile(walletBase58, { display_name: trimmed || undefined });
+    setProfileDisplayName(trimmed || null);
+    setEditingName(false);
+  }
 
   useEffect(() => {
     if (!connected || !walletBase58) return;
@@ -1217,20 +1272,91 @@ export default function DashboardPage() {
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-8 md:py-10">
-      {/* Header */}
+      {/* Header with Profile */}
       <div className="mb-6">
         <div className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-3xl md:text-4xl font-bold text-white">Dashboard</h1>
-            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 mt-2">
-              <span className="text-sm text-gray-400">Wallet: <span className="font-mono text-white/80">{walletLabel}</span></span>
-              <span className="hidden sm:inline text-gray-600">•</span>
-              <div className="flex items-center gap-2">
+          <div className="flex items-center gap-4">
+            {/* Avatar */}
+            <div className="relative group flex-shrink-0">
+              <button
+                onClick={() => avatarInputRef.current?.click()}
+                className="relative w-[100px] h-[100px] md:w-[120px] md:h-[120px] rounded-full overflow-hidden border-2 border-gray-700 hover:border-pump-green transition bg-gray-800"
+                aria-label="Change avatar"
+              >
+                {profileAvatarUrl ? (
+                  <img
+                    src={profileAvatarUrl}
+                    alt="Avatar"
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-700 to-gray-900">
+                    <User className="w-10 h-10 text-gray-500" />
+                  </div>
+                )}
+                {/* Hover overlay */}
+                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
+                  {avatarUploading ? (
+                    <Loader2 className="w-6 h-6 text-white animate-spin" />
+                  ) : (
+                    <Pencil className="w-5 h-5 text-white" />
+                  )}
+                </div>
+              </button>
+              <input
+                ref={avatarInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleAvatarUpload}
+              />
+            </div>
+
+            {/* Name + wallet */}
+            <div className="min-w-0">
+              {/* Display name */}
+              {editingName ? (
+                <input
+                  autoFocus
+                  type="text"
+                  value={nameInput}
+                  onChange={(e) => setNameInput(e.target.value)}
+                  onBlur={handleNameSave}
+                  onKeyDown={(e) => { if (e.key === "Enter") handleNameSave(); if (e.key === "Escape") setEditingName(false); }}
+                  placeholder="Enter display name"
+                  className="bg-transparent border-b-2 border-pump-green text-2xl md:text-3xl font-bold text-white outline-none w-full max-w-[260px]"
+                />
+              ) : (
+                <button
+                  onClick={() => { setNameInput(profileDisplayName || ""); setEditingName(true); }}
+                  className="text-2xl md:text-3xl font-bold text-white hover:text-pump-green transition truncate max-w-[260px] text-left flex items-center gap-2 group/name"
+                  title="Click to edit display name"
+                >
+                  <span className="truncate">{profileDisplayName || walletLabel}</span>
+                  <Pencil className="w-4 h-4 text-gray-600 opacity-0 group-hover/name:opacity-100 transition flex-shrink-0" />
+                </button>
+              )}
+
+              {/* Wallet address */}
+              <div className="flex items-center gap-2 mt-1">
+                <span className="text-sm text-gray-500 font-mono">{walletLabel}</span>
+                <button
+                  onClick={() => navigator.clipboard.writeText(walletBase58)}
+                  className="text-gray-600 hover:text-pump-green transition"
+                  title="Copy wallet address"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" /></svg>
+                </button>
+              </div>
+
+              {/* Profit */}
+              <div className="flex items-center gap-2 mt-1">
                 <span className="text-sm text-gray-400">Profit</span>
-                <span className="text-2xl md:text-3xl font-bold text-pump-green">+{gainsSol.toFixed(2)} SOL</span>
+                <span className="text-xl md:text-2xl font-bold text-pump-green">+{gainsSol.toFixed(2)} SOL</span>
               </div>
             </div>
           </div>
+
           {totalCreatorFeesSol > 0 && (
             <button onClick={handleClaimAllCreatorFees} className={["flex items-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-sm transition", "border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20"].join(" ")}>
               <Coins className="w-4 h-4 text-amber-400" />

@@ -41,6 +41,7 @@ import type { SocialLinks } from "@/components/SocialLinksForm";
 import { useCallback } from "react";
 import { sendSignedTx } from "@/lib/solanaSend";
 import Link from "next/link";
+import { getProfile, type Profile } from "@/lib/profiles";
 
 type SupabaseMarket = any;
 
@@ -894,6 +895,9 @@ export default function TradePage() {
   const lastWsUpdateAtRef = useRef(0);
   const lastMobileSnapAtRef = useRef(0);
 
+  // Creator profile
+  const [creatorProfile, setCreatorProfile] = useState<Profile | null>(null);
+
   // Trade modal state
   const [tradeStep, setTradeStep] = useState<TradeStep>("idle");
   const [tradeResult, setTradeResult] = useState<TradeResult>(null);
@@ -1097,6 +1101,14 @@ if (snap?.posAcc?.shares) {
       void loadMarket(id);
     }, [id, program, loadMarket]);
 
+    /* Fetch creator profile when market loads */
+    useEffect(() => {
+      if (!market?.creator) { setCreatorProfile(null); return; }
+      let cancelled = false;
+      getProfile(market.creator).then((p) => { if (!cancelled) setCreatorProfile(p); });
+      return () => { cancelled = true; };
+    }, [market?.creator]);
+
     useEffect(() => {
       if (!id) return;
       setMarket(null);
@@ -1105,6 +1117,7 @@ if (snap?.posAcc?.shares) {
       setOddsPoints([]);
       setMobileTradeOpen(false);
       setActiveLiveSession(null);
+      setCreatorProfile(null);
     }, [id]);
 
     // Fetch active live session for this market
@@ -2277,6 +2290,25 @@ const ended = endedByTime;
                       </div>
                     </div>
   
+                    {/* Creator profile */}
+                    {market.creator && (
+                      <div className="flex items-center gap-2 mt-1">
+                        {creatorProfile?.avatar_url ? (
+                          <img src={creatorProfile.avatar_url} alt="" className="w-5 h-5 rounded-full object-cover flex-shrink-0" />
+                        ) : (
+                          <div className="w-5 h-5 rounded-full bg-gray-700 flex-shrink-0" />
+                        )}
+                        <span className="text-sm text-gray-500">
+                          by{" "}
+                          <span className="text-gray-300">
+                            {creatorProfile?.display_name
+                              ? creatorProfile.display_name
+                              : `${market.creator.slice(0, 4)}…${market.creator.slice(-4)}`}
+                          </span>
+                        </span>
+                      </div>
+                    )}
+
                     {market.socialLinks && (
                       <div className="mb-0">
                         <CreatorSocialLinks socialLinks={market.socialLinks} />
