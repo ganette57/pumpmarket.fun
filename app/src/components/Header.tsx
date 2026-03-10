@@ -6,6 +6,7 @@ import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { useWallet } from '@solana/wallet-adapter-react';
 import HowItWorksModal from '@/components/HowItWorksModal';
+import { getProfile } from '@/lib/profiles';
 
 // --- Hook pour fermer le menu avatar quand on clique en dehors ---
 function useClickOutside(ref: React.RefObject<HTMLDivElement>, onClose: () => void) {
@@ -28,6 +29,7 @@ export default function Header() {
   const [search, setSearch] = useState('');
   const [isHowItWorksOpen, setIsHowItWorksOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [headerAvatarUrl, setHeaderAvatarUrl] = useState<string | null>(null);
 
   const menuRef = useRef<HTMLDivElement>(null);
   useClickOutside(menuRef, () => setMenuOpen(false));
@@ -48,6 +50,19 @@ export default function Header() {
   const avatarLabel = useMemo(() => {
     return publicKey ? publicKey.toBase58().slice(0, 2).toUpperCase() : '??';
   }, [publicKey]);
+
+  // Fetch profile avatar for header
+  useEffect(() => {
+    if (!connected || !publicKey) {
+      setHeaderAvatarUrl(null);
+      return;
+    }
+    let cancelled = false;
+    getProfile(publicKey.toBase58()).then((p) => {
+      if (!cancelled) setHeaderAvatarUrl(p?.avatar_url ?? null);
+    });
+    return () => { cancelled = true; };
+  }, [connected, publicKey]);
 
   // Navigate to search page on focus (if not already there)
   const handleSearchFocus = () => {
@@ -148,10 +163,12 @@ export default function Header() {
                            bg-gray-900
                            text-l font-semibold text-gray-200
                            hover:border-gray-400 hover:text-white
-                           transition"
+                           transition overflow-hidden"
                 aria-label="Open menu"
               >
-                {connected ? avatarLabel : "☰"}
+                {connected && headerAvatarUrl ? (
+                  <img src={headerAvatarUrl} alt="" className="w-full h-full object-cover" />
+                ) : connected ? avatarLabel : "☰"}
               </button>
 
               {menuOpen && (

@@ -144,21 +144,21 @@ export default function MarketCard({ market, liveSessionId, liveMatch = false, f
           {/* OUTCOMES GREEN / RED */}
           <div className="flex gap-2">
             {/* OUTCOME 1 (GREEN) */}
-            <div className="flex-1 bg-green-500/15 border border-green-500/30 rounded-lg p-2 flex flex-col justify-center items-center text-center">
-              <span className="text-[11px] uppercase text-green-400 font-semibold tracking-wide">
+            <div className="flex-1 bg-[#00FF87] rounded-lg p-2 flex flex-col justify-center items-center text-center">
+              <span className="text-[11px] uppercase text-black font-bold tracking-wide">
                 {outcomes[0].length > 10 ? outcomes[0].slice(0, 8) + '…' : outcomes[0]}
               </span>
-              <span className="text-[18px] md:text-[20px] font-semibold text-green-400">
+              <span className="text-[18px] md:text-[20px] font-bold text-black">
                 {percents[0]}%
               </span>
             </div>
 
             {/* OUTCOME 2 (RED) */}
-            <div className="flex-1 bg-red-500/15 border border-red-500/30 rounded-lg p-2 flex flex-col justify-center items-center text-center">
-              <span className="text-[11px] uppercase text-red-400 font-semibold tracking-wide">
+            <div className="flex-1 bg-red-500 rounded-lg p-2 flex flex-col justify-center items-center text-center">
+              <span className="text-[11px] uppercase text-black font-bold tracking-wide">
                 {outcomes[1].length > 10 ? outcomes[1].slice(0, 8) + '…' : outcomes[1]}
               </span>
-              <span className="text-[18px] md:text-[20px] font-semibold text-red-400">
+              <span className="text-[18px] md:text-[20px] font-bold text-black">
                 {percents[1]}%
               </span>
             </div>
