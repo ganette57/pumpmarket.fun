@@ -154,7 +154,7 @@ export default function MarketCard({ market, liveSessionId, liveMatch = false, f
             </div>
 
             {/* OUTCOME 2 (RED) */}
-            <div className="flex-1 bg-red-500 rounded-lg p-2 flex flex-col justify-center items-center text-center">
+            <div className="flex-1 bg-[#ff5c73] rounded-lg p-2 flex flex-col justify-center items-center text-center">
               <span className="text-[11px] uppercase text-black font-bold tracking-wide">
                 {outcomes[1].length > 10 ? outcomes[1].slice(0, 8) + '…' : outcomes[1]}
               </span>
