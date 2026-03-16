@@ -38,8 +38,8 @@ export default function Header() {
   const TERMS_URL = "https://funmarket.gitbook.io/funmarket/terms-of-use";
   const PRIVACY_URL = "https://funmarket.gitbook.io/funmarket/privacy-policy";
 
-  // Check if we're on search page
-  const isOnSearchPage = pathname === '/search';
+  // Check if we're on explorer/search page
+  const isOnSearchPage = pathname === '/search' || pathname === '/explorer';
 
   // pré-remplir search si on est sur /search?q=
   useEffect(() => {
@@ -67,13 +67,13 @@ export default function Header() {
   // Navigate to search page on focus (if not already there)
   const handleSearchFocus = () => {
     if (!isOnSearchPage) {
-      router.push('/search');
+      router.push('/explorer');
     }
   };
 
   const handleSearchSubmit = () => {
     const q = search.trim();
-    router.push(q ? `/search?q=${encodeURIComponent(q)}` : '/search');
+    router.push(q ? `/explorer?q=${encodeURIComponent(q)}` : '/explorer');
   };
 
   return (

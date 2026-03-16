@@ -49,7 +49,7 @@ const avatarLabel = useMemo(() => {
 
   function submit(next?: string) {
     const value = (next ?? q).trim();
-    router.push(value ? `/search?q=${encodeURIComponent(value)}` : "/search");
+    router.push(value ? `/explorer?q=${encodeURIComponent(value)}` : "/explorer");
   }
 
   return (

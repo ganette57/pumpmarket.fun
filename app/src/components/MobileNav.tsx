@@ -70,14 +70,14 @@ export default function MobileNav() {
           }
         />
 
-        {/* Search */}
+        {/* Explorer */}
         <Item
-          href="/search"
-          active={isActive("/search")}
+          href="/explorer"
+          active={isActive("/explorer") || isActive("/search")}
           icon={
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="11" cy="11" r="7" />
-              <path d="M21 21l-4.3-4.3" />
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76" fill="currentColor" stroke="none" />
             </svg>
           }
         />

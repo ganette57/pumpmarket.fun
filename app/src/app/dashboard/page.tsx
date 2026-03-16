@@ -17,12 +17,6 @@ import { Coins, X, CheckCircle, AlertCircle, Loader2, Pencil, User } from "lucid
 import { getProfile, upsertProfile, uploadAvatar } from "@/lib/profiles";
 
 /* -------------------------------------------------------------------------- */
-/* Constants                                                                  */
-/* -------------------------------------------------------------------------- */
-
-const PLATFORM_WALLET = "xBaRohQaEKaYm57K6yB6pGBVMPiD4jdJkykx5knU3xr";
-
-/* -------------------------------------------------------------------------- */
 /* Helpers                                                                    */
 /* -------------------------------------------------------------------------- */
 

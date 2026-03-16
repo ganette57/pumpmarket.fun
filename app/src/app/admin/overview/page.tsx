@@ -7,11 +7,9 @@ import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { useProgram } from "@/hooks/useProgram";
 import { sendSignedTx } from "@/lib/solanaSend";
 import AdminReportsTab from "@/components/AdminReportsTab";
+import AdminLiveMicroPanel from "@/components/admin/AdminLiveMicroPanel";
 import { solanaExplorerAddressUrl } from "@/utils/explorer";
-
-/* ========= Constants ========= */
-
-const PLATFORM_WALLET = "xBaRohQaEKaYm57K6yB6pGBVMPiD4jdJkykx5knU3xr";
+import { PLATFORM_WALLET } from "@/utils/solana";
 
 /* ========= Types ========= */
 
@@ -1090,11 +1088,13 @@ export default function AdminOverviewPage() {
                 value={`${platformFeesSol.toFixed(4)} SOL`}
                 hint="1% of volume"
                 link={{
-                  href: solanaExplorerAddressUrl(PLATFORM_WALLET),
+                  href: solanaExplorerAddressUrl(PLATFORM_WALLET.toBase58()),
                   text: "Verify on Explorer",
                 }}
               />
             </div>
+
+            <AdminLiveMicroPanel />
 
             {/* Filters */}
             <div className="flex flex-wrap items-center gap-3 mb-4">

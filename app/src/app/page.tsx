@@ -8,11 +8,13 @@ import { ChevronLeft, ChevronRight, ChevronDown } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import MarketCard from "@/components/MarketCard";
 import FeaturedMarketCardFull from "@/components/FeaturedMarketCardFull";
+import FlashMarketCard from "@/components/FlashMarketCard";
 import CategoryFilters from "@/components/CategoryFilters";
 import type { SelectedCategory } from "@/components/CategoryFilters";
 import { SkeletonCard, SkeletonFeaturedCard } from "@/components/SkeletonCard";
 import { isSportSubcategory } from "@/utils/categories";
 import { getProfiles, type Profile } from "@/lib/profiles";
+import type { FlashMarket } from "@/lib/flashMarkets/types";
 
 type Market = {
   id?: string;
@@ -50,9 +52,34 @@ type Market = {
   endTime?: string | null;
 };
 
+type FeaturedCarouselMarket = {
+  id: string;
+  dbId?: string;
+  question: string;
+  category: string;
+  imageUrl?: string;
+  volume: number;
+  daysLeft: number;
+  creator?: string;
+  socialLinks?: {
+    twitter?: string;
+    telegram?: string;
+    website?: string;
+  };
+  yesSupply: number;
+  noSupply: number;
+  marketType?: number;
+  outcomeNames?: string[];
+  outcomeSupplies?: number[];
+  isLive?: boolean;
+};
+
+type HomeCarouselSlide =
+  | { kind: "flash"; market: FlashMarket }
+  | { kind: "featured"; market: FeaturedCarouselMarket };
+
 type MarketStatusFilter = "all" | "open" | "resolved" | "ending_soon" | "top_volume";
 const CAROUSEL_LIMIT = 5;
-const MIN_VOL_LAMPORTS = 50_000_000; // 0.05 SOL
 
 const DEBUG_SPORT_OPEN_FILTER = false;
 
@@ -171,59 +198,58 @@ function homeSportDurationMs(sport: string | null | undefined): number {
   return NaN;
 }
 
-function isMarketOpenForHome(m: Market): boolean {
-  const nowMs = Date.now();
-  const nowSec = Date.now() / 1000;
-  const endedByTime = !!m.resolutionTime && nowSec >= m.resolutionTime;
-  const resolutionStatus = String(m.resolutionStatus || "open").toLowerCase();
+function mapHomeRowToMarket(row: any): Market {
+  const mt = (row.market_type ?? 0) as 0 | 1;
 
-  // Home "Open" must reflect tradable status.
-  if (resolutionStatus === "proposed" || resolutionStatus === "finalized" || resolutionStatus === "cancelled") {
-    return false;
+  const outcomeNames: string[] | undefined = Array.isArray(row.outcome_names)
+    ? row.outcome_names.map((x: any) => String(x)).filter(Boolean)
+    : undefined;
+
+  const outcomeSupplies: number[] | undefined = Array.isArray(row.outcome_supplies)
+    ? row.outcome_supplies.map((x: any) => Number(x) || 0)
+    : undefined;
+
+  let yesSupply = Number(row.yes_supply || 0);
+  let noSupply = Number(row.no_supply || 0);
+
+  if (mt === 1 && Array.isArray(outcomeSupplies) && outcomeSupplies.length >= 2) {
+    yesSupply = Number(outcomeSupplies[0] || 0);
+    noSupply = Number(outcomeSupplies[1] || 0);
   }
-  if (m.cancelled || m.isBlocked) return false;
-  if (!!m.resolved) return false;
 
-  if (!isSportMarket(m)) {
-    return !endedByTime;
-  }
+  const endDate = row.end_date ? new Date(row.end_date) : new Date();
 
-  const meta = (m.sportMeta || {}) as any;
-  const sportKey = normalizeSportSubcategoryFromMarket(m) || String(m.sport || meta?.sport || "").toLowerCase();
-  const startMs = parseUtcMs(meta?.start_time);
-  const explicitEndMs = parseUtcMs(meta?.end_time);
-  const durationMs = homeSportDurationMs(sportKey);
-  const sportPredefinedEndMs = Number.isFinite(explicitEndMs)
-    ? explicitEndMs
-    : Number.isFinite(startMs) && Number.isFinite(durationMs)
-    ? startMs + durationMs
-    : NaN;
-  const sportLockMs = Number.isFinite(sportPredefinedEndMs)
-    ? sportPredefinedEndMs - 2 * 60_000
-    : Number.isFinite(m.resolutionTime)
-    ? m.resolutionTime * 1000
-    : NaN;
-  const providerLive = isSportOpenByProvider(m);
-  const providerFinished = isSportFinishedByProvider(m);
-
-  // Home listing override only: keep provider-live matches visible in "open".
-  if (providerFinished) return false;
-  if (providerLive) return true;
-
-  const homeLocked = Number.isFinite(sportLockMs) && nowMs >= sportLockMs;
-  const homeSportEnded =
-    String(m.sportTradingState || "").toLowerCase() === "ended_by_sport" ||
-    (Number.isFinite(sportPredefinedEndMs) && nowMs >= sportPredefinedEndMs);
-
-  if (homeSportEnded || homeLocked) return false;
-
-  // Missing provider data: keep open unless strong finished/locked signal exists.
-  if (Number.isFinite(sportPredefinedEndMs)) return nowMs < sportPredefinedEndMs;
-  return !endedByTime;
-}
-
-function isMarketResolved(m: Market) {
-  return !isMarketOpenForHome(m);
+  return {
+    id: row.id,
+    publicKey: row.market_address,
+    question: row.question || "",
+    description: row.description || "",
+    category: row.category || "other",
+    imageUrl: row.image_url ?? null,
+    yesSupply,
+    noSupply,
+    totalVolume: Number(row.total_volume || 0),
+    resolutionTime: Math.floor(endDate.getTime() / 1000),
+    resolved: !!row.resolved,
+    cancelled: !!row.cancelled,
+    isBlocked: !!row.is_blocked,
+    marketType: mt,
+    outcomeNames,
+    outcomeSupplies,
+    creator: row.creator ?? null,
+    socialLinks: row.social_links ?? null,
+    sportMeta: row.sport_meta ?? null,
+    sport:
+      typeof row.sport === "string"
+        ? row.sport
+        : typeof row.sport_meta?.sport === "string"
+        ? row.sport_meta.sport
+        : null,
+    sportTradingState: row.sport_trading_state ?? null,
+    resolutionStatus: row.resolution_status ?? "open",
+    startTime: row.start_time ?? null,
+    endTime: row.end_time ?? null,
+  };
 }
 
 function StatusFilterDropdown({
@@ -285,7 +311,9 @@ function StatusFilterDropdown({
 }
 
 export default function Home() {
-  const [markets, setMarkets] = useState<Market[]>([]);
+  const [featuredClassicMarkets, setFeaturedClassicMarkets] = useState<Market[]>([]);
+  const [openClassicMarkets, setOpenClassicMarkets] = useState<Market[]>([]);
+  const [resolvedClassicMarkets, setResolvedClassicMarkets] = useState<Market[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
 
@@ -293,6 +321,7 @@ export default function Home() {
   const [statusFilter, setStatusFilter] = useState<MarketStatusFilter>("open");
 
   const [currentFeaturedIndex, setCurrentFeaturedIndex] = useState(0);
+  const [homeLiveFlashMarket, setHomeLiveFlashMarket] = useState<FlashMarket | null>(null);
   const [displayedCount, setDisplayedCount] = useState(12);
   const router = useRouter();
   const sp = useSearchParams();
@@ -307,6 +336,19 @@ export default function Home() {
 
   // ✅ used only on mobile to detect which slide is centered
   const mobileFeaturedRef = useRef<HTMLDivElement | null>(null);
+
+  const markets = useMemo(() => {
+    const merged = [...openClassicMarkets, ...resolvedClassicMarkets, ...featuredClassicMarkets];
+    const seen = new Set<string>();
+    const out: Market[] = [];
+    for (const market of merged) {
+      const key = market.publicKey;
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(market);
+    }
+    return out;
+  }, [openClassicMarkets, resolvedClassicMarkets, featuredClassicMarkets]);
 
   // ------- LOAD MARKETS FROM SERVER API (cached) -------
   useEffect(() => {
@@ -329,77 +371,42 @@ export default function Home() {
       }
       if (!res.ok) {
         console.error("Error loading markets:", res.status);
-        setMarkets([]);
+        setFeaturedClassicMarkets([]);
+        setOpenClassicMarkets([]);
+        setResolvedClassicMarkets([]);
         return;
       }
       const json = await res.json();
-      const data = json.markets || [];
+      const featuredData = json.featuredMarkets || [];
+      const openClassicData = json.openMarketsClassic || [];
+      const resolvedClassicData = json.resolvedMarketsClassic || [];
       const liveMapData = json.liveMap || {};
+      const topHomeLiveFlash =
+        (json.topLiveFlashMarket as FlashMarket | null) ??
+        (json.homeLiveFlashMarket as FlashMarket | null) ??
+        null;
 
       setLiveMap(liveMapData);
+      setHomeLiveFlashMarket(topHomeLiveFlash);
 
-      const mapped: Market[] =
-        (data || []).map((row: any) => {
-          const mt = (row.market_type ?? 0) as 0 | 1;
+      setFeaturedClassicMarkets((featuredData as any[]).map(mapHomeRowToMarket));
+      setOpenClassicMarkets((openClassicData as any[]).map(mapHomeRowToMarket));
+      setResolvedClassicMarkets((resolvedClassicData as any[]).map(mapHomeRowToMarket));
 
-          const outcomeNames: string[] | undefined = Array.isArray(row.outcome_names)
-            ? row.outcome_names.map((x: any) => String(x)).filter(Boolean)
-            : undefined;
-
-          const outcomeSupplies: number[] | undefined = Array.isArray(row.outcome_supplies)
-            ? row.outcome_supplies.map((x: any) => Number(x) || 0)
-            : undefined;
-
-          let yesSupply = Number(row.yes_supply || 0);
-          let noSupply = Number(row.no_supply || 0);
-
-          if (mt === 1 && Array.isArray(outcomeSupplies) && outcomeSupplies.length >= 2) {
-            yesSupply = Number(outcomeSupplies[0] || 0);
-            noSupply = Number(outcomeSupplies[1] || 0);
-          }
-
-          const endDate = row.end_date ? new Date(row.end_date) : new Date();
-
-          return {
-            id: row.id,
-            publicKey: row.market_address,
-            question: row.question || "",
-            description: row.description || "",
-            category: row.category || "other",
-            imageUrl: row.image_url ?? null,
-            yesSupply,
-            noSupply,
-            totalVolume: Number(row.total_volume || 0),
-            resolutionTime: Math.floor(endDate.getTime() / 1000),
-            resolved: !!row.resolved,
-            cancelled: !!row.cancelled,
-            isBlocked: !!row.is_blocked,
-            marketType: mt,
-            outcomeNames,
-            outcomeSupplies,
-            creator: row.creator ?? null,
-            socialLinks: row.social_links ?? null,
-            sportMeta: row.sport_meta ?? null,
-            sport:
-              typeof row.sport === "string"
-                ? row.sport
-                : typeof row.sport_meta?.sport === "string"
-                ? row.sport_meta.sport
-                : null,
-            sportTradingState: row.sport_trading_state ?? null,
-            resolutionStatus: row.resolution_status ?? "open",
-            startTime: row.start_time ?? null,
-            endTime: row.end_time ?? null,
-          } as Market;
-        }) ?? [];
-
-      setMarkets(mapped);
       if (process.env.NODE_ENV !== "production") {
-        console.log("home markets loaded", mapped.length);
+        console.log("home data loaded", {
+          featured: (featuredData as any[])?.length || 0,
+          openClassic: (openClassicData as any[])?.length || 0,
+          resolvedClassic: (resolvedClassicData as any[])?.length || 0,
+          hasTopLiveFlash: !!topHomeLiveFlash,
+        });
       }
     } catch (err) {
       console.error("loadMarkets fatal error:", err);
-      setMarkets([]);
+      setFeaturedClassicMarkets([]);
+      setOpenClassicMarkets([]);
+      setResolvedClassicMarkets([]);
+      setHomeLiveFlashMarket(null);
     } finally {
       setLoading(false);
     }
@@ -435,26 +442,35 @@ export default function Home() {
   }, [sp]);
 
   // ------- FILTERS -------
-  const categoryFiltered = useMemo(() => {
-    // "all" = no filter
-    if (selectedCategory === "all") return markets;
+  const matchesSelectedCategory = useCallback(
+    (m: Market) => {
+      if (selectedCategory === "all") return true;
+      if (selectedCategory === "sports") return isSportMarket(m);
 
-    // "sports" = superset of all sports markets
-    if (selectedCategory === "sports") {
-      return markets.filter((m) => isSportMarket(m));
-    }
+      if (isSportSubcategory(selectedCategory)) {
+        const wanted = normalizeSportSubcategoryValue(selectedCategory);
+        if (!wanted) return isSportMarket(m);
+        return normalizeSportSubcategoryFromMarket(m) === wanted;
+      }
 
-    // Sport subcategory (soccer, basketball, baseball, american football...)
-    if (isSportSubcategory(selectedCategory)) {
-      const wanted = normalizeSportSubcategoryValue(selectedCategory);
-      if (!wanted) return markets.filter((m) => isSportMarket(m));
-      return markets.filter((m) => normalizeSportSubcategoryFromMarket(m) === wanted);
-    }
+      const selectedNorm = normalizeCategoryId(selectedCategory);
+      return normalizeCategoryId(m.category) === selectedNorm;
+    },
+    [selectedCategory],
+  );
 
-    // Regular category
-    const selectedNorm = normalizeCategoryId(selectedCategory);
-    return markets.filter((m) => normalizeCategoryId(m.category) === selectedNorm);
-  }, [markets, selectedCategory]);
+  const categoryFilteredOpen = useMemo(
+    () => openClassicMarkets.filter(matchesSelectedCategory),
+    [openClassicMarkets, matchesSelectedCategory],
+  );
+  const categoryFilteredResolved = useMemo(
+    () => resolvedClassicMarkets.filter(matchesSelectedCategory),
+    [resolvedClassicMarkets, matchesSelectedCategory],
+  );
+  const categoryFilteredAll = useMemo(
+    () => [...categoryFilteredOpen, ...categoryFilteredResolved],
+    [categoryFilteredOpen, categoryFilteredResolved],
+  );
 
   const statusFiltered = useMemo(() => {
     const nowSec = Date.now() / 1000;
@@ -463,22 +479,21 @@ export default function Home() {
     let filtered: Market[];
 
     if (statusFilter === "all") {
-      filtered = categoryFiltered;
+      filtered = categoryFilteredAll;
     } else if (statusFilter === "resolved") {
-      filtered = categoryFiltered.filter((m) => isMarketResolved(m));
+      filtered = categoryFilteredResolved;
     } else if (statusFilter === "ending_soon") {
       // Only open markets ending within 48 hours
       const in48h = nowSec + 48 * 60 * 60;
-      filtered = categoryFiltered.filter((m) => {
-        if (isMarketResolved(m)) return false;
+      filtered = categoryFilteredOpen.filter((m) => {
         return m.resolutionTime > nowSec && m.resolutionTime <= in48h;
       });
     } else if (statusFilter === "top_volume") {
       // Only open markets, will be sorted by volume
-      filtered = categoryFiltered.filter((m) => !isMarketResolved(m));
+      filtered = categoryFilteredOpen;
     } else {
       // "open" - default
-      filtered = categoryFiltered.filter((m) => !isMarketResolved(m));
+      filtered = categoryFilteredOpen;
     }
 
     // Then sort based on filter type
@@ -492,34 +507,12 @@ export default function Home() {
 
     // Default: keep original order (created_at desc)
     return filtered;
-  }, [categoryFiltered, statusFilter]);
+  }, [categoryFilteredAll, categoryFilteredOpen, categoryFilteredResolved, statusFilter]);
 
-  // ------- FEATURED (open pool: top volume, fallback to latest created) -------
-  const featuredMarkets = useMemo(() => {
-    const openTradable = categoryFiltered.filter((m) => isMarketOpenForHome(m));
-    const openNotFinal = categoryFiltered.filter((m) => {
-      const rs = String(m.resolutionStatus || "open").toLowerCase();
-      if (rs !== "open") return false;
-      if (m.resolved) return false;
-      return true;
-    });
-    if (!openTradable.length && !openNotFinal.length) return [];
-
-    const byVol = [...openTradable].sort((a, b) => Number(b.totalVolume || 0) - Number(a.totalVolume || 0));
-    const countWithVol = byVol.filter((m) => Number(m.totalVolume || 0) >= MIN_VOL_LAMPORTS).length;
-    const pickedBase = (countWithVol >= 2 && openTradable.length > 0 ? byVol : openNotFinal).slice(0, CAROUSEL_LIMIT);
-
-    const seen = new Set<string>();
-    const picked: Market[] = [];
-    for (const m of pickedBase) {
-      const key = String(m.id || m.publicKey);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      picked.push(m);
-      if (picked.length >= CAROUSEL_LIMIT) break;
-    }
-
-    return picked.map((market) => {
+  // ------- FEATURED (from API, filtered by category only) -------
+  const featuredMarkets = useMemo<FeaturedCarouselMarket[]>(() => {
+    const base = featuredClassicMarkets.filter(matchesSelectedCategory).slice(0, CAROUSEL_LIMIT);
+    return base.map((market) => {
         const now = Date.now() / 1000;
         const daysLeft = Math.max(0, Math.floor((market.resolutionTime - now) / 86400));
 
@@ -541,7 +534,21 @@ export default function Home() {
           isLive: isSportLiveInProgress(market),
         };
       });
-  }, [categoryFiltered]);
+  }, [featuredClassicMarkets, matchesSelectedCategory]);
+
+  const carouselSlides = useMemo<HomeCarouselSlide[]>(() => {
+    const baseSlides = featuredMarkets.slice(
+      0,
+      homeLiveFlashMarket ? Math.max(0, CAROUSEL_LIMIT - 1) : CAROUSEL_LIMIT,
+    );
+    const mappedBase = baseSlides.map((market) => ({ kind: "featured" as const, market }));
+
+    if (homeLiveFlashMarket) {
+      return [{ kind: "flash", market: homeLiveFlashMarket }, ...mappedBase];
+    }
+
+    return mappedBase;
+  }, [featuredMarkets, homeLiveFlashMarket]);
 
   // reset index when list changes
   useEffect(() => {
@@ -549,7 +556,7 @@ export default function Home() {
     // reset scroll position on mobile
     const el = mobileFeaturedRef.current;
     if (el) el.scrollLeft = 0;
-  }, [featuredMarkets.length]);
+  }, [carouselSlides.length]);
 
   // ------- INFINITE SCROLL -------
   const displayedMarkets = useMemo(() => statusFiltered.slice(0, displayedCount), [statusFiltered, displayedCount]);
@@ -594,13 +601,13 @@ export default function Home() {
 
   // ------- DESKTOP BUTTONS -------
   const handlePrevFeatured = () => {
-    if (!featuredMarkets.length) return;
-    setCurrentFeaturedIndex((prev) => (prev === 0 ? featuredMarkets.length - 1 : prev - 1));
+    if (!carouselSlides.length) return;
+    setCurrentFeaturedIndex((prev) => (prev === 0 ? carouselSlides.length - 1 : prev - 1));
   };
 
   const handleNextFeatured = () => {
-    if (!featuredMarkets.length) return;
-    setCurrentFeaturedIndex((prev) => (prev === featuredMarkets.length - 1 ? 0 : prev + 1));
+    if (!carouselSlides.length) return;
+    setCurrentFeaturedIndex((prev) => (prev === carouselSlides.length - 1 ? 0 : prev + 1));
   };
 
   // ------- MOBILE: update dots based on scroll (simple center calc) -------
@@ -678,7 +685,7 @@ export default function Home() {
               <button
                 type="button"
                 onClick={handlePrevFeatured}
-                disabled={!featuredMarkets.length}
+                disabled={!carouselSlides.length}
                 className="p-2 bg-black/70 hover:bg-black border border-white/20 hover:border-white/40 rounded-lg transition disabled:opacity-40"
                 aria-label="Previous featured market"
               >
@@ -687,7 +694,7 @@ export default function Home() {
               <button
                 type="button"
                 onClick={handleNextFeatured}
-                disabled={!featuredMarkets.length}
+                disabled={!carouselSlides.length}
                 className="p-2 bg-black/70 hover:bg-black border border-white/20 hover:border-white/40 rounded-lg transition disabled:opacity-40"
                 aria-label="Next featured market"
               >
@@ -698,25 +705,36 @@ export default function Home() {
 
           {loading ? (
             <SkeletonFeaturedCard />
-          ) : featuredMarkets.length > 0 ? (
+          ) : carouselSlides.length > 0 ? (
             <div className="relative">
               {/* DESKTOP: slider - NO extra border wrapper */}
-              <div className="hidden md:block relative overflow-hidden">
+              <div className="hidden md:block relative overflow-hidden min-h-[400px]">
                 <div
-                  className="flex transition-transform duration-500 ease-out"
+                  className="flex transition-transform duration-500 ease-out h-[400px]"
                   style={{ transform: `translateX(-${currentFeaturedIndex * 100}%)` }}
                 >
-                  {featuredMarkets.map((market) => (
-                    <div key={market.id} className="w-full flex-shrink-0">
-                      <FeaturedMarketCardFull market={market} liveSessionId={liveMap[market.id] || null} creatorProfile={market.creator ? profilesMap[market.creator] ?? null : null} />
+                  {carouselSlides.map((slide) => (
+                    <div
+                      key={slide.kind === "flash" ? `flash-${slide.market.liveMicroId}` : `featured-${slide.market.id}`}
+                      className="w-full flex-shrink-0 h-[400px]"
+                    >
+                      {slide.kind === "flash" ? (
+                        <FlashMarketCard market={slide.market} variant="hero" className="h-full" />
+                      ) : (
+                        <FeaturedMarketCardFull
+                          market={slide.market}
+                          liveSessionId={liveMap[slide.market.id] || null}
+                          creatorProfile={slide.market.creator ? profilesMap[slide.market.creator] ?? null : null}
+                        />
+                      )}
                     </div>
                   ))}
                 </div>
 
                 {/* dots - outside the cards */}
-                {featuredMarkets.length > 1 && (
+                {carouselSlides.length > 1 && (
                   <div className="flex justify-center gap-2 mt-4">
-                    {featuredMarkets.map((_, index) => (
+                    {carouselSlides.map((_, index) => (
                       <button
                         key={index}
                         type="button"
@@ -743,17 +761,28 @@ export default function Home() {
                     "[&::-webkit-scrollbar]:hidden",
                   ].join(" ")}
                 >
-                  {featuredMarkets.map((market) => (
-                    <div key={market.id} className="min-w-[92%] snap-center">
-                      <FeaturedMarketCardFull market={market} liveSessionId={liveMap[market.id] || null} creatorProfile={market.creator ? profilesMap[market.creator] ?? null : null} />
+                  {carouselSlides.map((slide) => (
+                    <div
+                      key={slide.kind === "flash" ? `flash-mobile-${slide.market.liveMicroId}` : `featured-mobile-${slide.market.id}`}
+                      className="min-w-[92%] snap-center h-[520px]"
+                    >
+                      {slide.kind === "flash" ? (
+                        <FlashMarketCard market={slide.market} variant="hero" className="h-[520px]" />
+                      ) : (
+                        <FeaturedMarketCardFull
+                          market={slide.market}
+                          liveSessionId={liveMap[slide.market.id] || null}
+                          creatorProfile={slide.market.creator ? profilesMap[slide.market.creator] ?? null : null}
+                        />
+                      )}
                     </div>
                   ))}
                 </div>
 
                 {/* dots */}
-                {featuredMarkets.length > 1 && (
+                {carouselSlides.length > 1 && (
                   <div className="flex justify-center gap-2 mt-2">
-                    {featuredMarkets.map((_, index) => (
+                    {carouselSlides.map((_, index) => (
                       <button
                         key={index}
                         type="button"

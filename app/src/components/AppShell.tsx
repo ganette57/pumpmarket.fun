@@ -8,7 +8,7 @@ import SiteFooter from "@/components/SiteFooter";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const isSearch = pathname?.startsWith("/search");
+  const isSearch = pathname?.startsWith("/search") || pathname?.startsWith("/explorer");
   const isTrade = pathname?.startsWith("/trade/");
 
   return (

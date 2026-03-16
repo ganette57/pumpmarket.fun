@@ -747,16 +747,24 @@ export default function LiveViewerPage() {
       let txSig: string;
 
       if (side === "buy") {
+        const buyAccounts = {
+          market: marketPubkey,
+          userPosition: positionPDA,
+          platformWallet: PLATFORM_WALLET,
+          creator: creatorPubkey,
+          trader: publicKey,
+          systemProgram: SystemProgram.programId,
+        };
+
+        console.log("[live buy debug] PLATFORM_WALLET", PLATFORM_WALLET.toBase58());
+        console.log("[live buy debug] market PDA", marketPubkey.toBase58());
+        console.log("[live buy debug] user position PDA", positionPDA.toBase58());
+        console.log("[live buy debug] trader public key", publicKey.toBase58());
+        console.log("[live buy debug] accounts", buyAccounts);
+
         const tx = await (program as any).methods
           .buyShares(amountBn, safeOutcome)
-          .accounts({
-            market: marketPubkey,
-            userPosition: positionPDA,
-            platformWallet: PLATFORM_WALLET,
-            creator: creatorPubkey,
-            trader: publicKey,
-            systemProgram: SystemProgram.programId,
-          })
+          .accounts(buyAccounts)
           .transaction();
 
         txSig = await sendSignedTx({ connection, tx, signTx: signTransaction, feePayer: publicKey });

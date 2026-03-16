@@ -3,6 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import React, { useEffect, useMemo, useState } from "react";
+import { solanaExplorerTxUrl } from "@/utils/explorer";
 
 type ResolutionStatus = "open" | "proposed" | "finalized" | "cancelled";
 
@@ -50,6 +51,162 @@ function formatDt(x?: string | null) {
   const t = new Date(x);
   if (!Number.isFinite(t.getTime())) return null;
   return t.toLocaleString();
+}
+
+function readPath(obj: unknown, path: Array<string | number>): unknown {
+  let cur: unknown = obj;
+  for (const key of path) {
+    if (cur == null) return undefined;
+    if (typeof key === "number") {
+      if (!Array.isArray(cur) || key < 0 || key >= cur.length) return undefined;
+      cur = cur[key];
+      continue;
+    }
+    if (typeof cur !== "object" || Array.isArray(cur)) return undefined;
+    cur = (cur as Record<string, unknown>)[key];
+  }
+  return cur;
+}
+
+function firstText(candidates: unknown[]): string | null {
+  for (const candidate of candidates) {
+    const text = String(candidate ?? "").trim();
+    if (text && text !== "null" && text !== "undefined") return text;
+  }
+  return null;
+}
+
+type ScorePair = { home: number; away: number };
+
+function parseScorePair(value: unknown): ScorePair | null {
+  if (typeof value === "string") {
+    const m = value.match(/(-?\d+)\s*[-:]\s*(-?\d+)/);
+    if (!m) return null;
+    const home = Number(m[1]);
+    const away = Number(m[2]);
+    if (!Number.isFinite(home) || !Number.isFinite(away)) return null;
+    return { home, away };
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+
+  const homeRaw = firstText([
+    readPath(value, ["home"]),
+    readPath(value, ["home_score"]),
+    readPath(value, ["local"]),
+    readPath(value, ["h"]),
+  ]);
+  const awayRaw = firstText([
+    readPath(value, ["away"]),
+    readPath(value, ["away_score"]),
+    readPath(value, ["visitor"]),
+    readPath(value, ["a"]),
+  ]);
+  if (!homeRaw || !awayRaw) return null;
+
+  const home = Number(homeRaw);
+  const away = Number(awayRaw);
+  if (!Number.isFinite(home) || !Number.isFinite(away)) return null;
+  return { home, away };
+}
+
+function scoreLabel(pair: ScorePair | null): string | null {
+  if (!pair) return null;
+  return `${pair.home} - ${pair.away}`;
+}
+
+function normalizeOutcomeCandidate(value: unknown): "YES" | "NO" | null {
+  if (value == null) return null;
+  const raw = String(value).trim().toUpperCase();
+  if (!raw) return null;
+  if (raw === "YES" || raw === "Y" || raw === "TRUE") return "YES";
+  if (raw === "NO" || raw === "N" || raw === "FALSE") return "NO";
+  const n = Number(raw);
+  if (Number.isFinite(n)) {
+    if (n === 0) return "YES";
+    if (n === 1) return "NO";
+  }
+  if (raw.includes("YES")) return "YES";
+  if (raw.includes("NO")) return "NO";
+  return null;
+}
+
+function deriveOutcomeFromScoreDelta(start: ScorePair | null, end: ScorePair | null): "YES" | "NO" | null {
+  if (!start || !end) return null;
+  const startTotal = start.home + start.away;
+  const endTotal = end.home + end.away;
+  return endTotal > startTotal ? "YES" : "NO";
+}
+
+function truncateMiddle(value: string, keep = 8): string {
+  const raw = String(value || "");
+  if (raw.length <= keep * 2 + 3) return raw;
+  return `${raw.slice(0, keep)}...${raw.slice(-keep)}`;
+}
+
+type ParsedProofPayload = {
+  raw: string;
+  windowStart: string | null;
+  windowEnd: string | null;
+  startScore: ScorePair | null;
+  endScore: ScorePair | null;
+  payloadOutcome: "YES" | "NO" | null;
+  onchainTxSig: string | null;
+};
+
+function parseProofPayload(proofNote: string | null | undefined): ParsedProofPayload {
+  const raw = String(proofNote ?? "").trim();
+  if (!raw) {
+    return {
+      raw: "",
+      windowStart: null,
+      windowEnd: null,
+      startScore: null,
+      endScore: null,
+      payloadOutcome: null,
+      onchainTxSig: null,
+    };
+  }
+
+  let parsedJson: Record<string, unknown> | null = null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      parsedJson = parsed as Record<string, unknown>;
+    }
+  } catch {
+    parsedJson = null;
+  }
+
+  if (!parsedJson) {
+    return {
+      raw,
+      windowStart: null,
+      windowEnd: null,
+      startScore: null,
+      endScore: null,
+      payloadOutcome: null,
+      onchainTxSig: null,
+    };
+  }
+
+  const windowStart = firstText([parsedJson.window_start, parsedJson.start_time]);
+  const windowEnd = firstText([parsedJson.window_end, parsedJson.end_time]);
+  const startScore = parseScorePair(parsedJson.start_score) || parseScorePair(parsedJson.score_start);
+  const endScore = parseScorePair(parsedJson.end_score) || parseScorePair(parsedJson.score_end);
+  const payloadOutcome = normalizeOutcomeCandidate(
+    firstText([parsedJson.outcome, parsedJson.proposed_outcome, parsedJson.outcome_proposed, parsedJson.winning_outcome]),
+  );
+  const onchainTxSig = firstText([parsedJson.onchain_tx_sig, parsedJson.tx_sig, parsedJson.tx_signature, parsedJson.signature]);
+
+  return {
+    raw,
+    windowStart,
+    windowEnd,
+    startScore,
+    endScore,
+    payloadOutcome,
+    onchainTxSig,
+  };
 }
 
 function Chip({
@@ -125,6 +282,15 @@ function Step({
   );
 }
 
+function ProofRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
+      <div className="text-[11px] uppercase tracking-[0.1em] text-gray-500">{label}</div>
+      <div className="mt-1 text-sm text-white break-all">{value}</div>
+    </div>
+  );
+}
+
 export default function ResolutionPanel(props: Props) {
   const {
     marketAddress,
@@ -192,8 +358,6 @@ export default function ResolutionPanel(props: Props) {
 
   const contestHref = `/contest/${encodeURIComponent(marketAddress)}`;
 
-  const noDisputes = (contestCount ?? 0) <= 0;
-  
   // ✅ Only show as final if actually resolved on-chain
   const uiFinal = isFinal;
   
@@ -220,8 +384,24 @@ export default function ResolutionPanel(props: Props) {
   const proofUrlRaw = uiFinal ? resolutionProofUrl : proposedProofUrl;
   const proofUrl = normalizeProofUrl(proofUrlRaw);
   const proofNote = uiFinal ? resolutionProofNote : proposedProofNote;
+  const parsedProof = useMemo(() => parseProofPayload(proofNote), [proofNote]);
+  const derivedOutcome = useMemo(
+    () => deriveOutcomeFromScoreDelta(parsedProof.startScore, parsedProof.endScore),
+    [parsedProof.startScore, parsedProof.endScore],
+  );
+  const displayedOutcome = derivedOutcome && parsedProof.payloadOutcome && derivedOutcome !== parsedProof.payloadOutcome
+    ? derivedOutcome
+    : parsedProof.payloadOutcome || derivedOutcome;
+  const outcomeDerivedFromDelta =
+    !!derivedOutcome && !!parsedProof.payloadOutcome && derivedOutcome !== parsedProof.payloadOutcome;
+  const txExplorerUrl = parsedProof.onchainTxSig ? solanaExplorerTxUrl(parsedProof.onchainTxSig) : null;
+  const [showRawProof, setShowRawProof] = useState(false);
 
   const [previewOpen, setPreviewOpen] = useState(false);
+
+  useEffect(() => {
+    setShowRawProof(false);
+  }, [parsedProof.raw, uiFinal]);
 
   const shouldShow = ended || isProposed || isFinal || isCancelled;
   if (!shouldShow) return null;
@@ -251,7 +431,7 @@ export default function ResolutionPanel(props: Props) {
   const headerChip = uiFinal ? (
     <Chip label="Final" variant="final" />
   ) : isAwaitingAdmin ? (
-    <Chip label="Pending" variant="pending" />
+    <Chip label="Outcome proposed" variant="proposed" />
   ) : isProposed ? (
     <Chip label="Proposed" variant="proposed" />
   ) : isCancelled ? (
@@ -268,12 +448,6 @@ export default function ResolutionPanel(props: Props) {
       className="px-4 py-2.5 rounded-xl border border-white/10 text-gray-200 hover:bg-white/5 transition"
     >
       View proof
-    </a>
-  ) : null;
-
-  const ProofOpenLink = proofUrl ? (
-    <a href={proofUrl} target="_blank" rel="noreferrer" className="text-pump-green underline">
-      open proof
     </a>
   ) : null;
 
@@ -420,27 +594,64 @@ export default function ResolutionPanel(props: Props) {
           <div className="mt-5">
             <div className="text-white font-semibold mb-2">{uiFinal ? "Final proof" : "Proposed proof"}</div>
 
-            {proofNote ? <p className="text-sm text-gray-300 mb-2">{proofNote}</p> : null}
+            <div className="rounded-2xl border border-white/10 bg-black/20 p-3 space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <ProofRow label="Window start" value={formatDt(parsedProof.windowStart) || "—"} />
+                <ProofRow label="Start score" value={scoreLabel(parsedProof.startScore) || "—"} />
+                <ProofRow label="Window end" value={formatDt(parsedProof.windowEnd) || "—"} />
+                <ProofRow label="End score" value={scoreLabel(parsedProof.endScore) || "—"} />
+                <ProofRow label="Outcome proposed" value={displayedOutcome || "—"} />
+                <ProofRow
+                  label="On-chain tx sig"
+                  value={
+                    txExplorerUrl && parsedProof.onchainTxSig ? (
+                      <a href={txExplorerUrl} target="_blank" rel="noreferrer" className="text-pump-green underline">
+                        {truncateMiddle(parsedProof.onchainTxSig, 10)}
+                      </a>
+                    ) : (
+                      "—"
+                    )
+                  }
+                />
+              </div>
 
-            {proofUrl ? (
-              <p className="text-sm text-gray-300 mb-3">
-                Proof link: {ProofOpenLink}
-              </p>
-            ) : null}
-
-            {proofImg ? (
-              <button
-                type="button"
-                onClick={() => setPreviewOpen(true)}
-                className="w-full text-left rounded-2xl overflow-hidden border border-white/10 bg-black/20 hover:border-white/20 transition"
-                title="Open preview"
-              >
-                <div className="relative w-full aspect-video">
-                  <Image src={proofImg} alt="Proof" fill className="object-contain bg-black" />
+              {outcomeDerivedFromDelta ? (
+                <div className="rounded-lg border border-amber-400/25 bg-amber-400/10 px-3 py-2 text-xs text-amber-200">
+                  Displayed outcome derived from score delta.
                 </div>
-                <div className="px-3 py-2 text-xs text-gray-400">Click to preview</div>
-              </button>
-            ) : null}
+              ) : null}
+
+              {proofImg ? (
+                <button
+                  type="button"
+                  onClick={() => setPreviewOpen(true)}
+                  className="w-full text-left rounded-2xl overflow-hidden border border-white/10 bg-black/20 hover:border-white/20 transition"
+                  title="Open preview"
+                >
+                  <div className="relative w-full aspect-video">
+                    <Image src={proofImg} alt="Proof" fill className="object-contain bg-black" />
+                  </div>
+                  <div className="px-3 py-2 text-xs text-gray-400">Click to preview</div>
+                </button>
+              ) : null}
+
+              {parsedProof.raw ? (
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => setShowRawProof((prev) => !prev)}
+                    className="text-xs text-gray-400 hover:text-white underline"
+                  >
+                    {showRawProof ? "Hide raw proof" : "Show raw proof"}
+                  </button>
+                  {showRawProof ? (
+                    <pre className="mt-2 max-h-48 overflow-auto rounded-xl border border-white/10 bg-black/40 p-3 text-[11px] text-gray-300 whitespace-pre-wrap break-all">
+                      {parsedProof.raw}
+                    </pre>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
           </div>
         ) : null}
 

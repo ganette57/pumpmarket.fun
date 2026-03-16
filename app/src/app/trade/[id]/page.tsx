@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import Image from "next/image";
 
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
@@ -442,6 +441,133 @@ function formatScore(score: Record<string, unknown>, sport: string): string {
   return formatLiveScore(score) || "—";
 }
 
+function asObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+function isTruthyFlag(value: unknown): boolean {
+  if (value === true) return true;
+  const raw = String(value ?? "").trim().toLowerCase();
+  return raw === "true" || raw === "1" || raw === "yes";
+}
+
+function extractScorePair(event: any): { home: number; away: number } | null {
+  const toNum = (v: unknown): number | null => {
+    if (v == null) return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const pairs: Array<{ home: unknown; away: unknown; allowPartial: boolean }> = [
+    { home: event?.score?.home, away: event?.score?.away, allowPartial: true },
+    { home: event?.score?.home_score, away: event?.score?.away_score, allowPartial: true },
+    { home: event?.score?.local, away: event?.score?.visitor, allowPartial: true },
+    { home: event?.score?.h, away: event?.score?.a, allowPartial: true },
+  ];
+
+  for (const pair of pairs) {
+    const home = toNum(pair.home);
+    const away = toNum(pair.away);
+    if (home != null && away != null) return { home, away };
+    if (pair.allowPartial && (home != null || away != null)) {
+      return { home: home ?? 0, away: away ?? 0 };
+    }
+  }
+
+  return null;
+}
+
+function formatCountdownMmSs(totalSec: number): string {
+  const safe = Math.max(0, Math.floor(totalSec));
+  const minutes = Math.floor(safe / 60);
+  const seconds = safe % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function liveMicroStatusText({
+  isLive,
+  remainingSec,
+  goalObserved,
+  tradingLocked,
+}: {
+  isLive: boolean;
+  remainingSec: number | null;
+  goalObserved: boolean;
+  tradingLocked: boolean;
+}): string {
+  if (goalObserved || tradingLocked) return "Trading locked";
+  if (!isLive) return "Resolving window";
+  if (remainingSec == null) return "Trading open";
+  if (remainingSec <= 0) return "Resolving window";
+  return "Trading open";
+}
+
+function readDescriptionField(description: string | null | undefined, fieldLabel: string): string | null {
+  const raw = String(description || "");
+  if (!raw) return null;
+  const escaped = fieldLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = raw.match(new RegExp(`^\\s*${escaped}\\s*:\\s*(.+)$`, "im"));
+  return match?.[1]?.trim() || null;
+}
+
+function parseMatchupFromQuestion(question: string | null | undefined): { home: string; away: string } | null {
+  const q = String(question || "").trim();
+  if (!q) return null;
+  const cleaned = q.replace(/^next\s+goal\s+in\s+\d+\s+minutes\?\s*/i, "");
+  const m = cleaned.match(/^(.+?)\s+vs\s+(.+)$/i);
+  if (!m) return null;
+  const home = m[1]?.trim();
+  const away = m[2]?.trim();
+  if (!home || !away) return null;
+  return { home, away };
+}
+
+function parseScorePairFromText(raw: string | null | undefined): { home: number; away: number } | null {
+  if (!raw) return null;
+  const m = String(raw).match(/(-?\d+)\s*[-:]\s*(-?\d+)/);
+  if (!m) return null;
+  const home = Number(m[1]);
+  const away = Number(m[2]);
+  if (!Number.isFinite(home) || !Number.isFinite(away)) return null;
+  return { home, away };
+}
+
+function isSoccerNextGoalMicroMarket(
+  sportMetaValue: unknown,
+  question: string | null | undefined,
+  description: string | null | undefined,
+): boolean {
+  const meta = asObject(sportMetaValue);
+  const liveMicro = asObject(meta.live_micro);
+  const liveMicroCamel = asObject(meta.liveMicro);
+  const liveMicroMarket = asObject(meta.live_micro_market);
+  const nestedMicro = asObject(liveMicro.micro_market);
+
+  const normalize = (v: unknown) => String(v ?? "").trim().toLowerCase().replace(/\s+/g, "_");
+  const typeCandidates = [
+    meta.micro_market_type,
+    meta.microMarketType,
+    liveMicro.micro_market_type,
+    liveMicro.microMarketType,
+    liveMicroMarket.micro_market_type,
+    liveMicroCamel.micro_market_type,
+    nestedMicro.micro_market_type,
+    nestedMicro.type,
+  ].map(normalize).filter(Boolean);
+
+  const hasTypeMatch = typeCandidates.some((t) => t === "soccer_next_goal_5m" || t.includes("next_goal"));
+
+  const q = String(question || "").toLowerCase();
+  const d = String(description || "").toLowerCase();
+  const looksLikeQuestion = /next\s+goal\s+in\s+\d+\s+minutes\?/i.test(q) || q.includes("next goal");
+  const looksLikeDescription =
+    d.includes("type: soccer_next_goal_5m") ||
+    (d.includes("window start:") && d.includes("window end:") && d.includes("start score:"));
+
+  return hasTypeMatch || (looksLikeQuestion && looksLikeDescription);
+}
+
 function pickEventBanner(event: any, meta?: any): string | null {
   const keys = ["strBanner", "strFanart1", "strThumb", "strPoster"];
   const sources = [event?.raw, event?.meta?.raw, meta?.raw, meta?.images, meta];
@@ -450,6 +576,38 @@ function pickEventBanner(event: any, meta?: any): string | null {
       const v = src?.[key];
       if (typeof v === "string" && v.startsWith("http")) return v;
     }
+  }
+  return null;
+}
+
+function normalizeVisualUrl(value: unknown): string | null {
+  const raw = String(value ?? "").trim();
+  if (!raw || raw === "null" || raw === "undefined" || raw.startsWith("data:")) return null;
+  if (!/^https?:\/\//i.test(raw)) return null;
+  return raw.replace(/^http:\/\//i, "https://");
+}
+
+function pickMarketCardVisual(event: any, meta: any, fallbackImage: string | null | undefined): string | null {
+  const candidates: unknown[] = [
+    pickEventBanner(event, meta),
+    event?.event_image,
+    event?.raw?.event_image,
+    event?.raw?.strThumb,
+    event?.raw?.strPoster,
+    event?.raw?.strFanart1,
+    meta?.live_micro?.event_image,
+    meta?.live_micro?.event_thumb,
+    meta?.images?.event_image,
+    meta?.images?.event_thumb,
+    meta?.images?.strThumb,
+    meta?.raw?.event_image,
+    meta?.raw?.event_thumb,
+    fallbackImage,
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeVisualUrl(candidate);
+    if (normalized) return normalized;
   }
   return null;
 }
@@ -578,6 +736,10 @@ function SportScoreCard({
   polling,
   stale,
   lastPolledAt,
+  isLiveMicro = false,
+  microWindowEndMs = NaN,
+  microGoalObserved = false,
+  microTradingLocked = false,
 }: {
   event: SportEvent;
   meta?: any;
@@ -586,19 +748,59 @@ function SportScoreCard({
   polling: boolean;
   stale: boolean;
   lastPolledAt: number | null;
+  isLiveMicro?: boolean;
+  microWindowEndMs?: number;
+  microGoalObserved?: boolean;
+  microTradingLocked?: boolean;
 }) {
   const isLive = displayStatus === "live";
   const banner = pickEventBanner(event, meta);
   const homeBadge = pickBadge(event, meta, "home");
   const awayBadge = pickBadge(event, meta, "away");
   const hasScore = hasMeaningfulScore(event);
+  const scorePair = extractScorePair(event);
   const fallbackUpdatedAt = parseIsoUtc(event.last_update)?.getTime() ?? NaN;
   const updatedAt = typeof lastPolledAt === "number" && Number.isFinite(lastPolledAt) ? lastPolledAt : fallbackUpdatedAt;
   const kickoffDate = parseIsoUtc(event.start_time);
+  const [countdownNowMs, setCountdownNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!isLiveMicro || !Number.isFinite(microWindowEndMs)) return;
+    const timer = window.setInterval(() => setCountdownNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [isLiveMicro, microWindowEndMs]);
+
+  useEffect(() => {
+    if (isLiveMicro) setCountdownNowMs(Date.now());
+  }, [isLiveMicro, microWindowEndMs]);
+
+  const remainingSec = isLiveMicro && Number.isFinite(microWindowEndMs)
+    ? Math.max(0, Math.ceil((microWindowEndMs - countdownNowMs) / 1000))
+    : null;
+  const timerColor = remainingSec == null
+    ? "#7CFF6B"
+    : remainingSec > 120
+    ? "#7CFF6B"
+    : remainingSec >= 60
+    ? "#FFD166"
+    : "#FF4D4D";
+  const timerPulseClass = remainingSec != null && remainingSec < 30
+    ? "micro-timer-hard-pulse"
+    : remainingSec != null && remainingSec < 60
+    ? "micro-timer-soft-pulse"
+    : "";
+  const microStatus = liveMicroStatusText({
+    isLive,
+    remainingSec,
+    goalObserved: microGoalObserved,
+    tradingLocked: microTradingLocked,
+  });
 
   return (
-    <div className={`rounded-xl border overflow-hidden bg-black ${
-      isLive ? "border-red-500/50 shadow-[0_0_24px_rgba(239,68,68,0.15)]" : "border-gray-800"
+    <div className={`rounded-xl border overflow-hidden ${
+      isLiveMicro
+        ? "border-[#7CFF6B]/35 bg-[radial-gradient(circle_at_28%_0%,rgba(124,255,107,0.15),transparent_45%),linear-gradient(145deg,rgba(7,15,11,0.98),rgba(3,6,9,0.98)_58%,rgba(8,13,10,0.96))] shadow-[0_24px_64px_rgba(0,0,0,0.58),0_0_20px_rgba(124,255,107,0.16)]"
+        : `bg-black ${isLive ? "border-red-500/50 shadow-[0_0_24px_rgba(239,68,68,0.15)]" : "border-gray-800"}`
     }`}>
       {/* Banner image (edge-to-edge) */}
       {banner && (
@@ -610,65 +812,149 @@ function SportScoreCard({
       )}
 
       <div className={`px-4 ${banner ? "pt-2 pb-4" : "py-4"}`}>
-        {/* Status + league */}
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <span className={`px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wide ${sportStatusColor(displayStatus)}`}>
-              {isLive && (
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-white mr-1.5 animate-pulse" />
-              )}
-              {statusBadgeLabel(displayStatus, minute)}
-            </span>
-            {event.league && (
-              <span className="text-xs text-gray-500 truncate max-w-[140px]">{event.league}</span>
-            )}
-          </div>
-          {polling && <span className="inline-block w-3 h-3 border border-gray-500 border-t-transparent rounded-full animate-spin" />}
-        </div>
-
-        {/* Teams + Score */}
-        <div className="flex items-center justify-between gap-2">
-          {/* Home */}
-          <div className="flex-1 flex flex-col items-center gap-1.5 min-w-0">
-            {homeBadge ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={homeBadge} alt="" className="w-12 h-12 sm:w-14 sm:h-14 object-contain drop-shadow-lg" />
-            ) : (
-              <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-white/5 flex items-center justify-center text-lg font-bold text-gray-600">
-                {(event.home_team || "H")[0]}
+        {isLiveMicro ? (
+          <>
+            <div className="flex items-center justify-between gap-3 mb-4">
+              <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full border border-red-500/35 bg-red-500/12 text-[11px] font-semibold uppercase tracking-[0.14em] text-red-200">
+                <span className="micro-live-dot w-2 h-2 rounded-full bg-red-400 shadow-[0_0_10px_rgba(248,113,113,0.45)]" />
+                Live
               </div>
-            )}
-            <span className="text-xs sm:text-sm font-semibold text-white text-center leading-tight line-clamp-2">
-              {event.home_team || "Home"}
-            </span>
-          </div>
-
-          {/* Score / VS */}
-          <div className="text-center px-2 shrink-0">
-            {hasScore ? (
-              <div className={`text-2xl sm:text-3xl font-black tabular-nums ${isLive ? "text-pump-green" : "text-white"}`}>
-                {formatScore(event.score, event.sport)}
+              <div className="flex items-center gap-2 min-w-0">
+                {event.league && (
+                  <span className="text-[11px] text-gray-300/80 truncate max-w-[160px] uppercase tracking-wide">
+                    {event.league}
+                  </span>
+                )}
+                {polling && (
+                  <span className="inline-block w-3 h-3 border border-gray-500 border-t-transparent rounded-full animate-spin" />
+                )}
               </div>
-            ) : (
-              <div className="text-lg font-bold text-gray-600">VS</div>
-            )}
-          </div>
+            </div>
 
-          {/* Away */}
-          <div className="flex-1 flex flex-col items-center gap-1.5 min-w-0">
-            {awayBadge ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={awayBadge} alt="" className="w-12 h-12 sm:w-14 sm:h-14 object-contain drop-shadow-lg" />
-            ) : (
-              <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-white/5 flex items-center justify-center text-lg font-bold text-gray-600">
-                {(event.away_team || "A")[0]}
+            <div className="text-center">
+              <div
+                className={`mx-auto text-5xl sm:text-6xl font-black tabular-nums tracking-[0.08em] ${timerPulseClass}`}
+                style={{ color: timerColor }}
+              >
+                {remainingSec == null ? "00:00" : formatCountdownMmSs(remainingSec)}
               </div>
-            )}
-            <span className="text-xs sm:text-sm font-semibold text-white text-center leading-tight line-clamp-2">
-              {event.away_team || "Away"}
-            </span>
-          </div>
-        </div>
+              <div className="mt-1 text-[11px] sm:text-xs uppercase tracking-[0.22em] text-gray-300">
+                Window Active
+              </div>
+              <div className="mt-2 text-xs text-gray-400">{microStatus}</div>
+            </div>
+
+            <div className="mt-5 rounded-2xl border border-white/12 bg-white/[0.04] backdrop-blur-sm px-3 py-3 sm:px-5">
+              <div className="flex items-center gap-2 sm:gap-4">
+                <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0">
+                  {homeBadge ? (
+                    <>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={homeBadge}
+                        alt=""
+                        className="w-9 h-9 sm:w-11 sm:h-11 object-contain shrink-0 drop-shadow-[0_0_10px_rgba(124,255,107,0.2)]"
+                      />
+                    </>
+                  ) : (
+                    <span className="text-sm font-bold text-gray-200 shrink-0">
+                      {(event.home_team || "H")[0]}
+                    </span>
+                  )}
+                  <span className="text-xs sm:text-sm font-medium text-white truncate uppercase tracking-wide">
+                    {event.home_team || "Home"}
+                  </span>
+                </div>
+
+                <div className={`micro-score-pulse text-4xl sm:text-5xl font-black tabular-nums text-white shrink-0`}>
+                  {scorePair ? `${scorePair.home} — ${scorePair.away}` : "—"}
+                </div>
+
+                <div className="flex items-center justify-end gap-2 sm:gap-3 flex-1 min-w-0">
+                  <span className="text-xs sm:text-sm font-medium text-white truncate uppercase tracking-wide text-right">
+                    {event.away_team || "Away"}
+                  </span>
+                  {awayBadge ? (
+                    <>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={awayBadge}
+                        alt=""
+                        className="w-9 h-9 sm:w-11 sm:h-11 object-contain shrink-0 drop-shadow-[0_0_10px_rgba(124,255,107,0.2)]"
+                      />
+                    </>
+                  ) : (
+                    <span className="text-sm font-bold text-gray-200 shrink-0">
+                      {(event.away_team || "A")[0]}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Status + league */}
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <span className={`px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wide ${sportStatusColor(displayStatus)}`}>
+                  {isLive && (
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-white mr-1.5 animate-pulse" />
+                  )}
+                  {statusBadgeLabel(displayStatus, minute)}
+                </span>
+                {event.league && (
+                  <span className="text-xs text-gray-500 truncate max-w-[140px]">{event.league}</span>
+                )}
+              </div>
+              {polling && <span className="inline-block w-3 h-3 border border-gray-500 border-t-transparent rounded-full animate-spin" />}
+            </div>
+
+            {/* Teams + Score */}
+            <div className="flex items-center justify-between gap-2">
+              {/* Home */}
+              <div className="flex-1 flex flex-col items-center gap-1.5 min-w-0">
+                {homeBadge ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={homeBadge} alt="" className="w-12 h-12 sm:w-14 sm:h-14 object-contain drop-shadow-lg" />
+                ) : (
+                  <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-white/5 flex items-center justify-center text-lg font-bold text-gray-600">
+                    {(event.home_team || "H")[0]}
+                  </div>
+                )}
+                <span className="text-xs sm:text-sm font-semibold text-white text-center leading-tight line-clamp-2">
+                  {event.home_team || "Home"}
+                </span>
+              </div>
+
+              {/* Score / VS */}
+              <div className="text-center px-2 shrink-0">
+                {hasScore ? (
+                  <div className={`text-2xl sm:text-3xl font-black tabular-nums ${isLive ? "text-pump-green" : "text-white"}`}>
+                    {formatScore(event.score, event.sport)}
+                  </div>
+                ) : (
+                  <div className="text-lg font-bold text-gray-600">VS</div>
+                )}
+              </div>
+
+              {/* Away */}
+              <div className="flex-1 flex flex-col items-center gap-1.5 min-w-0">
+                {awayBadge ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={awayBadge} alt="" className="w-12 h-12 sm:w-14 sm:h-14 object-contain drop-shadow-lg" />
+                ) : (
+                  <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-white/5 flex items-center justify-center text-lg font-bold text-gray-600">
+                    {(event.away_team || "A")[0]}
+                  </div>
+                )}
+                <span className="text-xs sm:text-sm font-semibold text-white text-center leading-tight line-clamp-2">
+                  {event.away_team || "Away"}
+                </span>
+              </div>
+            </div>
+          </>
+        )}
 
         {/* Kickoff time */}
         {kickoffDate && (
@@ -687,6 +973,72 @@ function SportScoreCard({
           </div>
         )}
       </div>
+      <style jsx>{`
+        :global(.micro-timer-soft-pulse) {
+          animation: microTimerSoftPulse 1s ease-in-out infinite;
+          transform-origin: center;
+        }
+        :global(.micro-timer-hard-pulse) {
+          animation: microTimerHardPulse 0.95s ease-in-out infinite;
+          transform-origin: center;
+        }
+        :global(.micro-score-pulse) {
+          animation: microScorePulse 9s ease-in-out infinite;
+          transform-origin: center;
+        }
+        :global(.micro-live-dot) {
+          animation: microLiveDotPulse 1.6s ease-in-out infinite;
+        }
+        @keyframes microTimerSoftPulse {
+          0%, 100% {
+            transform: scale(1);
+            opacity: 1;
+          }
+          50% {
+            transform: scale(1.02);
+            opacity: 0.92;
+          }
+        }
+        @keyframes microTimerHardPulse {
+          0%, 100% {
+            transform: scale(1);
+            filter: drop-shadow(0 0 0 rgba(255, 77, 77, 0));
+          }
+          50% {
+            transform: scale(1.06);
+            filter: drop-shadow(0 0 16px rgba(255, 77, 77, 0.42));
+          }
+        }
+        @keyframes microScorePulse {
+          0%, 100% {
+            transform: scale(1);
+          }
+          4.5% {
+            transform: scale(1.04);
+          }
+          9% {
+            transform: scale(1);
+          }
+        }
+        @keyframes microLiveDotPulse {
+          0%, 100% {
+            transform: scale(1);
+            opacity: 0.85;
+          }
+          50% {
+            transform: scale(1.2);
+            opacity: 1;
+          }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          :global(.micro-timer-soft-pulse),
+          :global(.micro-timer-hard-pulse),
+          :global(.micro-score-pulse),
+          :global(.micro-live-dot) {
+            animation: none !important;
+          }
+        }
+      `}</style>
     </div>
   );
 }
@@ -1510,13 +1862,83 @@ if (snap?.posAcc?.shares) {
     };
   }, [market?.dbId, market?.publicKey, submitting]);
 
+  const fallbackMicroEvent = useMemo(() => {
+    if (!market) return null;
+    if (!isSoccerNextGoalMicroMarket(market.sportMeta, market.question, market.description)) return null;
+
+    const meta = asObject(market.sportMeta);
+    const liveMicro = asObject(meta.live_micro);
+    const matchup = parseMatchupFromQuestion(market.question);
+    const startScoreMeta = asObject(meta.start_score);
+    const startScoreMicro = asObject(liveMicro.start_score);
+    const startScoreDesc = parseScorePairFromText(readDescriptionField(market.description, "Start Score"));
+
+    const startHomeCandidate = Number(
+      startScoreMeta.home ??
+      startScoreMeta.home_score ??
+      startScoreMicro.home ??
+      startScoreMicro.home_score ??
+      startScoreDesc?.home ??
+      0,
+    );
+    const startAwayCandidate = Number(
+      startScoreMeta.away ??
+      startScoreMeta.away_score ??
+      startScoreMicro.away ??
+      startScoreMicro.away_score ??
+      startScoreDesc?.away ??
+      0,
+    );
+    const startHome = Number.isFinite(startHomeCandidate) ? startHomeCandidate : 0;
+    const startAway = Number.isFinite(startAwayCandidate) ? startAwayCandidate : 0;
+
+    const event: any = {
+      sport: "soccer",
+      status: String(liveScore?.status || "live"),
+      league: String(meta.league || liveMicro.league || "Soccer"),
+      home_team: matchup?.home || "Home",
+      away_team: matchup?.away || "Away",
+      start_time: (typeof meta.start_time === "string" ? meta.start_time : market.startTime) || null,
+      end_time:
+        (typeof meta.window_end === "string" ? meta.window_end : null) ||
+        (typeof liveMicro.window_end === "string" ? liveMicro.window_end : null) ||
+        market.endTime ||
+        null,
+      score: {
+        home: liveScore?.home_score ?? startHome,
+        away: liveScore?.away_score ?? startAway,
+        minute: liveScore?.minute ?? null,
+      },
+      raw: {
+        ...(asObject(meta.raw)),
+        ...(asObject(liveMicro.raw)),
+      },
+      last_update: liveScoreLastSuccessAt ? new Date(liveScoreLastSuccessAt).toISOString() : undefined,
+    };
+
+    return event as SportEvent;
+  }, [
+    market?.publicKey,
+    market?.sportMeta,
+    market?.question,
+    market?.description,
+    market?.startTime,
+    market?.endTime,
+    liveScore?.home_score,
+    liveScore?.away_score,
+    liveScore?.minute,
+    liveScore?.status,
+    liveScoreLastSuccessAt,
+  ]);
+
   // Merge liveScore into sportEvent for display while keeping last known values on fetch errors.
   const sportEventForUi = useMemo(() => {
-    if (!sportEvent) return null;
+    const baseEvent = sportEvent || fallbackMicroEvent;
+    if (!baseEvent) return null;
     const ev: any = {
-      ...sportEvent,
-      score: { ...(sportEvent.score || {}) },
-      raw: { ...(sportEvent.raw || {}) },
+      ...baseEvent,
+      score: { ...(baseEvent.score || {}) },
+      raw: { ...(baseEvent.raw || {}) },
     };
     if (market?.startTime) ev.start_time = market.startTime;
     if (market?.endTime) ev.end_time = market.endTime;
@@ -1531,7 +1953,7 @@ if (snap?.posAcc?.shares) {
       if (liveScoreLastSuccessAt) ev.last_update = new Date(liveScoreLastSuccessAt).toISOString();
     }
     return ev as SportEvent;
-  }, [sportEvent, liveScore, liveScoreLastSuccessAt, market?.startTime, market?.endTime]);
+  }, [sportEvent, fallbackMicroEvent, liveScore, liveScoreLastSuccessAt, market?.startTime, market?.endTime]);
 
   const sharedSportDisplayStatus: DisplayStatus = useMemo(
     () => (sportEventForUi ? resolveDisplayStatus(sportEventForUi) : "unknown"),
@@ -1837,16 +2259,24 @@ useEffect(() => {
       let txSig: string;
 
       if (side === "buy") {
+        const buyAccounts = {
+          market: marketPubkey,
+          userPosition: positionPDA,
+          platformWallet: PLATFORM_WALLET,
+          creator: creatorPubkey,
+          trader: publicKey,
+          systemProgram: SystemProgram.programId,
+        };
+
+        console.log("[trade buy debug] PLATFORM_WALLET", PLATFORM_WALLET.toBase58());
+        console.log("[trade buy debug] market PDA", marketPubkey.toBase58());
+        console.log("[trade buy debug] user position PDA", positionPDA.toBase58());
+        console.log("[trade buy debug] trader public key", publicKey.toBase58());
+        console.log("[trade buy debug] accounts", buyAccounts);
+
         const tx = await (program as any).methods
           .buyShares(amountBn, safeOutcome)
-          .accounts({
-            market: marketPubkey,
-            userPosition: positionPDA,
-            platformWallet: PLATFORM_WALLET,
-            creator: creatorPubkey,
-            trader: publicKey,
-            systemProgram: SystemProgram.programId,
-          })
+          .accounts(buyAccounts)
           .transaction();
       
         setTradeStep("confirming");
@@ -2037,8 +2467,16 @@ useEffect(() => {
   const nowSec = Math.floor(nowMs / 1000);
   const hasValidEnd = Number.isFinite(market.resolutionTime) && market.resolutionTime > 0;
   const endedByTime = hasValidEnd ? nowSec >= market.resolutionTime : false;
-  const sportIsLive = market.marketMode === "sport" && sharedSportDisplayStatus === "live";
-  const sportIsFinished = market.marketMode === "sport" && sharedSportDisplayStatus === "finished";
+  const sportMeta = asObject(market.sportMeta);
+  const liveMicroMeta = asObject(sportMeta.live_micro);
+  const isSoccerNextGoalMicro = isSoccerNextGoalMicroMarket(
+    market.sportMeta,
+    market.question,
+    market.description,
+  );
+  const isSportLikeMarket = market.marketMode === "sport" || isSoccerNextGoalMicro;
+  const sportIsLive = isSportLikeMarket && sharedSportDisplayStatus === "live";
+  const sportIsFinished = isSportLikeMarket && sharedSportDisplayStatus === "finished";
 
   const status = market.resolutionStatus ?? "open";
   const isResolvedOnChain = !!market.resolved;
@@ -2057,16 +2495,28 @@ useEffect(() => {
   // Sport status: scheduled → live → locked → finished
   // Read sportStartTime from sportMeta or sportEvent
   const sportStartMs = (() => {
-    const raw = market?.startTime || sportEventForUi?.start_time || sportEvent?.start_time || (market.sportMeta as any)?.start_time;
+    const raw =
+      market?.startTime ||
+      sportEventForUi?.start_time ||
+      sportEvent?.start_time ||
+      (market.sportMeta as any)?.start_time ||
+      readDescriptionField(market.description, "Window Start");
     const t = parseIsoUtc(raw)?.getTime() ?? NaN;
     return Number.isFinite(t) ? t : NaN;
   })();
   const resolvedSportEndMs = (() => {
-    const raw = market?.endTime || sportEventForUi?.end_time || sportEvent?.end_time || (market.sportMeta as any)?.end_time;
+    const raw =
+      market?.endTime ||
+      sportEventForUi?.end_time ||
+      sportEvent?.end_time ||
+      (market.sportMeta as any)?.end_time ||
+      (market.sportMeta as any)?.window_end ||
+      (asObject((market.sportMeta as any)?.live_micro).window_end as string | undefined) ||
+      readDescriptionField(market.description, "Window End");
     const t = parseIsoUtc(raw)?.getTime() ?? NaN;
     return Number.isFinite(t) ? t : NaN;
   })();
-  const sportKey = String(sportEventForUi?.sport || (market.sportMeta as any)?.sport || "").toLowerCase();
+  const sportKey = String(sportEventForUi?.sport || (market.sportMeta as any)?.sport || (isSoccerNextGoalMicro ? "soccer" : "")).toLowerCase();
   const isSoccerLike = sportKey === "soccer" || sportKey === "football";
   const sportDurationMs = predefinedSportDurationMs(sportKey);
   const sportHeuristicEndMs = Number.isFinite(sportStartMs) && Number.isFinite(sportDurationMs)
@@ -2102,7 +2552,7 @@ const ended = endedByTime;
   // Compute sport phase: scheduled | live | locked | finished.
   // Provider live status has priority over early time-based checks before predefined end.
   const sportPhase: "scheduled" | "live" | "locked" | "finished" | null = (() => {
-    if (!market.marketMode || market.marketMode !== "sport") return null;
+    if (!isSportLikeMarket) return null;
     if (sportFinished) return "finished";
     if (sportIsLive && !hardSportLockReached) return "live";
     // Hard guard: match hasn't started yet → always scheduled
@@ -2136,6 +2586,32 @@ const ended = endedByTime;
   const sportLocksLabel = Number.isFinite(sportLockMs)
     ? new Date(sportLockMs).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })
     : null;
+  const microWindowEndMs = (() => {
+    const raw =
+      sportMeta.window_end ??
+      liveMicroMeta.window_end ??
+      readDescriptionField(market.description, "Window End");
+    const fromMeta = typeof raw === "string" ? parseIsoUtc(raw)?.getTime() ?? NaN : NaN;
+    if (Number.isFinite(fromMeta)) return fromMeta;
+    return hasValidEnd ? market.resolutionTime * 1000 : NaN;
+  })();
+  const microGoalObserved = isTruthyFlag(liveMicroMeta.goal_observed ?? sportMeta.goal_observed);
+  const microTradingLocked = isTruthyFlag(liveMicroMeta.trading_locked ?? sportMeta.trading_locked);
+  const blockedReasonLower = String(market.blockedReason || "").toLowerCase();
+  const liveMicroAutoLocked =
+    isSoccerNextGoalMicro &&
+    (microGoalObserved ||
+      microTradingLocked ||
+      (market.isBlocked && /live micro|goal observed|goal detected|next goal/.test(blockedReasonLower)));
+  const microWindowEnded = Number.isFinite(microWindowEndMs) ? nowMs >= microWindowEndMs : endedByTime;
+  const microHeroState: "active" | "locked" | "resolving" | "ended" | null = (() => {
+    if (!isSoccerNextGoalMicro) return null;
+    if (isResolvedOnChain || status === "finalized" || status === "cancelled") return "ended";
+    if (liveMicroAutoLocked) return "locked";
+    if (isProposed || microWindowEnded) return "resolving";
+    return "active";
+  })();
+  const showGenericBlockedBanner = !!market.isBlocked && !liveMicroAutoLocked;
 
   const winningLabel =
     market.winningOutcome != null && Number.isFinite(Number(market.winningOutcome))
@@ -2153,6 +2629,11 @@ const ended = endedByTime;
   const marketBadgeScore = sportEventForUi && hasMeaningfulScore(sportEventForUi)
     ? (formatLiveScore(sportEventForUi.score)?.split(" · ")[0] ?? null)
     : null;
+  const marketCardVisualUrl = pickMarketCardVisual(
+    sportEventForUi,
+    market.sportMeta,
+    market.imageUrl ?? null,
+  );
   const effectiveVol =
     Number.isFinite(marketBalanceLamports)
       ? (marketBalanceLamports as number)
@@ -2219,7 +2700,7 @@ const ended = endedByTime;
               )}
 
               {/* Sport score card — when ended (on-chain), badge shows FINAL regardless of provider */}
-              {sportEventForUi && market.marketMode === "sport" && (
+              {sportEventForUi && isSportLikeMarket && (
                 <SportScoreCard
                   event={sportEventForUi}
                   meta={market?.sportMeta}
@@ -2228,16 +2709,46 @@ const ended = endedByTime;
                   polling={liveScorePolling}
                   stale={liveScoreFailures >= 3}
                   lastPolledAt={liveScoreLastSuccessAt}
+                  isLiveMicro={isSoccerNextGoalMicro}
+                  microWindowEndMs={microWindowEndMs}
+                  microGoalObserved={microGoalObserved}
+                  microTradingLocked={microTradingLocked || !!market.isBlocked}
                 />
               )}
 
               {/* Sport trading state banners */}
-              {sportPhase === "locked" && (
+              {isSoccerNextGoalMicro && microHeroState && (
+                <div
+                  className={`rounded-xl border px-4 py-3 ${
+                    microHeroState === "active"
+                      ? "border-pump-green/40 bg-pump-green/10 text-pump-green"
+                      : microHeroState === "locked"
+                      ? "border-red-500/40 bg-red-500/10 text-red-200"
+                      : microHeroState === "resolving"
+                      ? "border-sky-500/40 bg-sky-500/10 text-sky-200"
+                      : "border-gray-600 bg-gray-800/40 text-gray-300"
+                  }`}
+                >
+                  <div className="text-sm font-semibold">
+                    {microHeroState === "active" && "Window active"}
+                    {microHeroState === "locked" && "Goal detected"}
+                    {microHeroState === "resolving" && "Resolving window"}
+                    {microHeroState === "ended" && "Window ended"}
+                  </div>
+                  <div className="text-xs opacity-90 mt-0.5">
+                    {microHeroState === "active" && "Trading open"}
+                    {microHeroState === "locked" && "Trading locked"}
+                    {microHeroState === "resolving" && "Awaiting resolution"}
+                    {microHeroState === "ended" && "Final state reached"}
+                  </div>
+                </div>
+              )}
+              {!isSoccerNextGoalMicro && sportPhase === "locked" && (
                 <div className="rounded-xl border border-yellow-500/40 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-200 flex items-center gap-2">
                   Match ending soon, trading locked
                 </div>
               )}
-              {sportPhase === "finished" && (
+              {!isSoccerNextGoalMicro && sportPhase === "finished" && (
                 <div className="rounded-xl border border-gray-600 bg-gray-800/40 px-4 py-3 text-sm text-gray-300 flex items-center gap-2">
                   Match ended — trading closed
                 </div>
@@ -2259,12 +2770,11 @@ const ended = endedByTime;
               <div className="bg-black border border-gray-800 rounded-xl p-4 md:p-5 hover:border-pump-green/60 transition-all duration-200">
                 <div className="flex items-start gap-3">
                   <div className="flex-shrink-0 w-16 h-16 md:w-20 md:h-20 rounded-xl overflow-hidden bg-pump-dark">
-                    {market.imageUrl ? (
-                      <Image
-                        src={market.imageUrl}
+                    {marketCardVisualUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={marketCardVisualUrl}
                         alt={market.question}
-                        width={80}
-                        height={80}
                         className="object-cover w-full h-full"
                       />
                     ) : (
@@ -2325,7 +2835,7 @@ const ended = endedByTime;
                     </span>
                   </div>
   
-                  {market.marketMode === "sport" ? (
+                  {isSportLikeMarket ? (
                     <div className="leading-tight">
                       <div>
                         {sportKickoffLabel ? `Kickoff ${sportKickoffLabel}` : "Kickoff —"}
@@ -2342,9 +2852,15 @@ const ended = endedByTime;
                   <div className="ml-auto text-xs text-gray-500 flex items-center gap-2">
                     {/* Blocked badge */}
                     {market.isBlocked && (
-                      <span className="px-2 py-1 rounded-full border border-red-600/40 bg-red-600/20 text-red-400">
-                        Blocked
-                      </span>
+                      liveMicroAutoLocked ? (
+                        <span className="px-2 py-1 rounded-full border border-yellow-500/40 bg-yellow-500/10 text-yellow-300">
+                          Locked
+                        </span>
+                      ) : (
+                        <span className="px-2 py-1 rounded-full border border-red-600/40 bg-red-600/20 text-red-400">
+                          Blocked
+                        </span>
+                      )
                     )}
 
                     {/* Sport phase badges — on-chain ended overrides provider status */}
@@ -2430,7 +2946,19 @@ const ended = endedByTime;
                     </div>
                   </div>
                 )}
-  
+
+                {isSoccerNextGoalMicro && marketCardVisualUrl && (
+                  <div className="mt-4 mb-1 flex justify-end">
+                    <div className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1">
+                      <span className="text-[10px] uppercase tracking-[0.12em] text-gray-400">Provider</span>
+                      <div className="w-11 h-7 rounded overflow-hidden border border-white/10 bg-black/50">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={marketCardVisualUrl} alt="" className="w-full h-full object-cover" />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Outcomes */}
                 {isBinaryStyle ? (
                   <div className="mt-4 grid grid-cols-2 gap-3">
@@ -2611,8 +3139,26 @@ const ended = endedByTime;
                 ════════════════════════════════════════════════════════════ */}
             <div className="lg:col-span-1">
               <div className="lg:sticky lg:top-6 space-y-4 pb-8">
-                {/* ✅ Show BlockedMarketBanner instead of TradingPanel if blocked */}
-                {market.isBlocked ? (
+                {/* Live micro auto-lock gets dedicated state copy; admin blocks keep the generic banner */}
+                {liveMicroAutoLocked ? (
+                  <div className="rounded-2xl border border-yellow-500/40 bg-yellow-500/10 p-5">
+                    <h3 className="text-lg font-bold text-yellow-200 mb-2">Goal detected</h3>
+                    <p className="text-sm text-yellow-100/90">
+                      Trading has been locked for this market and it will resolve at window end.
+                    </p>
+                    {Number.isFinite(microWindowEndMs) && (
+                      <p className="text-xs text-yellow-200/80 mt-3">
+                        Window ends at{" "}
+                        {new Date(microWindowEndMs).toLocaleTimeString("en-US", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                          hour12: false,
+                        })}
+                        .
+                      </p>
+                    )}
+                  </div>
+                ) : showGenericBlockedBanner ? (
                   <BlockedMarketBanner
                     reason={market.blockedReason}
                     blockedAt={market.blockedAt}
