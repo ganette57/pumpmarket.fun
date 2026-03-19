@@ -7,13 +7,19 @@ import {
   getLiveMicroWindowMinutes,
 } from "@/lib/liveMicro/config";
 import { ensureLiveMicroAutoTickStarted, getLiveMicroAutoTickStatus } from "@/lib/liveMicro/autoTick";
-import { activateLiveMicroMatchLoop, startLiveMicroMarket, tickLiveMicroMarkets } from "@/lib/liveMicro/engine";
+import {
+  activateLiveMicroMatchLoop,
+  resumeLiveMicroMatchLoop,
+  stopLiveMicroMatchLoop,
+  startLiveMicroMarket,
+  tickLiveMicroMarkets,
+} from "@/lib/liveMicro/engine";
 import { findLiveMicroMatchLoopByMatch, getLiveMicroMatchLoopById, listRecentLiveMicroMatchLoops } from "@/lib/liveMicro/repository";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type TriggerAction = "start" | "tick" | "activate_match" | "start_loop" | "loop_status";
+type TriggerAction = "start" | "tick" | "activate_match" | "start_loop" | "loop_status" | "resume_loop" | "stop_loop";
 
 function jsonError(message: string, status = 400, extra?: Record<string, unknown>) {
   return NextResponse.json({ ok: false, error: message, ...(extra || {}) }, { status });
@@ -76,7 +82,9 @@ export async function POST(req: Request) {
     actionRaw === "tick" ||
       actionRaw === "activate_match" ||
       actionRaw === "start_loop" ||
-      actionRaw === "loop_status"
+      actionRaw === "loop_status" ||
+      actionRaw === "resume_loop" ||
+      actionRaw === "stop_loop"
       ? actionRaw
       : "start";
 
@@ -195,6 +203,73 @@ export async function POST(req: Request) {
         },
         loop_config: getLiveMicroSoccerLoopConfig(),
         loops,
+      });
+    }
+
+    if (action === "resume_loop") {
+      const loopId = String(body.loop_id || body.id || "").trim();
+      const providerMatchId = String(body.provider_match_id || body.providerMatchId || "").trim();
+      const providerName = String(body.provider_name || body.providerName || "api-football").trim();
+      const resumedBy = String(
+        body.resumed_by ||
+        body.resumedBy ||
+        req.headers.get("x-live-micro-actor") ||
+        "admin_or_token",
+      ).trim();
+
+      if (!loopId && !providerMatchId) {
+        return jsonError("loop_id or provider_match_id is required", 400);
+      }
+
+      const result = await resumeLiveMicroMatchLoop({
+        loopId: loopId || undefined,
+        providerMatchId: providerMatchId || undefined,
+        providerName,
+        resumedBy: resumedBy || "admin_or_token",
+        windowMinutes: toInt(body.window_minutes, getLiveMicroWindowMinutes()),
+      });
+
+      return NextResponse.json({
+        ok: true,
+        action,
+        auto_tick: getLiveMicroAutoTickStatus(),
+        guards: {
+          cluster: flags.currentCluster,
+          allowed_cluster: flags.allowedCluster,
+          dev_only: flags.devOnly,
+        },
+        loop_config: getLiveMicroSoccerLoopConfig(),
+        result,
+      });
+    }
+
+    if (action === "stop_loop") {
+      const loopId = String(body.loop_id || body.id || "").trim();
+      const stoppedBy = String(
+        body.stopped_by ||
+        body.stoppedBy ||
+        req.headers.get("x-live-micro-actor") ||
+        "admin_or_token",
+      ).trim();
+
+      if (!loopId) return jsonError("loop_id is required", 400);
+
+      const result = await stopLiveMicroMatchLoop({
+        loopId,
+        stoppedBy: stoppedBy || "admin_or_token",
+      });
+
+      return NextResponse.json({
+        ok: true,
+        action,
+        auto_tick: getLiveMicroAutoTickStatus(),
+        guards: {
+          cluster: flags.currentCluster,
+          allowed_cluster: flags.allowedCluster,
+          dev_only: flags.devOnly,
+        },
+        loop_config: getLiveMicroSoccerLoopConfig(),
+        result,
       });
     }
 

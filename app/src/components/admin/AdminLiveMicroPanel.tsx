@@ -19,6 +19,7 @@ type SportsMatch = {
 
 type LiveMicroLoopStatus = "active" | "halftime" | "ended" | "error";
 type LiveMicroLoopPhase = "first_half" | "halftime" | "second_half" | "ended";
+type LiveMicroDisplayStatus = LiveMicroLoopStatus | "retrying" | "stopped";
 
 type LiveMicroLoop = {
   id: string;
@@ -53,6 +54,27 @@ type TriggerActivateResponse = {
     firstMarket?: {
       liveMicroId?: string;
     } | null;
+    loop?: LiveMicroLoop | null;
+  };
+};
+
+type TriggerResumeResponse = {
+  ok?: boolean;
+  error?: string;
+  result?: {
+    resumed?: boolean;
+    reason?: string;
+    reconcile?: Record<string, unknown> | null;
+    loop?: LiveMicroLoop | null;
+  };
+};
+
+type TriggerStopResponse = {
+  ok?: boolean;
+  error?: string;
+  result?: {
+    stopped?: boolean;
+    reason?: string;
     loop?: LiveMicroLoop | null;
   };
 };
@@ -202,9 +224,11 @@ function matchStatusTone(status: MatchStatus): string {
   return "border-yellow-500/40 bg-yellow-500/10 text-yellow-300";
 }
 
-function loopStatusTone(status: LiveMicroLoopStatus): string {
+function loopStatusTone(status: LiveMicroDisplayStatus): string {
   if (status === "active") return "border-pump-green/40 bg-pump-green/10 text-pump-green";
   if (status === "halftime") return "border-blue-500/40 bg-blue-500/10 text-blue-300";
+  if (status === "retrying") return "border-amber-500/40 bg-amber-500/10 text-amber-300";
+  if (status === "stopped") return "border-slate-500/40 bg-slate-500/10 text-slate-300";
   if (status === "ended") return "border-gray-500/40 bg-gray-500/10 text-gray-300";
   return "border-red-500/40 bg-red-500/10 text-red-300";
 }
@@ -219,6 +243,43 @@ function loopPhaseTone(phase: LiveMicroLoopPhase): string {
 function safeObj(input: unknown): Record<string, unknown> {
   if (!input || typeof input !== "object" || Array.isArray(input)) return {};
   return input as Record<string, unknown>;
+}
+
+type LoopRetryInfo = {
+  retrying: boolean;
+  retryCount: number;
+  maxAttempts: number;
+  nextRetryAt: string | null;
+  lastError: string | null;
+  lastErrorAt: string | null;
+};
+
+function readLoopRetryInfo(loop: LiveMicroLoop): LoopRetryInfo {
+  const payload = safeObj(loop.last_snapshot_payload);
+  const runtime = safeObj(payload.__live_micro_loop_runtime);
+  const retry = safeObj(runtime.retry);
+  const retryCount = Math.max(0, Math.floor(Number(retry.retry_count ?? 0) || 0));
+  const maxAttempts = Math.max(1, Math.floor(Number(retry.max_attempts ?? 6) || 6));
+  const nextRetryAt = String(retry.next_retry_at || "").trim() || null;
+  const lastError = String(retry.last_error || "").trim() || null;
+  const lastErrorAt = String(retry.last_error_at || "").trim() || null;
+  return {
+    retrying: Boolean(retry.retrying),
+    retryCount,
+    maxAttempts,
+    nextRetryAt,
+    lastError,
+    lastErrorAt,
+  };
+}
+
+function loopDisplayStatus(loop: LiveMicroLoop): LiveMicroDisplayStatus {
+  if (loop.loop_status === "ended" && loop.stop_reason === "manual_admin_stop") return "stopped";
+  if (loop.loop_status === "ended") return "ended";
+  if (loop.loop_status === "error") return "error";
+  const retryInfo = readLoopRetryInfo(loop);
+  if (retryInfo.retrying) return "retrying";
+  return loop.loop_status;
 }
 
 function readNestedString(obj: unknown, path: string[]): string | null {
@@ -270,8 +331,12 @@ function friendlyActivationReason(reason: string | undefined): string {
   if (!r) return "Loop activated.";
   if (r === "first_market_created") return "Loop activated and first market created.";
   if (r === "active_micro_already_exists") return "Loop activated (active market already existed).";
+  if (r === "first_market_retry_scheduled") return "Loop activated. First window creation failed temporarily and retry is scheduled.";
+  if (r === "first_market_retry_exhausted") return "Loop activation reached max retry attempts for first window.";
   if (r.startsWith("match_not_live:")) return "Loop activated. Match is not live yet, waiting for live state.";
-  if (r === "provider_finished") return "Loop ended immediately because provider reports the match as finished.";
+  if (r === "provider_finished" || r === "provider_match_finished") {
+    return "Loop ended immediately because provider reports the match as finished.";
+  }
   if (r === "hard_stop_minute_reached" || r === "hard_stop_max_match_minutes_reached") {
     return "Loop reached hard stop conditions.";
   }
@@ -512,6 +577,8 @@ export default function AdminLiveMicroPanel() {
 
   const [activating, setActivating] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [resumingLoopId, setResumingLoopId] = useState<string | null>(null);
+  const [stoppingLoopId, setStoppingLoopId] = useState<string | null>(null);
 
   const [loops, setLoops] = useState<LiveMicroLoop[]>([]);
   const [loopsLoading, setLoopsLoading] = useState(true);
@@ -669,6 +736,134 @@ export default function AdminLiveMicroPanel() {
     }
   }
 
+  async function resumeLoop(loop: LiveMicroLoop) {
+    if (resumingLoopId) return;
+    setResumingLoopId(loop.id);
+    setNotice(null);
+
+    try {
+      const res = await fetch("/api/admin/live-micro/trigger", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          action: "resume_loop",
+          loop_id: loop.id,
+          provider_match_id: loop.provider_match_id,
+          provider_name: loop.provider_name,
+        }),
+      });
+
+      const json = (await res.json().catch(() => ({}))) as TriggerResumeResponse;
+      if (!res.ok || !json.ok) {
+        throw new Error(friendlyApiError(json.error || `HTTP ${res.status}`));
+      }
+
+      const resumed = json.result?.resumed;
+      const reason = String(json.result?.reason || "").trim();
+      const summary = resumed
+        ? reason === "manual_resume_retry_scheduled"
+          ? "Loop resume requested. Reconcile hit a temporary error and retry was scheduled."
+          : reason === "manual_resume_retry_exhausted"
+          ? "Loop resume requested but retry budget is exhausted."
+          : "Loop resumed and immediate reconcile triggered."
+        : reason === "manual_resume_blocked_match_finished"
+        ? "Loop not resumed because provider reports the match as finished."
+        : reason === "manual_resume_blocked_hard_stop"
+        ? "Loop not resumed because hard stop conditions are already met."
+        : reason === "loop_already_ended"
+        ? "Loop is already ended."
+        : reason === "loop_not_found"
+        ? "Loop not found."
+        : reason === "manual_resume_failed_non_retryable"
+        ? "Loop resume failed with a non-retryable error."
+        : `Resume not applied (${reason || "unknown reason"}).`;
+
+      if (json.result?.loop) {
+        setLoops((prev) => {
+          const byId = new Map<string, LiveMicroLoop>();
+          for (const row of prev) byId.set(row.id, row);
+          byId.set(json.result!.loop!.id, json.result!.loop!);
+          return Array.from(byId.values()).sort(
+            (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+          );
+        });
+      }
+
+      setNotice({
+        tone: resumed ? "ok" : "neutral",
+        message: summary,
+      });
+      await loadLoops({ silent: true });
+    } catch (e: unknown) {
+      setNotice({
+        tone: "error",
+        message: (e as { message?: string })?.message || "Failed to resume loop.",
+      });
+    } finally {
+      setResumingLoopId(null);
+    }
+  }
+
+  async function stopLoop(loop: LiveMicroLoop) {
+    if (stoppingLoopId) return;
+    setStoppingLoopId(loop.id);
+    setNotice(null);
+
+    try {
+      const res = await fetch("/api/admin/live-micro/trigger", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          action: "stop_loop",
+          loop_id: loop.id,
+        }),
+      });
+
+      const json = (await res.json().catch(() => ({}))) as TriggerStopResponse;
+      if (!res.ok || !json.ok) {
+        throw new Error(friendlyApiError(json.error || `HTTP ${res.status}`));
+      }
+
+      const stopped = json.result?.stopped;
+      const reason = String(json.result?.reason || "").trim();
+      const summary = stopped
+        ? "Loop stopped manually."
+        : reason === "manual_stop_already_applied"
+        ? "Loop is already manually stopped."
+        : reason === "loop_already_ended"
+        ? "Loop is already ended."
+        : reason === "loop_not_found"
+        ? "Loop not found."
+        : `Stop not applied (${reason || "unknown reason"}).`;
+
+      if (json.result?.loop) {
+        setLoops((prev) => {
+          const byId = new Map<string, LiveMicroLoop>();
+          for (const row of prev) byId.set(row.id, row);
+          byId.set(json.result!.loop!.id, json.result!.loop!);
+          return Array.from(byId.values()).sort(
+            (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+          );
+        });
+      }
+
+      setNotice({
+        tone: stopped ? "ok" : "neutral",
+        message: summary,
+      });
+      await loadLoops({ silent: true });
+    } catch (e: unknown) {
+      setNotice({
+        tone: "error",
+        message: (e as { message?: string })?.message || "Failed to stop loop.",
+      });
+    } finally {
+      setStoppingLoopId(null);
+    }
+  }
+
   const selectedMatchStatus = selectedMatch ? normalizeMatchStatus(selectedMatch.status) : "unknown";
   const selectedMatchTime = selectedMatch
     ? parseEventStartDate(selectedMatch.start_time, extractEventTimeZone(selectedMatch))
@@ -796,6 +991,16 @@ export default function AdminLiveMicroPanel() {
                 {loops.map((loop) => {
                   const label = loopMatchLabel(loop, knownMatchesById);
                   const league = loopLeague(loop, knownMatchesById);
+                  const retryInfo = readLoopRetryInfo(loop);
+                  const displayStatus = loopDisplayStatus(loop);
+                  const canResume =
+                    loop.loop_status === "error" ||
+                    loop.loop_status === "halftime" ||
+                    displayStatus === "retrying" ||
+                    displayStatus === "stopped";
+                  const canStop = loop.loop_status !== "ended";
+                  const isResuming = resumingLoopId === loop.id;
+                  const isStopping = stoppingLoopId === loop.id;
                   return (
                     <div key={loop.id} className="rounded-lg border border-white/10 bg-black/20 p-2.5">
                       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -804,8 +1009,8 @@ export default function AdminLiveMicroPanel() {
                           <span className={`px-2 py-0.5 rounded-full border text-[10px] font-medium ${loopPhaseTone(loop.loop_phase)}`}>
                             {loop.loop_phase.replace("_", " ")}
                           </span>
-                          <span className={`px-2 py-0.5 rounded-full border text-[10px] font-medium ${loopStatusTone(loop.loop_status)}`}>
-                            {loop.loop_status}
+                          <span className={`px-2 py-0.5 rounded-full border text-[10px] font-medium ${loopStatusTone(displayStatus)}`}>
+                            {displayStatus}
                           </span>
                         </div>
                       </div>
@@ -819,14 +1024,51 @@ export default function AdminLiveMicroPanel() {
                         <span>updated: {formatDateTime(loop.updated_at)}</span>
                       </div>
 
+                      {displayStatus === "retrying" ? (
+                        <div className="mt-1 text-[11px] text-amber-300">
+                          retry: {retryInfo.retryCount}/{retryInfo.maxAttempts}
+                          {retryInfo.nextRetryAt ? ` • next: ${formatDateTime(retryInfo.nextRetryAt)}` : ""}
+                        </div>
+                      ) : null}
+
                       {loop.stop_reason ? (
                         <div className="mt-1 text-[11px] text-gray-400">
                           stop reason: <span className="text-gray-300">{loop.stop_reason}</span>
                         </div>
                       ) : null}
 
+                      {retryInfo.lastError ? (
+                        <div className="mt-1 text-[11px] text-red-300">
+                          last error: {retryInfo.lastError}
+                          {retryInfo.lastErrorAt ? ` (${formatDateTime(retryInfo.lastErrorAt)})` : ""}
+                        </div>
+                      ) : null}
+
                       {loop.error_message ? (
                         <div className="mt-1 text-[11px] text-red-300">error: {loop.error_message}</div>
+                      ) : null}
+
+                      {canResume || canStop ? (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void resumeLoop(loop)}
+                            disabled={!canResume || !!resumingLoopId || !!stoppingLoopId}
+                            className="px-2.5 py-1.5 rounded-md border border-white/15 bg-white/5 text-gray-200 text-[11px] hover:bg-white/10 disabled:opacity-50 transition inline-flex items-center gap-1.5"
+                          >
+                            {isResuming ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                            Resume loop
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void stopLoop(loop)}
+                            disabled={!canStop || !!resumingLoopId || !!stoppingLoopId}
+                            className="px-2.5 py-1.5 rounded-md border border-red-500/25 bg-red-500/10 text-red-200 text-[11px] hover:bg-red-500/20 disabled:opacity-50 transition inline-flex items-center gap-1.5"
+                          >
+                            {isStopping ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                            Stop loop
+                          </button>
+                        </div>
                       ) : null}
                     </div>
                   );

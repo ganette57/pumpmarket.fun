@@ -8,6 +8,7 @@ export const revalidate = 0;
 const NO_STORE_HEADERS = {
   "Cache-Control": "no-store, no-cache, max-age=0, must-revalidate",
 };
+const MARKET_BATCH_SIZE = 1000;
 
 function env(name: string) {
   const v = process.env[name];
@@ -46,14 +47,21 @@ export async function GET(req: Request) {
   });
 
   try {
-    const { data: markets, error: mErr } = await supabase
-      .from("markets")
-      .select(
-        "id, resolved, resolution_status, end_date, total_volume, contest_count, contested, contest_deadline, question, market_address, proposed_winning_outcome, cancelled"
-      )
-      .limit(5000);
-
-    if (mErr) throw mErr;
+    const markets: any[] = [];
+    for (let from = 0; ; from += MARKET_BATCH_SIZE) {
+      const to = from + MARKET_BATCH_SIZE - 1;
+      const { data: chunk, error: mErr } = await supabase
+        .from("markets")
+        .select(
+          "id, resolved, resolution_status, end_date, total_volume, contest_count, contested, contest_deadline, question, market_address, proposed_winning_outcome, cancelled"
+        )
+        .order("id", { ascending: true })
+        .range(from, to);
+      if (mErr) throw mErr;
+      if (!chunk?.length) break;
+      markets.push(...chunk);
+      if (chunk.length < MARKET_BATCH_SIZE) break;
+    }
 
     const now = Date.now();
     const cutoff24h = now - 24 * 60 * 60 * 1000; // Changed from 48h
@@ -179,7 +187,7 @@ export async function GET(req: Request) {
           disputes_open,
           disputes_total,
         },
-        actionable_markets: actionable_markets.slice(0, 50),
+        actionable_markets,
       },
       { headers: NO_STORE_HEADERS }
     );

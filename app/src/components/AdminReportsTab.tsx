@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useWallet } from "@solana/wallet-adapter-react";
 
@@ -94,6 +94,8 @@ type Props = {
   onBlockMarket?: (marketAddress: string) => void;
 };
 
+const ITEMS_PER_PAGE = 15;
+
 export default function AdminReportsTab({ onBlockMarket }: Props) {
   const { publicKey } = useWallet();
   
@@ -103,6 +105,8 @@ export default function AdminReportsTab({ onBlockMarket }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"pending" | "reviewed" | "dismissed" | "all">("pending");
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const listRef = useRef<HTMLDivElement | null>(null);
 
   async function loadReports() {
     setLoading(true);
@@ -125,6 +129,28 @@ export default function AdminReportsTab({ onBlockMarket }: Props) {
   useEffect(() => {
     loadReports();
   }, [statusFilter]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [statusFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(reports.length / ITEMS_PER_PAGE));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const paginatedReports = useMemo(() => {
+    const start = (safeCurrentPage - 1) * ITEMS_PER_PAGE;
+    return reports.slice(start, start + ITEMS_PER_PAGE);
+  }, [reports, safeCurrentPage]);
+
+  useEffect(() => {
+    if (currentPage <= totalPages) return;
+    setCurrentPage(totalPages);
+  }, [currentPage, totalPages]);
+
+  function goToPage(page: number) {
+    const safePage = Math.max(1, Math.min(totalPages, page));
+    setCurrentPage(safePage);
+    listRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
   async function handleAction(reportId: string, action: "reviewed" | "dismissed") {
     setActionLoading(reportId);
@@ -199,8 +225,8 @@ export default function AdminReportsTab({ onBlockMarket }: Props) {
           No {statusFilter === "all" ? "" : statusFilter} reports.
         </div>
       ) : (
-        <div className="space-y-3">
-          {reports.map((r) => (
+        <div ref={listRef} className="space-y-3">
+          {paginatedReports.map((r) => (
             <div
               key={r.id}
               className={`card-pump p-4 ${
@@ -290,6 +316,25 @@ export default function AdminReportsTab({ onBlockMarket }: Props) {
               </div>
             </div>
           ))}
+          <div className="flex items-center justify-between gap-3 pt-1">
+            <button
+              onClick={() => goToPage(safeCurrentPage - 1)}
+              disabled={safeCurrentPage <= 1}
+              className="px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-gray-300 text-xs md:text-sm font-medium hover:bg-white/10 transition disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            <div className="text-xs md:text-sm text-gray-400">
+              Page {safeCurrentPage} / {totalPages}
+            </div>
+            <button
+              onClick={() => goToPage(safeCurrentPage + 1)}
+              disabled={safeCurrentPage >= totalPages}
+              className="px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-gray-300 text-xs md:text-sm font-medium hover:bg-white/10 transition disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
         </div>
       )}
     </div>

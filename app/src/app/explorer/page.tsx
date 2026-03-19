@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import FlashMarketCard from "@/components/FlashMarketCard";
@@ -40,6 +40,8 @@ function marketTopPct(m: Market): number {
 }
 
 type StatusFilter = "open" | "resolved";
+type ResolvedSort = "newest" | "oldest" | "match";
+const RESOLVED_PAGE_SIZE = 28;
 
 export default function ExplorerPage() {
   const searchParams = useSearchParams();
@@ -51,12 +53,17 @@ export default function ExplorerPage() {
   const [flashMarkets, setFlashMarkets] = useState<FlashMarket[]>([]);
   const [flashLoading, setFlashLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("open");
+  const [resolvedSearch, setResolvedSearch] = useState("");
+  const [resolvedSort, setResolvedSort] = useState<ResolvedSort>("newest");
+  const [resolvedPage, setResolvedPage] = useState(1);
+  const resolvedGridTopRef = useRef<HTMLDivElement | null>(null);
 
   const fetchFlashMarkets = useCallback(async (filter: StatusFilter) => {
     setFlashLoading(true);
     try {
+      const limit = filter === "resolved" ? 200 : 20;
       const res = await fetch(
-        `/api/explorer/flash-markets?limit=20&status=${filter}`,
+        `/api/explorer/flash-markets?limit=${limit}&status=${filter}`,
         { cache: "no-store" },
       );
       if (!res.ok) throw new Error(`Flash markets fetch failed (${res.status})`);
@@ -73,6 +80,82 @@ export default function ExplorerPage() {
   useEffect(() => {
     void fetchFlashMarkets(statusFilter);
   }, [statusFilter, fetchFlashMarkets]);
+
+  const visibleFlashMarkets = useMemo(() => {
+    if (statusFilter !== "resolved") return flashMarkets;
+    const q = resolvedSearch.trim().toLowerCase();
+    const filtered = q
+      ? flashMarkets.filter((m) => {
+          const match = `${m.homeTeam} vs ${m.awayTeam}`.toLowerCase();
+          const question = String(m.question || "").toLowerCase();
+          const windowLabel = m.loopSequence != null ? `window #${m.loopSequence}` : "";
+          return (
+            match.includes(q) ||
+            question.includes(q) ||
+            String(m.homeTeam || "").toLowerCase().includes(q) ||
+            String(m.awayTeam || "").toLowerCase().includes(q) ||
+            windowLabel.includes(q)
+          );
+        })
+      : [...flashMarkets];
+
+    const createdMs = (m: FlashMarket) => {
+      const t = Date.parse(String(m.createdAt || ""));
+      return Number.isFinite(t) ? t : 0;
+    };
+
+    filtered.sort((a, b) => {
+      if (resolvedSort === "oldest") return createdMs(a) - createdMs(b);
+      if (resolvedSort === "match") {
+        const matchA = `${a.homeTeam} vs ${a.awayTeam}`.toLowerCase();
+        const matchB = `${b.homeTeam} vs ${b.awayTeam}`.toLowerCase();
+        const byMatch = matchA.localeCompare(matchB);
+        if (byMatch !== 0) return byMatch;
+        const seqA = a.loopSequence ?? Number.MAX_SAFE_INTEGER;
+        const seqB = b.loopSequence ?? Number.MAX_SAFE_INTEGER;
+        if (seqA !== seqB) return seqA - seqB;
+        return createdMs(a) - createdMs(b);
+      }
+      return createdMs(b) - createdMs(a);
+    });
+
+    return filtered;
+  }, [flashMarkets, resolvedSearch, resolvedSort, statusFilter]);
+
+  const resolvedTotalPages = useMemo(() => {
+    if (statusFilter !== "resolved") return 1;
+    return Math.max(1, Math.ceil(visibleFlashMarkets.length / RESOLVED_PAGE_SIZE));
+  }, [statusFilter, visibleFlashMarkets.length]);
+
+  const pagedFlashMarkets = useMemo(() => {
+    if (statusFilter !== "resolved") return visibleFlashMarkets;
+    const safePage = Math.min(Math.max(1, resolvedPage), resolvedTotalPages);
+    const start = (safePage - 1) * RESOLVED_PAGE_SIZE;
+    return visibleFlashMarkets.slice(start, start + RESOLVED_PAGE_SIZE);
+  }, [statusFilter, visibleFlashMarkets, resolvedPage, resolvedTotalPages]);
+
+  useEffect(() => {
+    setResolvedPage(1);
+  }, [statusFilter, resolvedSearch, resolvedSort]);
+
+  useEffect(() => {
+    if (statusFilter !== "resolved") return;
+    if (resolvedPage > resolvedTotalPages) setResolvedPage(1);
+  }, [statusFilter, resolvedPage, resolvedTotalPages]);
+
+  const scrollToResolvedGridTop = useCallback(() => {
+    resolvedGridTopRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+
+  const goToPreviousResolvedPage = useCallback(() => {
+    setResolvedPage((p) => Math.max(1, p - 1));
+    requestAnimationFrame(scrollToResolvedGridTop);
+  }, [scrollToResolvedGridTop]);
+
+  const goToNextResolvedPage = useCallback(() => {
+    setResolvedPage((p) => Math.min(resolvedTotalPages, p + 1));
+    requestAnimationFrame(scrollToResolvedGridTop);
+  }, [resolvedTotalPages, scrollToResolvedGridTop]);
 
   useEffect(() => {
     if (!q) {
@@ -154,9 +237,30 @@ export default function ExplorerPage() {
             />
           </div>
 
+          {statusFilter === "resolved" && (
+            <div className="mb-4 flex flex-col md:flex-row md:items-center gap-2">
+              <input
+                type="text"
+                value={resolvedSearch}
+                onChange={(e) => setResolvedSearch(e.target.value)}
+                placeholder="Search by match, team, question, window..."
+                className="w-full md:w-[360px] px-3 py-2 rounded-lg bg-white/95 text-black text-sm border border-white/20 focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
+              />
+              <select
+                value={resolvedSort}
+                onChange={(e) => setResolvedSort(e.target.value as ResolvedSort)}
+                className="w-full md:w-[220px] px-3 py-2 rounded-lg bg-[#111827] text-white text-sm border border-white/15 focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
+              >
+                <option value="newest">Newest first</option>
+                <option value="oldest">Oldest first</option>
+                <option value="match">Group by match</option>
+              </select>
+            </div>
+          )}
+
           {flashLoading ? (
             <LoadingSpinner />
-          ) : flashMarkets.length === 0 ? (
+          ) : visibleFlashMarkets.length === 0 ? (
             <EmptyState
               message={
                 statusFilter === "resolved"
@@ -170,11 +274,37 @@ export default function ExplorerPage() {
               }
             />
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-              {flashMarkets.map((market) => (
-                <FlashMarketCard key={market.liveMicroId} market={market} />
-              ))}
-            </div>
+            <>
+              <div ref={resolvedGridTopRef} />
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                {pagedFlashMarkets.map((market) => (
+                  <FlashMarketCard key={market.liveMicroId} market={market} />
+                ))}
+              </div>
+              {statusFilter === "resolved" && (
+                <div className="mt-5 flex items-center justify-center gap-3">
+                  <button
+                    type="button"
+                    onClick={goToPreviousResolvedPage}
+                    disabled={resolvedPage <= 1}
+                    className="px-3 py-1.5 rounded-lg text-sm font-medium border border-white/15 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:border-white/30 transition"
+                  >
+                    Previous
+                  </button>
+                  <span className="text-sm text-gray-300 tabular-nums">
+                    Page {Math.min(resolvedPage, resolvedTotalPages)} / {resolvedTotalPages}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={goToNextResolvedPage}
+                    disabled={resolvedPage >= resolvedTotalPages}
+                    className="px-3 py-1.5 rounded-lg text-sm font-medium border border-white/15 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:border-white/30 transition"
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </section>
 

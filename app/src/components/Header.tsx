@@ -40,6 +40,7 @@ export default function Header() {
 
   // Check if we're on explorer/search page
   const isOnSearchPage = pathname === '/search' || pathname === '/explorer';
+  const isExplore = pathname === '/explorer';
 
   // pré-remplir search si on est sur /search?q=
   useEffect(() => {
@@ -81,23 +82,61 @@ export default function Header() {
       {/* HEADER FIXE - h-16 = 64px */}
       <header className="fixed top-0 left-0 right-0 z-[70] h-16 border-b border-gray-700/40 bg-pump-dark/95 backdrop-blur"> 
         <div className="mx-auto flex h-16 max-w-7xl items-center gap-4 px-4 sm:px-6 lg:px-8">
-          {/* Logo + name -> home */}
-          <Link href="/" className="flex items-center gap-2 shrink-0">
-            <img
-              src="/logo4.png"
-              alt="FunMarket"
-              className="h-16 w-16 object-contain"
-            />
-            <div className="flex items-center gap-2">
-              <span className="text-xl font-bold text-white">FunMarket</span>
-              <span className="px-2 py-0.5 text-[10px] font-bold uppercase rounded-full bg-pump-green text-black">
-                beta
-              </span>
-            </div>
-          </Link>
+          {/* Left side: logo + desktop nav */}
+          <div className="flex min-w-0 items-center gap-5">
+            {/* Logo + name -> home */}
+            <Link href="/" className="flex items-center gap-2 shrink-0">
+              <img
+                src="/logo4.png"
+                alt="FunMarket"
+                className="h-16 w-16 object-contain"
+              />
+              <div className="flex items-center gap-2">
+                <span className="text-xl font-bold text-white">FunMarket</span>
+                <span className="px-2 py-0.5 text-[10px] font-bold uppercase rounded-full bg-pump-green text-black">
+                  beta
+                </span>
+              </div>
+            </Link>
+
+            <nav className="ml-6 hidden md:flex items-center gap-4">
+              {/* Explore */}
+              <Link
+                href="/explorer"
+                className={`inline-flex items-center border-b pb-0.5 text-sm transition ${
+                  isExplore
+                    ? 'border-pump-green text-pump-green'
+                    : 'border-transparent text-gray-300 hover:text-white'
+                }`}
+              >
+                Explore
+              </Link>
+
+              {/* Live */}
+              <Link
+                href="/live"
+                className="inline-flex items-center gap-1.5 text-sm font-medium text-white hover:text-pump-green transition"
+              >
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
+                </span>
+                Live
+              </Link>
+
+              {/* How it works */}
+              <button
+                type="button"
+                onClick={() => setIsHowItWorksOpen(true)}
+                className="text-sm text-gray-300 hover:text-white"
+              >
+                How it works
+              </button>
+            </nav>
+          </div>
 
           {/* Search bar - hidden on mobile, visible on md+ */}
-          <div className="flex-1 min-w-0 hidden md:block">
+          <div className="hidden min-w-0 md:block md:flex-1 md:max-w-md lg:max-w-lg">
             <div className="flex items-center rounded-lg border border-gray-700/60 bg-black px-4 py-2 text-sm text-gray-300">
               <button
                 type="button"
@@ -123,28 +162,7 @@ export default function Header() {
           </div>
 
           {/* Right side */}
-          <div className="flex items-center gap-3 shrink-0">
-            {/* How it works */}
-            <button
-              type="button"
-              onClick={() => setIsHowItWorksOpen(true)}
-              className="hidden text-sm text-gray-300 hover:text-white md:inline-block"
-            >
-              How it works
-            </button>
-
-            {/* Live */}
-            <Link
-              href="/live"
-              className="hidden md:inline-flex items-center gap-1.5 text-sm text-gray-300 hover:text-pump-green transition"
-            >
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
-              </span>
-              Live
-            </Link>
-
+          <div className="ml-auto flex items-center gap-3 shrink-0">
             {/* Create */}
             <Link
               href="/create"

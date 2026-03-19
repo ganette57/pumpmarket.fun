@@ -113,6 +113,13 @@ type OddsRange = "24h" | "7d" | "30d" | "all";
 type BottomTab = "discussion" | "activity" | "rules";
 
 type RelatedTab = "related" | "trending" | "popular";
+type ScorePair = { home: number; away: number };
+type ResolvedLiveScore = {
+  home: number | null;
+  away: number | null;
+  source: string | null;
+  ignoredSources: string[];
+};
 
 /* ══════════════════════════════════════════════════════════════
    TRADE MODAL TYPES
@@ -380,7 +387,7 @@ function resolveDisplayStatus(event: any): DisplayStatus {
 }
 
 function statusBadgeLabel(status: DisplayStatus, minute: string): string {
-  if (status === "live") return minute ? `LIVE • ${minute}` : "LIVE";
+  if (status === "live") return minute ? `LIVE ${minute}` : "LIVE";
   if (status === "finished") return "FINAL";
   if (status === "scheduled") return "SCHEDULED";
   return "—";
@@ -478,6 +485,239 @@ function extractScorePair(event: any): { home: number; away: number } | null {
   return null;
 }
 
+function toStrictScorePair(homeLike: unknown, awayLike: unknown): ScorePair | null {
+  const home = Number(homeLike);
+  const away = Number(awayLike);
+  if (!Number.isFinite(home) || !Number.isFinite(away)) return null;
+  return { home, away };
+}
+
+function extractScorePairFromUnknown(value: unknown, depth = 0): ScorePair | null {
+  if (depth > 4 || value == null) return null;
+
+  if (typeof value === "string") {
+    const raw = value.trim();
+    if (!raw) return null;
+
+    try {
+      return extractScorePairFromUnknown(JSON.parse(raw), depth + 1);
+    } catch {
+      return parseScorePairFromText(raw);
+    }
+  }
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const pair = extractScorePairFromUnknown(entry, depth + 1);
+      if (pair) return pair;
+    }
+    return null;
+  }
+
+  if (typeof value !== "object") return null;
+
+  const obj = value as Record<string, unknown>;
+  const directPairs: Array<ScorePair | null> = [
+    toStrictScorePair(obj.home, obj.away),
+    toStrictScorePair(obj.home_score, obj.away_score),
+    toStrictScorePair(obj.local, obj.visitor),
+    toStrictScorePair(obj.h, obj.a),
+    toStrictScorePair(obj.homeScore, obj.awayScore),
+  ];
+  for (const pair of directPairs) {
+    if (pair) return pair;
+  }
+
+  const nestedCandidates = [
+    obj.score,
+    obj.current_score,
+    obj.live_score,
+    obj.result,
+    obj.raw,
+    obj.live,
+    obj.payload,
+    obj.data,
+    obj.provider_payload_start,
+    obj.provider_payload_end,
+  ];
+
+  for (const nested of nestedCandidates) {
+    const pair = extractScorePairFromUnknown(nested, depth + 1);
+    if (pair) return pair;
+  }
+
+  return null;
+}
+
+function readPath(value: unknown, path: Array<string | number>): unknown {
+  let cur: unknown = value;
+  for (const key of path) {
+    if (cur == null) return undefined;
+    if (typeof key === "number") {
+      if (!Array.isArray(cur) || key < 0 || key >= cur.length) return undefined;
+      cur = cur[key];
+      continue;
+    }
+    if (typeof cur !== "object" || Array.isArray(cur)) return undefined;
+    cur = (cur as Record<string, unknown>)[key];
+  }
+  return cur;
+}
+
+function firstFiniteNumber(values: unknown[]): number | null {
+  for (const value of values) {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+function scoreFromLiveMicroPayload(payload: Record<string, unknown> | null | undefined): ScorePair | null {
+  const home = firstFiniteNumber([
+    readPath(payload, ["current_score", "home"]),
+    readPath(payload, ["score", "home"]),
+    readPath(payload, ["event", "score", "home"]),
+    readPath(payload, ["live", "home_score"]),
+    readPath(payload, ["fixture", "goals", "home"]),
+    readPath(payload, ["event", "raw", "full", "goals", "home"]),
+    readPath(payload, ["event", "raw", "goals", "home"]),
+  ]);
+  const away = firstFiniteNumber([
+    readPath(payload, ["current_score", "away"]),
+    readPath(payload, ["score", "away"]),
+    readPath(payload, ["event", "score", "away"]),
+    readPath(payload, ["live", "away_score"]),
+    readPath(payload, ["fixture", "goals", "away"]),
+    readPath(payload, ["event", "raw", "full", "goals", "away"]),
+    readPath(payload, ["event", "raw", "goals", "away"]),
+  ]);
+  if (home == null || away == null) return null;
+  return { home: Math.max(0, Math.floor(home)), away: Math.max(0, Math.floor(away)) };
+}
+
+function scoreFromLiveMicroRow(liveMicroPayload: {
+  start_home_score?: number | null;
+  start_away_score?: number | null;
+  end_home_score?: number | null;
+  end_away_score?: number | null;
+} | null): ScorePair | null {
+  if (!liveMicroPayload) return null;
+  const home = firstFiniteNumber([liveMicroPayload.end_home_score, liveMicroPayload.start_home_score]);
+  const away = firstFiniteNumber([liveMicroPayload.end_away_score, liveMicroPayload.start_away_score]);
+  if (home == null || away == null) return null;
+  return { home: Math.max(0, Math.floor(home)), away: Math.max(0, Math.floor(away)) };
+}
+
+function resolveBestLiveScore({
+  liveScore,
+  sportEventForUi,
+  liveMicroPayload,
+  market,
+  lastKnownScore,
+}: {
+  liveScore: {
+    home_score: number | null;
+    away_score: number | null;
+    raw?: Record<string, unknown> | null;
+  } | null;
+  sportEventForUi: SportEvent | null;
+  liveMicroPayload: {
+    provider_payload_start?: Record<string, unknown> | null;
+    provider_payload_end?: Record<string, unknown> | null;
+    start_home_score?: number | null;
+    start_away_score?: number | null;
+    end_home_score?: number | null;
+    end_away_score?: number | null;
+  } | null;
+  market: UiMarket | null;
+  lastKnownScore: ScorePair | null;
+}): ResolvedLiveScore {
+  const ignoredSources: string[] = [];
+  const pick = (source: string, value: unknown): ScorePair | null => {
+    const pair = extractScorePairFromUnknown(value);
+    if (!pair) ignoredSources.push(source);
+    return pair;
+  };
+
+  const homePayloadPair =
+    scoreFromLiveMicroPayload(liveMicroPayload?.provider_payload_end) ||
+    scoreFromLiveMicroPayload(liveMicroPayload?.provider_payload_start);
+  if (homePayloadPair) {
+    return {
+      home: homePayloadPair.home,
+      away: homePayloadPair.away,
+      source: "home-live-micro:payload",
+      ignoredSources,
+    };
+  }
+  ignoredSources.push("home-live-micro:payload");
+
+  const homeRowPair = scoreFromLiveMicroRow(liveMicroPayload);
+  if (homeRowPair) {
+    return {
+      home: homeRowPair.home,
+      away: homeRowPair.away,
+      source: "home-live-micro:row",
+      ignoredSources,
+    };
+  }
+  ignoredSources.push("home-live-micro:row");
+
+  const providerCandidates: Array<{ source: string; value: unknown }> = [
+    { source: "live-provider:direct", value: { home: liveScore?.home_score ?? null, away: liveScore?.away_score ?? null } },
+    { source: "live-provider:raw", value: liveScore?.raw ?? null },
+  ];
+  for (const candidate of providerCandidates) {
+    const pair = pick(candidate.source, candidate.value);
+    if (pair) {
+      return { home: pair.home, away: pair.away, source: candidate.source, ignoredSources };
+    }
+  }
+
+  const sportCandidates: Array<{ source: string; value: unknown }> = [
+    { source: "sport-event:score", value: sportEventForUi?.score ?? null },
+    { source: "sport-event:raw", value: (sportEventForUi as any)?.raw ?? null },
+    { source: "sport-event:event", value: sportEventForUi ?? null },
+  ];
+  for (const candidate of sportCandidates) {
+    const pair = pick(candidate.source, candidate.value);
+    if (pair) {
+      return { home: pair.home, away: pair.away, source: candidate.source, ignoredSources };
+    }
+  }
+
+  const isPostLive =
+    !!market?.resolved ||
+    market?.resolutionStatus === "proposed" ||
+    market?.resolutionStatus === "finalized" ||
+    market?.resolutionStatus === "cancelled" ||
+    market?.proposedOutcome != null ||
+    !!market?.contestDeadline;
+  if (isPostLive) {
+    const proofCandidates: Array<{ source: string; value: unknown }> = [
+      { source: "proof:proposed_note", value: market?.proposedProofNote ?? null },
+      { source: "proof:resolved_note", value: market?.resolutionProofNote ?? null },
+    ];
+    for (const candidate of proofCandidates) {
+      const pair = pick(candidate.source, candidate.value);
+      if (pair) {
+        return { home: pair.home, away: pair.away, source: candidate.source, ignoredSources };
+      }
+    }
+  }
+
+  if (lastKnownScore) {
+    return {
+      home: lastKnownScore.home,
+      away: lastKnownScore.away,
+      source: "last-known",
+      ignoredSources,
+    };
+  }
+
+  return { home: null, away: null, source: null, ignoredSources };
+}
+
 function formatCountdownMmSs(totalSec: number): string {
   const safe = Math.max(0, Math.floor(totalSec));
   const minutes = Math.floor(safe / 60);
@@ -509,6 +749,49 @@ function readDescriptionField(description: string | null | undefined, fieldLabel
   const escaped = fieldLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = raw.match(new RegExp(`^\\s*${escaped}\\s*:\\s*(.+)$`, "im"));
   return match?.[1]?.trim() || null;
+}
+
+function toPositiveInt(value: unknown): number | null {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  const out = Math.floor(n);
+  return out >= 1 ? out : null;
+}
+
+function extractLoopSequence(description: string | null | undefined, sportMetaValue: unknown): number | null {
+  const fromDescription = toPositiveInt(readDescriptionField(description, "Loop Sequence"));
+  if (fromDescription != null) return fromDescription;
+  const meta = asObject(sportMetaValue);
+  const liveMicro = asObject(meta.live_micro);
+  return (
+    toPositiveInt(liveMicro.loop_sequence) ??
+    toPositiveInt(liveMicro.loopSequence) ??
+    toPositiveInt(meta.loop_sequence) ??
+    toPositiveInt(meta.loopSequence) ??
+    null
+  );
+}
+
+function extractLoopPhase(description: string | null | undefined, sportMetaValue: unknown): string | null {
+  const fromDescription = readDescriptionField(description, "Loop Phase");
+  if (fromDescription) return fromDescription;
+  const meta = asObject(sportMetaValue);
+  const liveMicro = asObject(meta.live_micro);
+  const raw = String(liveMicro.loop_phase ?? liveMicro.loopPhase ?? "").trim();
+  return raw || null;
+}
+
+function formatLoopPhaseLabel(loopPhase: string | null | undefined): string | null {
+  const raw = String(loopPhase ?? "").trim();
+  if (!raw) return null;
+  const normalized = raw
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (normalized === "first half" || normalized === "1st half" || normalized === "h1") return "1st half";
+  if (normalized === "second half" || normalized === "2nd half" || normalized === "h2") return "2nd half";
+  return raw;
 }
 
 function parseMatchupFromQuestion(question: string | null | undefined): { home: string; away: string } | null {
@@ -612,16 +895,83 @@ function pickMarketCardVisual(event: any, meta: any, fallbackImage: string | nul
   return null;
 }
 
+function pickProviderVisual(event: any, meta: any): string | null {
+  const candidates: unknown[] = [
+    event?.provider_image,
+    event?.provider_thumb,
+    event?.raw?.provider_image,
+    event?.raw?.provider_thumb,
+    event?.raw?.event_thumb,
+    event?.raw?.strThumb,
+    event?.raw?.strSquare,
+    event?.raw?.strPoster,
+    event?.meta?.raw?.provider_image,
+    event?.meta?.raw?.provider_thumb,
+    event?.meta?.raw?.event_thumb,
+    event?.meta?.raw?.strThumb,
+    meta?.live_micro?.provider_image,
+    meta?.live_micro?.provider_thumb,
+    meta?.live_micro?.event_thumb,
+    meta?.live_micro?.strThumb,
+    meta?.images?.provider_image,
+    meta?.images?.provider_thumb,
+    meta?.images?.event_thumb,
+    meta?.images?.strThumb,
+    meta?.raw?.provider_image,
+    meta?.raw?.provider_thumb,
+    meta?.raw?.event_thumb,
+    meta?.raw?.strThumb,
+    meta?.provider_image,
+    meta?.provider_thumb,
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeVisualUrl(candidate);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
 function pickBadge(event: any, meta: any, side: "home" | "away"): string | null {
-  const keys = side === "home"
-    ? ["strHomeTeamBadge", "home_badge", "strHomeTeamLogo"]
-    : ["strAwayTeamBadge", "away_badge", "strAwayTeamLogo"];
-  const sources = [event, event?.raw, event?.meta?.raw, meta, meta?.raw, meta?.images];
-  for (const key of keys) {
-    for (const src of sources) {
-      const v = src?.[key];
-      if (typeof v === "string" && v.startsWith("http")) return v;
-    }
+  const badgeKey = side === "home" ? "home_badge" : "away_badge";
+  const strBadgeKey = side === "home" ? "strHomeTeamBadge" : "strAwayTeamBadge";
+  const logoKey = side === "home" ? "strHomeTeamLogo" : "strAwayTeamLogo";
+
+  const candidates: unknown[] = [
+    // Existing sources (normal sport matches)
+    event?.[strBadgeKey],
+    event?.[badgeKey],
+    event?.[logoKey],
+    event?.raw?.[strBadgeKey],
+    event?.raw?.[badgeKey],
+    event?.raw?.[logoKey],
+    event?.meta?.raw?.[strBadgeKey],
+    event?.meta?.raw?.[badgeKey],
+    event?.meta?.raw?.[logoKey],
+    meta?.[strBadgeKey],
+    meta?.[badgeKey],
+    meta?.[logoKey],
+    meta?.raw?.[strBadgeKey],
+    meta?.raw?.[badgeKey],
+    meta?.raw?.[logoKey],
+    meta?.images?.[strBadgeKey],
+    meta?.images?.[badgeKey],
+    meta?.images?.[logoKey],
+
+    // Micro/flash-specific payload shapes observed in dev rows
+    event?.live?.raw?.[badgeKey],
+    event?.live?.raw?.[strBadgeKey],
+    event?.live?.[badgeKey],
+    meta?.live_micro?.raw?.[badgeKey],
+    meta?.live_micro?.raw?.[strBadgeKey],
+    meta?.live_micro?.[badgeKey],
+    meta?.raw?.[badgeKey],
+    meta?.raw?.[strBadgeKey],
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeVisualUrl(candidate);
+    if (normalized) return normalized;
   }
   return null;
 }
@@ -740,6 +1090,9 @@ function SportScoreCard({
   microWindowEndMs = NaN,
   microGoalObserved = false,
   microTradingLocked = false,
+  microState = null,
+  resolvedScorePair = null,
+  lockToResolvedScore = false,
 }: {
   event: SportEvent;
   meta?: any;
@@ -752,13 +1105,18 @@ function SportScoreCard({
   microWindowEndMs?: number;
   microGoalObserved?: boolean;
   microTradingLocked?: boolean;
+  microState?: "active" | "locked" | "resolving" | "ended" | null;
+  resolvedScorePair?: ScorePair | null;
+  lockToResolvedScore?: boolean;
 }) {
   const isLive = displayStatus === "live";
   const banner = pickEventBanner(event, meta);
   const homeBadge = pickBadge(event, meta, "home");
   const awayBadge = pickBadge(event, meta, "away");
-  const hasScore = hasMeaningfulScore(event);
+
   const scorePair = extractScorePair(event);
+  const effectiveScorePair = lockToResolvedScore ? (resolvedScorePair ?? null) : (resolvedScorePair ?? scorePair);
+  const hasScore = !!effectiveScorePair || hasMeaningfulScore(event);
   const fallbackUpdatedAt = parseIsoUtc(event.last_update)?.getTime() ?? NaN;
   const updatedAt = typeof lastPolledAt === "number" && Number.isFinite(lastPolledAt) ? lastPolledAt : fallbackUpdatedAt;
   const kickoffDate = parseIsoUtc(event.start_time);
@@ -795,6 +1153,21 @@ function SportScoreCard({
     goalObserved: microGoalObserved,
     tradingLocked: microTradingLocked,
   });
+  const effectiveMicroState = microState ?? (isLive ? "active" : "resolving");
+  const microBadgeLabel = effectiveMicroState === "active"
+    ? "Live"
+    : effectiveMicroState === "locked"
+    ? "Locked"
+    : effectiveMicroState === "resolving"
+    ? "Resolving"
+    : "Final";
+  const microBadgeClass = effectiveMicroState === "active"
+    ? "border-red-500/35 bg-red-500/12 text-red-200"
+    : effectiveMicroState === "locked"
+    ? "border-yellow-500/35 bg-yellow-500/12 text-yellow-200"
+    : effectiveMicroState === "resolving"
+    ? "border-sky-500/35 bg-sky-500/12 text-sky-200"
+    : "border-gray-500/35 bg-gray-500/12 text-gray-200";
 
   return (
     <div className={`rounded-xl border overflow-hidden ${
@@ -815,16 +1188,15 @@ function SportScoreCard({
         {isLiveMicro ? (
           <>
             <div className="flex items-center justify-between gap-3 mb-4">
-              <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full border border-red-500/35 bg-red-500/12 text-[11px] font-semibold uppercase tracking-[0.14em] text-red-200">
-                <span className="micro-live-dot w-2 h-2 rounded-full bg-red-400 shadow-[0_0_10px_rgba(248,113,113,0.45)]" />
-                Live
-              </div>
-              <div className="flex items-center gap-2 min-w-0">
-                {event.league && (
-                  <span className="text-[11px] text-gray-300/80 truncate max-w-[160px] uppercase tracking-wide">
-                    {event.league}
-                  </span>
+              <div className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-full border text-[11px] font-semibold uppercase tracking-[0.14em] ${microBadgeClass}`}>
+                {effectiveMicroState === "active" ? (
+                  <span className="micro-live-dot w-2 h-2 rounded-full bg-red-400 shadow-[0_0_10px_rgba(248,113,113,0.45)]" />
+                ) : (
+                  <span className="w-2 h-2 rounded-full bg-current/70" />
                 )}
+                {microBadgeLabel}
+              </div>
+              <div className="flex items-center justify-end min-w-[12px]">
                 {polling && (
                   <span className="inline-block w-3 h-3 border border-gray-500 border-t-transparent rounded-full animate-spin" />
                 )}
@@ -867,7 +1239,7 @@ function SportScoreCard({
                 </div>
 
                 <div className={`micro-score-pulse text-4xl sm:text-5xl font-black tabular-nums text-white shrink-0`}>
-                  {scorePair ? `${scorePair.home} — ${scorePair.away}` : "—"}
+                  {effectiveScorePair ? `${effectiveScorePair.home} — ${effectiveScorePair.away}` : "—"}
                 </div>
 
                 <div className="flex items-center justify-end gap-2 sm:gap-3 flex-1 min-w-0">
@@ -931,7 +1303,7 @@ function SportScoreCard({
               <div className="text-center px-2 shrink-0">
                 {hasScore ? (
                   <div className={`text-2xl sm:text-3xl font-black tabular-nums ${isLive ? "text-pump-green" : "text-white"}`}>
-                    {formatScore(event.score, event.sport)}
+                    {effectiveScorePair ? `${effectiveScorePair.home} — ${effectiveScorePair.away}` : formatScore(event.score, event.sport)}
                   </div>
                 ) : (
                   <div className="text-lg font-bold text-gray-600">VS</div>
@@ -1308,10 +1680,36 @@ const [sportEvent, setSportEvent] = useState<SportEvent | null>(null);
 const [liveScore, setLiveScore] = useState<{
   home_score: number | null; away_score: number | null;
   minute: number | null; status: string;
+  home_team?: string | null;
+  away_team?: string | null;
+  home_badge?: string | null;
+  away_badge?: string | null;
+  raw?: Record<string, unknown> | null;
+} | null>(null);
+const [liveMicroPayload, setLiveMicroPayload] = useState<{
+  provider_payload_start?: Record<string, unknown> | null;
+  provider_payload_end?: Record<string, unknown> | null;
+  start_home_score?: number | null;
+  start_away_score?: number | null;
+  end_home_score?: number | null;
+  end_away_score?: number | null;
 } | null>(null);
 const [liveScorePolling, setLiveScorePolling] = useState(false);
 const [liveScoreFailures, setLiveScoreFailures] = useState(0);
 const [liveScoreLastSuccessAt, setLiveScoreLastSuccessAt] = useState<number | null>(null);
+const [persistedTradeScore, setPersistedTradeScore] = useState<{
+  home: number;
+  away: number;
+  source: string | null;
+  updatedAt: number;
+} | null>(null);
+const scoreLogRef = useRef<{
+  lastIgnoredSignature: string;
+  lastDisplaySignature: string;
+}>({
+  lastIgnoredSignature: "",
+  lastDisplaySignature: "",
+});
 
 // Related block (RIGHT column under TradingPanel)
   const [relatedTab, setRelatedTab] = useState<RelatedTab>("related");
@@ -1470,6 +1868,8 @@ if (snap?.posAcc?.shares) {
       setMobileTradeOpen(false);
       setActiveLiveSession(null);
       setCreatorProfile(null);
+      setPersistedTradeScore(null);
+      scoreLogRef.current = { lastIgnoredSignature: "", lastDisplaySignature: "" };
     }, [id]);
 
     // Fetch active live session for this market
@@ -1483,6 +1883,44 @@ if (snap?.posAcc?.shares) {
       if (!market?.sportEventId) { setSportEvent(null); return; }
       getSportEvent(market.sportEventId).then(setSportEvent).catch(() => {});
     }, [market?.sportEventId]);
+
+    // Fetch live_micro payload row by linked market to recover provider badges for micro markets.
+    useEffect(() => {
+      if (!market?.publicKey) {
+        setLiveMicroPayload(null);
+        return;
+      }
+
+      let cancelled = false;
+      (async () => {
+        const { data, error } = await supabase
+          .from("live_micro_markets")
+          .select("provider_payload_start,provider_payload_end,start_home_score,start_away_score,end_home_score,end_away_score,created_at")
+          .eq("linked_market_address", market.publicKey)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (cancelled) return;
+        if (error || !data) {
+          setLiveMicroPayload(null);
+          return;
+        }
+
+        setLiveMicroPayload({
+          provider_payload_start: asObject(data.provider_payload_start),
+          provider_payload_end: asObject(data.provider_payload_end),
+          start_home_score: Number.isFinite(Number(data.start_home_score)) ? Number(data.start_home_score) : null,
+          start_away_score: Number.isFinite(Number(data.start_away_score)) ? Number(data.start_away_score) : null,
+          end_home_score: Number.isFinite(Number(data.end_home_score)) ? Number(data.end_home_score) : null,
+          end_away_score: Number.isFinite(Number(data.end_away_score)) ? Number(data.end_away_score) : null,
+        });
+      })();
+
+      return () => {
+        cancelled = true;
+      };
+    }, [market?.publicKey]);
 
     // Auto-refresh sport event after kickoff (even if provider status lags behind "live").
     useEffect(() => {
@@ -1576,12 +2014,61 @@ if (snap?.posAcc?.shares) {
           setLiveScoreFailures(0);
           setLiveScoreLastSuccessAt(Date.now());
 
-          setLiveScore((prev) => ({
-            home_score: data?.home_score ?? prev?.home_score ?? null,
-            away_score: data?.away_score ?? prev?.away_score ?? null,
-            minute: data?.minute ?? prev?.minute ?? null,
-            status: nextStatus || prev?.status || "unknown",
-          }));
+          const nextRaw = asObject(data?.raw);
+          const nextHomeBadge = normalizeVisualUrl(
+            data?.home_badge ??
+              nextRaw.home_badge ??
+              nextRaw.strHomeTeamBadge ??
+              null,
+          );
+          const nextAwayBadge = normalizeVisualUrl(
+            data?.away_badge ??
+              nextRaw.away_badge ??
+              nextRaw.strAwayTeamBadge ??
+              null,
+          );
+
+          setLiveScore((prev) => {
+            const prevRaw = asObject(prev?.raw);
+            return {
+              home_score: data?.home_score ?? prev?.home_score ?? null,
+              away_score: data?.away_score ?? prev?.away_score ?? null,
+              minute: data?.minute ?? prev?.minute ?? null,
+              status: nextStatus || prev?.status || "unknown",
+              home_team: data?.home_team ?? prev?.home_team ?? null,
+              away_team: data?.away_team ?? prev?.away_team ?? null,
+              home_badge: nextHomeBadge ?? prev?.home_badge ?? null,
+              away_badge: nextAwayBadge ?? prev?.away_badge ?? null,
+              raw: {
+                ...prevRaw,
+                ...nextRaw,
+                home_badge:
+                  nextRaw.home_badge ??
+                  nextRaw.strHomeTeamBadge ??
+                  prevRaw.home_badge ??
+                  prevRaw.strHomeTeamBadge ??
+                  null,
+                away_badge:
+                  nextRaw.away_badge ??
+                  nextRaw.strAwayTeamBadge ??
+                  prevRaw.away_badge ??
+                  prevRaw.strAwayTeamBadge ??
+                  null,
+                strHomeTeamBadge:
+                  nextRaw.strHomeTeamBadge ??
+                  nextRaw.home_badge ??
+                  prevRaw.strHomeTeamBadge ??
+                  prevRaw.home_badge ??
+                  null,
+                strAwayTeamBadge:
+                  nextRaw.strAwayTeamBadge ??
+                  nextRaw.away_badge ??
+                  prevRaw.strAwayTeamBadge ??
+                  prevRaw.away_badge ??
+                  null,
+              },
+            };
+          });
         } catch {
           if (cancelled) return;
           consecutiveFailures += 1;
@@ -1868,6 +2355,19 @@ if (snap?.posAcc?.shares) {
 
     const meta = asObject(market.sportMeta);
     const liveMicro = asObject(meta.live_micro);
+    const liveMicroPayloadStart = asObject(
+      liveMicroPayload?.provider_payload_start ?? (liveMicro as any)?.provider_payload_start,
+    );
+    const liveMicroPayloadEnd = asObject(
+      liveMicroPayload?.provider_payload_end ?? (liveMicro as any)?.provider_payload_end,
+    );
+    const liveMicroPayloadStartLiveRaw = asObject(asObject(liveMicroPayloadStart.live).raw);
+    const liveMicroPayloadEndLiveRaw = asObject(asObject(liveMicroPayloadEnd.live).raw);
+    const metaRaw = asObject(meta.raw);
+    const liveMicroRaw = asObject(liveMicro.raw);
+    const metaLiveRaw = asObject((meta as any)?.live?.raw);
+    const liveMicroLiveRaw = asObject((liveMicro as any)?.live?.raw);
+    const liveScoreRaw = asObject(liveScore?.raw);
     const matchup = parseMatchupFromQuestion(market.question);
     const startScoreMeta = asObject(meta.start_score);
     const startScoreMicro = asObject(liveMicro.start_score);
@@ -1891,6 +2391,44 @@ if (snap?.posAcc?.shares) {
     );
     const startHome = Number.isFinite(startHomeCandidate) ? startHomeCandidate : 0;
     const startAway = Number.isFinite(startAwayCandidate) ? startAwayCandidate : 0;
+    const homeBadge =
+      normalizeVisualUrl(
+        liveScore?.home_badge ??
+          liveScoreRaw.home_badge ??
+          liveScoreRaw.strHomeTeamBadge ??
+          liveMicroPayloadStartLiveRaw.home_badge ??
+          liveMicroPayloadStartLiveRaw.strHomeTeamBadge ??
+          liveMicroPayloadEndLiveRaw.home_badge ??
+          liveMicroPayloadEndLiveRaw.strHomeTeamBadge ??
+          liveMicroRaw.home_badge ??
+          liveMicroRaw.strHomeTeamBadge ??
+          liveMicroLiveRaw.home_badge ??
+          liveMicroLiveRaw.strHomeTeamBadge ??
+          metaRaw.home_badge ??
+          metaRaw.strHomeTeamBadge ??
+          metaLiveRaw.home_badge ??
+          metaLiveRaw.strHomeTeamBadge ??
+          null,
+      ) ?? null;
+    const awayBadge =
+      normalizeVisualUrl(
+        liveScore?.away_badge ??
+          liveScoreRaw.away_badge ??
+          liveScoreRaw.strAwayTeamBadge ??
+          liveMicroPayloadStartLiveRaw.away_badge ??
+          liveMicroPayloadStartLiveRaw.strAwayTeamBadge ??
+          liveMicroPayloadEndLiveRaw.away_badge ??
+          liveMicroPayloadEndLiveRaw.strAwayTeamBadge ??
+          liveMicroRaw.away_badge ??
+          liveMicroRaw.strAwayTeamBadge ??
+          liveMicroLiveRaw.away_badge ??
+          liveMicroLiveRaw.strAwayTeamBadge ??
+          metaRaw.away_badge ??
+          metaRaw.strAwayTeamBadge ??
+          metaLiveRaw.away_badge ??
+          metaLiveRaw.strAwayTeamBadge ??
+          null,
+      ) ?? null;
 
     const event: any = {
       sport: "soccer",
@@ -1898,6 +2436,8 @@ if (snap?.posAcc?.shares) {
       league: String(meta.league || liveMicro.league || "Soccer"),
       home_team: matchup?.home || "Home",
       away_team: matchup?.away || "Away",
+      home_badge: homeBadge,
+      away_badge: awayBadge,
       start_time: (typeof meta.start_time === "string" ? meta.start_time : market.startTime) || null,
       end_time:
         (typeof meta.window_end === "string" ? meta.window_end : null) ||
@@ -1910,8 +2450,79 @@ if (snap?.posAcc?.shares) {
         minute: liveScore?.minute ?? null,
       },
       raw: {
-        ...(asObject(meta.raw)),
-        ...(asObject(liveMicro.raw)),
+        ...liveMicroPayloadStartLiveRaw,
+        ...liveMicroPayloadEndLiveRaw,
+        ...metaRaw,
+        ...liveMicroRaw,
+        ...liveScoreRaw,
+        home_badge:
+          homeBadge ??
+          liveMicroPayloadStartLiveRaw.home_badge ??
+          liveMicroPayloadEndLiveRaw.home_badge ??
+          metaRaw.home_badge ??
+          liveMicroRaw.home_badge ??
+          liveScoreRaw.home_badge ??
+          null,
+        away_badge:
+          awayBadge ??
+          liveMicroPayloadStartLiveRaw.away_badge ??
+          liveMicroPayloadEndLiveRaw.away_badge ??
+          metaRaw.away_badge ??
+          liveMicroRaw.away_badge ??
+          liveScoreRaw.away_badge ??
+          null,
+        strHomeTeamBadge:
+          homeBadge ??
+          liveMicroPayloadStartLiveRaw.strHomeTeamBadge ??
+          liveMicroPayloadEndLiveRaw.strHomeTeamBadge ??
+          metaRaw.strHomeTeamBadge ??
+          liveMicroRaw.strHomeTeamBadge ??
+          liveScoreRaw.strHomeTeamBadge ??
+          null,
+        strAwayTeamBadge:
+          awayBadge ??
+          liveMicroPayloadStartLiveRaw.strAwayTeamBadge ??
+          liveMicroPayloadEndLiveRaw.strAwayTeamBadge ??
+          metaRaw.strAwayTeamBadge ??
+          liveMicroRaw.strAwayTeamBadge ??
+          liveScoreRaw.strAwayTeamBadge ??
+          null,
+      },
+      live: {
+        raw: {
+          ...liveMicroPayloadStartLiveRaw,
+          ...liveMicroPayloadEndLiveRaw,
+          ...metaLiveRaw,
+          ...liveMicroLiveRaw,
+          home_badge:
+            homeBadge ??
+            liveMicroPayloadStartLiveRaw.home_badge ??
+            liveMicroPayloadEndLiveRaw.home_badge ??
+            metaLiveRaw.home_badge ??
+            liveMicroLiveRaw.home_badge ??
+            null,
+          away_badge:
+            awayBadge ??
+            liveMicroPayloadStartLiveRaw.away_badge ??
+            liveMicroPayloadEndLiveRaw.away_badge ??
+            metaLiveRaw.away_badge ??
+            liveMicroLiveRaw.away_badge ??
+            null,
+          strHomeTeamBadge:
+            homeBadge ??
+            liveMicroPayloadStartLiveRaw.strHomeTeamBadge ??
+            liveMicroPayloadEndLiveRaw.strHomeTeamBadge ??
+            metaLiveRaw.strHomeTeamBadge ??
+            liveMicroLiveRaw.strHomeTeamBadge ??
+            null,
+          strAwayTeamBadge:
+            awayBadge ??
+            liveMicroPayloadStartLiveRaw.strAwayTeamBadge ??
+            liveMicroPayloadEndLiveRaw.strAwayTeamBadge ??
+            metaLiveRaw.strAwayTeamBadge ??
+            liveMicroLiveRaw.strAwayTeamBadge ??
+            null,
+        },
       },
       last_update: liveScoreLastSuccessAt ? new Date(liveScoreLastSuccessAt).toISOString() : undefined,
     };
@@ -1926,8 +2537,13 @@ if (snap?.posAcc?.shares) {
     market?.endTime,
     liveScore?.home_score,
     liveScore?.away_score,
+    liveScore?.home_badge,
+    liveScore?.away_badge,
+    liveScore?.raw,
     liveScore?.minute,
     liveScore?.status,
+    liveMicroPayload?.provider_payload_start,
+    liveMicroPayload?.provider_payload_end,
     liveScoreLastSuccessAt,
   ]);
 
@@ -1935,11 +2551,67 @@ if (snap?.posAcc?.shares) {
   const sportEventForUi = useMemo(() => {
     const baseEvent = sportEvent || fallbackMicroEvent;
     if (!baseEvent) return null;
+    const liveMicroPayloadStartLiveRaw = asObject(
+      asObject(asObject(liveMicroPayload?.provider_payload_start).live).raw,
+    );
+    const liveMicroPayloadEndLiveRaw = asObject(
+      asObject(asObject(liveMicroPayload?.provider_payload_end).live).raw,
+    );
     const ev: any = {
       ...baseEvent,
       score: { ...(baseEvent.score || {}) },
-      raw: { ...(baseEvent.raw || {}) },
+      raw: {
+        ...liveMicroPayloadStartLiveRaw,
+        ...liveMicroPayloadEndLiveRaw,
+        ...(baseEvent.raw || {}),
+      },
+      live: { ...(asObject((baseEvent as any).live)) },
     };
+    const baseHomeBadge =
+      normalizeVisualUrl(
+        ev.home_badge ??
+          liveMicroPayloadStartLiveRaw.home_badge ??
+          liveMicroPayloadStartLiveRaw.strHomeTeamBadge ??
+          liveMicroPayloadEndLiveRaw.home_badge ??
+          liveMicroPayloadEndLiveRaw.strHomeTeamBadge ??
+          ev.raw?.home_badge ??
+          ev.raw?.strHomeTeamBadge ??
+          ev.live?.raw?.home_badge ??
+          ev.live?.raw?.strHomeTeamBadge ??
+          null,
+      ) ?? null;
+    const baseAwayBadge =
+      normalizeVisualUrl(
+        ev.away_badge ??
+          liveMicroPayloadStartLiveRaw.away_badge ??
+          liveMicroPayloadStartLiveRaw.strAwayTeamBadge ??
+          liveMicroPayloadEndLiveRaw.away_badge ??
+          liveMicroPayloadEndLiveRaw.strAwayTeamBadge ??
+          ev.raw?.away_badge ??
+          ev.raw?.strAwayTeamBadge ??
+          ev.live?.raw?.away_badge ??
+          ev.live?.raw?.strAwayTeamBadge ??
+          null,
+      ) ?? null;
+    if (baseHomeBadge) {
+      ev.home_badge = baseHomeBadge;
+      ev.raw.home_badge = baseHomeBadge;
+      ev.raw.strHomeTeamBadge = baseHomeBadge;
+    }
+    if (baseAwayBadge) {
+      ev.away_badge = baseAwayBadge;
+      ev.raw.away_badge = baseAwayBadge;
+      ev.raw.strAwayTeamBadge = baseAwayBadge;
+    }
+    ev.live.raw = { ...(asObject(ev.live?.raw)) };
+    if (baseHomeBadge) {
+      ev.live.raw.home_badge = baseHomeBadge;
+      ev.live.raw.strHomeTeamBadge = baseHomeBadge;
+    }
+    if (baseAwayBadge) {
+      ev.live.raw.away_badge = baseAwayBadge;
+      ev.live.raw.strAwayTeamBadge = baseAwayBadge;
+    }
     if (market?.startTime) ev.start_time = market.startTime;
     if (market?.endTime) ev.end_time = market.endTime;
     if (liveScore) {
@@ -1951,9 +2623,47 @@ if (snap?.posAcc?.shares) {
       }
       if (liveScore.status) ev.status = liveScore.status;
       if (liveScoreLastSuccessAt) ev.last_update = new Date(liveScoreLastSuccessAt).toISOString();
+      const liveScoreRaw = asObject(liveScore.raw);
+      const liveScoreHomeBadge =
+        normalizeVisualUrl(
+          liveScore.home_badge ??
+            liveScoreRaw.home_badge ??
+            liveScoreRaw.strHomeTeamBadge ??
+            null,
+        ) ?? null;
+      const liveScoreAwayBadge =
+        normalizeVisualUrl(
+          liveScore.away_badge ??
+            liveScoreRaw.away_badge ??
+            liveScoreRaw.strAwayTeamBadge ??
+            null,
+        ) ?? null;
+      if (liveScoreHomeBadge) {
+        ev.home_badge = liveScoreHomeBadge;
+        ev.raw.home_badge = liveScoreHomeBadge;
+        ev.raw.strHomeTeamBadge = liveScoreHomeBadge;
+        ev.live.raw.home_badge = liveScoreHomeBadge;
+        ev.live.raw.strHomeTeamBadge = liveScoreHomeBadge;
+      }
+      if (liveScoreAwayBadge) {
+        ev.away_badge = liveScoreAwayBadge;
+        ev.raw.away_badge = liveScoreAwayBadge;
+        ev.raw.strAwayTeamBadge = liveScoreAwayBadge;
+        ev.live.raw.away_badge = liveScoreAwayBadge;
+        ev.live.raw.strAwayTeamBadge = liveScoreAwayBadge;
+      }
     }
     return ev as SportEvent;
-  }, [sportEvent, fallbackMicroEvent, liveScore, liveScoreLastSuccessAt, market?.startTime, market?.endTime]);
+  }, [
+    sportEvent,
+    fallbackMicroEvent,
+    liveMicroPayload?.provider_payload_start,
+    liveMicroPayload?.provider_payload_end,
+    liveScore,
+    liveScoreLastSuccessAt,
+    market?.startTime,
+    market?.endTime,
+  ]);
 
   const sharedSportDisplayStatus: DisplayStatus = useMemo(
     () => (sportEventForUi ? resolveDisplayStatus(sportEventForUi) : "unknown"),
@@ -1962,6 +2672,27 @@ if (snap?.posAcc?.shares) {
   const sharedSportMinute = useMemo(
     () => (sportEventForUi ? liveLabel(sportEventForUi) : ""),
     [sportEventForUi],
+  );
+  const persistedScorePair = persistedTradeScore
+    ? { home: persistedTradeScore.home, away: persistedTradeScore.away }
+    : null;
+  const bestLiveScore = useMemo(
+    () =>
+      resolveBestLiveScore({
+        liveScore,
+        sportEventForUi,
+        liveMicroPayload,
+        market,
+        lastKnownScore: persistedScorePair,
+      }),
+    [
+      liveScore,
+      sportEventForUi,
+      liveMicroPayload,
+      market,
+      persistedScorePair?.home,
+      persistedScorePair?.away,
+    ],
   );
 
   const derived: Derived | null = useMemo(() => {
@@ -2441,6 +3172,101 @@ useEffect(() => {
     const iv = setInterval(() => setNowMs(Date.now()), 15_000);
     return () => clearInterval(iv);
   }, []);
+  const isSoccerNextGoalMicroForScore = market
+    ? isSoccerNextGoalMicroMarket(market.sportMeta, market.question, market.description)
+    : false;
+  const isSportLikeMarketForScore = !!market && (market.marketMode === "sport" || isSoccerNextGoalMicroForScore);
+  const scoreStartRawForDisplay = market
+    ? (
+        market.startTime ||
+        sportEventForUi?.start_time ||
+        (market.sportMeta as any)?.start_time ||
+        readDescriptionField(market.description, "Window Start")
+      )
+    : null;
+  const scoreStartMsForDisplay = parseIsoUtc(scoreStartRawForDisplay)?.getTime() ?? NaN;
+  const scoreBeforeStartForDisplay =
+    isSportLikeMarketForScore &&
+    Number.isFinite(scoreStartMsForDisplay) &&
+    nowMs < scoreStartMsForDisplay;
+  const bestLiveScorePair = bestLiveScore.home != null && bestLiveScore.away != null
+    ? { home: bestLiveScore.home, away: bestLiveScore.away }
+    : null;
+  const unifiedTradeScorePair = scoreBeforeStartForDisplay
+    ? null
+    : (bestLiveScorePair ?? persistedScorePair);
+
+  useEffect(() => {
+    if (!id || !isSoccerNextGoalMicroForScore) return;
+    const scope = `[flash-score][${id}]`;
+    const ignoredSignature = bestLiveScore.ignoredSources.join("|");
+    if (ignoredSignature && scoreLogRef.current.lastIgnoredSignature !== ignoredSignature) {
+      bestLiveScore.ignoredSources.forEach((ignored) => {
+        console.info(`${scope} rejected source=${ignored} reason=empty_or_stale`);
+      });
+      scoreLogRef.current.lastIgnoredSignature = ignoredSignature;
+    }
+
+    if (bestLiveScore.home != null && bestLiveScore.away != null) {
+      const nextHome = bestLiveScore.home;
+      const nextAway = bestLiveScore.away;
+      const nextSource = bestLiveScore.source;
+      setPersistedTradeScore((prev) => {
+        const samePair = !!prev && prev.home === nextHome && prev.away === nextAway;
+        const sameSource = !!prev && prev.source === nextSource;
+        if (samePair && sameSource) return prev;
+        console.info(
+          `${scope} selected source=${nextSource ?? "unknown"} score=${nextHome}-${nextAway}`,
+        );
+        return {
+          home: nextHome,
+          away: nextAway,
+          source: nextSource,
+          updatedAt: Date.now(),
+        };
+      });
+      return;
+    }
+
+    setPersistedTradeScore((prev) => {
+      if (prev) {
+        console.warn(`${scope} block empty override existing=${prev.home}-${prev.away} incoming=null`);
+        return prev;
+      }
+      console.warn(`${scope} final score unavailable reason=no_valid_source`);
+      return prev;
+    });
+  }, [
+    id,
+    isSoccerNextGoalMicroForScore,
+    bestLiveScore.home,
+    bestLiveScore.away,
+    bestLiveScore.source,
+    bestLiveScore.ignoredSources,
+  ]);
+
+  useEffect(() => {
+    if (!id || !isSoccerNextGoalMicroForScore) return;
+    const scope = `[flash-score][${id}]`;
+    const finalScoreLabel = unifiedTradeScorePair ? `${unifiedTradeScorePair.home}-${unifiedTradeScorePair.away}` : "—";
+    const hiddenReason = scoreBeforeStartForDisplay ? "pre-match" : "missing-valid-score";
+    const displaySignature = `${finalScoreLabel}|${hiddenReason}|${bestLiveScore.source ?? "none"}`;
+    if (scoreLogRef.current.lastDisplaySignature === displaySignature) return;
+    scoreLogRef.current.lastDisplaySignature = displaySignature;
+
+    console.info(`${scope} final hero score=${finalScoreLabel}`);
+    console.info(`${scope} final market-card score=${finalScoreLabel}`);
+    if (finalScoreLabel === "—") {
+      console.warn(`${scope} score hidden reason=${hiddenReason}`);
+    }
+  }, [
+    id,
+    isSoccerNextGoalMicroForScore,
+    unifiedTradeScorePair?.home,
+    unifiedTradeScorePair?.away,
+    scoreBeforeStartForDisplay,
+    bestLiveScore.source,
+  ]);
 
   if (loading) {
     return (
@@ -2474,6 +3300,13 @@ useEffect(() => {
     market.question,
     market.description,
   );
+  const microLoopSequence = isSoccerNextGoalMicro
+    ? extractLoopSequence(market.description, market.sportMeta)
+    : null;
+  const microLoopPhase = isSoccerNextGoalMicro
+    ? extractLoopPhase(market.description, market.sportMeta)
+    : null;
+  const microLoopPhaseLabel = isSoccerNextGoalMicro ? formatLoopPhaseLabel(microLoopPhase) : null;
   const isSportLikeMarket = market.marketMode === "sport" || isSoccerNextGoalMicro;
   const sportIsLive = isSportLikeMarket && sharedSportDisplayStatus === "live";
   const sportIsFinished = isSportLikeMarket && sharedSportDisplayStatus === "finished";
@@ -2626,14 +3459,48 @@ const ended = endedByTime;
   const deadlineMs = market.contestDeadline ? new Date(market.contestDeadline).getTime() : NaN;
   const contestRemainingMs = Number.isFinite(deadlineMs) ? deadlineMs - Date.now() : NaN;
   const contestOpen = Number.isFinite(contestRemainingMs) ? contestRemainingMs > 0 : false;
-  const marketBadgeScore = sportEventForUi && hasMeaningfulScore(sportEventForUi)
-    ? (formatLiveScore(sportEventForUi.score)?.split(" · ")[0] ?? null)
+  const marketBadgeScorePair = unifiedTradeScorePair;
+  const marketBadgeScore = marketBadgeScorePair
+    ? `${marketBadgeScorePair.home}-${marketBadgeScorePair.away}`
     : null;
+  const marketBadgeMinuteValue = sportEventForUi ? extractMinuteNumber(sportEventForUi) : NaN;
+  const marketBadgeMinute = Number.isFinite(marketBadgeMinuteValue) && marketBadgeMinuteValue > 0
+    ? `${Math.floor(marketBadgeMinuteValue)}'`
+    : sharedSportMinute;
+  const marketCardBadgeState: "scheduled" | "live" | "locked" | "resolving" | "finished" | "unknown" = (() => {
+    if (ended || showResolvedProofBox || isResolvedOnChain) return "finished";
+    if (isSoccerNextGoalMicro) {
+      if (sportBeforeStart) return "scheduled";
+      if (microHeroState === "ended" || sportPhase === "finished") return "finished";
+      if (microHeroState === "locked" || sportPhase === "locked") return "locked";
+      if (microHeroState === "resolving") return "resolving";
+      if (microHeroState === "active") return "live";
+    }
+    if (sportPhase === "locked") return "locked";
+    if (sharedSportDisplayStatus === "scheduled") return "scheduled";
+    if (sharedSportDisplayStatus === "live") return "live";
+    if (sharedSportDisplayStatus === "finished") return "finished";
+    return "unknown";
+  })();
+  const sportMetaObj = asObject(market.sportMeta);
+  const canonicalMarketImageUrl = normalizeVisualUrl(
+    market.imageUrl ?? (market as any)?.image_url ?? null,
+  );
   const marketCardVisualUrl = pickMarketCardVisual(
     sportEventForUi,
-    market.sportMeta,
-    market.imageUrl ?? null,
+    sportMetaObj,
+    market.imageUrl ?? (market as any)?.image_url ?? null,
   );
+  const providerPrimaryVisualUrl = pickProviderVisual(sportEventForUi, sportMetaObj);
+  const teamBadgeFallbackVisualUrl =
+    pickBadge(sportEventForUi, sportMetaObj, "home") ||
+    pickBadge(sportEventForUi, sportMetaObj, "away");
+  const tradeCardThumbUrl =
+    canonicalMarketImageUrl ||
+    providerPrimaryVisualUrl ||
+    marketCardVisualUrl ||
+    teamBadgeFallbackVisualUrl ||
+    null;
   const effectiveVol =
     Number.isFinite(marketBalanceLamports)
       ? (marketBalanceLamports as number)
@@ -2713,6 +3580,9 @@ const ended = endedByTime;
                   microWindowEndMs={microWindowEndMs}
                   microGoalObserved={microGoalObserved}
                   microTradingLocked={microTradingLocked || !!market.isBlocked}
+                  microState={microHeroState}
+                  resolvedScorePair={unifiedTradeScorePair}
+                  lockToResolvedScore={isSoccerNextGoalMicro}
                 />
               )}
 
@@ -2770,10 +3640,10 @@ const ended = endedByTime;
               <div className="bg-black border border-gray-800 rounded-xl p-4 md:p-5 hover:border-pump-green/60 transition-all duration-200">
                 <div className="flex items-start gap-3">
                   <div className="flex-shrink-0 w-16 h-16 md:w-20 md:h-20 rounded-xl overflow-hidden bg-pump-dark">
-                    {marketCardVisualUrl ? (
+                    {tradeCardThumbUrl ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
-                        src={marketCardVisualUrl}
+                        src={tradeCardThumbUrl}
                         alt={market.question}
                         className="object-cover w-full h-full"
                       />
@@ -2799,6 +3669,18 @@ const ended = endedByTime;
                         />
                       </div>
                     </div>
+                    {isSoccerNextGoalMicro && (microLoopSequence != null || microLoopPhaseLabel) && (
+                      <div className="mb-2 flex flex-wrap items-center gap-2">
+                        {microLoopSequence != null && (
+                          <span className="px-2 py-1 rounded-full border border-pump-green/40 bg-pump-green/10 text-pump-green text-xs font-semibold">
+                            Window #{microLoopSequence}
+                          </span>
+                        )}
+                        {microLoopPhaseLabel ? (
+                          <span className="text-xs text-gray-400 font-medium">{microLoopPhaseLabel}</span>
+                        ) : null}
+                      </div>
+                    )}
   
                     {/* Creator profile */}
                     {market.creator && (
@@ -2839,7 +3721,7 @@ const ended = endedByTime;
                     <div className="leading-tight">
                       <div>
                         {sportKickoffLabel ? `Kickoff ${sportKickoffLabel}` : "Kickoff —"}
-                        {sportEndsLabel ? ` • Ends ~ ${sportEndsLabel}` : ""}
+                        {sportEndsLabel ? ` Ends ~ ${sportEndsLabel}` : ""}
                       </div>
                       {sportLocksLabel && (
                         <div className="text-[11px] text-gray-500">Locks at {sportLocksLabel}</div>
@@ -2865,19 +3747,18 @@ const ended = endedByTime;
 
                     {/* Sport phase badges — on-chain ended overrides provider status */}
                     {(() => {
-                      const badgeStatus = ended ? "finished" as DisplayStatus : sharedSportDisplayStatus;
                       return (
                         <>
-                          {!market.isBlocked && sportPhase !== "locked" && badgeStatus === "scheduled" && !showProposedBox && !showResolvedProofBox && (
+                          {!market.isBlocked && marketCardBadgeState === "scheduled" && !showProposedBox && !showResolvedProofBox && (
                             <span className="px-2 py-1 rounded-full border border-blue-500/40 bg-blue-500/10 text-blue-400">
                               Scheduled
                             </span>
                           )}
-                          {!market.isBlocked && sportPhase !== "locked" && badgeStatus === "live" && !showProposedBox && !showResolvedProofBox && (
+                          {!market.isBlocked && marketCardBadgeState === "live" && !showProposedBox && !showResolvedProofBox && (
                             <span className="px-2 py-1 rounded-full border border-red-500/40 bg-red-500/10 text-red-400 flex items-center gap-1">
                               <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
                               Live
-                              {sharedSportMinute && <span className="text-red-300">• {sharedSportMinute}</span>}
+                              {marketBadgeMinute && <span className="text-red-300">{marketBadgeMinute}</span>}
                               {marketBadgeScore && (
                                 <span className="ml-1 font-mono text-white">
                                   {marketBadgeScore}
@@ -2885,13 +3766,25 @@ const ended = endedByTime;
                               )}
                             </span>
                           )}
-                          {!market.isBlocked && sportPhase !== "locked" && badgeStatus === "finished" && !showProposedBox && !showResolvedProofBox && (
+                          {!market.isBlocked && marketCardBadgeState === "locked" && !showProposedBox && !showResolvedProofBox && (
+                            <span className="px-2 py-1 rounded-full border border-yellow-500/40 bg-yellow-500/10 text-yellow-300 flex items-center gap-1">
+                              Locked
+                              {marketBadgeScore && <span className="ml-1 font-mono text-white">{marketBadgeScore}</span>}
+                            </span>
+                          )}
+                          {!market.isBlocked && marketCardBadgeState === "resolving" && !showProposedBox && !showResolvedProofBox && (
+                            <span className="px-2 py-1 rounded-full border border-sky-500/40 bg-sky-500/10 text-sky-200 flex items-center gap-1">
+                              Resolving
+                              {marketBadgeScore && <span className="ml-1 font-mono text-white">{marketBadgeScore}</span>}
+                            </span>
+                          )}
+                          {!market.isBlocked && marketCardBadgeState === "finished" && !showProposedBox && !showResolvedProofBox && (
                             <span className="px-2 py-1 rounded-full border border-gray-500/40 bg-gray-700/30 text-gray-200 flex items-center gap-1">
                               Final
                               {marketBadgeScore && <span className="ml-1 font-mono text-white">{marketBadgeScore}</span>}
                             </span>
                           )}
-                          {!market.isBlocked && sportPhase !== "locked" && badgeStatus === "unknown" && !showProposedBox && !showResolvedProofBox && (
+                          {!market.isBlocked && marketCardBadgeState === "unknown" && !showProposedBox && !showResolvedProofBox && (
                             <span className="px-2 py-1 rounded-full border border-gray-600/40 bg-gray-700/20 text-gray-300">—</span>
                           )}
                         </>
@@ -2899,14 +3792,16 @@ const ended = endedByTime;
                     })()}
 
                     {showProposedBox && !market.isBlocked && (
-                      <span className="px-2 py-1 rounded-full border border-pump-green/40 bg-pump-green/10 text-pump-green">
+                      <span className="px-2 py-1 rounded-full border border-pump-green/40 bg-pump-green/10 text-pump-green flex items-center gap-1">
                         Proposed
+                        {marketBadgeScore && <span className="ml-1 font-mono text-white">{marketBadgeScore}</span>}
                       </span>
                     )}
 
                     {showResolvedProofBox && (
-                      <span className="px-2 py-1 rounded-full border border-gray-600 bg-gray-800/40 text-green-400">
+                      <span className="px-2 py-1 rounded-full border border-gray-600 bg-gray-800/40 text-green-400 flex items-center gap-1">
                         Resolved
+                        {marketBadgeScore && <span className="ml-1 font-mono text-white">{marketBadgeScore}</span>}
                       </span>
                     )}
                   </div>
@@ -2943,18 +3838,6 @@ const ended = endedByTime;
                           </span>
                         </>
                       )}
-                    </div>
-                  </div>
-                )}
-
-                {isSoccerNextGoalMicro && marketCardVisualUrl && (
-                  <div className="mt-4 mb-1 flex justify-end">
-                    <div className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1">
-                      <span className="text-[10px] uppercase tracking-[0.12em] text-gray-400">Provider</span>
-                      <div className="w-11 h-7 rounded overflow-hidden border border-white/10 bg-black/50">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={marketCardVisualUrl} alt="" className="w-full h-full object-cover" />
-                      </div>
                     </div>
                   </div>
                 )}
@@ -3109,6 +3992,20 @@ const ended = endedByTime;
                   />
                 ) : (
                   <div className="mt-4">
+                    {isSoccerNextGoalMicro && (
+                      <div className="mb-3 text-xs text-gray-400 space-y-1">
+                        {microLoopSequence != null && (
+                          <div>
+                            Window: <span className="text-gray-200">#{microLoopSequence}</span>
+                          </div>
+                        )}
+                        {microLoopPhaseLabel && (
+                          <div>
+                            Loop phase: <span className="text-gray-200">{microLoopPhaseLabel}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
                     <div className="text-sm text-gray-300 whitespace-pre-wrap">
                       {fullDescription ? (
                         <>

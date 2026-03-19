@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
+const RESOLVED_BATCH_SIZE = 500;
 
 function supabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -15,28 +16,35 @@ export async function GET() {
     const sb = supabaseAdmin();
 
     // We consider "resolved history" = finalized OR cancelled
-    const { data, error } = await sb
-      .from("markets")
-      .select(
+    const data: any[] = [];
+    for (let from = 0; ; from += RESOLVED_BATCH_SIZE) {
+      const to = from + RESOLVED_BATCH_SIZE - 1;
+      const { data: chunk, error } = await sb
+        .from("markets")
+        .select(
+          `
+          market_address,
+          question,
+          resolution_status,
+          winning_outcome,
+          resolved_at,
+          cancelled_at,
+          resolve_tx,
+          cancel_tx,
+          market_type,
+          outcome_names
         `
-        market_address,
-        question,
-        resolution_status,
-        winning_outcome,
-        resolved_at,
-        cancelled_at,
-        resolve_tx,
-        cancel_tx,
-        market_type,
-        outcome_names
-      `
-      )
-      .in("resolution_status", ["finalized", "cancelled"])
-      .order("resolved_at", { ascending: false, nullsFirst: false })
-      .order("cancelled_at", { ascending: false, nullsFirst: false })
-      .limit(200);
-
-    if (error) throw error;
+        )
+        .in("resolution_status", ["finalized", "cancelled"])
+        .order("resolved_at", { ascending: false, nullsFirst: false })
+        .order("cancelled_at", { ascending: false, nullsFirst: false })
+        .order("market_address", { ascending: true })
+        .range(from, to);
+      if (error) throw error;
+      if (!chunk?.length) break;
+      data.push(...chunk);
+      if (chunk.length < RESOLVED_BATCH_SIZE) break;
+    }
 
     const resolved = (data || []).map((m: any) => {
       const action = m.resolution_status === "finalized" ? "approved" : "cancelled";

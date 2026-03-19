@@ -21,6 +21,8 @@ export type FlashMarket = {
   currentScoreAway: number;
   minute: number | null;
   windowEnd: string | null;
+  loopSequence: number | null;
+  loopPhase: string | null;
   remainingSec: number | null;
   status: FlashMarketStatus;
   volume: number;

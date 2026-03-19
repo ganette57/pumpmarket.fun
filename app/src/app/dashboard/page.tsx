@@ -87,6 +87,63 @@ function decodeMarketStatus(status: any): ResolutionStatus {
   return "open";
 }
 
+function asObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function readDescriptionField(description: string | null | undefined, fieldLabel: string): string | null {
+  const raw = String(description || "");
+  if (!raw) return null;
+  const escaped = fieldLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = raw.match(new RegExp(`^\\s*${escaped}\\s*:\\s*(.+)$`, "im"));
+  return match?.[1]?.trim() || null;
+}
+
+function toPositiveInt(value: unknown): number | null {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  const out = Math.floor(n);
+  return out >= 1 ? out : null;
+}
+
+function extractLoopSequenceFromMarket(market: DbMarket | null): number | null {
+  if (!market) return null;
+  const fromDescription = toPositiveInt(readDescriptionField(market.description, "Loop Sequence"));
+  if (fromDescription != null) return fromDescription;
+  const meta = asObject(market.sport_meta);
+  const liveMicro = asObject(meta.live_micro);
+  return (
+    toPositiveInt(liveMicro.loop_sequence) ??
+    toPositiveInt(liveMicro.loopSequence) ??
+    toPositiveInt(meta.loop_sequence) ??
+    toPositiveInt(meta.loopSequence) ??
+    null
+  );
+}
+
+function extractLoopPhaseFromMarket(market: DbMarket | null): string | null {
+  if (!market) return null;
+  const fromDescription = readDescriptionField(market.description, "Loop Phase");
+  if (fromDescription) return fromDescription;
+  const meta = asObject(market.sport_meta);
+  const liveMicro = asObject(meta.live_micro);
+  const raw = String(liveMicro.loop_phase ?? liveMicro.loopPhase ?? meta.loop_phase ?? meta.loopPhase ?? "").trim();
+  return raw || null;
+}
+
+function formatLoopPhaseLabel(loopPhase: string | null | undefined): string | null {
+  const raw = String(loopPhase ?? "").trim();
+  if (!raw) return null;
+  const normalized = raw
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (normalized === "first half" || normalized === "1st half" || normalized === "h1") return "1st half";
+  if (normalized === "second half" || normalized === "2nd half" || normalized === "h2") return "2nd half";
+  return raw;
+}
+
 const BI_0 = BigInt(0);
 const BI_1 = BigInt(1);
 const BI_8 = BigInt(8);
@@ -162,6 +219,8 @@ type DbMarket = {
   market_address?: string;
   creator?: string;
   question?: string;
+  description?: string | null;
+  sport_meta?: Record<string, unknown> | null;
   total_volume?: number;
   end_date?: string;
   resolved?: boolean;
@@ -214,6 +273,8 @@ type Claimable = {
   marketQuestion: string;
   estPayoutLamports?: number;
   winningIndex?: number;
+  loopSequence?: number | null;
+  loopPhase?: string | null;
 };
 
 type Refundable = {
@@ -320,7 +381,7 @@ async function saveClaimTransaction(params: {
 
 async function safeFetchMyCreatedMarkets(walletBase58: string): Promise<DbMarket[]> {
   const trySelects = [
-    "id,created_at,market_address,creator,question,total_volume,end_date,resolved,outcome_names,winning_outcome,resolved_at,resolution_proof_url,resolution_proof_image,resolution_proof_note,resolution_status,proposed_winning_outcome,resolution_proposed_at,contest_deadline,contested,contest_count,proposed_proof_url,proposed_proof_image,proposed_proof_note,cancelled_at,cancel_reason",
+    "id,created_at,market_address,creator,question,description,sport_meta,total_volume,end_date,resolved,outcome_names,winning_outcome,resolved_at,resolution_proof_url,resolution_proof_image,resolution_proof_note,resolution_status,proposed_winning_outcome,resolution_proposed_at,contest_deadline,contested,contest_count,proposed_proof_url,proposed_proof_image,proposed_proof_note,cancelled_at,cancel_reason",
     "id,created_at,market_address,creator,question,total_volume,end_date,resolved,outcome_names",
     "id,market_address,creator,question,total_volume,end_date,resolved",
   ];
@@ -343,7 +404,7 @@ async function safeFetchMyCreatedMarkets(walletBase58: string): Promise<DbMarket
 async function safeFetchMarketsByIds(ids: string[]): Promise<DbMarket[]> {
   if (!ids.length) return [];
   const trySelects = [
-    "id,market_address,creator,question,total_volume,end_date,resolved,outcome_names,winning_outcome,resolved_at,resolution_proof_url,resolution_proof_image,resolution_proof_note,resolution_status,proposed_winning_outcome,resolution_proposed_at,contest_deadline,contested,contest_count,proposed_proof_url,proposed_proof_image,proposed_proof_note",
+    "id,market_address,creator,question,description,sport_meta,total_volume,end_date,resolved,outcome_names,winning_outcome,resolved_at,resolution_proof_url,resolution_proof_image,resolution_proof_note,resolution_status,proposed_winning_outcome,resolution_proposed_at,contest_deadline,contested,contest_count,proposed_proof_url,proposed_proof_image,proposed_proof_note",
     "id,market_address,creator,question,total_volume,end_date,resolved,outcome_names",
     "id,market_address,question,total_volume,end_date,resolved",
   ];
@@ -363,7 +424,7 @@ async function safeFetchMarketsByAddresses(addrs: string[]): Promise<DbMarket[]>
   const uniq = Array.from(new Set(addrs.map(String).filter(Boolean))).slice(0, 200);
   if (!uniq.length) return [];
   const trySelects = [
-    "id,market_address,creator,question,total_volume,end_date,resolved,outcome_names,winning_outcome,resolved_at,resolution_proof_url,resolution_proof_image,resolution_proof_note,resolution_status,proposed_winning_outcome,resolution_proposed_at,contest_deadline,contested,contest_count,proposed_proof_url,proposed_proof_image,proposed_proof_note,cancelled_at,cancel_reason",
+    "id,market_address,creator,question,description,sport_meta,total_volume,end_date,resolved,outcome_names,winning_outcome,resolved_at,resolution_proof_url,resolution_proof_image,resolution_proof_note,resolution_status,proposed_winning_outcome,resolution_proposed_at,contest_deadline,contested,contest_count,proposed_proof_url,proposed_proof_image,proposed_proof_note,cancelled_at,cancel_reason",
     "id,market_address,question,total_volume,end_date,resolved,outcome_names,resolution_status,contest_deadline,contest_count,contested",
     "id,market_address,question,total_volume,end_date,resolved,outcome_names",
   ];
@@ -938,6 +999,8 @@ export default function DashboardPage() {
             myCreatedMarkets.find((x) => x.market_address === addr) ||
             null;
           const marketQuestion = mkDb?.question || "(Market)";
+          const loopSequence = extractLoopSequenceFromMarket(mkDb);
+          const loopPhase = extractLoopPhaseFromMarket(mkDb);
 
           const resolved = !!marketAcc?.resolved;
           const winningIndex =
@@ -965,6 +1028,8 @@ export default function DashboardPage() {
                   marketQuestion,
                   estPayoutLamports: Number(payout),
                   winningIndex,
+                  loopSequence,
+                  loopPhase,
                 });
               }
             }
@@ -1478,7 +1543,26 @@ export default function DashboardPage() {
                       <span className="self-start text-[10px] font-bold uppercase tracking-wider text-pump-green bg-pump-green/10 px-2 py-0.5 rounded">🏆 Claim</span>
                       <div className="min-w-0 flex-1">
                         <div className="text-white font-semibold text-sm truncate">{c.marketQuestion}</div>
-                        <div className="text-xs text-gray-500 mt-1">{shortAddr(c.marketAddress)}</div>
+                        {(() => {
+                          const windowLabel = c.loopSequence != null ? `Window #${c.loopSequence}` : null;
+                          const phaseLabel = formatLoopPhaseLabel(c.loopPhase);
+                          if (!windowLabel && !phaseLabel) return null;
+                          return (
+                            <div className="mt-1 flex items-center gap-2 text-xs">
+                              {windowLabel ? (
+                                <span className="inline-flex items-center rounded-full border border-pump-green/40 bg-pump-green/10 px-2 py-0.5 font-semibold text-pump-green">
+                                  {windowLabel}
+                                </span>
+                              ) : null}
+                              {phaseLabel ? (
+                                <>
+                                  {windowLabel ? <span className="text-white/35">•</span> : null}
+                                  <span className="text-gray-400 font-medium">{phaseLabel}</span>
+                                </>
+                              ) : null}
+                            </div>
+                          );
+                        })()}
                       </div>
                       <div className="flex items-center justify-between gap-2 mt-auto">
                         <span className="text-pump-green font-bold text-lg">{typeof c.estPayoutLamports === "number" ? `~${lamportsToSol(c.estPayoutLamports).toFixed(4)}` : "?"} SOL</span>

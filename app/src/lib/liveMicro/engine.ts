@@ -13,9 +13,10 @@ import {
   countRunnableLiveMicroMatchLoops,
   createLiveMicroRow,
   findActiveLiveMicroByMatch,
+  getLiveMicroMatchLoopById,
   findRecentLiveMicroForLoopStep,
   findLiveMicroMatchLoopByMatch,
-  findSportEventIdByProviderMatchId,
+  findSportEventByProviderMatchId,
   getLiveMicroById,
   listActiveLiveMicros,
   listRunnableLiveMicroMatchLoops,
@@ -68,8 +69,48 @@ export type ActivateLiveMicroMatchLoopResult = {
   reason: string;
 };
 
+export type ResumeLiveMicroMatchLoopInput = {
+  loopId?: string;
+  providerMatchId?: string;
+  providerName?: string;
+  resumedBy?: string | null;
+  windowMinutes?: number;
+};
+
+export type ResumeLiveMicroMatchLoopResult = {
+  loop: LiveMicroMatchLoopRow | null;
+  reconcile: Record<string, unknown> | null;
+  resumed: boolean;
+  reason: string;
+};
+
+export type StopLiveMicroMatchLoopInput = {
+  loopId?: string;
+  providerMatchId?: string;
+  providerName?: string;
+  stoppedBy?: string | null;
+};
+
+export type StopLiveMicroMatchLoopResult = {
+  loop: LiveMicroMatchLoopRow | null;
+  stopped: boolean;
+  reason: string;
+};
+
 const LOOP_STEP_CREATE_LOCKS_KEY = "__FUNMARKET_LIVE_MICRO_LOOP_STEP_CREATE_LOCKS__";
 const LOOP_STEP_EXISTS_ERROR_PREFIX = "Loop step micro-market already exists";
+const LOOP_RUNTIME_META_KEY = "__live_micro_loop_runtime";
+const LOOP_RETRY_BACKOFF_SECONDS = [15, 30, 60, 120, 180, 180] as const;
+const LOOP_RETRY_MAX_ATTEMPTS = LOOP_RETRY_BACKOFF_SECONDS.length;
+
+type LoopRetryMeta = {
+  retrying: boolean;
+  retryCount: number;
+  maxAttempts: number;
+  nextRetryAt: string | null;
+  lastError: string | null;
+  lastErrorAt: string | null;
+};
 
 function getLoopStepLockSet(): Set<string> {
   const host = (typeof process !== "undefined" ? process : globalThis) as Record<string, unknown>;
@@ -103,6 +144,154 @@ async function withLoopStepCreateLock<T>(
 
 function isLoopStepExistsError(message: string): boolean {
   return message.includes(LOOP_STEP_EXISTS_ERROR_PREFIX);
+}
+
+function readLoopRuntimeMeta(payload: Record<string, unknown> | null): Record<string, unknown> {
+  const base = asObject(payload);
+  return asObject(base[LOOP_RUNTIME_META_KEY]);
+}
+
+function readLoopRetryMeta(payload: Record<string, unknown> | null): LoopRetryMeta {
+  const runtime = readLoopRuntimeMeta(payload);
+  const retry = asObject(runtime.retry);
+  const retryCount = Math.max(0, Math.floor(Number(retry.retry_count ?? 0) || 0));
+  const maxAttempts = Math.max(
+    1,
+    Math.min(
+      20,
+      Math.floor(Number(retry.max_attempts ?? LOOP_RETRY_MAX_ATTEMPTS) || LOOP_RETRY_MAX_ATTEMPTS),
+    ),
+  );
+  const nextRetryAtRaw = String(retry.next_retry_at ?? "").trim();
+  const lastErrorRaw = String(retry.last_error ?? "").trim();
+  const lastErrorAtRaw = String(retry.last_error_at ?? "").trim();
+  return {
+    retrying: Boolean(retry.retrying),
+    retryCount,
+    maxAttempts,
+    nextRetryAt: nextRetryAtRaw || null,
+    lastError: lastErrorRaw || null,
+    lastErrorAt: lastErrorAtRaw || null,
+  };
+}
+
+function writeLoopRetryMeta(payload: Record<string, unknown> | null, retryMeta: LoopRetryMeta): Record<string, unknown> {
+  const base = asObject(payload);
+  const runtime = readLoopRuntimeMeta(base);
+  return {
+    ...base,
+    [LOOP_RUNTIME_META_KEY]: {
+      ...runtime,
+      retry: {
+        retrying: retryMeta.retrying,
+        retry_count: retryMeta.retryCount,
+        max_attempts: retryMeta.maxAttempts,
+        next_retry_at: retryMeta.nextRetryAt,
+        last_error: retryMeta.lastError,
+        last_error_at: retryMeta.lastErrorAt,
+      },
+    },
+  };
+}
+
+function withExistingRuntimeMeta(
+  snapshotPayload: Record<string, unknown> | null,
+  existingPayload: Record<string, unknown> | null,
+): Record<string, unknown> {
+  const base = asObject(snapshotPayload);
+  const runtime = readLoopRuntimeMeta(existingPayload);
+  if (!Object.keys(runtime).length) return base;
+  return {
+    ...base,
+    [LOOP_RUNTIME_META_KEY]: runtime,
+  };
+}
+
+function withLoopRetryPatch(
+  snapshotPayload: Record<string, unknown> | null,
+  existingPayload: Record<string, unknown> | null,
+  patch: Partial<LoopRetryMeta>,
+): Record<string, unknown> {
+  const payloadWithRuntime = withExistingRuntimeMeta(snapshotPayload, existingPayload);
+  const current = readLoopRetryMeta(payloadWithRuntime);
+  return writeLoopRetryMeta(payloadWithRuntime, {
+    retrying: patch.retrying ?? current.retrying,
+    retryCount: patch.retryCount ?? current.retryCount,
+    maxAttempts: patch.maxAttempts ?? current.maxAttempts,
+    nextRetryAt: patch.nextRetryAt === undefined ? current.nextRetryAt : patch.nextRetryAt,
+    lastError: patch.lastError === undefined ? current.lastError : patch.lastError,
+    lastErrorAt: patch.lastErrorAt === undefined ? current.lastErrorAt : patch.lastErrorAt,
+  });
+}
+
+function retryBackoffDelaySeconds(retryCount: number): number {
+  const idx = Math.max(0, Math.min(LOOP_RETRY_BACKOFF_SECONDS.length - 1, retryCount - 1));
+  return LOOP_RETRY_BACKOFF_SECONDS[idx];
+}
+
+function retryAtIsoFromNow(delaySeconds: number): string {
+  return new Date(Date.now() + Math.max(1, delaySeconds) * 1000).toISOString();
+}
+
+function retryAtMs(value: string | null): number | null {
+  if (!value) return null;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function extractErrorMessage(input: unknown): string {
+  const err = input as {
+    message?: unknown;
+    cause?: unknown;
+    code?: unknown;
+    stack?: unknown;
+  };
+  const message = String(err?.message || input || "Unknown error");
+  const code = String(err?.code || "").trim();
+  const causeMessage = String((err?.cause as { message?: unknown } | null)?.message || "").trim();
+  if (code && causeMessage) return `${message} (code=${code}; cause=${causeMessage})`;
+  if (code) return `${message} (code=${code})`;
+  if (causeMessage) return `${message} (cause=${causeMessage})`;
+  return message;
+}
+
+export function isRetryableLoopError(input: unknown): boolean {
+  const err = input as {
+    message?: unknown;
+    cause?: unknown;
+    code?: unknown;
+    stack?: unknown;
+  };
+  const chunks = [
+    String(err?.message || ""),
+    String(err?.code || ""),
+    String((err?.cause as { message?: unknown } | null)?.message || ""),
+    String(err?.stack || ""),
+  ]
+    .map((x) => x.toLowerCase())
+    .filter(Boolean);
+  const text = chunks.join(" ");
+  if (!text) return false;
+
+  if (text.includes("active micro-market already exists") || text.includes(LOOP_STEP_EXISTS_ERROR_PREFIX.toLowerCase())) {
+    return false;
+  }
+  if (text.includes("provider_match_id is required")) return false;
+  if (text.includes("unsupported provider")) return false;
+
+  return (
+    text.includes("failed to get recent blockhash") ||
+    text.includes("fetch failed") ||
+    text.includes("network error") ||
+    text.includes("econnreset") ||
+    text.includes("etimedout") ||
+    text.includes("eai_again") ||
+    text.includes("socket hang up") ||
+    text.includes("temporar") ||
+    text.includes("timeout") ||
+    text.includes("timed out") ||
+    text.includes("rpc")
+  );
 }
 
 function sanitizeWindowMinutes(x: number): number {
@@ -155,6 +344,79 @@ function normalizeIso(input: string | null): string | null {
   const ms = Date.parse(input);
   if (!Number.isFinite(ms)) return null;
   return new Date(ms).toISOString();
+}
+
+function normalizeImageUrl(value: unknown): string | null {
+  const raw = String(value ?? "").trim();
+  if (!raw || raw === "null" || raw === "undefined" || raw.startsWith("data:")) return null;
+  if (!/^https?:\/\//i.test(raw)) return null;
+  return raw.replace(/^http:\/\//i, "https://");
+}
+
+function firstImageUrl(candidates: unknown[]): string | null {
+  for (const candidate of candidates) {
+    const normalized = normalizeImageUrl(candidate);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function imageFromKnownFields(raw: Record<string, unknown> | null): string | null {
+  if (!raw) return null;
+  return firstImageUrl([
+    raw.image_url,
+    raw.imageUrl,
+    raw.thumbnail,
+    raw.thumb,
+    raw.event_image,
+    raw.event_thumb,
+    raw.event_poster,
+    raw.event_banner,
+    raw.event_square,
+    raw.event_thumbnail,
+    raw.strThumb,
+    raw.strPoster,
+    raw.strBanner,
+    raw.strSquare,
+    raw.strFanart1,
+    raw.strFanart2,
+    raw.strCutout,
+  ]);
+}
+
+function extractCanonicalMarketImageUrl(
+  snapshot: SoccerScoreSnapshot,
+  sportEventRaw: Record<string, unknown> | null,
+): string | null {
+  const payload = asObject(snapshot.payload);
+  const event = asObject(payload.event);
+  const eventRaw = asObject(event.raw);
+  const payloadRaw = asObject(payload.raw);
+  const liveRaw = asObject(asObject(payload.live).raw);
+  const fixture = asObject(payload.fixture);
+
+  const preferred = firstImageUrl([
+    imageFromKnownFields(event),
+    imageFromKnownFields(eventRaw),
+    imageFromKnownFields(payload),
+    imageFromKnownFields(payloadRaw),
+    imageFromKnownFields(liveRaw),
+    imageFromKnownFields(fixture),
+    imageFromKnownFields(sportEventRaw),
+  ]);
+  if (preferred) return preferred;
+
+  // Last resort only when no real match thumb/banner exists.
+  return firstImageUrl([
+    readNestedString(payload, ["live", "raw", "home_badge"]),
+    readNestedString(payload, ["live", "raw", "away_badge"]),
+    readNestedString(payload, ["event", "raw", "home_badge"]),
+    readNestedString(payload, ["event", "raw", "away_badge"]),
+    readNestedString(payload, ["fixture", "teams", "home", "logo"]),
+    readNestedString(payload, ["fixture", "teams", "away", "logo"]),
+    readNestedString(payload, ["event", "raw", "full", "teams", "home", "logo"]),
+    readNestedString(payload, ["event", "raw", "full", "teams", "away", "logo"]),
+  ]);
 }
 
 function extractElapsedMinute(snapshot: SoccerScoreSnapshot): number | null {
@@ -268,7 +530,9 @@ export async function startLiveMicroMarket(input: StartLiveMicroInput): Promise<
     throw new Error("Operator wallet unavailable");
   }
 
-  const sportEventId = await findSportEventIdByProviderMatchId(providerMatchId);
+  const sportEvent = await findSportEventByProviderMatchId(providerMatchId);
+  const sportEventId = sportEvent?.id ?? null;
+  const canonicalImageUrl = extractCanonicalMarketImageUrl(snapshot, sportEvent?.raw ?? null);
 
   const marketRow = await upsertLinkedMarketRow({
     marketAddress: createResult.marketAddress,
@@ -277,6 +541,7 @@ export async function startLiveMicroMarket(input: StartLiveMicroInput): Promise<
     description: makeDescription(snapshot, windowStartIso, windowEndIso, input.loopContext),
     endDateIso: windowEndIso,
     sportEventId,
+    imageUrl: canonicalImageUrl,
     sportMeta: {
       sport: "soccer",
       micro_market_type: LIVE_MICRO_TYPE,
@@ -502,7 +767,7 @@ function getHardStopReason(params: {
   scheduledStartIso: string | null;
 }): string | null {
   const cfg = getLiveMicroSoccerLoopConfig();
-  if (params.snapshot.status === "finished") return "provider_finished";
+  if (params.snapshot.status === "finished") return "provider_match_finished";
   if (typeof params.elapsedMinute === "number" && params.elapsedMinute >= cfg.hardStopMinute) {
     return "hard_stop_minute_reached";
   }
@@ -515,6 +780,185 @@ function getHardStopReason(params: {
   }
 
   return null;
+}
+
+function readStatusHints(snapshot: SoccerScoreSnapshot): string[] {
+  const payload = asObject(snapshot.payload);
+  const hints = [
+    readNestedString(payload, ["event", "status"]),
+    readNestedString(payload, ["live", "status"]),
+    readNestedString(payload, ["live", "raw", "status_text"]),
+    readNestedString(payload, ["live", "raw", "progress"]),
+    readNestedString(payload, ["event", "raw", "full", "fixture", "status", "short"]),
+    readNestedString(payload, ["event", "raw", "full", "fixture", "status", "long"]),
+    readNestedString(payload, ["fixture", "fixture", "status", "short"]),
+    readNestedString(payload, ["fixture", "fixture", "status", "long"]),
+    readNestedString(payload, ["override", "status"]),
+  ];
+  return hints
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function inferProviderPhase(snapshot: SoccerScoreSnapshot, elapsedMinute: number | null): "first_half" | "halftime" | "second_half" | "ended" | null {
+  if (snapshot.status === "finished") return "ended";
+
+  const hints = readStatusHints(snapshot);
+  for (const hint of hints) {
+    if (
+      /\b(ht|half[\s-]*time|halftime|interval|break)\b/.test(hint) &&
+      !/\b2h\b/.test(hint)
+    ) {
+      return "halftime";
+    }
+    if (/\b(2h|2nd|second)\b/.test(hint)) return "second_half";
+    if (/\b(1h|1st|first)\b/.test(hint)) return "first_half";
+    if (/\b(ft|finished|full[\s-]*time)\b/.test(hint)) return "ended";
+  }
+
+  if (typeof elapsedMinute === "number" && elapsedMinute >= 0) {
+    if (elapsedMinute >= 46) return "second_half";
+    if (elapsedMinute >= 44 && elapsedMinute <= 45) return "halftime";
+    return "first_half";
+  }
+
+  return null;
+}
+
+function markManualResumeInPayload(
+  snapshotPayload: Record<string, unknown> | null,
+  existingPayload: Record<string, unknown> | null,
+): Record<string, unknown> {
+  const payload = withExistingRuntimeMeta(snapshotPayload, existingPayload);
+  const runtime = readLoopRuntimeMeta(payload);
+  return {
+    ...payload,
+    [LOOP_RUNTIME_META_KEY]: {
+      ...runtime,
+      manual_resume_requested_at: nowIso(),
+    },
+  };
+}
+
+function markManualStopInPayload(
+  snapshotPayload: Record<string, unknown> | null,
+  existingPayload: Record<string, unknown> | null,
+  stoppedBy?: string | null,
+): Record<string, unknown> {
+  const payload = withExistingRuntimeMeta(snapshotPayload, existingPayload);
+  const runtime = readLoopRuntimeMeta(payload);
+  return {
+    ...payload,
+    [LOOP_RUNTIME_META_KEY]: {
+      ...runtime,
+      manual_stop_requested_at: nowIso(),
+      manual_stop_requested_by: stoppedBy || null,
+    },
+  };
+}
+
+async function handleRetryableLoopError(params: {
+  loop: LiveMicroMatchLoopRow;
+  error: unknown;
+  snapshotPayload: Record<string, unknown> | null;
+  scheduledStartIso: string | null;
+  context: "activate" | "tick";
+}): Promise<{
+  loop: LiveMicroMatchLoopRow;
+  retryCount: number;
+  nextRetryAt: string | null;
+  exhausted: boolean;
+  message: string;
+}> {
+  const message = extractErrorMessage(params.error);
+  const currentRetry = readLoopRetryMeta(params.loop.last_snapshot_payload);
+  const retryCount = currentRetry.retryCount + 1;
+  const maxAttempts = LOOP_RETRY_MAX_ATTEMPTS;
+
+  if (retryCount > maxAttempts) {
+    const exhaustedPayload = withLoopRetryPatch(
+      params.snapshotPayload,
+      params.loop.last_snapshot_payload,
+      {
+        retrying: false,
+        retryCount,
+        maxAttempts,
+        nextRetryAt: null,
+        lastError: message,
+        lastErrorAt: nowIso(),
+      },
+    );
+    const exhaustedLoop = await updateLiveMicroMatchLoop({
+      id: params.loop.id,
+      loopStatus: "error",
+      errorMessage: message,
+      stopReason: "retryable_creation_error_retries_exhausted",
+      lastSnapshotPayload: exhaustedPayload,
+      scheduledStartTimeIso: params.scheduledStartIso,
+    });
+    console.log("[live-micro:loop] retry exhausted; moving loop to error", {
+      loopId: params.loop.id,
+      providerMatchId: params.loop.provider_match_id,
+      context: params.context,
+      retryCount,
+      maxAttempts,
+      error: message,
+    });
+    return {
+      loop: exhaustedLoop,
+      retryCount,
+      nextRetryAt: null,
+      exhausted: true,
+      message,
+    };
+  }
+
+  const delaySeconds = retryBackoffDelaySeconds(retryCount);
+  const nextRetryAt = retryAtIsoFromNow(delaySeconds);
+  const retryPayload = withLoopRetryPatch(
+    params.snapshotPayload,
+    params.loop.last_snapshot_payload,
+    {
+      retrying: true,
+      retryCount,
+      maxAttempts,
+      nextRetryAt,
+      lastError: message,
+      lastErrorAt: nowIso(),
+    },
+  );
+
+  console.log("[live-micro:loop] retryable error detected", {
+    loopId: params.loop.id,
+    providerMatchId: params.loop.provider_match_id,
+    context: params.context,
+    retryCount,
+    maxAttempts,
+    error: message,
+  });
+  console.log("[live-micro:loop] scheduling retry", {
+    loopId: params.loop.id,
+    providerMatchId: params.loop.provider_match_id,
+    delaySeconds,
+    nextRetryAt,
+  });
+
+  const updatedLoop = await updateLiveMicroMatchLoop({
+    id: params.loop.id,
+    loopStatus: params.loop.loop_phase === "halftime" ? "halftime" : "active",
+    errorMessage: message,
+    stopReason: null,
+    lastSnapshotPayload: retryPayload,
+    scheduledStartTimeIso: params.scheduledStartIso,
+  });
+
+  return {
+    loop: updatedLoop,
+    retryCount,
+    nextRetryAt,
+    exhausted: false,
+    message,
+  };
 }
 
 async function endLoopWithReason(
@@ -592,7 +1036,7 @@ async function ensureLoopStepMarket(params: {
         loopSequence: params.sequence,
       });
       if (existingBefore) {
-        console.log("[live-micro:loop] create skipped (dedupe hit)", {
+        console.log("[live-micro:loop] window already exists, skipping", {
           loopId: params.loop.id,
           providerMatchId: params.loop.provider_match_id,
           phase: params.phase,
@@ -637,7 +1081,7 @@ async function ensureLoopStepMarket(params: {
         loopSequence: params.sequence,
       });
       if (existingAfterTouch) {
-        console.log("[live-micro:loop] create skipped (dedupe after touch)", {
+        console.log("[live-micro:loop] window already exists, skipping", {
           loopId: params.loop.id,
           providerMatchId: params.loop.provider_match_id,
           phase: params.phase,
@@ -891,7 +1335,7 @@ export async function activateLiveMicroMatchLoop(
         : "first_market_creation_race_skipped",
     };
   } catch (e: any) {
-    const message = String(e?.message || e || "Unknown error");
+    const message = extractErrorMessage(e);
     if (message.includes("Active micro-market already exists") || isLoopStepExistsError(message)) {
       return {
         loop,
@@ -901,15 +1345,242 @@ export async function activateLiveMicroMatchLoop(
       };
     }
 
+    if (isRetryableLoopError(e)) {
+      const retry = await handleRetryableLoopError({
+        loop,
+        error: e,
+        snapshotPayload: snapshot.payload,
+        scheduledStartIso: scheduledStartIsoResolved || loop.scheduled_start_time,
+        context: "activate",
+      });
+      return {
+        loop: retry.loop,
+        firstMarketCreated: false,
+        firstMarket: null,
+        reason: retry.exhausted ? "first_market_retry_exhausted" : "first_market_retry_scheduled",
+      };
+    }
+
     await updateLiveMicroMatchLoop({
       id: loop.id,
       loopStatus: "error",
       errorMessage: message,
+      stopReason: "non_retryable_creation_error",
       lastSnapshotPayload: snapshot.payload,
       scheduledStartTimeIso: scheduledStartIsoResolved || loop.scheduled_start_time,
     });
 
     throw e;
+  }
+}
+
+export async function stopLiveMicroMatchLoop(
+  input: StopLiveMicroMatchLoopInput,
+): Promise<StopLiveMicroMatchLoopResult> {
+  const loopId = String(input.loopId || "").trim();
+  const providerMatchId = String(input.providerMatchId || "").trim();
+  const providerName = normalizeProviderName(input.providerName || "api-football");
+
+  let loop: LiveMicroMatchLoopRow | null = null;
+  if (loopId) {
+    loop = await getLiveMicroMatchLoopById(loopId);
+  } else if (providerMatchId) {
+    loop = await findLiveMicroMatchLoopByMatch({ providerMatchId, providerName });
+  }
+
+  if (!loop) {
+    return {
+      loop: null,
+      stopped: false,
+      reason: "loop_not_found",
+    };
+  }
+
+  if (loop.loop_status === "ended" || loop.loop_phase === "ended") {
+    return {
+      loop,
+      stopped: false,
+      reason: loop.stop_reason === "manual_admin_stop" ? "manual_stop_already_applied" : "loop_already_ended",
+    };
+  }
+
+  console.log("[live-micro:loop] manual stop requested", {
+    loopId: loop.id,
+    providerMatchId: loop.provider_match_id,
+    providerName: loop.provider_name,
+    stoppedBy: input.stoppedBy || null,
+  });
+
+  const stoppedLoop = await updateLiveMicroMatchLoop({
+    id: loop.id,
+    loopStatus: "ended",
+    currentActiveLiveMicroId: null,
+    stopReason: "manual_admin_stop",
+    errorMessage: null,
+    lastSnapshotPayload: markManualStopInPayload(loop.last_snapshot_payload, loop.last_snapshot_payload, input.stoppedBy),
+  });
+
+  return {
+    loop: stoppedLoop,
+    stopped: true,
+    reason: "manual_stop_applied",
+  };
+}
+
+export async function resumeLiveMicroMatchLoop(
+  input: ResumeLiveMicroMatchLoopInput,
+): Promise<ResumeLiveMicroMatchLoopResult> {
+  const loopId = String(input.loopId || "").trim();
+  const providerMatchId = String(input.providerMatchId || "").trim();
+  const providerName = normalizeProviderName(input.providerName || "api-football");
+  const windowMinutes = sanitizeWindowMinutes(input.windowMinutes ?? getLiveMicroWindowMinutes());
+
+  let loop: LiveMicroMatchLoopRow | null = null;
+  if (loopId) {
+    loop = await getLiveMicroMatchLoopById(loopId);
+  } else if (providerMatchId) {
+    loop = await findLiveMicroMatchLoopByMatch({ providerMatchId, providerName });
+  }
+
+  if (!loop) {
+    return {
+      loop: null,
+      reconcile: null,
+      resumed: false,
+      reason: "loop_not_found",
+    };
+  }
+
+  const ended = loop.loop_phase === "ended" || loop.loop_status === "ended";
+  const manuallyStopped = loop.stop_reason === "manual_admin_stop";
+  if (ended && !manuallyStopped) {
+    return {
+      loop,
+      reconcile: null,
+      resumed: false,
+      reason: "loop_already_ended",
+    };
+  }
+
+  console.log("[live-micro:loop] manual resume requested", {
+    loopId: loop.id,
+    providerMatchId: loop.provider_match_id,
+    providerName: loop.provider_name,
+    resumedBy: input.resumedBy || null,
+  });
+
+  try {
+    const snapshot = await fetchSoccerSnapshot({
+      providerName: loop.provider_name,
+      providerMatchId: loop.provider_match_id,
+    });
+    const elapsedMinute = extractElapsedMinute(snapshot);
+    const scheduledStartIso = extractScheduledStartIso(snapshot) || loop.scheduled_start_time;
+    const providerPhase = inferProviderPhase(snapshot, elapsedMinute);
+    const hardStopReason = getHardStopReason({
+      snapshot,
+      elapsedMinute,
+      scheduledStartIso,
+    });
+
+    if (hardStopReason) {
+      const endedLoop = await endLoopWithReason(
+        loop,
+        hardStopReason,
+        withLoopRetryPatch(snapshot.payload, loop.last_snapshot_payload, {
+          retrying: false,
+          nextRetryAt: null,
+        }),
+        scheduledStartIso,
+      );
+      return {
+        loop: endedLoop,
+        reconcile: {
+          status: "ended",
+          stop_reason: hardStopReason,
+        },
+        resumed: false,
+        reason: hardStopReason === "provider_match_finished"
+          ? "manual_resume_blocked_match_finished"
+          : "manual_resume_blocked_hard_stop",
+      };
+    }
+
+    const nextLoopPhase: "first_half" | "halftime" | "second_half" =
+      providerPhase === "first_half" || providerPhase === "halftime" || providerPhase === "second_half"
+        ? providerPhase
+        : loop.loop_phase === "first_half" || loop.loop_phase === "halftime" || loop.loop_phase === "second_half"
+        ? loop.loop_phase
+        : "first_half";
+
+    loop = await updateLiveMicroMatchLoop({
+      id: loop.id,
+      loopStatus: nextLoopPhase === "halftime" ? "halftime" : "active",
+      loopPhase: nextLoopPhase,
+      stopReason: null,
+      errorMessage: null,
+      scheduledStartTimeIso: scheduledStartIso,
+      lastSnapshotPayload: withLoopRetryPatch(
+        markManualResumeInPayload(snapshot.payload, loop.last_snapshot_payload),
+        loop.last_snapshot_payload,
+        {
+          retrying: false,
+          nextRetryAt: null,
+        },
+      ),
+    });
+
+    const reconcile = await processSingleLoop({
+      loop,
+      windowMinutes,
+    });
+    const refreshed = await getLiveMicroMatchLoopById(loop.id);
+
+    return {
+      loop: refreshed,
+      reconcile,
+      resumed: true,
+      reason: "manual_resume_reconcile_triggered",
+    };
+  } catch (e: any) {
+    if (isRetryableLoopError(e)) {
+      const retry = await handleRetryableLoopError({
+        loop,
+        error: e,
+        snapshotPayload: loop.last_snapshot_payload,
+        scheduledStartIso: loop.scheduled_start_time,
+        context: "tick",
+      });
+      return {
+        loop: retry.loop,
+        reconcile: {
+          status: retry.exhausted ? "error" : "retry_scheduled",
+          retry_count: retry.retryCount,
+          retry_max_attempts: LOOP_RETRY_MAX_ATTEMPTS,
+          next_retry_at: retry.nextRetryAt,
+          error: retry.message,
+        },
+        resumed: true,
+        reason: retry.exhausted ? "manual_resume_retry_exhausted" : "manual_resume_retry_scheduled",
+      };
+    }
+
+    const message = extractErrorMessage(e);
+    const erroredLoop = await updateLiveMicroMatchLoop({
+      id: loop.id,
+      loopStatus: "error",
+      errorMessage: message,
+      stopReason: "non_retryable_creation_error",
+    });
+    return {
+      loop: erroredLoop,
+      reconcile: {
+        status: "error",
+        error: message,
+      },
+      resumed: false,
+      reason: "manual_resume_failed_non_retryable",
+    };
   }
 }
 
@@ -919,6 +1590,14 @@ async function processSingleLoop(params: {
 }): Promise<Record<string, unknown>> {
   const cfg = getLiveMicroSoccerLoopConfig();
   let loop = params.loop;
+
+  if (loop.stop_reason === "manual_admin_stop" && loop.loop_status !== "ended") {
+    loop = await updateLiveMicroMatchLoop({
+      id: loop.id,
+      loopStatus: "ended",
+      currentActiveLiveMicroId: null,
+    });
+  }
 
   if (loop.loop_phase === "ended" || loop.loop_status === "ended") {
     return {
@@ -963,6 +1642,28 @@ async function processSingleLoop(params: {
     });
   }
 
+  const retryMeta = readLoopRetryMeta(loop.last_snapshot_payload);
+  const nextRetryAtMs = retryAtMs(retryMeta.nextRetryAt);
+  if (retryMeta.retrying && nextRetryAtMs && Date.now() < nextRetryAtMs) {
+    return {
+      loop_id: loop.id,
+      provider_match_id: loop.provider_match_id,
+      status: "retry_wait",
+      retry_count: retryMeta.retryCount,
+      retry_max_attempts: retryMeta.maxAttempts,
+      next_retry_at: retryMeta.nextRetryAt,
+      error: retryMeta.lastError || loop.error_message,
+    };
+  }
+  if (retryMeta.retrying && nextRetryAtMs && Date.now() >= nextRetryAtMs) {
+    console.log("[live-micro:loop] retry window reached; reconciling now", {
+      loopId: loop.id,
+      providerMatchId: loop.provider_match_id,
+      retryCount: retryMeta.retryCount,
+      nextRetryAt: retryMeta.nextRetryAt,
+    });
+  }
+
   const snapshot = await fetchSoccerSnapshot({
     providerName: loop.provider_name,
     providerMatchId: loop.provider_match_id,
@@ -970,6 +1671,11 @@ async function processSingleLoop(params: {
 
   const elapsedMinute = extractElapsedMinute(snapshot);
   const scheduledStartIso = extractScheduledStartIso(snapshot) || loop.scheduled_start_time;
+  const providerPhase = inferProviderPhase(snapshot, elapsedMinute);
+  const snapshotPayloadForLoop = withLoopRetryPatch(snapshot.payload, loop.last_snapshot_payload, {
+    retrying: false,
+    nextRetryAt: null,
+  });
 
   const hardStopReason = getHardStopReason({
     snapshot,
@@ -978,7 +1684,13 @@ async function processSingleLoop(params: {
   });
 
   if (hardStopReason) {
-    loop = await endLoopWithReason(loop, hardStopReason, snapshot.payload, scheduledStartIso);
+    if (hardStopReason === "provider_match_finished") {
+      console.log("[live-micro:loop] provider says ended, closing loop", {
+        loopId: loop.id,
+        providerMatchId: loop.provider_match_id,
+      });
+    }
+    loop = await endLoopWithReason(loop, hardStopReason, snapshotPayloadForLoop, scheduledStartIso);
     return {
       loop_id: loop.id,
       provider_match_id: loop.provider_match_id,
@@ -988,13 +1700,54 @@ async function processSingleLoop(params: {
     };
   }
 
+  if (providerPhase === "halftime" && loop.loop_phase !== "halftime") {
+    console.log("[live-micro:loop] provider says halftime, pausing", {
+      loopId: loop.id,
+      providerMatchId: loop.provider_match_id,
+    });
+    loop = await updateLiveMicroMatchLoop({
+      id: loop.id,
+      loopStatus: "halftime",
+      loopPhase: "halftime",
+      halftimeStartedAtIso: loop.halftime_started_at || nowIso(),
+      lastSnapshotPayload: snapshotPayloadForLoop,
+      scheduledStartTimeIso: scheduledStartIso,
+      stopReason: null,
+      errorMessage: null,
+    });
+    return {
+      loop_id: loop.id,
+      provider_match_id: loop.provider_match_id,
+      status: "halftime_wait_provider",
+      phase: loop.loop_phase,
+      halftime_started_at: loop.halftime_started_at,
+    };
+  }
+
+  if (providerPhase === "second_half" && (loop.loop_phase === "halftime" || loop.loop_phase === "first_half")) {
+    console.log("[live-micro:loop] provider says second half, resuming second-half generation", {
+      loopId: loop.id,
+      providerMatchId: loop.provider_match_id,
+      previousPhase: loop.loop_phase,
+    });
+    loop = await updateLiveMicroMatchLoop({
+      id: loop.id,
+      loopStatus: "active",
+      loopPhase: "second_half",
+      lastSnapshotPayload: snapshotPayloadForLoop,
+      scheduledStartTimeIso: scheduledStartIso,
+      stopReason: null,
+      errorMessage: null,
+    });
+  }
+
   if (loop.loop_phase === "first_half" && loop.first_half_count >= cfg.firstHalfMaxMarkets) {
     loop = await updateLiveMicroMatchLoop({
       id: loop.id,
       loopStatus: "halftime",
       loopPhase: "halftime",
       halftimeStartedAtIso: nowIso(),
-      lastSnapshotPayload: snapshot.payload,
+      lastSnapshotPayload: snapshotPayloadForLoop,
       scheduledStartTimeIso: scheduledStartIso,
       stopReason: null,
       errorMessage: null,
@@ -1019,13 +1772,27 @@ async function processSingleLoop(params: {
       loop = await updateLiveMicroMatchLoop({
         id: loop.id,
         halftimeStartedAtIso: halftimeStartIso,
-        lastSnapshotPayload: snapshot.payload,
+        lastSnapshotPayload: snapshotPayloadForLoop,
         scheduledStartTimeIso: scheduledStartIso,
       });
     }
 
+    if (providerPhase === "halftime") {
+      console.log("[live-micro:loop] provider says halftime, pausing", {
+        loopId: loop.id,
+        providerMatchId: loop.provider_match_id,
+      });
+      return {
+        loop_id: loop.id,
+        provider_match_id: loop.provider_match_id,
+        status: "halftime_wait_provider",
+        phase: loop.loop_phase,
+        halftime_started_at: halftimeStartIso,
+      };
+    }
+
     const resumeAtMs = halftimeStartMs + cfg.halftimePauseMinutes * 60_000;
-    if (Date.now() < resumeAtMs) {
+    if (providerPhase !== "second_half" && Date.now() < resumeAtMs) {
       return {
         loop_id: loop.id,
         provider_match_id: loop.provider_match_id,
@@ -1040,7 +1807,7 @@ async function processSingleLoop(params: {
       id: loop.id,
       loopStatus: "active",
       loopPhase: "second_half",
-      lastSnapshotPayload: snapshot.payload,
+      lastSnapshotPayload: snapshotPayloadForLoop,
       scheduledStartTimeIso: scheduledStartIso,
       stopReason: null,
       errorMessage: null,
@@ -1048,7 +1815,7 @@ async function processSingleLoop(params: {
   }
 
   if (loop.loop_phase === "second_half" && loop.second_half_count >= cfg.secondHalfMaxMarkets) {
-    loop = await endLoopWithReason(loop, "second_half_slots_exhausted", snapshot.payload, scheduledStartIso);
+    loop = await endLoopWithReason(loop, "second_half_slots_exhausted", snapshotPayloadForLoop, scheduledStartIso);
     return {
       loop_id: loop.id,
       provider_match_id: loop.provider_match_id,
@@ -1060,7 +1827,7 @@ async function processSingleLoop(params: {
   if (snapshot.status !== "live") {
     loop = await updateLiveMicroMatchLoop({
       id: loop.id,
-      lastSnapshotPayload: snapshot.payload,
+      lastSnapshotPayload: snapshotPayloadForLoop,
       scheduledStartTimeIso: scheduledStartIso,
       errorMessage: null,
     });
@@ -1091,7 +1858,7 @@ async function processSingleLoop(params: {
       loopStatus: "halftime",
       loopPhase: "halftime",
       halftimeStartedAtIso: nowIso(),
-      lastSnapshotPayload: snapshot.payload,
+      lastSnapshotPayload: snapshotPayloadForLoop,
       scheduledStartTimeIso: scheduledStartIso,
       stopReason: null,
       errorMessage: null,
@@ -1106,7 +1873,7 @@ async function processSingleLoop(params: {
   }
 
   if (phase === "second_half" && nextSequence > cfg.secondHalfMaxMarkets) {
-    loop = await endLoopWithReason(loop, "second_half_slots_exhausted", snapshot.payload, scheduledStartIso);
+    loop = await endLoopWithReason(loop, "second_half_slots_exhausted", snapshotPayloadForLoop, scheduledStartIso);
     return {
       loop_id: loop.id,
       provider_match_id: loop.provider_match_id,
@@ -1116,12 +1883,18 @@ async function processSingleLoop(params: {
   }
 
   try {
+    console.log("[live-micro:loop] reconcile found missing window", {
+      loopId: loop.id,
+      providerMatchId: loop.provider_match_id,
+      phase,
+      sequence: nextSequence,
+    });
     const ensured = await ensureLoopStepMarket({
       loop,
       phase,
       sequence: nextSequence,
       windowMinutes: params.windowMinutes,
-      payload: snapshot.payload,
+      payload: snapshotPayloadForLoop,
       scheduledStartIso,
     });
 
@@ -1162,7 +1935,7 @@ async function processSingleLoop(params: {
       second_half_count: loop.second_half_count,
     };
   } catch (e: any) {
-    const message = String(e?.message || e || "Unknown error");
+    const message = extractErrorMessage(e);
     if (message.includes("Active micro-market already exists") || isLoopStepExistsError(message)) {
       return {
         loop_id: loop.id,
@@ -1171,11 +1944,31 @@ async function processSingleLoop(params: {
       };
     }
 
+    if (isRetryableLoopError(e)) {
+      const retry = await handleRetryableLoopError({
+        loop,
+        error: e,
+        snapshotPayload: snapshot.payload,
+        scheduledStartIso,
+        context: "tick",
+      });
+      return {
+        loop_id: loop.id,
+        provider_match_id: loop.provider_match_id,
+        status: retry.exhausted ? "error" : "retry_scheduled",
+        retry_count: retry.retryCount,
+        retry_max_attempts: LOOP_RETRY_MAX_ATTEMPTS,
+        next_retry_at: retry.nextRetryAt,
+        error: retry.message,
+      };
+    }
+
     loop = await updateLiveMicroMatchLoop({
       id: loop.id,
       loopStatus: "error",
       errorMessage: message,
-      lastSnapshotPayload: snapshot.payload,
+      stopReason: "non_retryable_creation_error",
+      lastSnapshotPayload: snapshotPayloadForLoop,
       scheduledStartTimeIso: scheduledStartIso,
     });
 
@@ -1219,12 +2012,37 @@ async function processActivatedLoops(input: {
     try {
       results.push(await processSingleLoop({ loop, windowMinutes: input.windowMinutes }));
     } catch (e: any) {
-      const message = String(e?.message || e || "Unknown error");
+      const message = extractErrorMessage(e);
+      if (isRetryableLoopError(e)) {
+        try {
+          const retry = await handleRetryableLoopError({
+            loop,
+            error: e,
+            snapshotPayload: loop.last_snapshot_payload,
+            scheduledStartIso: loop.scheduled_start_time,
+            context: "tick",
+          });
+          results.push({
+            loop_id: loop.id,
+            provider_match_id: loop.provider_match_id,
+            status: retry.exhausted ? "error" : "retry_scheduled",
+            retry_count: retry.retryCount,
+            retry_max_attempts: LOOP_RETRY_MAX_ATTEMPTS,
+            next_retry_at: retry.nextRetryAt,
+            error: retry.message,
+          });
+          continue;
+        } catch {
+          // fallback below
+        }
+      }
+
       try {
         await updateLiveMicroMatchLoop({
           id: loop.id,
           loopStatus: "error",
           errorMessage: message,
+          stopReason: "non_retryable_creation_error",
         });
       } catch {
         // no-op

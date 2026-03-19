@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 function parseLimit(raw: string | null): number {
   const n = Number(raw);
   if (!Number.isFinite(n)) return 6;
-  return Math.max(1, Math.min(20, Math.floor(n)));
+  return Math.max(1, Math.min(200, Math.floor(n)));
 }
 
 function parseFilter(raw: string | null): "open" | "resolved" {

@@ -1,7 +1,7 @@
 import "server-only";
 
 import { supabaseServer } from "@/lib/supabaseServer";
-import { LIVE_MICRO_TYPE } from "@/lib/liveMicro/repository";
+import { LIVE_MICRO_TYPE, setLinkedMarketImageUrlIfMissing } from "@/lib/liveMicro/repository";
 import type { FlashMarket, FlashMarketStatus } from "@/lib/flashMarkets/types";
 
 type LiveMicroDbRow = {
@@ -27,6 +27,7 @@ type MarketDbRow = {
   id: string | null;
   market_address: string;
   question: string | null;
+  description: string | null;
   image_url: string | null;
   total_volume: number | null;
   created_at: string | null;
@@ -83,6 +84,62 @@ function firstNumber(candidates: unknown[]): number | null {
   return null;
 }
 
+function normalizePositiveInt(value: unknown): number | null {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  const floored = Math.floor(n);
+  return floored >= 1 ? floored : null;
+}
+
+function readDescriptionField(description: string | null | undefined, fieldLabel: string): string | null {
+  const raw = String(description || "");
+  if (!raw) return null;
+  const escaped = fieldLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = raw.match(new RegExp(`^\\s*${escaped}\\s*:\\s*(.+)$`, "im"));
+  return match?.[1]?.trim() || null;
+}
+
+function loopSequenceFromDescription(description: string | null | undefined): number | null {
+  return normalizePositiveInt(readDescriptionField(description, "Loop Sequence"));
+}
+
+function loopSequenceFromMeta(sportMeta: Record<string, unknown> | null): number | null {
+  const meta = asObject(sportMeta);
+  const liveMicro = asObject(meta.live_micro);
+  return (
+    normalizePositiveInt(liveMicro.loop_sequence) ??
+    normalizePositiveInt(liveMicro.loopSequence) ??
+    normalizePositiveInt(meta.loop_sequence) ??
+    normalizePositiveInt(meta.loopSequence) ??
+    null
+  );
+}
+
+function loopSequenceFromPayload(payloadStart: Record<string, unknown> | null): number | null {
+  return (
+    normalizePositiveInt(readPath(payloadStart, ["loop_context", "loopSequence"])) ??
+    normalizePositiveInt(readPath(payloadStart, ["loop_context", "sequence"])) ??
+    normalizePositiveInt(readPath(payloadStart, ["loop_context", "loop_sequence"])) ??
+    normalizePositiveInt(readPath(payloadStart, ["loopSequence"])) ??
+    normalizePositiveInt(readPath(payloadStart, ["loop_sequence"])) ??
+    null
+  );
+}
+
+function loopPhaseFromPayload(payloadStart: Record<string, unknown> | null, sportMeta: Record<string, unknown> | null): string | null {
+  return (
+    firstText([
+      readPath(payloadStart, ["loop_context", "loopPhase"]),
+      readPath(payloadStart, ["loop_context", "loop_phase"]),
+      readPath(payloadStart, ["loop_context", "phase"]),
+      readPath(payloadStart, ["loopPhase"]),
+      readPath(payloadStart, ["loop_phase"]),
+      readPath(sportMeta, ["live_micro", "loop_phase"]),
+      readPath(sportMeta, ["live_micro", "loopPhase"]),
+    ]) || null
+  );
+}
+
 function normalizeImageUrl(value: unknown): string | null {
   const raw = String(value ?? "").trim();
   if (!raw || raw === "null" || raw === "undefined" || raw.startsWith("data:")) return null;
@@ -90,23 +147,39 @@ function normalizeImageUrl(value: unknown): string | null {
   return raw.replace(/^http:\/\//i, "https://");
 }
 
-/**
- * Pick the best event image from a sport_events.raw object.
- * Mirrors the keys used by trade/[id] pickEventBanner / pickMarketCardVisual.
- */
-function pickImageFromSportEventRaw(raw: Record<string, unknown> | null): string | null {
-  if (!raw) return null;
-  const keys = [
-    "strBanner", "strFanart1", "strThumb", "strPoster",
-    "strFanart2", "strCutout", "strSquare",
-    "event_banner", "event_image", "event_thumb",
-    "event_poster", "event_thumbnail",
-  ];
-  for (const key of keys) {
-    const v = normalizeImageUrl(raw[key]);
-    if (v) return v;
+function firstImageUrl(candidates: unknown[]): string | null {
+  for (const candidate of candidates) {
+    const normalized = normalizeImageUrl(candidate);
+    if (normalized) return normalized;
   }
   return null;
+}
+
+function imageFromKnownKeys(raw: Record<string, unknown> | null): string | null {
+  if (!raw) return null;
+  return firstImageUrl([
+    raw.image_url,
+    raw.imageUrl,
+    raw.thumbnail,
+    raw.thumb,
+    raw.event_image,
+    raw.event_thumb,
+    raw.event_poster,
+    raw.event_banner,
+    raw.event_square,
+    raw.event_thumbnail,
+    raw.strThumb,
+    raw.strPoster,
+    raw.strBanner,
+    raw.strSquare,
+    raw.strFanart1,
+    raw.strFanart2,
+    raw.strCutout,
+  ]);
+}
+
+function pickImageFromSportEventRaw(raw: Record<string, unknown> | null): string | null {
+  return imageFromKnownKeys(raw);
 }
 
 function parseQuestionTeams(question: string | null | undefined): { home: string; away: string } | null {
@@ -245,131 +318,40 @@ function providerImageFromPayload(
   fallbackMarketImageUrl: string | null,
 ): string | null {
   const meta = asObject(sportMeta);
-  const rawMeta = asObject(meta.raw);
-  const images = asObject(meta.images);
   const liveMicro = asObject(meta.live_micro);
-  const liveMicroRaw = asObject(liveMicro.raw);
-  const endRaw = asObject(readPath(payloadEnd, ["event", "raw"]));
-  const startRaw = asObject(readPath(payloadStart, ["event", "raw"]));
-  // payload top-level and payload.raw (theSportsDB may store fields here)
   const payloadEndDirect = asObject(payloadEnd);
   const payloadStartDirect = asObject(payloadStart);
+  const payloadEndEvent = asObject(readPath(payloadEndDirect, ["event"]));
+  const payloadStartEvent = asObject(readPath(payloadStartDirect, ["event"]));
+  const payloadEndEventRaw = asObject(readPath(payloadEndEvent, ["raw"]));
+  const payloadStartEventRaw = asObject(readPath(payloadStartEvent, ["raw"]));
   const payloadEndRaw = asObject(payloadEndDirect.raw);
   const payloadStartRaw = asObject(payloadStartDirect.raw);
+  const payloadEndLiveRaw = asObject(readPath(payloadEndDirect, ["live", "raw"]));
+  const payloadStartLiveRaw = asObject(readPath(payloadStartDirect, ["live", "raw"]));
+  const liveMicroRaw = asObject(liveMicro.raw);
+  const rawMeta = asObject(meta.raw);
+  const images = asObject(meta.images);
 
-  // Keep this aligned with trade/[id] visual selection logic (pickMarketCardVisual / pickEventBanner).
-  // Order: payload event.raw → payload top-level/raw → sportMeta.live_micro.raw → sportMeta.raw → sportMeta.images → sportMeta.live_micro → sportMeta top-level → fallback
-  const candidates: unknown[] = [
-    // 1. payload.event.raw (nested theSportsDB structure)
-    endRaw.strBanner,
-    startRaw.strBanner,
-    endRaw.strFanart1,
-    startRaw.strFanart1,
-    endRaw.strThumb,
-    startRaw.strThumb,
-    endRaw.strPoster,
-    startRaw.strPoster,
-    endRaw.event_image,
-    startRaw.event_image,
-    endRaw.event_thumb,
-    startRaw.event_thumb,
-    endRaw.event_banner,
-    startRaw.event_banner,
-    endRaw.event_poster,
-    startRaw.event_poster,
-    endRaw.event_thumbnail,
-    startRaw.event_thumbnail,
-    endRaw.strFanart2,
-    startRaw.strFanart2,
-    endRaw.strCutout,
-    startRaw.strCutout,
-    endRaw.strSquare,
-    startRaw.strSquare,
-    // 2. payload top-level (theSportsDB stores fields flat in some configs)
-    payloadEndDirect.strBanner,
-    payloadStartDirect.strBanner,
-    payloadEndDirect.strFanart1,
-    payloadStartDirect.strFanart1,
-    payloadEndDirect.strThumb,
-    payloadStartDirect.strThumb,
-    payloadEndDirect.strPoster,
-    payloadStartDirect.strPoster,
-    payloadEndDirect.event_image,
-    payloadStartDirect.event_image,
-    // 3. payload.raw (one-level nesting, not under event)
-    payloadEndRaw.strBanner,
-    payloadStartRaw.strBanner,
-    payloadEndRaw.strFanart1,
-    payloadStartRaw.strFanart1,
-    payloadEndRaw.strThumb,
-    payloadStartRaw.strThumb,
-    payloadEndRaw.strPoster,
-    payloadStartRaw.strPoster,
-    payloadEndRaw.event_image,
-    payloadStartRaw.event_image,
-    // 4. sportMeta.live_micro.raw (trade page merges this into event.raw — was missing)
-    liveMicroRaw.strBanner,
-    liveMicroRaw.strFanart1,
-    liveMicroRaw.strFanart2,
-    liveMicroRaw.strThumb,
-    liveMicroRaw.strPoster,
-    liveMicroRaw.strCutout,
-    liveMicroRaw.strSquare,
-    liveMicroRaw.event_image,
-    liveMicroRaw.event_thumb,
-    liveMicroRaw.event_banner,
-    liveMicroRaw.event_poster,
-    liveMicroRaw.event_thumbnail,
-    // 5. sportMeta.raw
-    rawMeta.strBanner,
-    rawMeta.strFanart1,
-    rawMeta.strFanart2,
-    rawMeta.strThumb,
-    rawMeta.strPoster,
-    rawMeta.strCutout,
-    rawMeta.strSquare,
-    rawMeta.event_image,
-    rawMeta.event_thumb,
-    rawMeta.event_banner,
-    rawMeta.event_poster,
-    rawMeta.event_thumbnail,
-    // 6. sportMeta.images
-    images.strBanner,
-    images.strFanart1,
-    images.strThumb,
-    images.strPoster,
-    images.event_image,
-    images.event_thumb,
-    // 7. sportMeta.live_micro (direct)
-    liveMicro.strBanner,
-    liveMicro.strFanart1,
-    liveMicro.strThumb,
-    liveMicro.strPoster,
-    liveMicro.event_image,
-    liveMicro.event_thumb,
-    // 8. sportMeta top-level (trade page pickEventBanner checks "meta" directly)
-    meta.strBanner,
-    meta.strFanart1,
-    meta.strFanart2,
-    meta.strThumb,
-    meta.strPoster,
-    meta.strCutout,
-    meta.strSquare,
-    meta.event_image,
-    meta.event_thumb,
-    meta.event_banner,
-    meta.event_poster,
-    meta.event_thumbnail,
-    // 9. market.image_url fallback
-    fallbackMarketImageUrl,
-  ];
-
-  for (const c of candidates) {
-    const normalized = normalizeImageUrl(c);
-    if (normalized) return normalized;
-  }
-
-  return null;
+  const resolved = firstImageUrl([
+    imageFromKnownKeys(payloadEndEvent),
+    imageFromKnownKeys(payloadStartEvent),
+    imageFromKnownKeys(payloadEndEventRaw),
+    imageFromKnownKeys(payloadStartEventRaw),
+    imageFromKnownKeys(payloadEndDirect),
+    imageFromKnownKeys(payloadStartDirect),
+    imageFromKnownKeys(payloadEndRaw),
+    imageFromKnownKeys(payloadStartRaw),
+    imageFromKnownKeys(payloadEndLiveRaw),
+    imageFromKnownKeys(payloadStartLiveRaw),
+    imageFromKnownKeys(liveMicroRaw),
+    imageFromKnownKeys(rawMeta),
+    imageFromKnownKeys(images),
+    imageFromKnownKeys(liveMicro),
+    imageFromKnownKeys(meta),
+  ]);
+  if (resolved) return resolved;
+  return normalizeImageUrl(fallbackMarketImageUrl);
 }
 
 function teamNameFromPayload(
@@ -448,7 +430,7 @@ function normalizeLimit(limit: number, fallback: number, max = 20): number {
 
 async function loadFlashCandidates(maxRows: number): Promise<FlashMarket[]> {
   const supabase = supabaseServer();
-  const fetchLimit = normalizeLimit(maxRows, 20, 50);
+  const fetchLimit = normalizeLimit(maxRows, 20, 500);
   const nowMs = Date.now();
 
   const { data: liveRows, error: liveErr } = await supabase
@@ -491,7 +473,7 @@ async function loadFlashCandidates(maxRows: number): Promise<FlashMarket[]> {
 
   const { data: marketRows, error: marketErr } = await supabase
     .from("markets")
-    .select("id,market_address,question,image_url,total_volume,created_at,resolution_status,is_blocked,sport_meta,sport_event_id")
+    .select("id,market_address,question,description,image_url,total_volume,created_at,resolution_status,is_blocked,sport_meta,sport_event_id")
     .in("market_address", addresses);
 
   if (marketErr) throw new Error(`markets fetch for flash list failed: ${marketErr.message}`);
@@ -536,6 +518,7 @@ async function loadFlashCandidates(maxRows: number): Promise<FlashMarket[]> {
   }
 
   const out: FlashMarket[] = [];
+  const pendingCanonicalBackfill = new Map<string, string>();
   for (const row of live) {
     const marketAddress = String(row.linked_market_address || "").trim();
     if (!marketAddress) continue;
@@ -562,11 +545,32 @@ async function loadFlashCandidates(maxRows: number): Promise<FlashMarket[]> {
 
     const sportMeta = market?.sport_meta || null;
     const question = market?.question || null;
-    const marketImageUrl = normalizeImageUrl(market?.image_url ?? null);
+    const loopSequence =
+      loopSequenceFromPayload(payloadStart) ??
+      loopSequenceFromDescription(market?.description) ??
+      loopSequenceFromMeta(sportMeta);
+    const loopPhase = loopPhaseFromPayload(payloadStart, sportMeta);
+    const canonicalMarketImageUrl = normalizeImageUrl(market?.image_url ?? null);
     // Sport event image from sport_events.raw (the actual source of theSportsDB images)
     const sportEventImage = sportEventImageByAddress.get(marketAddress) || null;
-    const providerImageUrl = providerImageFromPayload(payloadStart, payloadEnd, sportMeta, marketImageUrl) || sportEventImage;
-    const heroImageUrl = providerImageUrl || marketImageUrl;
+    const homeLogo = logoFromPayload(payloadStart, sportMeta, "home");
+    const awayLogo = logoFromPayload(payloadStart, sportMeta, "away");
+    const fallbackBadgeVisual = firstImageUrl([
+      readPath(payloadEnd, ["live", "raw", "home_badge"]),
+      readPath(payloadEnd, ["live", "raw", "away_badge"]),
+      readPath(payloadStart, ["live", "raw", "home_badge"]),
+      readPath(payloadStart, ["live", "raw", "away_badge"]),
+      homeLogo,
+      awayLogo,
+    ]);
+    const fallbackResolvedImage =
+      providerImageFromPayload(payloadStart, payloadEnd, sportMeta, null) ||
+      sportEventImage ||
+      fallbackBadgeVisual;
+    const heroImageUrl = canonicalMarketImageUrl || fallbackResolvedImage;
+    if (!canonicalMarketImageUrl && heroImageUrl) {
+      pendingCanonicalBackfill.set(marketAddress, heroImageUrl);
+    }
     const league = leagueFromPayload(payloadStart, sportMeta);
     const sport = sportFromPayload(payloadStart, sportMeta);
 
@@ -578,24 +582,38 @@ async function loadFlashCandidates(maxRows: number): Promise<FlashMarket[]> {
       question: question || "Next goal in 5 minutes?",
       league,
       sport,
-      providerImageUrl,
-      marketImageUrl,
+      providerImageUrl: fallbackResolvedImage,
+      marketImageUrl: canonicalMarketImageUrl,
       heroImageUrl,
       homeTeam: teamNameFromPayload(payloadStart, question, "home"),
       awayTeam: teamNameFromPayload(payloadStart, question, "away"),
-      homeLogo: logoFromPayload(payloadStart, sportMeta, "home"),
-      awayLogo: logoFromPayload(payloadStart, sportMeta, "away"),
+      homeLogo,
+      awayLogo,
       startScoreHome: startScore.home,
       startScoreAway: startScore.away,
       currentScoreHome: currentScore.home,
       currentScoreAway: currentScore.away,
       minute,
       windowEnd: row.window_end,
+      loopSequence,
+      loopPhase,
       remainingSec,
       status,
       volume: Math.max(0, Math.floor(toFiniteNumber(market?.total_volume) ?? 0)),
       createdAt: String(row.created_at || market?.created_at || new Date(0).toISOString()),
     });
+  }
+
+  if (pendingCanonicalBackfill.size > 0) {
+    await Promise.all(
+      Array.from(pendingCanonicalBackfill.entries()).map(async ([marketAddress, imageUrl]) => {
+        try {
+          await setLinkedMarketImageUrlIfMissing({ marketAddress, imageUrl });
+        } catch (error) {
+          console.warn("[flashMarkets] canonical image backfill failed", { marketAddress, error });
+        }
+      }),
+    );
   }
 
   return out;
@@ -646,9 +664,9 @@ export async function getExplorerFlashMarkets(
   limit = 6,
   filter: "open" | "resolved" = "open",
 ): Promise<FlashMarket[]> {
-  const cap = normalizeLimit(limit, 6);
-  // Fetch more rows for resolved since many may be old
-  const candidates = await loadFlashCandidates(filter === "resolved" ? 50 : 20);
+  const cap = normalizeLimit(limit, 6, 200);
+  const desiredRows = filter === "resolved" ? Math.max(cap, 200) : Math.max(cap, 20);
+  const candidates = await loadFlashCandidates(desiredRows);
   const allowed = filter === "resolved" ? RESOLVED_STATUSES : OPEN_STATUSES;
   const filtered = candidates.filter((m) => allowed.has(m.status));
   const deduped = filter === "open"

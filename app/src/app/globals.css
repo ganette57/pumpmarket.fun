@@ -20,6 +20,7 @@ body {
     )
     rgb(var(--background-start-rgb));
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-weight: 400;
 }
 
 /* =========================

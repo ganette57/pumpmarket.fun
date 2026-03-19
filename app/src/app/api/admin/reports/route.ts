@@ -6,38 +6,76 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+const REPORTS_BATCH_SIZE = 200;
+const MARKET_LOOKUP_BATCH_SIZE = 500;
 
 export async function GET(req: NextRequest) {
   try {
     const url = new URL(req.url);
     const status = url.searchParams.get("status") || "pending"; // pending, reviewed, dismissed, all
-    const limit = Math.min(100, parseInt(url.searchParams.get("limit") || "50", 10));
+    const limitParam = Number(url.searchParams.get("limit") || "0");
+    const explicitLimit = Number.isFinite(limitParam) && limitParam > 0
+      ? Math.min(1000, Math.floor(limitParam))
+      : null;
 
-    let query = supabase
-      .from("reports")
-      .select(`
-        id,
-        created_at,
-        market_address,
-        reporter_address,
-        reason,
-        details,
-        status,
-        reviewed_at,
-        reviewed_by
-      `)
-      .order("created_at", { ascending: false })
-      .limit(limit);
+    const reports: any[] = [];
+    if (explicitLimit) {
+      let query = supabase
+        .from("reports")
+        .select(`
+          id,
+          created_at,
+          market_address,
+          reporter_address,
+          reason,
+          details,
+          status,
+          reviewed_at,
+          reviewed_by
+        `)
+        .order("created_at", { ascending: false })
+        .limit(explicitLimit);
 
-    if (status !== "all") {
-      query = query.eq("status", status);
-    }
+      if (status !== "all") {
+        query = query.eq("status", status);
+      }
+      const { data, error } = await query;
+      if (error) {
+        console.error("Reports fetch error:", error);
+        return NextResponse.json({ error: error.message }, { status: 500 });
+      }
+      reports.push(...(data || []));
+    } else {
+      for (let from = 0; ; from += REPORTS_BATCH_SIZE) {
+        const to = from + REPORTS_BATCH_SIZE - 1;
+        let query = supabase
+          .from("reports")
+          .select(`
+            id,
+            created_at,
+            market_address,
+            reporter_address,
+            reason,
+            details,
+            status,
+            reviewed_at,
+            reviewed_by
+          `)
+          .order("created_at", { ascending: false })
+          .range(from, to);
 
-    const { data: reports, error } = await query;
-
-    if (error) {
-      console.error("Reports fetch error:", error);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+        if (status !== "all") {
+          query = query.eq("status", status);
+        }
+        const { data, error } = await query;
+        if (error) {
+          console.error("Reports fetch error:", error);
+          return NextResponse.json({ error: error.message }, { status: 500 });
+        }
+        if (!data?.length) break;
+        reports.push(...data);
+        if (data.length < REPORTS_BATCH_SIZE) break;
+      }
     }
 
     // Get market questions for context
@@ -45,17 +83,20 @@ export async function GET(req: NextRequest) {
     let marketMap: Record<string, { question: string; is_blocked: boolean }> = {};
     
     if (marketAddresses.length > 0) {
-      const { data: markets } = await supabase
-        .from("markets")
-        .select("market_address, question, is_blocked")
-        .in("market_address", marketAddresses);
+      for (let i = 0; i < marketAddresses.length; i += MARKET_LOOKUP_BATCH_SIZE) {
+        const chunk = marketAddresses.slice(i, i + MARKET_LOOKUP_BATCH_SIZE);
+        const { data: markets } = await supabase
+          .from("markets")
+          .select("market_address, question, is_blocked")
+          .in("market_address", chunk);
 
-      if (markets) {
-        for (const m of markets) {
-          marketMap[m.market_address] = {
-            question: m.question || "(Untitled)",
-            is_blocked: !!m.is_blocked,
-          };
+        if (markets) {
+          for (const m of markets) {
+            marketMap[m.market_address] = {
+              question: m.question || "(Untitled)",
+              is_blocked: !!m.is_blocked,
+            };
+          }
         }
       }
     }

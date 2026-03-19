@@ -68,6 +68,13 @@ export type LiveMicroLoopStepRef = {
   loopSequence: number;
 };
 
+function normalizeImageUrl(value: unknown): string | null {
+  const raw = String(value ?? "").trim();
+  if (!raw || raw === "null" || raw === "undefined" || raw.startsWith("data:")) return null;
+  if (!/^https?:\/\//i.test(raw)) return null;
+  return raw.replace(/^http:\/\//i, "https://");
+}
+
 export async function getLiveMicroMatchLoopById(id: string): Promise<LiveMicroMatchLoopRow | null> {
   const supabase = supabaseServer();
   const { data, error } = await supabase
@@ -552,6 +559,7 @@ export async function upsertLinkedMarketRow(input: {
   endDateIso: string;
   sportMeta: Record<string, unknown>;
   sportEventId?: string | null;
+  imageUrl?: string | null;
 }): Promise<{ id: string | null; marketAddress: string }> {
   const supabase = supabaseServer();
 
@@ -579,6 +587,8 @@ export async function upsertLinkedMarketRow(input: {
   };
 
   if (input.sportEventId) payload.sport_event_id = input.sportEventId;
+  const normalizedImageUrl = normalizeImageUrl(input.imageUrl);
+  if (normalizedImageUrl) payload.image_url = normalizedImageUrl;
 
   const { data, error } = await supabase
     .from("markets")
@@ -595,16 +605,54 @@ export async function upsertLinkedMarketRow(input: {
 }
 
 export async function findSportEventIdByProviderMatchId(providerMatchId: string): Promise<string | null> {
+  const row = await findSportEventByProviderMatchId(providerMatchId);
+  return row?.id ?? null;
+}
+
+export async function findSportEventByProviderMatchId(providerMatchId: string): Promise<{
+  id: string;
+  raw: Record<string, unknown> | null;
+} | null> {
   const supabase = supabaseServer();
   const { data, error } = await supabase
     .from("sport_events")
-    .select("id")
+    .select("id,raw")
     .eq("provider_event_id", providerMatchId)
     .limit(1)
     .maybeSingle();
 
   if (error) return null;
-  return (data as any)?.id ?? null;
+  if (!data?.id) return null;
+  const raw = data.raw && typeof data.raw === "object" && !Array.isArray(data.raw)
+    ? (data.raw as Record<string, unknown>)
+    : null;
+  return { id: data.id, raw };
+}
+
+export async function setLinkedMarketImageUrlIfMissing(params: {
+  marketAddress: string;
+  imageUrl: string;
+}): Promise<void> {
+  const marketAddress = String(params.marketAddress || "").trim();
+  const imageUrl = normalizeImageUrl(params.imageUrl);
+  if (!marketAddress || !imageUrl) return;
+
+  const supabase = supabaseServer();
+  const { data, error } = await supabase
+    .from("markets")
+    .select("image_url")
+    .eq("market_address", marketAddress)
+    .maybeSingle();
+  if (error) throw new Error(`markets image fetch failed: ${error.message}`);
+
+  const current = normalizeImageUrl((data as any)?.image_url);
+  if (current) return;
+
+  const { error: updateError } = await supabase
+    .from("markets")
+    .update({ image_url: imageUrl })
+    .eq("market_address", marketAddress);
+  if (updateError) throw new Error(`markets image update failed: ${updateError.message}`);
 }
 
 export async function persistResolutionProposalToMarkets(input: {
