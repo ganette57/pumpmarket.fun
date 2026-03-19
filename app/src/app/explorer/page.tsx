@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { Zap } from "lucide-react";
 import FlashMarketCard from "@/components/FlashMarketCard";
 import { supabase } from "@/lib/supabaseClient";
 import type { FlashMarket } from "@/lib/flashMarkets/types";
@@ -53,10 +54,13 @@ export default function ExplorerPage() {
   const [flashMarkets, setFlashMarkets] = useState<FlashMarket[]>([]);
   const [flashLoading, setFlashLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("open");
+  const [cryptoStatusFilter, setCryptoStatusFilter] = useState<StatusFilter>("open");
+  const [irlStatusFilter, setIrlStatusFilter] = useState<StatusFilter>("open");
   const [resolvedSearch, setResolvedSearch] = useState("");
   const [resolvedSort, setResolvedSort] = useState<ResolvedSort>("newest");
   const [resolvedPage, setResolvedPage] = useState(1);
-  const resolvedGridTopRef = useRef<HTMLDivElement | null>(null);
+  const desktopResolvedGridTopRef = useRef<HTMLDivElement | null>(null);
+  const mobileResolvedGridTopRef = useRef<HTMLDivElement | null>(null);
 
   const fetchFlashMarkets = useCallback(async (filter: StatusFilter) => {
     setFlashLoading(true);
@@ -144,7 +148,11 @@ export default function ExplorerPage() {
   }, [statusFilter, resolvedPage, resolvedTotalPages]);
 
   const scrollToResolvedGridTop = useCallback(() => {
-    resolvedGridTopRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (typeof window !== "undefined" && window.matchMedia("(min-width: 768px)").matches) {
+      desktopResolvedGridTopRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    mobileResolvedGridTopRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
 
   const goToPreviousResolvedPage = useCallback(() => {
@@ -215,103 +223,339 @@ export default function ExplorerPage() {
           </section>
         )}
 
-        <section>
-          <div className="flex items-end justify-between gap-3 mb-4">
-            <div>
-              <h2 className="text-xl md:text-2xl font-bold text-white">Flash Markets — Sports</h2>
-              <p className="text-sm text-gray-400">Live quick markets, updated for instant decisions.</p>
+        {/* Desktop-only flash system layout */}
+        <div className="hidden md:block space-y-10">
+          <section>
+            <div className="mb-4 flex items-end justify-between gap-3">
+              <div>
+                <h2 className="text-2xl font-bold text-white">⚽ Flash Markets — Sports</h2>
+                <p className="text-sm text-gray-400">Live quick markets, updated for instant decisions.</p>
+              </div>
             </div>
-          </div>
 
-          {/* ── Filter pills ── */}
-          <div className="flex items-center gap-2 mb-4">
-            <FilterPill
-              label="Open"
-              active={statusFilter === "open"}
-              onClick={() => setStatusFilter("open")}
-            />
-            <FilterPill
-              label="Resolved"
-              active={statusFilter === "resolved"}
-              onClick={() => setStatusFilter("resolved")}
-            />
-          </div>
-
-          {statusFilter === "resolved" && (
-            <div className="mb-4 flex flex-col md:flex-row md:items-center gap-2">
-              <input
-                type="text"
-                value={resolvedSearch}
-                onChange={(e) => setResolvedSearch(e.target.value)}
-                placeholder="Search by match, team, question, window..."
-                className="w-full md:w-[360px] px-3 py-2 rounded-lg bg-white/95 text-black text-sm border border-white/20 focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
+            <div className="mb-4 flex items-center gap-2">
+              <FilterPill
+                label="Open"
+                active={statusFilter === "open"}
+                onClick={() => setStatusFilter("open")}
               />
-              <select
-                value={resolvedSort}
-                onChange={(e) => setResolvedSort(e.target.value as ResolvedSort)}
-                className="w-full md:w-[220px] px-3 py-2 rounded-lg bg-[#111827] text-white text-sm border border-white/15 focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
-              >
-                <option value="newest">Newest first</option>
-                <option value="oldest">Oldest first</option>
-                <option value="match">Group by match</option>
-              </select>
+              <FilterPill
+                label="Resolved"
+                active={statusFilter === "resolved"}
+                onClick={() => setStatusFilter("resolved")}
+              />
             </div>
-          )}
 
-          {flashLoading ? (
-            <LoadingSpinner />
-          ) : visibleFlashMarkets.length === 0 ? (
-            <EmptyState
-              message={
-                statusFilter === "resolved"
-                  ? "No resolved flash markets yet"
-                  : "No live flash market right now"
+            {statusFilter === "resolved" && (
+              <div className="mb-4 flex items-center gap-2">
+                <input
+                  type="text"
+                  value={resolvedSearch}
+                  onChange={(e) => setResolvedSearch(e.target.value)}
+                  placeholder="Search by match, team, question, window..."
+                  className="w-full max-w-[360px] rounded-lg border border-white/20 bg-white/95 px-3 py-2 text-sm text-black focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
+                />
+                <select
+                  value={resolvedSort}
+                  onChange={(e) => setResolvedSort(e.target.value as ResolvedSort)}
+                  className="w-[220px] rounded-lg border border-white/15 bg-[#111827] px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
+                >
+                  <option value="newest">Newest first</option>
+                  <option value="oldest">Oldest first</option>
+                  <option value="match">Group by match</option>
+                </select>
+              </div>
+            )}
+
+            {flashLoading ? (
+              <LoadingSpinner />
+            ) : visibleFlashMarkets.length === 0 ? (
+              <PremiumFlashEmptyState
+                title={
+                  statusFilter === "resolved"
+                    ? "No resolved sports flash markets right now"
+                    : "No live sports flash session right now"
+                }
+                subtitle={
+                  statusFilter === "resolved"
+                    ? "Next sports flash session soon"
+                    : "Check back in a few minutes"
+                }
+              />
+            ) : (
+              <>
+                <div ref={desktopResolvedGridTopRef} />
+                <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+                  {pagedFlashMarkets.map((market) => (
+                    <FlashMarketCard key={market.liveMicroId} market={market} />
+                  ))}
+                </div>
+                {statusFilter === "resolved" && (
+                  <div className="mt-5 flex items-center justify-center gap-3">
+                    <button
+                      type="button"
+                      onClick={goToPreviousResolvedPage}
+                      disabled={resolvedPage <= 1}
+                      className="rounded-lg border border-white/15 px-3 py-1.5 text-sm font-medium text-white transition hover:border-white/30 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Previous
+                    </button>
+                    <span className="tabular-nums text-sm text-gray-300">
+                      Page {Math.min(resolvedPage, resolvedTotalPages)} / {resolvedTotalPages}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={goToNextResolvedPage}
+                      disabled={resolvedPage >= resolvedTotalPages}
+                      className="rounded-lg border border-white/15 px-3 py-1.5 text-sm font-medium text-white transition hover:border-white/30 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Next
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+
+          <section>
+            <div className="mb-4 flex items-end justify-between gap-3">
+              <div>
+                <h2 className="text-2xl font-bold text-white">⚡ Flash Markets — Crypto</h2>
+                <p className="text-sm text-gray-400">Fast crypto flash sessions, tuned for live momentum.</p>
+              </div>
+            </div>
+
+            <div className="mb-4 flex items-center gap-2">
+              <FilterPill
+                label="Open"
+                active={cryptoStatusFilter === "open"}
+                onClick={() => setCryptoStatusFilter("open")}
+              />
+              <FilterPill
+                label="Resolved"
+                active={cryptoStatusFilter === "resolved"}
+                onClick={() => setCryptoStatusFilter("resolved")}
+              />
+            </div>
+
+            <PremiumFlashEmptyState
+              title={
+                cryptoStatusFilter === "resolved"
+                  ? "No resolved crypto flash markets right now"
+                  : "No live crypto flash session right now"
               }
               subtitle={
-                statusFilter === "resolved"
-                  ? "Resolved markets will appear here."
-                  : "Come back in a few minutes."
+                cryptoStatusFilter === "resolved"
+                  ? "Resolved crypto flash markets will appear here soon"
+                  : "Crypto flash sessions start soon"
               }
             />
-          ) : (
-            <>
-              <div ref={resolvedGridTopRef} />
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                {pagedFlashMarkets.map((market) => (
-                  <FlashMarketCard key={market.liveMicroId} market={market} />
-                ))}
-              </div>
-              {statusFilter === "resolved" && (
-                <div className="mt-5 flex items-center justify-center gap-3">
-                  <button
-                    type="button"
-                    onClick={goToPreviousResolvedPage}
-                    disabled={resolvedPage <= 1}
-                    className="px-3 py-1.5 rounded-lg text-sm font-medium border border-white/15 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:border-white/30 transition"
-                  >
-                    Previous
-                  </button>
-                  <span className="text-sm text-gray-300 tabular-nums">
-                    Page {Math.min(resolvedPage, resolvedTotalPages)} / {resolvedTotalPages}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={goToNextResolvedPage}
-                    disabled={resolvedPage >= resolvedTotalPages}
-                    className="px-3 py-1.5 rounded-lg text-sm font-medium border border-white/15 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:border-white/30 transition"
-                  >
-                    Next
-                  </button>
-                </div>
-              )}
-            </>
-          )}
-        </section>
+          </section>
 
-        <section className="rounded-2xl border border-gray-800 bg-[#0a0a0a] p-5">
-          <h2 className="text-xl md:text-2xl font-bold text-white">Flash Markets — Crypto</h2>
-          <p className="text-sm text-gray-400 mt-1">Coming soon</p>
-        </section>
+          <section>
+            <div className="mb-4 flex items-end justify-between gap-3">
+              <div>
+                <h2 className="text-2xl font-bold text-white">📍 Flash Markets — IRL</h2>
+                <p className="text-sm text-gray-400">Real-world flash windows, ready for quick market action.</p>
+              </div>
+            </div>
+
+            <div className="mb-4 flex items-center gap-2">
+              <FilterPill
+                label="Open"
+                active={irlStatusFilter === "open"}
+                onClick={() => setIrlStatusFilter("open")}
+              />
+              <FilterPill
+                label="Resolved"
+                active={irlStatusFilter === "resolved"}
+                onClick={() => setIrlStatusFilter("resolved")}
+              />
+            </div>
+
+            <PremiumFlashEmptyState
+              title={
+                irlStatusFilter === "resolved"
+                  ? "No resolved IRL flash markets right now"
+                  : "No live IRL flash session right now"
+              }
+              subtitle={
+                irlStatusFilter === "resolved"
+                  ? "Resolved IRL flash markets will appear here soon"
+                  : "IRL flash sessions start soon"
+              }
+            />
+          </section>
+        </div>
+
+        {/* Mobile flash sections */}
+        <div className="space-y-8 md:hidden">
+          <section>
+            <div className="flex items-end justify-between gap-3 mb-4">
+              <div>
+                <h2 className="text-xl font-bold text-white">⚽ Flash Markets — Sports</h2>
+                <p className="mt-1 text-sm text-gray-400">Live quick markets, updated for instant decisions.</p>
+              </div>
+            </div>
+
+            {/* ── Filter pills ── */}
+            <div className="mb-4 flex items-center gap-2">
+              <FilterPill
+                label="Open"
+                active={statusFilter === "open"}
+                onClick={() => setStatusFilter("open")}
+              />
+              <FilterPill
+                label="Resolved"
+                active={statusFilter === "resolved"}
+                onClick={() => setStatusFilter("resolved")}
+              />
+            </div>
+
+            {statusFilter === "resolved" && (
+              <div className="mb-4 flex flex-col gap-2">
+                <input
+                  type="text"
+                  value={resolvedSearch}
+                  onChange={(e) => setResolvedSearch(e.target.value)}
+                  placeholder="Search by match, team, question, window..."
+                  className="w-full rounded-lg border border-white/20 bg-white/95 px-3 py-2 text-sm text-black focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
+                />
+                <select
+                  value={resolvedSort}
+                  onChange={(e) => setResolvedSort(e.target.value as ResolvedSort)}
+                  className="w-full rounded-lg border border-white/15 bg-[#111827] px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
+                >
+                  <option value="newest">Newest first</option>
+                  <option value="oldest">Oldest first</option>
+                  <option value="match">Group by match</option>
+                </select>
+              </div>
+            )}
+
+            {flashLoading ? (
+              <LoadingSpinner />
+            ) : visibleFlashMarkets.length === 0 ? (
+              <PremiumFlashEmptyState
+                compact
+                title={
+                  statusFilter === "resolved"
+                    ? "No resolved sports flash markets right now"
+                    : "No live sports flash session right now"
+                }
+                subtitle={
+                  statusFilter === "resolved"
+                    ? "Next sports flash session soon"
+                    : "Check back in a few minutes"
+                }
+              />
+            ) : (
+              <>
+                <div ref={mobileResolvedGridTopRef} />
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                  {pagedFlashMarkets.map((market) => (
+                    <FlashMarketCard key={market.liveMicroId} market={market} />
+                  ))}
+                </div>
+                {statusFilter === "resolved" && (
+                  <div className="mt-5 flex items-center justify-center gap-3">
+                    <button
+                      type="button"
+                      onClick={goToPreviousResolvedPage}
+                      disabled={resolvedPage <= 1}
+                      className="px-3 py-1.5 rounded-lg text-sm font-medium border border-white/15 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:border-white/30 transition"
+                    >
+                      Previous
+                    </button>
+                    <span className="text-sm text-gray-300 tabular-nums">
+                      Page {Math.min(resolvedPage, resolvedTotalPages)} / {resolvedTotalPages}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={goToNextResolvedPage}
+                      disabled={resolvedPage >= resolvedTotalPages}
+                      className="px-3 py-1.5 rounded-lg text-sm font-medium border border-white/15 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:border-white/30 transition"
+                    >
+                      Next
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+
+          <section>
+            <div className="mb-4 flex items-end justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-bold text-white">⚡ Flash Markets — Crypto</h2>
+                <p className="mt-1 text-sm text-gray-400">Fast crypto flash sessions, tuned for live momentum.</p>
+              </div>
+            </div>
+
+            <div className="mb-4 flex items-center gap-2">
+              <FilterPill
+                label="Open"
+                active={cryptoStatusFilter === "open"}
+                onClick={() => setCryptoStatusFilter("open")}
+              />
+              <FilterPill
+                label="Resolved"
+                active={cryptoStatusFilter === "resolved"}
+                onClick={() => setCryptoStatusFilter("resolved")}
+              />
+            </div>
+
+            <PremiumFlashEmptyState
+              compact
+              title={
+                cryptoStatusFilter === "resolved"
+                  ? "No resolved crypto flash markets right now"
+                  : "No live crypto flash session right now"
+              }
+              subtitle={
+                cryptoStatusFilter === "resolved"
+                  ? "Resolved crypto flash markets will appear here soon"
+                  : "Crypto flash sessions start soon"
+              }
+            />
+          </section>
+
+          <section>
+            <div className="mb-4 flex items-end justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-bold text-white">📍 Flash Markets — IRL</h2>
+                <p className="mt-1 text-sm text-gray-400">Real-world flash windows, ready for quick market action.</p>
+              </div>
+            </div>
+
+            <div className="mb-4 flex items-center gap-2">
+              <FilterPill
+                label="Open"
+                active={irlStatusFilter === "open"}
+                onClick={() => setIrlStatusFilter("open")}
+              />
+              <FilterPill
+                label="Resolved"
+                active={irlStatusFilter === "resolved"}
+                onClick={() => setIrlStatusFilter("resolved")}
+              />
+            </div>
+
+            <PremiumFlashEmptyState
+              compact
+              title={
+                irlStatusFilter === "resolved"
+                  ? "No resolved IRL flash markets right now"
+                  : "No live IRL flash session right now"
+              }
+              subtitle={
+                irlStatusFilter === "resolved"
+                  ? "Resolved IRL flash markets will appear here soon"
+                  : "IRL flash sessions start soon"
+              }
+            />
+          </section>
+        </div>
       </div>
     </div>
   );
@@ -375,6 +619,36 @@ function LoadingSpinner() {
   return (
     <div className="flex justify-center py-12">
       <div className="w-8 h-8 border-2 border-[#61ff9a] border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
+}
+
+function PremiumFlashEmptyState({
+  title,
+  subtitle,
+  compact = false,
+}: {
+  title: string;
+  subtitle: string;
+  compact?: boolean;
+}) {
+  return (
+    <div
+      className={`relative overflow-hidden rounded-2xl bg-gradient-to-b from-[#0b0f0c] to-[#070908] ${
+        compact ? "py-9" : "py-14"
+      }`}
+    >
+      <div className="mx-auto flex w-full max-w-lg flex-col items-center px-6 text-center">
+        <div
+          className={`mb-4 flex items-center justify-center rounded-2xl border border-pump-green/30 bg-pump-green/10 shadow-[0_0_36px_rgba(97,255,154,0.18)] animate-pulse ${
+            compact ? "h-12 w-12" : "h-16 w-16"
+          }`}
+        >
+          <Zap className={`${compact ? "h-5 w-5" : "h-7 w-7"} text-pump-green`} />
+        </div>
+        <p className="text-base font-semibold text-white">{title}</p>
+        <p className="mt-1 text-sm text-gray-400">{subtitle}</p>
+      </div>
     </div>
   );
 }
