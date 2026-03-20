@@ -14,7 +14,6 @@ import {
   type LiveSession,
 } from "@/lib/liveSessions";
 import { useProgram } from "@/hooks/useProgram";
-import TradingPanel from "@/components/TradingPanel";
 import {
   getMarketByAddress,
   recordTransaction,
@@ -329,7 +328,63 @@ function MobileTabs({
   );
 }
 
-function MobileLiveSlide({
+function StatusBanner({ status }: { status: string }) {
+  if (status === "live") {
+    return (
+      <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-600/20 border border-red-600/40 w-fit">
+        <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+        <span className="text-sm font-semibold text-red-400">LIVE</span>
+      </div>
+    );
+  }
+
+  const map: Record<
+    string,
+    { border: string; bg: string; text: string; label: string }
+  > = {
+    scheduled: {
+      border: "border-yellow-600/40",
+      bg: "bg-yellow-600/20",
+      text: "text-yellow-400",
+      label: "Scheduled",
+    },
+    locked: {
+      border: "border-orange-500/40",
+      bg: "bg-orange-500/20",
+      text: "text-orange-400",
+      label: "Trading Locked",
+    },
+    ended: {
+      border: "border-gray-600/40",
+      bg: "bg-gray-600/20",
+      text: "text-gray-400",
+      label: "Stream Ended",
+    },
+    resolved: {
+      border: "border-pump-green/40",
+      bg: "bg-pump-green/20",
+      text: "text-pump-green",
+      label: "Resolved",
+    },
+    cancelled: {
+      border: "border-gray-700/40",
+      bg: "bg-gray-700/20",
+      text: "text-gray-400",
+      label: "Cancelled",
+    },
+  };
+  const s = map[status] || map.ended!;
+
+  return (
+    <div
+      className={`flex items-center gap-2 px-4 py-2 rounded-xl ${s.bg} border ${s.border} w-fit`}
+    >
+      <span className={`text-sm font-semibold ${s.text}`}>{s.label}</span>
+    </div>
+  );
+}
+
+function MobileLiveTradeSlide({
   session,
   market,
   active,
@@ -350,116 +405,268 @@ function MobileLiveSlide({
     session.status === "locked" || !!market?.resolved || !!market?.isBlocked;
 
   return (
-    <section className="relative h-[100dvh] snap-start bg-black overflow-hidden">
-      {active && embedUrl ? (
-        <iframe
-          src={embedUrl}
-          className="absolute inset-0 h-full w-full"
-          allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
-          allowFullScreen
-          frameBorder="0"
-          title={`Live stream ${session.title}`}
-        />
-      ) : session.thumbnail_url ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={session.thumbnail_url}
-          alt={session.title}
-          className="absolute inset-0 h-full w-full object-cover"
-        />
-      ) : (
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(109,255,164,0.2),transparent_42%),linear-gradient(180deg,#020304_0%,#04070c_100%)]" />
-      )}
-
-      <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/55 to-transparent pointer-events-none" />
-      <div className="absolute inset-x-0 bottom-0 h-56 bg-gradient-to-t from-black/72 via-black/35 to-transparent pointer-events-none" />
-
-      <div className="absolute top-[4.2rem] inset-x-0 z-20 px-3 pointer-events-none">
-        <div className="flex items-center gap-2 min-w-0">
-          <div className="pointer-events-auto shrink-0">
-            <LiveBadge />
-          </div>
-          <p className="text-white text-sm font-semibold truncate max-w-[52vw] drop-shadow-sm">
-            {session.title}
-          </p>
-          <span className="text-[11px] text-gray-300/90">
-            {index + 1}/{total}
-          </span>
-          <Link
-            href={`/live/${session.id}`}
-            className="pointer-events-auto ml-auto text-[11px] text-pump-green font-semibold"
-          >
-            Details
-          </Link>
-        </div>
-      </div>
-
-      <div className="absolute inset-x-0 bottom-[calc(4.3rem+env(safe-area-inset-bottom))] z-20 px-3 pointer-events-none">
-        <div className="pointer-events-auto rounded-2xl border border-white/10 bg-black/60 backdrop-blur-md p-3">
-          <div className="flex items-center justify-between gap-2 mb-2 min-w-0">
-            <div className="min-w-0">
-              <p className="text-[11px] text-gray-400 uppercase tracking-[0.08em] font-semibold">
-                Quick Trade
-              </p>
-              <p className="text-sm text-white font-semibold truncate">
-                {market?.question || "Loading market..."}
-              </p>
-            </div>
-            {!!market && (
-              <p className="text-[11px] text-gray-400 shrink-0">
-                Vol {formatVol(market.totalVolume)} SOL
-              </p>
+    <section className="relative h-[100dvh] snap-start bg-[linear-gradient(180deg,#030507_0%,#060a12_100%)]">
+      <div className="h-full px-4 pt-24 pb-[calc(5rem+env(safe-area-inset-bottom))]">
+        <div className="space-y-4">
+          <div className="relative w-full aspect-video rounded-xl overflow-hidden bg-black">
+            {active && embedUrl ? (
+              <iframe
+                src={embedUrl}
+                className="absolute inset-0 w-full h-full"
+                allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+                allowFullScreen
+                frameBorder="0"
+                title={`Live stream ${session.title}`}
+              />
+            ) : session.thumbnail_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={session.thumbnail_url}
+                alt={session.title}
+                className="absolute inset-0 w-full h-full object-cover"
+              />
+            ) : (
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(109,255,164,0.2),transparent_42%),linear-gradient(180deg,#020304_0%,#04070c_100%)]" />
             )}
           </div>
 
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <h2 className="text-xl font-bold text-white leading-tight break-words">
+                {session.title}
+              </h2>
+              <p className="text-xs text-gray-500 mt-1">
+                Host: {shortWallet(session.host_wallet)}
+              </p>
+            </div>
+            <div className="shrink-0 text-[11px] text-gray-500 pt-1">
+              {index + 1}/{total}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <StatusBanner status={session.status} />
+            <Link
+              href={`/live/${session.id}`}
+              className="text-[11px] text-pump-green font-semibold"
+            >
+              Details
+            </Link>
+          </div>
+
           {market ? (
-            <div className="grid grid-cols-2 gap-2">
-              {display.names.slice(0, 4).map((name, idx) => {
-                const pct = (display.percentages[idx] ?? 0).toFixed(1);
-                return (
-                  <button
-                    key={`${name}-${idx}`}
-                    type="button"
-                    disabled={tradingLocked}
-                    onClick={() => onOutcomeTap(session, idx)}
-                    className={`h-12 rounded-xl px-3 flex items-center justify-between gap-2 border transition ${
-                      idx === 0
-                        ? "border-pump-green/45 bg-pump-green/10"
-                        : "border-[#ff5c73]/45 bg-[#ff5c73]/10"
-                    } ${
-                      tradingLocked
-                        ? "opacity-50 cursor-not-allowed"
-                        : "active:scale-[0.98]"
-                    }`}
+            <div className="card-pump p-4">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="min-w-0 flex-1">
+                  <Link
+                    href={`/trade/${market.publicKey}`}
+                    className="text-sm font-semibold text-white hover:text-pump-green transition line-clamp-1"
                   >
-                    <span
-                      className={`text-xs font-bold truncate ${
-                        idx === 0 ? "text-pump-green" : "text-[#ff5c73]"
+                    {market.question}
+                  </Link>
+                  <p className="text-[11px] text-gray-500">
+                    {formatVol(market.totalVolume)} SOL Vol
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                {display.names.slice(0, 2).map((name, idx) => {
+                  const pct = (display.percentages[idx] ?? 0).toFixed(1);
+                  const isYes = idx === 0;
+                  return (
+                    <button
+                      key={`${name}-${idx}`}
+                      onClick={() => onOutcomeTap(session, idx)}
+                      disabled={tradingLocked}
+                      className={`text-left rounded-xl px-4 py-3 border bg-pump-dark/80 transition ${
+                        isYes ? "border-pump-green/40" : "border-[#ff5c73]/40"
+                      } ${
+                        tradingLocked
+                          ? "opacity-50 cursor-not-allowed"
+                          : "active:scale-[0.98]"
                       }`}
                     >
-                      {name}
-                    </span>
-                    <span className="text-sm font-black text-white tabular-nums">
-                      {pct}%
-                    </span>
-                  </button>
-                );
-              })}
+                      <span
+                        className={`text-xs font-semibold uppercase ${
+                          isYes ? "text-pump-green" : "text-[#ff5c73]"
+                        }`}
+                      >
+                        {name}
+                      </span>
+                      <div
+                        className={`text-2xl font-bold tabular-nums ${
+                          isYes ? "text-pump-green" : "text-[#ff5c73]"
+                        }`}
+                      >
+                        {pct}%
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {tradingLocked && (
+                <p className="text-[11px] text-gray-400 mt-2">
+                  Trading is currently locked for this live.
+                </p>
+              )}
             </div>
           ) : (
-            <div className="h-12 rounded-xl border border-white/10 bg-white/5 flex items-center justify-center text-xs text-gray-400">
-              Loading live outcomes...
+            <div className="card-pump p-4">
+              <div className="h-12 rounded-xl border border-white/10 bg-white/5 flex items-center justify-center text-xs text-gray-400">
+                Loading live outcomes...
+              </div>
             </div>
-          )}
-
-          {tradingLocked && (
-            <p className="text-[11px] text-gray-400 mt-2">
-              Trading is currently locked for this live.
-            </p>
           )}
         </div>
       </div>
     </section>
+  );
+}
+
+function MobileQuickBuySheet({
+  open,
+  onClose,
+  market,
+  connected,
+  submitting,
+  defaultOutcomeIndex,
+  sessionLocked,
+  onTrade,
+}: {
+  open: boolean;
+  onClose: () => void;
+  market: MobileMarketSnapshot;
+  connected: boolean;
+  submitting: boolean;
+  defaultOutcomeIndex: number;
+  sessionLocked: boolean;
+  onTrade: (
+    shares: number,
+    outcomeIndex: number,
+    side: "buy",
+    costSol: number
+  ) => void;
+}) {
+  const display = deriveOutcomeDisplay(market);
+  const [selectedOutcome, setSelectedOutcome] = useState(0);
+  const [amount, setAmount] = useState<number>(0);
+  const presets = [0.01, 0.1, 1];
+
+  useEffect(() => {
+    if (!open) return;
+    setSelectedOutcome(
+      clampInt(defaultOutcomeIndex, 0, Math.max(display.names.length - 1, 0))
+    );
+    setAmount(0);
+  }, [defaultOutcomeIndex, display.names.length, open]);
+
+  useEffect(() => {
+    if (open) document.body.style.overflow = "hidden";
+    else document.body.style.overflow = "";
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [open]);
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[200] pointer-events-none">
+      <button
+        className="absolute inset-x-0 top-0 bottom-14 bg-black/60 pointer-events-auto"
+        onClick={onClose}
+        aria-label="Close quick buy"
+      />
+
+      <div className="absolute bottom-14 inset-x-0 bg-pump-dark border-t border-gray-800 rounded-t-2xl p-5 pb-8 pointer-events-auto">
+        <div className="w-10 h-1 rounded-full bg-gray-600 mx-auto mb-4" />
+
+        {sessionLocked ? (
+          <div className="text-center py-4">
+            <p className="text-gray-400 text-sm">
+              Trading is currently locked for this session.
+            </p>
+            <button
+              onClick={onClose}
+              className="mt-4 w-full py-3 rounded-xl bg-gray-700 text-white font-semibold"
+            >
+              Close
+            </button>
+          </div>
+        ) : (
+          <>
+            <p className="text-sm text-gray-400 mb-2">Amount</p>
+            <div className="flex gap-2 mb-4">
+              {presets.map((p) => (
+                <button
+                  key={p}
+                  onClick={() => setAmount(p)}
+                  className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border transition ${
+                    amount === p
+                      ? "border-pump-green bg-pump-green/10 text-pump-green"
+                      : "border-gray-700 text-gray-300 hover:border-gray-600"
+                  }`}
+                >
+                  {p} SOL
+                </button>
+              ))}
+            </div>
+
+            {display.names.length > 0 && (
+              <>
+                <p className="text-sm text-gray-400 mb-2">Outcome</p>
+                <div className="flex gap-2 mb-4">
+                  {display.names.slice(0, 4).map((name, idx) => (
+                    <button
+                      key={`${name}-${idx}`}
+                      onClick={() => setSelectedOutcome(idx)}
+                      className={`flex-1 py-3 rounded-xl text-sm font-semibold border transition text-center ${
+                        selectedOutcome === idx
+                          ? idx === 0
+                            ? "border-pump-green bg-pump-green/10 text-pump-green"
+                            : "border-[#ff5c73] bg-[#ff5c73]/10 text-[#ff5c73]"
+                          : "border-gray-700 text-gray-300 hover:border-gray-600"
+                      }`}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+
+            <button
+              disabled={!connected || amount === 0 || submitting}
+              onClick={() => {
+                const approxShares = Math.max(1, Math.floor(amount / 0.01));
+                onTrade(approxShares, selectedOutcome, "buy", amount);
+                onClose();
+              }}
+              className={`w-full py-4 rounded-xl font-bold text-lg transition-all ${
+                !connected || amount === 0 || submitting
+                  ? "bg-gray-700 text-gray-400 cursor-not-allowed"
+                  : "bg-pump-green text-black hover:bg-[#74ffb8]"
+              }`}
+            >
+              {!connected
+                ? "Connect wallet"
+                : submitting
+                ? "Submitting..."
+                : "Buy"}
+            </button>
+
+            <button
+              onClick={onClose}
+              className="w-full mt-2 py-3 rounded-xl bg-gray-800 text-white font-semibold"
+            >
+              Close
+            </button>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -479,9 +686,6 @@ export default function LivePage() {
 
   const [mobileMarketBySession, setMobileMarketBySession] = useState<
     Record<string, MobileMarketSnapshot>
-  >({});
-  const [marketBalanceByAddress, setMarketBalanceByAddress] = useState<
-    Record<string, number | null>
   >({});
 
   const [mobileTradeOpen, setMobileTradeOpen] = useState(false);
@@ -541,26 +745,6 @@ export default function LivePage() {
 
   const mobileActiveSessions = sessions.filter(
     (s) => s.status === "live" || s.status === "locked"
-  );
-
-  const loadMarketBalance = useCallback(
-    async (marketAddress: string) => {
-      try {
-        const pubkey = new PublicKey(marketAddress);
-        const info = await connection.getAccountInfo(pubkey, "confirmed");
-        setMarketBalanceByAddress((prev) => ({
-          ...prev,
-          [marketAddress]:
-            info?.lamports != null ? Number(info.lamports) : null,
-        }));
-      } catch {
-        setMarketBalanceByAddress((prev) => ({
-          ...prev,
-          [marketAddress]: null,
-        }));
-      }
-    },
-    [connection]
   );
 
   const loadSessionMarketSnapshot = useCallback(
@@ -660,11 +844,9 @@ export default function LivePage() {
     if (!active) return;
 
     void loadSessionMarketSnapshot(active);
-    void loadMarketBalance(active.market_address);
 
     const timer = setInterval(() => {
       void loadSessionMarketSnapshot(active);
-      void loadMarketBalance(active.market_address);
     }, 10000);
 
     return () => clearInterval(timer);
@@ -673,7 +855,6 @@ export default function LivePage() {
     mobileActiveSessions,
     mobileLiveIndex,
     loadSessionMarketSnapshot,
-    loadMarketBalance,
   ]);
 
   const handleSelectExploreSession = useCallback(
@@ -697,12 +878,13 @@ export default function LivePage() {
 
   const handleLiveScroll = useCallback(
     (evt: UIEvent<HTMLDivElement>) => {
+      if (mobileTradeOpen) return;
       const node = evt.currentTarget;
       if (!node.clientHeight) return;
       const next = Math.round(node.scrollTop / node.clientHeight);
       if (next !== mobileLiveIndex) setMobileLiveIndex(next);
     },
-    [mobileLiveIndex]
+    [mobileLiveIndex, mobileTradeOpen]
   );
 
   const openQuickTrade = useCallback(
@@ -719,9 +901,8 @@ export default function LivePage() {
         clampInt(outcomeIndex, 0, Math.max(loaded.outcomeNames.length - 1, 0))
       );
       setMobileTradeOpen(true);
-      void loadMarketBalance(loaded.publicKey);
     },
-    [mobileMarketBySession, loadSessionMarketSnapshot, loadMarketBalance]
+    [mobileMarketBySession, loadSessionMarketSnapshot]
   );
 
   const tradeSession = mobileTradeSessionId
@@ -738,10 +919,6 @@ export default function LivePage() {
     tradeSession.status === "locked" ||
     tradeMarket.isBlocked ||
     tradeMarket.resolved;
-
-  const tradeMarketBalanceLamports = tradeMarket
-    ? marketBalanceByAddress[tradeMarket.publicKey] ?? null
-    : null;
 
   const handleTrade = useCallback(
     async (
@@ -859,7 +1036,6 @@ export default function LivePage() {
         }
 
         await loadSessionMarketSnapshot(tradeSession);
-        await loadMarketBalance(tradeMarket.publicKey);
         setMobileTradeOpen(false);
       } catch (e: any) {
         const msg = String(e?.message || "");
@@ -882,7 +1058,6 @@ export default function LivePage() {
       tradeClosed,
       connection,
       loadSessionMarketSnapshot,
-      loadMarketBalance,
     ]
   );
 
@@ -912,8 +1087,7 @@ export default function LivePage() {
               No live streams right now
             </h2>
             <p className="text-sm text-gray-300 mt-2 max-w-xs">
-              As soon as a host goes live, this feed turns into full-screen mode
-              instantly.
+              As soon as a host goes live, you can watch and quick-trade here.
             </p>
             <button
               type="button"
@@ -929,7 +1103,7 @@ export default function LivePage() {
 
     return (
       <>
-        <div className="relative h-[100dvh] bg-black overflow-hidden">
+        <div className="relative h-[100dvh] bg-[linear-gradient(180deg,#030507_0%,#060a12_100%)] overflow-hidden z-0">
           <MobileTabs
             tab={mobileTab}
             onTabChange={setMobileTab}
@@ -940,15 +1114,19 @@ export default function LivePage() {
           {mobileTab === "live" ? (
             <div
               ref={liveScrollerRef}
-              onScroll={handleLiveScroll}
-              className="h-full overflow-y-auto snap-y snap-mandatory"
+              onScroll={mobileTradeOpen ? undefined : handleLiveScroll}
+              className={`h-full overscroll-y-contain ${
+                mobileTradeOpen
+                  ? "overflow-hidden snap-none touch-none"
+                  : "overflow-y-auto snap-y snap-mandatory"
+              }`}
             >
               {mobileActiveSessions.map((session, index) => (
-                <MobileLiveSlide
+                <MobileLiveTradeSlide
                   key={session.id}
                   session={session}
                   market={mobileMarketBySession[session.id] || null}
-                  active={index === mobileLiveIndex}
+                  active={index === mobileLiveIndex && !mobileTradeOpen}
                   index={index}
                   total={mobileActiveSessions.length}
                   onOutcomeTap={openQuickTrade}
@@ -956,13 +1134,13 @@ export default function LivePage() {
               ))}
             </div>
           ) : (
-            <div className="h-full overflow-y-auto px-4 pt-24 pb-20 bg-[linear-gradient(180deg,#040607_0%,#05080f_100%)]">
+            <div className="h-full overflow-y-auto px-4 pt-24 pb-[calc(5rem+env(safe-area-inset-bottom))] bg-[linear-gradient(180deg,#040607_0%,#05080f_100%)]">
               <div className="mb-4 px-1">
                 <h2 className="text-white text-lg font-bold">
                   Explore live streams
                 </h2>
                 <p className="text-sm text-gray-400 mt-1">
-                  Live-only discovery. Pick one and jump into full-screen mode.
+                  Pick one stream, then jump back to Live to trade.
                 </p>
               </div>
 
@@ -972,7 +1150,11 @@ export default function LivePage() {
                     key={session.id}
                     type="button"
                     onClick={() => handleSelectExploreSession(index)}
-                    className="w-full text-left rounded-2xl border border-white/10 bg-black/60 overflow-hidden"
+                    className={`w-full text-left rounded-2xl border overflow-hidden ${
+                      index === mobileLiveIndex
+                        ? "border-pump-green/45 bg-black/70"
+                        : "border-white/10 bg-black/60"
+                    }`}
                   >
                     <div className="relative h-36">
                       {session.thumbnail_url ? (
@@ -1008,42 +1190,18 @@ export default function LivePage() {
         </div>
 
         {mobileTradeOpen && tradeSession && tradeMarket && (
-          <div className="fixed inset-0 z-[200] pointer-events-none">
-            <button
-              className="absolute inset-x-0 top-0 bottom-14 bg-black/60 pointer-events-auto"
-              onClick={() => setMobileTradeOpen(false)}
-              aria-label="Close quick trade"
-            />
-
-            <div className="absolute inset-x-0 top-0 bottom-14 pointer-events-auto">
-              <div className="h-full border-b border-gray-800 bg-pump-dark shadow-2xl overflow-hidden">
-                <TradingPanel
-                  mode="drawer"
-                  title="Quick Buy"
-                  defaultSide="buy"
-                  defaultOutcomeIndex={mobileTradeOutcomeIndex}
-                  onClose={() => setMobileTradeOpen(false)}
-                  market={{
-                    resolved: tradeMarket.resolved,
-                    marketType: tradeMarket.marketType,
-                    outcomeNames: tradeMarket.outcomeNames,
-                    outcomeSupplies: tradeMarket.outcomeSupplies,
-                    bLamports: tradeMarket.bLamports,
-                    yesSupply: tradeMarket.yesSupply,
-                    noSupply: tradeMarket.noSupply,
-                  }}
-                  connected={connected}
-                  submitting={submittingTrade}
-                  onTrade={(s, outcomeIndex, side, costSol) =>
-                    void handleTrade(s, outcomeIndex, side, costSol)
-                  }
-                  marketBalanceLamports={tradeMarketBalanceLamports}
-                  userHoldings={Array(tradeMarket.outcomeNames.length).fill(0)}
-                  marketClosed={tradeClosed}
-                />
-              </div>
-            </div>
-          </div>
+          <MobileQuickBuySheet
+            open={mobileTradeOpen}
+            onClose={() => setMobileTradeOpen(false)}
+            market={tradeMarket}
+            connected={connected}
+            submitting={submittingTrade}
+            defaultOutcomeIndex={mobileTradeOutcomeIndex}
+            sessionLocked={tradeClosed}
+            onTrade={(shares, outcomeIndex, side, costSol) =>
+              void handleTrade(shares, outcomeIndex, side, costSol)
+            }
+          />
         )}
       </>
     );
