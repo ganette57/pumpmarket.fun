@@ -1,7 +1,7 @@
 // src/app/live/page.tsx
 "use client";
 
-import { useEffect, useState, useCallback, useRef, type UIEvent } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo, type UIEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
@@ -22,13 +22,16 @@ import {
 import {
   getUserPositionPDA,
   PLATFORM_WALLET,
-  lamportsToSol,
   solToLamports,
 } from "@/utils/solana";
 import { sendSignedTx } from "@/lib/solanaSend";
+import {
+  LiveMobileContent,
+  MobileBuySheet,
+} from "@/components/LiveMobileContent";
 
 type DesktopTab = "live" | "feed";
-type MobileTab = "live" | "explore";
+type MobileTab = "live" | "feed";
 
 type MobileMarketSnapshot = {
   sessionId: string;
@@ -45,6 +48,8 @@ type MobileMarketSnapshot = {
   outcomeSupplies: number[];
   yesSupply: number;
   noSupply: number;
+  imageUrl?: string;
+  category?: string;
 };
 
 function useIsMobile(bp = 1024) {
@@ -110,13 +115,6 @@ function parseBLamports(m: any): number | null {
   return solToLamports(0.01);
 }
 
-function formatVol(volLamports: number) {
-  const sol = lamportsToSol(Number(volLamports) || 0);
-  if (sol >= 1000) return `${(sol / 1000).toFixed(0)}k`;
-  if (sol >= 100) return `${sol.toFixed(0)}`;
-  return sol.toFixed(2);
-}
-
 function deriveOutcomeDisplay(
   snapshot: MobileMarketSnapshot | null | undefined
 ) {
@@ -156,32 +154,6 @@ function deriveOutcomeDisplay(
   );
 
   return { names, supplies, percentages };
-}
-
-function streamEmbedUrl(url: string, autoplay = false) {
-  const raw = String(url || "").trim();
-  if (!raw) return "";
-
-  const ytMatch = raw.match(
-    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/live\/)([\w-]+)/
-  );
-  if (ytMatch?.[1]) {
-    const auto = autoplay ? "1" : "0";
-    return `https://www.youtube.com/embed/${ytMatch[1]}?autoplay=${auto}&mute=1&playsinline=1&rel=0&modestbranding=1`;
-  }
-
-  const twitchMatch = raw.match(/twitch\.tv\/(\w+)/);
-  if (twitchMatch?.[1]) {
-    const auto = autoplay ? "true" : "false";
-    const parent =
-      typeof window !== "undefined" ? window.location.hostname : "localhost";
-    return `https://player.twitch.tv/?channel=${twitchMatch[1]}&parent=${parent}&autoplay=${auto}&muted=true`;
-  }
-
-  const kickMatch = raw.match(/kick\.com\/(\w+)/);
-  if (kickMatch?.[1]) return `https://player.kick.com/${kickMatch[1]}`;
-
-  return raw;
 }
 
 function LiveBadge() {
@@ -307,12 +279,12 @@ function MobileTabs({
           </button>
           <button
             type="button"
-            onClick={() => onTabChange("explore")}
+            onClick={() => onTabChange("feed")}
             className={`px-4 py-1.5 rounded-full text-xs font-semibold transition ${
-              tab === "explore" ? "bg-white text-black" : "text-gray-300"
+              tab === "feed" ? "bg-white text-black" : "text-gray-300"
             }`}
           >
-            Explore
+            Feed
           </button>
         </div>
 
@@ -328,345 +300,57 @@ function MobileTabs({
   );
 }
 
-function StatusBanner({ status }: { status: string }) {
-  if (status === "live") {
-    return (
-      <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-600/20 border border-red-600/40 w-fit">
-        <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-        <span className="text-sm font-semibold text-red-400">LIVE</span>
-      </div>
-    );
-  }
-
-  const map: Record<
-    string,
-    { border: string; bg: string; text: string; label: string }
-  > = {
-    scheduled: {
-      border: "border-yellow-600/40",
-      bg: "bg-yellow-600/20",
-      text: "text-yellow-400",
-      label: "Scheduled",
-    },
-    locked: {
-      border: "border-orange-500/40",
-      bg: "bg-orange-500/20",
-      text: "text-orange-400",
-      label: "Trading Locked",
-    },
-    ended: {
-      border: "border-gray-600/40",
-      bg: "bg-gray-600/20",
-      text: "text-gray-400",
-      label: "Stream Ended",
-    },
-    resolved: {
-      border: "border-pump-green/40",
-      bg: "bg-pump-green/20",
-      text: "text-pump-green",
-      label: "Resolved",
-    },
-    cancelled: {
-      border: "border-gray-700/40",
-      bg: "bg-gray-700/20",
-      text: "text-gray-400",
-      label: "Cancelled",
-    },
-  };
-  const s = map[status] || map.ended!;
-
-  return (
-    <div
-      className={`flex items-center gap-2 px-4 py-2 rounded-xl ${s.bg} border ${s.border} w-fit`}
-    >
-      <span className={`text-sm font-semibold ${s.text}`}>{s.label}</span>
-    </div>
-  );
-}
-
 function MobileLiveTradeSlide({
   session,
   market,
   active,
-  index,
-  total,
   onOutcomeTap,
 }: {
   session: LiveSession;
   market: MobileMarketSnapshot | null;
   active: boolean;
-  index: number;
-  total: number;
   onOutcomeTap: (session: LiveSession, outcomeIndex: number) => void;
 }) {
-  const embedUrl = streamEmbedUrl(session.stream_url, active);
   const display = deriveOutcomeDisplay(market);
   const tradingLocked =
     session.status === "locked" || !!market?.resolved || !!market?.isBlocked;
 
   return (
-    <section className="relative h-[100dvh] snap-start bg-[linear-gradient(180deg,#030507_0%,#060a12_100%)]">
-      <div className="h-full px-4 pt-24 pb-[calc(5rem+env(safe-area-inset-bottom))]">
+    <section className="relative h-full snap-start bg-[linear-gradient(180deg,#030507_0%,#060a12_100%)]">
+      <div className="h-full px-4 pt-24 pb-4 overflow-y-auto">
         <div className="space-y-4">
-          <div className="relative w-full aspect-video rounded-xl overflow-hidden bg-black">
-            {active && embedUrl ? (
-              <iframe
-                src={embedUrl}
-                className="absolute inset-0 w-full h-full"
-                allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
-                allowFullScreen
-                frameBorder="0"
-                title={`Live stream ${session.title}`}
-              />
-            ) : session.thumbnail_url ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={session.thumbnail_url}
-                alt={session.title}
-                className="absolute inset-0 w-full h-full object-cover"
-              />
-            ) : (
-              <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(109,255,164,0.2),transparent_42%),linear-gradient(180deg,#020304_0%,#04070c_100%)]" />
-            )}
-          </div>
-
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0 flex-1">
-              <h2 className="text-xl font-bold text-white leading-tight break-words">
-                {session.title}
-              </h2>
-              <p className="text-xs text-gray-500 mt-1">
-                Host: {shortWallet(session.host_wallet)}
-              </p>
-            </div>
-            <div className="shrink-0 text-[11px] text-gray-500 pt-1">
-              {index + 1}/{total}
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between gap-3">
-            <StatusBanner status={session.status} />
-            <Link
-              href={`/live/${session.id}`}
-              className="text-[11px] text-pump-green font-semibold"
-            >
-              Details
-            </Link>
-          </div>
-
-          {market ? (
-            <div className="card-pump p-4">
-              <div className="flex items-center gap-3 mb-3">
-                <div className="min-w-0 flex-1">
-                  <Link
-                    href={`/trade/${market.publicKey}`}
-                    className="text-sm font-semibold text-white hover:text-pump-green transition line-clamp-1"
-                  >
-                    {market.question}
-                  </Link>
-                  <p className="text-[11px] text-gray-500">
-                    {formatVol(market.totalVolume)} SOL Vol
-                  </p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                {display.names.slice(0, 2).map((name, idx) => {
-                  const pct = (display.percentages[idx] ?? 0).toFixed(1);
-                  const isYes = idx === 0;
-                  return (
-                    <button
-                      key={`${name}-${idx}`}
-                      onClick={() => onOutcomeTap(session, idx)}
-                      disabled={tradingLocked}
-                      className={`text-left rounded-xl px-4 py-3 border bg-pump-dark/80 transition ${
-                        isYes ? "border-pump-green/40" : "border-[#ff5c73]/40"
-                      } ${
-                        tradingLocked
-                          ? "opacity-50 cursor-not-allowed"
-                          : "active:scale-[0.98]"
-                      }`}
-                    >
-                      <span
-                        className={`text-xs font-semibold uppercase ${
-                          isYes ? "text-pump-green" : "text-[#ff5c73]"
-                        }`}
-                      >
-                        {name}
-                      </span>
-                      <div
-                        className={`text-2xl font-bold tabular-nums ${
-                          isYes ? "text-pump-green" : "text-[#ff5c73]"
-                        }`}
-                      >
-                        {pct}%
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {tradingLocked && (
-                <p className="text-[11px] text-gray-400 mt-2">
-                  Trading is currently locked for this live.
-                </p>
-              )}
-            </div>
-          ) : (
-            <div className="card-pump p-4">
-              <div className="h-12 rounded-xl border border-white/10 bg-white/5 flex items-center justify-center text-xs text-gray-400">
-                Loading live outcomes...
-              </div>
-            </div>
-          )}
+          <LiveMobileContent
+            streamUrl={session.stream_url}
+            title={session.title}
+            hostWallet={session.host_wallet}
+            status={session.status}
+            market={
+              market
+                ? {
+                    publicKey: market.publicKey,
+                    question: market.question,
+                    imageUrl: market.imageUrl,
+                    category: market.category,
+                    totalVolume: market.totalVolume,
+                  }
+                : null
+            }
+            derived={
+              market
+                ? {
+                    names: display.names,
+                    percentages: display.percentages,
+                  }
+                : null
+            }
+            sessionLocked={tradingLocked}
+            onOutcomeTap={(idx) => onOutcomeTap(session, idx)}
+            active={active}
+            thumbnailUrl={session.thumbnail_url || undefined}
+          />
         </div>
       </div>
     </section>
-  );
-}
-
-function MobileQuickBuySheet({
-  open,
-  onClose,
-  market,
-  connected,
-  submitting,
-  defaultOutcomeIndex,
-  sessionLocked,
-  onTrade,
-}: {
-  open: boolean;
-  onClose: () => void;
-  market: MobileMarketSnapshot;
-  connected: boolean;
-  submitting: boolean;
-  defaultOutcomeIndex: number;
-  sessionLocked: boolean;
-  onTrade: (
-    shares: number,
-    outcomeIndex: number,
-    side: "buy",
-    costSol: number
-  ) => void;
-}) {
-  const display = deriveOutcomeDisplay(market);
-  const [selectedOutcome, setSelectedOutcome] = useState(0);
-  const [amount, setAmount] = useState<number>(0);
-  const presets = [0.01, 0.1, 1];
-
-  useEffect(() => {
-    if (!open) return;
-    setSelectedOutcome(
-      clampInt(defaultOutcomeIndex, 0, Math.max(display.names.length - 1, 0))
-    );
-    setAmount(0);
-  }, [defaultOutcomeIndex, display.names.length, open]);
-
-  useEffect(() => {
-    if (open) document.body.style.overflow = "hidden";
-    else document.body.style.overflow = "";
-    return () => {
-      document.body.style.overflow = "";
-    };
-  }, [open]);
-
-  if (!open) return null;
-
-  return (
-    <div className="fixed inset-0 z-[200] pointer-events-none">
-      <button
-        className="absolute inset-x-0 top-0 bottom-14 bg-black/60 pointer-events-auto"
-        onClick={onClose}
-        aria-label="Close quick buy"
-      />
-
-      <div className="absolute bottom-14 inset-x-0 bg-pump-dark border-t border-gray-800 rounded-t-2xl p-5 pb-8 pointer-events-auto">
-        <div className="w-10 h-1 rounded-full bg-gray-600 mx-auto mb-4" />
-
-        {sessionLocked ? (
-          <div className="text-center py-4">
-            <p className="text-gray-400 text-sm">
-              Trading is currently locked for this session.
-            </p>
-            <button
-              onClick={onClose}
-              className="mt-4 w-full py-3 rounded-xl bg-gray-700 text-white font-semibold"
-            >
-              Close
-            </button>
-          </div>
-        ) : (
-          <>
-            <p className="text-sm text-gray-400 mb-2">Amount</p>
-            <div className="flex gap-2 mb-4">
-              {presets.map((p) => (
-                <button
-                  key={p}
-                  onClick={() => setAmount(p)}
-                  className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border transition ${
-                    amount === p
-                      ? "border-pump-green bg-pump-green/10 text-pump-green"
-                      : "border-gray-700 text-gray-300 hover:border-gray-600"
-                  }`}
-                >
-                  {p} SOL
-                </button>
-              ))}
-            </div>
-
-            {display.names.length > 0 && (
-              <>
-                <p className="text-sm text-gray-400 mb-2">Outcome</p>
-                <div className="flex gap-2 mb-4">
-                  {display.names.slice(0, 4).map((name, idx) => (
-                    <button
-                      key={`${name}-${idx}`}
-                      onClick={() => setSelectedOutcome(idx)}
-                      className={`flex-1 py-3 rounded-xl text-sm font-semibold border transition text-center ${
-                        selectedOutcome === idx
-                          ? idx === 0
-                            ? "border-pump-green bg-pump-green/10 text-pump-green"
-                            : "border-[#ff5c73] bg-[#ff5c73]/10 text-[#ff5c73]"
-                          : "border-gray-700 text-gray-300 hover:border-gray-600"
-                      }`}
-                    >
-                      {name}
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
-
-            <button
-              disabled={!connected || amount === 0 || submitting}
-              onClick={() => {
-                const approxShares = Math.max(1, Math.floor(amount / 0.01));
-                onTrade(approxShares, selectedOutcome, "buy", amount);
-                onClose();
-              }}
-              className={`w-full py-4 rounded-xl font-bold text-lg transition-all ${
-                !connected || amount === 0 || submitting
-                  ? "bg-gray-700 text-gray-400 cursor-not-allowed"
-                  : "bg-pump-green text-black hover:bg-[#74ffb8]"
-              }`}
-            >
-              {!connected
-                ? "Connect wallet"
-                : submitting
-                ? "Submitting..."
-                : "Buy"}
-            </button>
-
-            <button
-              onClick={onClose}
-              className="w-full mt-2 py-3 rounded-xl bg-gray-800 text-white font-semibold"
-            >
-              Close
-            </button>
-          </>
-        )}
-      </div>
-    </div>
   );
 }
 
@@ -697,6 +381,7 @@ export default function LivePage() {
 
   const liveScrollerRef = useRef<HTMLDivElement | null>(null);
   const inFlightTradeRef = useRef(false);
+  const failedMarketLoadsRef = useRef<Set<string>>(new Set());
 
   const handleGoLive = useCallback(() => {
     if (!publicKey) {
@@ -743,8 +428,9 @@ export default function LivePage() {
   const desktopDisplaySessions =
     desktopTab === "live" ? desktopLiveSessions : sessions;
 
-  const mobileActiveSessions = sessions.filter(
-    (s) => s.status === "live" || s.status === "locked"
+  const mobileActiveSessions = useMemo(
+    () => sessions.filter((s) => s.status === "live" || s.status === "locked"),
+    [sessions]
   );
 
   const loadSessionMarketSnapshot = useCallback(
@@ -790,6 +476,8 @@ export default function LivePage() {
           outcomeSupplies,
           yesSupply: Number(dbMarket.yes_supply) || 0,
           noSupply: Number(dbMarket.no_supply) || 0,
+          imageUrl: (dbMarket as any).image_url || undefined,
+          category: (dbMarket as any).category || undefined,
         };
 
         setMobileMarketBySession((prev) => ({
@@ -799,6 +487,7 @@ export default function LivePage() {
         return snapshot;
       } catch (e) {
         console.error("Failed to load market for live session:", e);
+        failedMarketLoadsRef.current.add(session.id);
         return null;
       }
     },
@@ -827,7 +516,7 @@ export default function LivePage() {
   useEffect(() => {
     if (!isMobile) return;
     mobileActiveSessions.forEach((session) => {
-      if (!mobileMarketBySession[session.id]) {
+      if (!mobileMarketBySession[session.id] && !failedMarketLoadsRef.current.has(session.id)) {
         void loadSessionMarketSnapshot(session);
       }
     });
@@ -1061,10 +750,21 @@ export default function LivePage() {
     ]
   );
 
+  const activeSession = mobileActiveSessions[mobileLiveIndex] ?? null;
+  const activeMarket = activeSession
+    ? mobileMarketBySession[activeSession.id] ?? null
+    : null;
+  const activeDisplay = deriveOutcomeDisplay(activeMarket);
+  const activeSessionLocked = activeSession
+    ? activeSession.status === "locked" ||
+      !!activeMarket?.resolved ||
+      !!activeMarket?.isBlocked
+    : false;
+
   if (isMobile) {
     if (loading) {
       return (
-        <div className="h-[100dvh] bg-black flex items-center justify-center">
+        <div className="h-full bg-black flex items-center justify-center">
           <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-pump-green" />
         </div>
       );
@@ -1072,14 +772,14 @@ export default function LivePage() {
 
     if (mobileActiveSessions.length === 0) {
       return (
-        <div className="relative h-[100dvh] bg-[radial-gradient(circle_at_top,rgba(109,255,164,0.24),transparent_45%),linear-gradient(180deg,#020304_0%,#05080f_58%,#030406_100%)] overflow-hidden">
+        <div className="h-full bg-[radial-gradient(circle_at_top,rgba(109,255,164,0.24),transparent_45%),linear-gradient(180deg,#020304_0%,#05080f_58%,#030406_100%)] overflow-hidden relative">
           <MobileTabs
             tab={mobileTab}
             onTabChange={setMobileTab}
             onGoLive={handleGoLive}
             connected={!!publicKey}
           />
-          <div className="h-full px-6 pt-28 pb-20 flex flex-col items-center justify-center text-center">
+          <div className="h-full px-6 pt-28 pb-4 flex flex-col items-center justify-center text-center">
             <div className="w-16 h-16 rounded-full border border-pump-green/40 bg-pump-green/10 flex items-center justify-center mb-4">
               <span className="w-3 h-3 rounded-full bg-red-500 animate-pulse" />
             </div>
@@ -1102,8 +802,7 @@ export default function LivePage() {
     }
 
     return (
-      <>
-        <div className="relative h-[100dvh] bg-[linear-gradient(180deg,#030507_0%,#060a12_100%)] overflow-hidden z-0">
+      <div className="h-full relative bg-[linear-gradient(180deg,#030507_0%,#060a12_100%)] overflow-hidden">
           <MobileTabs
             tab={mobileTab}
             onTabChange={setMobileTab}
@@ -1127,20 +826,18 @@ export default function LivePage() {
                   session={session}
                   market={mobileMarketBySession[session.id] || null}
                   active={index === mobileLiveIndex && !mobileTradeOpen}
-                  index={index}
-                  total={mobileActiveSessions.length}
                   onOutcomeTap={openQuickTrade}
                 />
               ))}
             </div>
           ) : (
-            <div className="h-full overflow-y-auto px-4 pt-24 pb-[calc(5rem+env(safe-area-inset-bottom))] bg-[linear-gradient(180deg,#040607_0%,#05080f_100%)]">
+            <div className="h-full overflow-y-auto px-4 pt-24 pb-4 bg-[linear-gradient(180deg,#040607_0%,#05080f_100%)]">
               <div className="mb-4 px-1">
                 <h2 className="text-white text-lg font-bold">
-                  Explore live streams
+                  Live streams
                 </h2>
                 <p className="text-sm text-gray-400 mt-1">
-                  Pick one stream, then jump back to Live to trade.
+                  Pick a stream to watch and trade.
                 </p>
               </div>
 
@@ -1187,13 +884,41 @@ export default function LivePage() {
               </div>
             </div>
           )}
-        </div>
 
+        {/* FAB — exact stable behavior */}
+        {mobileTab === "live" &&
+          activeSession &&
+          activeMarket &&
+          !activeSessionLocked &&
+          !mobileTradeOpen && (
+            <div className="absolute bottom-4 right-4 z-[100]">
+              <button
+                onClick={() => openQuickTrade(activeSession, 0)}
+                className="w-14 h-14 rounded-full bg-pump-green text-black shadow-lg flex items-center justify-center hover:bg-[#74ffb8] transition active:scale-95"
+                aria-label="Trade"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  className="w-6 h-6"
+                >
+                  <path d="M12 5v14" />
+                  <path d="M5 12h14" />
+                </svg>
+              </button>
+            </div>
+          )}
+
+        {/* Shared stable MobileBuySheet */}
         {mobileTradeOpen && tradeSession && tradeMarket && (
-          <MobileQuickBuySheet
+          <MobileBuySheet
             open={mobileTradeOpen}
             onClose={() => setMobileTradeOpen(false)}
-            market={tradeMarket}
+            derived={{
+              names: deriveOutcomeDisplay(tradeMarket).names,
+            }}
             connected={connected}
             submitting={submittingTrade}
             defaultOutcomeIndex={mobileTradeOutcomeIndex}
@@ -1201,9 +926,10 @@ export default function LivePage() {
             onTrade={(shares, outcomeIndex, side, costSol) =>
               void handleTrade(shares, outcomeIndex, side, costSol)
             }
+            keepNavbar
           />
         )}
-      </>
+      </div>
     );
   }
 

@@ -4,16 +4,20 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import Image from "next/image";
-
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { BN } from "@coral-xyz/anchor";
 
 import { useProgram } from "@/hooks/useProgram";
 import TradingPanel from "@/components/TradingPanel";
-import CategoryImagePlaceholder from "@/components/CategoryImagePlaceholder";
 import CommentsSection from "@/components/CommentsSection";
+import {
+  StreamPlayer,
+  StatusBanner,
+  MobileBuySheet,
+  formatVol,
+  LiveMobileContent,
+} from "@/components/LiveMobileContent";
 
 import { supabase } from "@/lib/supabaseClient";
 import { getMarketByAddress, recordTransaction, applyTradeToMarketInSupabase } from "@/lib/markets";
@@ -76,13 +80,6 @@ function clampInt(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, Math.floor(Number(n) || 0)));
 }
 
-function formatVol(volLamports: number) {
-  const sol = lamportsToSol(Number(volLamports) || 0);
-  if (sol >= 1000) return `${(sol / 1000).toFixed(0)}k`;
-  if (sol >= 100) return `${sol.toFixed(0)}`;
-  return sol.toFixed(2);
-}
-
 function parseBLamports(m: any): number | null {
   const d = m?.b_lamports ?? m?.bLamports ?? m?.liquidity_lamports ?? m?.liquidity_param_lamports;
   if (d != null && Number(d) > 0) return Math.floor(Number(d));
@@ -127,68 +124,6 @@ type UiMarket = {
   resolutionStatus?: string;
   proposedOutcome?: number | null;
 };
-
-/* ── Stream player ──────────────────────────────────────────────────── */
-
-function StreamPlayer({ url }: { url: string }) {
-  // Detect embed type from URL
-  const embedUrl = useMemo(() => {
-    // YouTube
-    const ytMatch = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/live\/)([\w-]+)/);
-    if (ytMatch) return `https://www.youtube.com/embed/${ytMatch[1]}?autoplay=1&mute=1`;
-
-    // Twitch
-    const twitchMatch = url.match(/twitch\.tv\/(\w+)/);
-    if (twitchMatch) return `https://player.twitch.tv/?channel=${twitchMatch[1]}&parent=${typeof window !== "undefined" ? window.location.hostname : "localhost"}`;
-
-    // Kick
-    const kickMatch = url.match(/kick\.com\/(\w+)/);
-    if (kickMatch) return `https://player.kick.com/${kickMatch[1]}`;
-
-    // Direct embed URL (m3u8, etc.) — just use iframe
-    return url;
-  }, [url]);
-
-  return (
-    <div className="relative w-full aspect-video bg-black rounded-xl overflow-hidden">
-      <iframe
-        src={embedUrl}
-        className="absolute inset-0 w-full h-full"
-        allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
-        allowFullScreen
-        frameBorder="0"
-      />
-    </div>
-  );
-}
-
-/* ── Status banner ──────────────────────────────────────────────────── */
-
-function StatusBanner({ status }: { status: LiveSessionStatus }) {
-  if (status === "live") {
-    return (
-      <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-600/20 border border-red-600/40">
-        <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-        <span className="text-sm font-semibold text-red-400">LIVE</span>
-      </div>
-    );
-  }
-
-  const map: Record<string, { border: string; bg: string; text: string; label: string }> = {
-    scheduled: { border: "border-yellow-600/40", bg: "bg-yellow-600/20", text: "text-yellow-400", label: "Scheduled" },
-    locked: { border: "border-orange-500/40", bg: "bg-orange-500/20", text: "text-orange-400", label: "Trading Locked" },
-    ended: { border: "border-gray-600/40", bg: "bg-gray-600/20", text: "text-gray-400", label: "Stream Ended" },
-    resolved: { border: "border-pump-green/40", bg: "bg-pump-green/20", text: "text-pump-green", label: "Resolved" },
-    cancelled: { border: "border-gray-700/40", bg: "bg-gray-700/20", text: "text-gray-400", label: "Cancelled" },
-  };
-  const s = map[status] || map.ended!;
-
-  return (
-    <div className={`flex items-center gap-2 px-4 py-2 rounded-xl ${s.bg} border ${s.border}`}>
-      <span className={`text-sm font-semibold ${s.text}`}>{s.label}</span>
-    </div>
-  );
-}
 
 /* ── Host controls ──────────────────────────────────────────────────── */
 
@@ -261,154 +196,6 @@ function HostControls({
           )}
         </div>
       )}
-    </div>
-  );
-}
-
-/* ── Mobile bottom sheet for buy ────────────────────────────────────── */
-
-function MobileBuySheet({
-  open,
-  onClose,
-  market,
-  derived,
-  connected,
-  submitting,
-  onTrade,
-  marketBalanceLamports,
-  userHoldings,
-  sessionLocked,
-}: {
-  open: boolean;
-  onClose: () => void;
-  market: UiMarket;
-  derived: { names: string[]; supplies: number[] };
-  connected: boolean;
-  submitting: boolean;
-  onTrade: (s: number, idx: number, side: "buy" | "sell", cost?: number) => void;
-  marketBalanceLamports: number | null;
-  userHoldings: number[];
-  sessionLocked: boolean;
-}) {
-  const [selectedOutcome, setSelectedOutcome] = useState(0);
-  const [amount, setAmount] = useState<number>(0);
-  const presets = [0.01, 0.1, 1];
-
-  useEffect(() => {
-    if (open) {
-      document.body.style.overflow = "hidden";
-    } else {
-      document.body.style.overflow = "";
-    }
-    return () => { document.body.style.overflow = ""; };
-  }, [open]);
-
-  if (!open) return null;
-
-  return (
-    <div className="fixed inset-0 z-[200]">
-      {/* Backdrop */}
-      <button
-        className="absolute inset-0 bg-black/60"
-        onClick={onClose}
-        aria-label="Close"
-      />
-
-      {/* Sheet */}
-      <div className="absolute bottom-0 inset-x-0 bg-pump-dark border-t border-gray-800 rounded-t-2xl p-5 pb-8 animate-slideUp">
-        {/* Drag handle */}
-        <div className="w-10 h-1 rounded-full bg-gray-600 mx-auto mb-4" />
-
-        {sessionLocked ? (
-          <div className="text-center py-4">
-            <p className="text-gray-400 text-sm">Trading is currently locked for this session.</p>
-            <button
-              onClick={onClose}
-              className="mt-4 w-full py-3 rounded-xl bg-gray-700 text-white font-semibold"
-            >
-              Close
-            </button>
-          </div>
-        ) : (
-          <>
-            {/* Amount presets */}
-            <p className="text-sm text-gray-400 mb-2">Amount</p>
-            <div className="flex gap-2 mb-4">
-              {presets.map((p) => (
-                <button
-                  key={p}
-                  onClick={() => setAmount(p)}
-                  className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border transition ${
-                    amount === p
-                      ? "border-pump-green bg-pump-green/10 text-pump-green"
-                      : "border-gray-700 text-gray-300 hover:border-gray-600"
-                  }`}
-                >
-                  {p} SOL
-                </button>
-              ))}
-            </div>
-
-            {amount === 0 && (
-              <div className="mb-4 rounded-lg bg-pump-dark/80 border border-gray-800 p-3 text-center">
-                <p className="text-xs text-gray-400">
-                  Select an amount to trade.
-                </p>
-              </div>
-            )}
-
-            {/* Outcome selector (emoji-style for mobile) */}
-            {derived.names.length > 0 && (
-              <>
-                <p className="text-sm text-gray-400 mb-2">Outcome</p>
-                <div className="flex gap-2 mb-4">
-                  {derived.names.slice(0, 4).map((name, idx) => (
-                    <button
-                      key={idx}
-                      onClick={() => setSelectedOutcome(idx)}
-                      className={`flex-1 py-3 rounded-xl text-sm font-semibold border transition text-center ${
-                        selectedOutcome === idx
-                          ? idx === 0
-                            ? "border-pump-green bg-pump-green/10 text-pump-green"
-                            : "border-[#ff5c73] bg-[#ff5c73]/10 text-[#ff5c73]"
-                          : "border-gray-700 text-gray-300 hover:border-gray-600"
-                      }`}
-                    >
-                      {name}
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
-
-            {/* Buy button */}
-            <button
-              disabled={!connected || amount === 0 || submitting}
-              onClick={() => {
-                // Convert SOL amount to approximate share count
-                // (simplified: 1 share ~ 0.01 SOL base price)
-                const approxShares = Math.max(1, Math.floor(amount / 0.01));
-                onTrade(approxShares, selectedOutcome, "buy", amount);
-                onClose();
-              }}
-              className={`w-full py-4 rounded-xl font-bold text-lg transition-all ${
-                !connected || amount === 0 || submitting
-                  ? "bg-gray-700 text-gray-400 cursor-not-allowed"
-                  : "bg-pump-green text-black hover:bg-[#74ffb8]"
-              }`}
-            >
-              {!connected ? "Connect wallet" : submitting ? "Submitting..." : "Buy"}
-            </button>
-
-            <button
-              onClick={onClose}
-              className="w-full mt-2 py-3 rounded-xl bg-gray-800 text-white font-semibold"
-            >
-              Close
-            </button>
-          </>
-        )}
-      </div>
     </div>
   );
 }
@@ -932,71 +719,27 @@ export default function LiveViewerPage() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 relative">
           {/* ── LEFT COLUMN ────────────────────────────────────── */}
           <div className="lg:col-span-2 space-y-4">
-            {/* Stream player */}
-            <StreamPlayer url={session.stream_url} />
-
-            {/* Title + status */}
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <h1 className="text-xl md:text-2xl font-bold text-white leading-tight break-words">
-                  {session.title}
-                </h1>
-                <p className="text-xs text-gray-500 mt-1">
-                  Host: {session.host_wallet.slice(0, 6)}...{session.host_wallet.slice(-4)}
-                </p>
-              </div>
-              <StatusBanner status={session.status} />
-            </div>
-
-            {/* Market info card (compact) */}
-            {market && derived && (
-              <div className="card-pump p-4">
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="w-10 h-10 rounded-lg overflow-hidden bg-pump-dark shrink-0">
-                    {market.imageUrl ? (
-                      <Image src={market.imageUrl} alt="" width={40} height={40} className="object-cover w-full h-full" />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center">
-                        <CategoryImagePlaceholder category={market.category || "other"} className="scale-[0.4]" />
-                      </div>
-                    )}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <Link href={`/trade/${market.publicKey}`} className="text-sm font-semibold text-white hover:text-pump-green transition line-clamp-1">
-                      {market.question}
-                    </Link>
-                    <p className="text-[11px] text-gray-500">{formatVol(market.totalVolume)} SOL Vol</p>
-                  </div>
-                </div>
-
-                {/* Outcome bars */}
-                <div className="grid grid-cols-2 gap-2">
-                  {derived.names.slice(0, 2).map((name, idx) => {
-                    const pct = (derived.percentages[idx] ?? 0).toFixed(1);
-                    const isYes = idx === 0;
-                    return (
-                      <button
-                        key={idx}
-                        onClick={() => {
-                          if (isMobile && !sessionLocked) setMobileSheetOpen(true);
-                        }}
-                        disabled={sessionLocked}
-                        className={`text-left rounded-xl px-4 py-3 border bg-pump-dark/80 transition ${
-                          isYes ? "border-pump-green/40" : "border-[#ff5c73]/40"
-                        } ${!sessionLocked && isMobile ? "active:scale-[0.98]" : ""}`}
-                      >
-                        <span className={`text-xs font-semibold uppercase ${isYes ? "text-pump-green" : "text-[#ff5c73]"}`}>
-                          {name}
-                        </span>
-                        <div className={`text-2xl font-bold tabular-nums ${isYes ? "text-pump-green" : "text-[#ff5c73]"}`}>
-                          {pct}%
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
+            <LiveMobileContent
+              streamUrl={session.stream_url}
+              title={session.title}
+              hostWallet={session.host_wallet}
+              status={session.status}
+              market={market ? {
+                publicKey: market.publicKey,
+                question: market.question,
+                imageUrl: market.imageUrl,
+                category: market.category,
+                totalVolume: market.totalVolume,
+              } : null}
+              derived={derived ? {
+                names: derived.names,
+                percentages: derived.percentages,
+              } : null}
+              sessionLocked={sessionLocked}
+              onOutcomeTap={() => {
+                if (isMobile && !sessionLocked) setMobileSheetOpen(true);
+              }}
+            />
 
             {/* Host controls */}
             {isHost && (
@@ -1056,13 +799,10 @@ export default function LiveViewerPage() {
         <MobileBuySheet
           open={mobileSheetOpen}
           onClose={() => setMobileSheetOpen(false)}
-          market={market}
           derived={derived}
           connected={connected}
           submitting={submitting}
           onTrade={handleTrade}
-          marketBalanceLamports={marketBalanceLamports}
-          userHoldings={userSharesForUi}
           sessionLocked={sessionLocked}
         />
       )}

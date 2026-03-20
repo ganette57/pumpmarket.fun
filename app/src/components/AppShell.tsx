@@ -10,6 +10,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isSearch = pathname?.startsWith("/search") || pathname?.startsWith("/explorer");
   const isTrade = pathname?.startsWith("/trade/");
+  // Only the /live feed page controls its own mobile header (MobileTabs);
+  // /live/[id] detail pages still use MobileTopBar.
+  const isLiveFeed = pathname === "/live";
 
   return (
     <div className={isTrade ? "md:h-screen md:flex md:flex-col md:overflow-hidden" : ""}>
@@ -18,16 +21,20 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <Header />
       </div>
 
-      {/* Mobile header */}
-      <div className="md:hidden">
-        <MobileTopBar showSearch={!!isSearch} />
-      </div>
+      {/* Mobile header — hidden on /live pages (live page has its own tabs) */}
+      {!isLiveFeed && (
+        <div className="md:hidden">
+          <MobileTopBar showSearch={!!isSearch} />
+        </div>
+      )}
 
       {/* Main content */}
       <main
         className={
           isTrade
             ? "flex-1 min-h-0 overflow-hidden pb-32 md:pb-0"
+            : isLiveFeed
+            ? "h-[calc(100dvh-3.5rem)] overflow-hidden md:h-auto md:overflow-visible md:min-h-screen md:pb-0"
             : "min-h-screen pb-32 md:pb-0"
         }
       >

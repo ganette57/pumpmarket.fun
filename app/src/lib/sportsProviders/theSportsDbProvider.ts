@@ -612,6 +612,9 @@ export async function fetchLiveScore(eventId: string): Promise<LiveScoreResult> 
         away_badge: ev.strAwayTeamBadge || null,
         date_event: ev.dateEvent || null,
         idLeague: ev.idLeague || null,
+        // Goal details (soccer)
+        home_goal_details: ev.strHomeGoalDetails || null,
+        away_goal_details: ev.strAwayGoalDetails || null,
       },
     };
 

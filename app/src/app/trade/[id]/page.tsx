@@ -21,6 +21,7 @@ import MarketCard from "@/components/MarketCard";
 import BlockedMarketBanner from "@/components/BlockedMarketBanner";
 import TradeBuyPopOverlay from "@/components/TradeBuyPopOverlay";
 import NbaWidgetDrawer from "@/components/NbaWidgetDrawer";
+import SoccerMatchDrawer from "@/components/SoccerMatchDrawer";
 
 import { supabase } from "@/lib/supabaseClient";
 import { buildOddsSeries, downsample } from "@/lib/marketHistory";
@@ -932,6 +933,35 @@ function pickProviderVisual(event: any, meta: any): string | null {
   return null;
 }
 
+/** Parse TheSportsDB goal details string like "Player:45';Player2:67'" into entries */
+function parseGoalDetailsStr(raw: unknown): { player: string; minute: string }[] {
+  if (!raw || typeof raw !== "string") return [];
+  return raw
+    .split(";")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const colonIdx = entry.lastIndexOf(":");
+      if (colonIdx > 0) {
+        return { player: entry.slice(0, colonIdx).trim(), minute: entry.slice(colonIdx + 1).trim() };
+      }
+      return { player: entry, minute: "" };
+    });
+}
+
+/** Extract goal details from event/meta raw data */
+function pickGoalDetails(event: any, meta: any, side: "home" | "away") {
+  const key = side === "home" ? "home_goal_details" : "away_goal_details";
+  const strKey = side === "home" ? "strHomeGoalDetails" : "strAwayGoalDetails";
+  const raw =
+    event?.raw?.[key] ?? event?.raw?.[strKey] ??
+    event?.[strKey] ?? event?.[key] ??
+    meta?.raw?.[key] ?? meta?.raw?.[strKey] ??
+    meta?.[key] ?? meta?.[strKey] ??
+    null;
+  return parseGoalDetailsStr(raw);
+}
+
 function pickBadge(event: any, meta: any, side: "home" | "away"): string | null {
   const badgeKey = side === "home" ? "home_badge" : "away_badge";
   const strBadgeKey = side === "home" ? "strHomeTeamBadge" : "strAwayTeamBadge";
@@ -1113,6 +1143,8 @@ function SportScoreCard({
   const banner = pickEventBanner(event, meta);
   const homeBadge = pickBadge(event, meta, "home");
   const awayBadge = pickBadge(event, meta, "away");
+  const homeGoals = pickGoalDetails(event, meta, "home");
+  const awayGoals = pickGoalDetails(event, meta, "away");
 
   const scorePair = extractScorePair(event);
   const effectiveScorePair = lockToResolvedScore ? (resolvedScorePair ?? null) : (resolvedScorePair ?? scorePair);
@@ -1297,6 +1329,15 @@ function SportScoreCard({
                 <span className="text-xs sm:text-sm font-semibold text-white text-center leading-tight line-clamp-2">
                   {event.home_team || "Home"}
                 </span>
+                {homeGoals.length > 0 && (
+                  <div className="flex flex-col items-center gap-0.5 mt-0.5">
+                    {homeGoals.map((g, i) => (
+                      <span key={i} className="text-[10px] text-gray-400 leading-tight">
+                        <span className="text-gray-500">⚽</span> {g.player}{g.minute ? ` (${g.minute})` : ""}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Score / VS */}
@@ -1323,6 +1364,15 @@ function SportScoreCard({
                 <span className="text-xs sm:text-sm font-semibold text-white text-center leading-tight line-clamp-2">
                   {event.away_team || "Away"}
                 </span>
+                {awayGoals.length > 0 && (
+                  <div className="flex flex-col items-center gap-0.5 mt-0.5">
+                    {awayGoals.map((g, i) => (
+                      <span key={i} className="text-[10px] text-gray-400 leading-tight">
+                        <span className="text-gray-500">⚽</span> {g.player}{g.minute ? ` (${g.minute})` : ""}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </>
@@ -1726,6 +1776,8 @@ const scoreLogRef = useRef<{
   const [mobileDefaultSide, setMobileDefaultSide] = useState<"buy" | "sell">("buy");
   // NBA widget drawer
   const [nbaDrawerOpen, setNbaDrawerOpen] = useState(false);
+  // Soccer match details drawer
+  const [soccerDrawerOpen, setSoccerDrawerOpen] = useState(false);
 
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -2652,6 +2704,9 @@ if (snap?.posAcc?.shares) {
         ev.live.raw.away_badge = liveScoreAwayBadge;
         ev.live.raw.strAwayTeamBadge = liveScoreAwayBadge;
       }
+      // Propagate goal details from live score
+      if (liveScoreRaw.home_goal_details) ev.raw.home_goal_details = liveScoreRaw.home_goal_details;
+      if (liveScoreRaw.away_goal_details) ev.raw.away_goal_details = liveScoreRaw.away_goal_details;
     }
     return ev as SportEvent;
   }, [
@@ -3586,6 +3641,21 @@ const ended = endedByTime;
                 />
               )}
 
+              {/* Soccer match details button */}
+              {sportEventForUi && isSportLikeMarket && isSoccerLike && (market.sportMeta as any)?.provider_event_id && (
+                <button
+                  onClick={() => setSoccerDrawerOpen(true)}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-gray-800 bg-white/[0.03] hover:bg-white/[0.06] transition text-xs text-gray-400 hover:text-gray-200"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                    <line x1="3" y1="9" x2="21" y2="9" />
+                    <line x1="9" y1="21" x2="9" y2="9" />
+                  </svg>
+                  Match Details
+                </button>
+              )}
+
               {/* Sport trading state banners */}
               {isSoccerNextGoalMicro && microHeroState && (
                 <div
@@ -4240,6 +4310,14 @@ const ended = endedByTime;
         isOpen={nbaDrawerOpen}
         onClose={() => setNbaDrawerOpen(false)}
         gameId={String((market.sportMeta as any)?.provider_event_id || "")}
+        isMobile={isMobile}
+      />
+
+      {/* Soccer Match Drawer — lineups + statistics */}
+      <SoccerMatchDrawer
+        isOpen={soccerDrawerOpen}
+        onClose={() => setSoccerDrawerOpen(false)}
+        eventId={String((market.sportMeta as any)?.provider_event_id || "")}
         isMobile={isMobile}
       />
     </>
