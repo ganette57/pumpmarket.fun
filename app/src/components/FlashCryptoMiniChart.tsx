@@ -12,9 +12,15 @@ type FlashCryptoMiniChartProps = {
   priceStart: number;
   windowEnd: string | null;
   isEnded: boolean;
+  tokenSymbol?: string;
+  tokenName?: string;
+  tokenImageUri?: string | null;
+  durationMinutes?: number | null;
   pollIntervalMs?: number;
   className?: string;
 };
+
+type ChartCoord = { x: number; y: number };
 
 function formatPrice(price: number): string {
   if (price === 0) return "0";
@@ -31,19 +37,71 @@ function pctStr(start: number, current: number): string {
   return `${sign}${pct.toFixed(2)}%`;
 }
 
+function formatCountdownMmSs(totalSec: number): string {
+  const safe = Math.max(0, Math.floor(totalSec));
+  const minutes = Math.floor(safe / 60);
+  const seconds = safe % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function smoothPathFromCoords(coords: ChartCoord[]): string {
+  if (coords.length === 0) return "";
+  if (coords.length === 1) return `M${coords[0].x.toFixed(1)},${coords[0].y.toFixed(1)}`;
+  if (coords.length === 2) {
+    return `M${coords[0].x.toFixed(1)},${coords[0].y.toFixed(1)} L${coords[1].x.toFixed(1)},${coords[1].y.toFixed(1)}`;
+  }
+
+  let path = `M${coords[0].x.toFixed(1)},${coords[0].y.toFixed(1)}`;
+  for (let i = 0; i < coords.length - 1; i++) {
+    const p0 = i > 0 ? coords[i - 1] : coords[i];
+    const p1 = coords[i];
+    const p2 = coords[i + 1];
+    const p3 = i + 2 < coords.length ? coords[i + 2] : p2;
+
+    const cp1x = p1.x + (p2.x - p0.x) / 6;
+    const cp1y = p1.y + (p2.y - p0.y) / 6;
+    const cp2x = p2.x - (p3.x - p1.x) / 6;
+    const cp2y = p2.y - (p3.y - p1.y) / 6;
+
+    path += ` C${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
+  }
+  return path;
+}
+
 export default function FlashCryptoMiniChart({
   tokenMint,
   priceStart,
   windowEnd,
   isEnded,
-  pollIntervalMs = 4000,
+  tokenSymbol,
+  tokenName,
+  tokenImageUri,
+  durationMinutes,
+  pollIntervalMs = 2000,
   className = "",
 }: FlashCryptoMiniChartProps) {
   const [points, setPoints] = useState<PricePoint[]>([]);
   const [currentPrice, setCurrentPrice] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [countdownNowMs, setCountdownNowMs] = useState(() => Date.now());
   const mountedRef = useRef(true);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const windowEndMs = Date.parse(String(windowEnd || ""));
+  const hasCountdown = !isEnded && Number.isFinite(windowEndMs);
+  const remainingSec =
+    hasCountdown
+      ? Math.max(0, Math.ceil((windowEndMs - countdownNowMs) / 1000))
+      : 0;
+  const pollTier = !hasCountdown ? "default" : remainingSec <= 10 ? "end-10" : remainingSec <= 30 ? "end-30" : "base";
+  const adaptivePollMs =
+    pollTier === "end-10"
+      ? 1000
+      : pollTier === "end-30"
+      ? 1500
+      : pollTier === "base"
+      ? 2000
+      : pollIntervalMs;
 
   const fetchPrice = useCallback(async () => {
     if (!mountedRef.current) return;
@@ -59,7 +117,6 @@ export default function FlashCryptoMiniChart({
       setError(null);
       setPoints((prev) => {
         const next = [...prev, { time: Date.now(), price }];
-        // Keep last 200 points
         if (next.length > 200) return next.slice(-200);
         return next;
       });
@@ -84,115 +141,284 @@ export default function FlashCryptoMiniChart({
       return;
     }
 
-    // Initial fetch
     fetchPrice();
 
-    intervalRef.current = setInterval(fetchPrice, pollIntervalMs);
+    intervalRef.current = setInterval(fetchPrice, adaptivePollMs);
     return () => {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
       }
     };
-  }, [fetchPrice, isEnded, pollIntervalMs]);
+  }, [adaptivePollMs, fetchPrice, isEnded]);
 
-  // SVG chart
-  const svgWidth = 280;
-  const svgHeight = 80;
-  const padding = { top: 4, right: 4, bottom: 4, left: 4 };
+  useEffect(() => {
+    if (priceStart > 0) {
+      setPoints([{ time: Date.now(), price: priceStart }]);
+    } else {
+      setPoints([]);
+    }
+    setCurrentPrice(null);
+    setError(null);
+  }, [tokenMint, priceStart]);
+
+  useEffect(() => {
+    if (countdownIntervalRef.current) {
+      clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = null;
+    }
+    if (isEnded) return;
+
+    setCountdownNowMs(Date.now());
+    countdownIntervalRef.current = setInterval(() => setCountdownNowMs(Date.now()), 1000);
+    return () => {
+      if (countdownIntervalRef.current) {
+        clearInterval(countdownIntervalRef.current);
+        countdownIntervalRef.current = null;
+      }
+    };
+  }, [isEnded]);
+
+  const svgWidth = 360;
+  const svgHeight = 170;
+  const padding = { top: 10, right: 10, bottom: 8, left: 10 };
   const chartW = svgWidth - padding.left - padding.right;
   const chartH = svgHeight - padding.top - padding.bottom;
 
   const allPrices = points.map((p) => p.price);
+  if (currentPrice != null && Number.isFinite(currentPrice)) allPrices.push(currentPrice);
   if (priceStart > 0) allPrices.push(priceStart);
-  const minPrice = allPrices.length ? Math.min(...allPrices) : 0;
-  const maxPrice = allPrices.length ? Math.max(...allPrices) : 1;
+  const rawMin = allPrices.length ? Math.min(...allPrices) : 0;
+  const rawMax = allPrices.length ? Math.max(...allPrices) : 1;
+  const sameValue = Math.abs(rawMax - rawMin) < Number.EPSILON;
+  const dynamicPad = sameValue ? Math.max(Math.abs(rawMax || 1) * 0.004, 1e-10) : 0;
+  const minPrice = rawMin - dynamicPad;
+  const maxPrice = rawMax + dynamicPad;
   const priceRange = maxPrice - minPrice || 1;
 
   const minTime = points.length ? points[0].time : Date.now();
   const maxTime = points.length ? points[points.length - 1].time : Date.now() + 1;
   const timeRange = maxTime - minTime || 1;
 
-  const pathPoints = points.map((p, i) => {
+  const coords: ChartCoord[] = points.map((p) => {
     const x = padding.left + ((p.time - minTime) / timeRange) * chartW;
     const y = padding.top + chartH - ((p.price - minPrice) / priceRange) * chartH;
-    return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+    return { x, y };
   });
-  const pathD = pathPoints.join(" ");
+  const pathD = smoothPathFromCoords(coords);
+  const baselineY = padding.top + chartH;
+  const areaD =
+    coords.length > 1
+      ? `${pathD} L${coords[coords.length - 1].x.toFixed(1)},${baselineY.toFixed(1)} L${coords[0].x.toFixed(1)},${baselineY.toFixed(1)} Z`
+      : "";
 
-  // Start price horizontal line
   const startY = padding.top + chartH - ((priceStart - minPrice) / priceRange) * chartH;
+  const lastCoord = coords.length ? coords[coords.length - 1] : null;
 
-  const isUp = currentPrice != null && currentPrice > priceStart;
-  const lineColor = currentPrice == null ? "#6b7280" : isUp ? "#61ff9a" : "#f87171";
+  const trend =
+    currentPrice == null || !Number.isFinite(currentPrice)
+      ? "flat"
+      : currentPrice > priceStart
+      ? "up"
+      : currentPrice < priceStart
+      ? "down"
+      : "flat";
+  const trendLabel = trend === "up" ? "Above start" : trend === "down" ? "Below start" : "Flat";
+  const trendTone =
+    trend === "up"
+      ? "text-pump-green border-pump-green/35 bg-pump-green/10"
+      : trend === "down"
+      ? "text-red-300 border-red-500/35 bg-red-500/10"
+      : "text-gray-300 border-white/15 bg-white/5";
+  const lineColor = trend === "up" ? "#61ff9a" : trend === "down" ? "#f87171" : "#94a3b8";
+  const changeText = currentPrice == null ? "—" : pctStr(priceStart, currentPrice);
+
+  const countdownCritical = hasCountdown && remainingSec <= 10;
+  const countdownUrgent = hasCountdown && !countdownCritical && remainingSec <= 30;
+  const countdownTone = countdownCritical
+    ? "text-red-300 border-red-500/50 bg-red-500/15 animate-pulse"
+    : countdownUrgent
+    ? "text-amber-200 border-amber-400/45 bg-amber-400/12"
+    : "text-pump-green border-pump-green/35 bg-pump-green/10";
+  const countdownLabel = hasCountdown ? formatCountdownMmSs(remainingSec) : "00:00";
+  const symbolText = String(tokenSymbol || "").trim() || tokenMint.slice(0, 6);
+  const nameText = String(tokenName || "").trim() || "Flash token";
+  const nowPriceForDisplay = currentPrice != null ? currentPrice : points.length ? points[points.length - 1].price : null;
 
   return (
-    <div className={`${className}`}>
-      <div className="flex items-center justify-between mb-2">
-        <div className="text-xs text-gray-400">
-          Start: <span className="text-white font-mono">{formatPrice(priceStart)}</span>
+    <div
+      className={`rounded-2xl border border-white/12 bg-[radial-gradient(circle_at_18%_0%,rgba(34,197,94,0.12),transparent_38%),linear-gradient(145deg,rgba(2,6,10,0.98),rgba(6,11,15,0.98))] p-4 sm:p-5 ${className}`}
+    >
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex items-center gap-3">
+            {tokenImageUri ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={tokenImageUri} alt="" className="h-10 w-10 rounded-full border border-white/20 object-cover shadow-lg" />
+            ) : (
+              <div className="h-10 w-10 rounded-full border border-white/15 bg-white/5" />
+            )}
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-lg sm:text-xl font-black text-white tracking-wide truncate">${symbolText}</span>
+                <span className="rounded-full border border-sky-400/35 bg-sky-400/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-sky-200">
+                  Crypto
+                </span>
+                {durationMinutes ? (
+                  <span className="rounded-full border border-white/15 bg-white/5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-200">
+                    {durationMinutes}m flash
+                  </span>
+                ) : null}
+              </div>
+              <div className="text-xs text-gray-400 truncate">{nameText}</div>
+            </div>
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div className="rounded-xl border border-white/12 bg-black/25 px-3 py-2.5">
+              <div className="text-[10px] uppercase tracking-[0.12em] text-gray-500">Start</div>
+              <div className="mt-1 text-sm font-mono font-semibold text-white">{formatPrice(priceStart)}</div>
+            </div>
+            <div className="rounded-xl border border-white/12 bg-black/25 px-3 py-2.5">
+              <div className="text-[10px] uppercase tracking-[0.12em] text-gray-500">Current</div>
+              <div className={`mt-1 text-sm font-mono font-semibold ${trend === "up" ? "text-pump-green" : trend === "down" ? "text-red-300" : "text-white"}`}>
+                {nowPriceForDisplay == null ? "Loading..." : formatPrice(nowPriceForDisplay)}
+              </div>
+            </div>
+            <div className="rounded-xl border border-white/12 bg-black/25 px-3 py-2.5">
+              <div className="text-[10px] uppercase tracking-[0.12em] text-gray-500">Change</div>
+              <div className={`mt-1 text-sm font-semibold ${trend === "up" ? "text-pump-green" : trend === "down" ? "text-red-300" : "text-gray-200"}`}>
+                {changeText}
+              </div>
+            </div>
+            <div className={`rounded-xl border px-3 py-2.5 ${trendTone}`}>
+              <div className="text-[10px] uppercase tracking-[0.12em] text-white/65">Signal</div>
+              <div className="mt-1 text-sm font-bold">{trendLabel}</div>
+            </div>
+          </div>
         </div>
-        <div className="text-xs text-gray-400">
-          {currentPrice != null ? (
-            <>
-              Now:{" "}
-              <span className={`font-mono font-semibold ${isUp ? "text-pump-green" : "text-red-400"}`}>
-                {formatPrice(currentPrice)}
-              </span>
-              <span className={`ml-1 ${isUp ? "text-pump-green" : "text-red-400"}`}>
-                ({pctStr(priceStart, currentPrice)})
-              </span>
-            </>
-          ) : (
-            <span className="text-gray-500">Loading...</span>
-          )}
+
+        <div className={`rounded-2xl border px-4 py-3 sm:min-w-[150px] text-center ${countdownTone}`}>
+          <div className="text-[10px] uppercase tracking-[0.18em] text-white/70">Time Left</div>
+          <div className="mt-1 text-3xl font-black tabular-nums leading-none">{countdownLabel}</div>
+          <div className="mt-1 text-[11px] text-white/80">
+            {isEnded ? "Window ended" : countdownCritical ? "Final seconds" : countdownUrgent ? "Closing fast" : "Window active"}
+          </div>
         </div>
       </div>
 
-      <div className="rounded-lg bg-pump-dark-lighter border border-white/10 p-2">
+      <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-3">
         <svg
           viewBox={`0 0 ${svgWidth} ${svgHeight}`}
           width="100%"
-          height={svgHeight}
+          height={170}
           className="block"
           preserveAspectRatio="none"
         >
-          {/* Start price dashed line */}
           <line
             x1={padding.left}
             y1={startY}
             x2={svgWidth - padding.right}
             y2={startY}
-            stroke="#ffffff20"
-            strokeWidth={0.5}
-            strokeDasharray="3,3"
+            stroke="#ffffff2e"
+            strokeWidth={1}
+            strokeDasharray="5,5"
           />
 
-          {/* Price line */}
+          {areaD && (
+            <path
+              d={areaD}
+              fill={lineColor}
+              fillOpacity={0.08}
+            />
+          )}
+
           {pathD && (
             <path
               d={pathD}
               fill="none"
               stroke={lineColor}
-              strokeWidth={1.5}
+              strokeWidth={2.2}
               strokeLinecap="round"
               strokeLinejoin="round"
             />
           )}
 
-          {/* Current price dot */}
-          {points.length > 0 && (
-            <circle
-              cx={padding.left + ((points[points.length - 1].time - minTime) / timeRange) * chartW}
-              cy={padding.top + chartH - ((points[points.length - 1].price - minPrice) / priceRange) * chartH}
-              r={3}
-              fill={lineColor}
-            />
-          )}
+          {lastCoord ? (
+            trend === "up" ? (
+              <text
+                x={lastCoord.x}
+                y={lastCoord.y - 8}
+                textAnchor="middle"
+                fontSize="15"
+                className="flash-marker-up"
+              >
+                🚀
+              </text>
+            ) : trend === "down" ? (
+              <text
+                x={lastCoord.x}
+                y={lastCoord.y - 8}
+                textAnchor="middle"
+                fontSize="15"
+                className="flash-marker-down"
+              >
+                🔥
+              </text>
+            ) : (
+              <>
+                <circle cx={lastCoord.x} cy={lastCoord.y} r={6} fill={`${lineColor}33`} />
+                <circle cx={lastCoord.x} cy={lastCoord.y} r={3.4} fill={lineColor} />
+              </>
+            )
+          ) : null}
         </svg>
       </div>
 
-      {error && <div className="text-[10px] text-red-400 mt-1">{error}</div>}
+      <div className="mt-3 text-[11px]">
+        <div className="text-gray-500">
+          Rule: <span className="text-gray-300">YES wins if final price &gt; start price.</span>
+        </div>
+      </div>
+
+      {error && <div className="mt-2 text-[10px] text-red-400">{error}</div>}
+
+      <style jsx>{`
+        :global(.flash-marker-up) {
+          animation: flashRocketSpin 2.2s ease-in-out infinite;
+          transform-origin: center;
+          filter: drop-shadow(0 0 8px rgba(97, 255, 154, 0.45));
+        }
+        :global(.flash-marker-down) {
+          animation: flashFireFlicker 1.25s ease-in-out infinite;
+          transform-origin: center;
+          filter: drop-shadow(0 0 8px rgba(248, 113, 113, 0.4));
+        }
+        @keyframes flashRocketSpin {
+          0%, 100% {
+            transform: rotate(-4deg) translateY(0px);
+          }
+          50% {
+            transform: rotate(6deg) translateY(-1px);
+          }
+        }
+        @keyframes flashFireFlicker {
+          0%, 100% {
+            transform: scale(1);
+            opacity: 1;
+          }
+          50% {
+            transform: scale(1.06);
+            opacity: 0.9;
+          }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          :global(.flash-marker-up),
+          :global(.flash-marker-down) {
+            animation: none !important;
+          }
+        }
+      `}</style>
     </div>
   );
 }

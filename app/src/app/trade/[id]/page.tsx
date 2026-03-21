@@ -3361,6 +3361,13 @@ useEffect(() => {
     .toLowerCase();
   const isFlashCryptoPriceMarket =
     market.marketMode === "flash_crypto" || cryptoTypeTag === "flash_crypto_price";
+  const cryptoMeta = isFlashCryptoPriceMarket ? asObject(market.sportMeta) : {};
+  const cryptoTokenMint = String(cryptoMeta.token_mint || "").trim();
+  const cryptoTokenSymbol = String(cryptoMeta.token_symbol || "").trim();
+  const cryptoTokenName = String(cryptoMeta.token_name || "").trim();
+  const cryptoTokenImageUri = String(cryptoMeta.token_image_uri || "").trim() || null;
+  const cryptoPriceStart = Number(cryptoMeta.price_start || 0);
+  const cryptoDurationMinutes = Number(cryptoMeta.duration_minutes || 0) || null;
   const microLoopSequence = isSoccerNextGoalMicro
     ? extractLoopSequence(market.description, market.sportMeta)
     : null;
@@ -3489,6 +3496,9 @@ const ended = endedByTime;
     if (Number.isFinite(fromMeta)) return fromMeta;
     return hasValidEnd ? market.resolutionTime * 1000 : NaN;
   })();
+  const cryptoWindowEnd = isFlashCryptoPriceMarket
+    ? String(cryptoMeta.window_end || market.endTime || "").trim() || null
+    : null;
   const microGoalObserved = isTruthyFlag(liveMicroMeta.goal_observed ?? sportMeta.goal_observed);
   const microTradingLocked = isTruthyFlag(liveMicroMeta.trading_locked ?? sportMeta.trading_locked);
   const blockedReasonLower = String(market.blockedReason || "").toLowerCase();
@@ -3712,49 +3722,23 @@ const ended = endedByTime;
                   </button>
               )}
 
-              {/* Flash Crypto Price Chart */}
-              {market.marketMode === "flash_crypto" && (() => {
-                const cryptoMeta = asObject(market.sportMeta);
-                const cryptoTokenMint = String(cryptoMeta.token_mint || "").trim();
-                const cryptoPriceStart = Number(cryptoMeta.price_start || 0);
-                const cryptoWindowEnd = String(
-                  cryptoMeta.window_end || market.endTime || ""
-                ).trim() || null;
+              {/* Flash Crypto Hero */}
+              {isFlashCryptoPriceMarket && (() => {
                 const cryptoIsEnded = isResolvedOnChain || isProposed || endedByTime;
+                if (!cryptoTokenMint || !(cryptoPriceStart > 0)) return null;
 
-                if (cryptoTokenMint && cryptoPriceStart > 0) {
-                  return (
-                    <div className="rounded-xl border border-purple-500/30 bg-purple-500/5 p-4">
-                      <div className="flex items-center gap-2 mb-3">
-                        {String(cryptoMeta.token_image_uri || "").trim() ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={String(cryptoMeta.token_image_uri)}
-                            alt=""
-                            className="w-6 h-6 rounded-full"
-                          />
-                        ) : null}
-                        <span className="text-sm font-bold text-white">
-                          ${String(cryptoMeta.token_symbol || "?")}
-                        </span>
-                        <span className="rounded-full bg-purple-500/20 border border-purple-500/40 px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-purple-300">
-                          CRYPTO
-                        </span>
-                        <span className="text-xs text-gray-400">
-                          {String(cryptoMeta.duration_minutes || "")}m flash
-                        </span>
-                      </div>
-                      <FlashCryptoMiniChart
-                        tokenMint={cryptoTokenMint}
-                        priceStart={cryptoPriceStart}
-                        windowEnd={cryptoWindowEnd}
-                        isEnded={cryptoIsEnded}
-                        pollIntervalMs={4000}
-                      />
-                    </div>
-                  );
-                }
-                return null;
+                return (
+                  <FlashCryptoMiniChart
+                    tokenMint={cryptoTokenMint}
+                    tokenSymbol={cryptoTokenSymbol || undefined}
+                    tokenName={cryptoTokenName || undefined}
+                    tokenImageUri={cryptoTokenImageUri}
+                    durationMinutes={cryptoDurationMinutes}
+                    priceStart={cryptoPriceStart}
+                    windowEnd={cryptoWindowEnd}
+                    isEnded={cryptoIsEnded}
+                  />
+                );
               })()}
 
               {/* Market card */}

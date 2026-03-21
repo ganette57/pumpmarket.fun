@@ -351,9 +351,17 @@ function Step({
   );
 }
 
-function ProofRow({ label, value }: { label: string; value: React.ReactNode }) {
+function ProofRow({
+  label,
+  value,
+  className = "",
+}: {
+  label: string;
+  value: React.ReactNode;
+  className?: string;
+}) {
   return (
-    <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
+    <div className={`rounded-lg border border-white/10 bg-black/20 px-3 py-2 ${className}`}>
       <div className="text-[11px] uppercase tracking-[0.1em] text-gray-500">{label}</div>
       <div className="mt-1 text-sm text-white break-all">{value}</div>
     </div>
@@ -676,16 +684,57 @@ export default function ResolutionPanel(props: Props) {
         {/* Proof */}
         {(proofNote || proofUrl || proofImg) ? (
           <div className="mt-5">
-            <div className="text-white font-semibold mb-2">{uiFinal ? "Final proof" : "Proposed proof"}</div>
+            <div className="text-white font-semibold mb-2">
+              {isCryptoProof
+                ? uiFinal
+                  ? "Final market receipt"
+                  : "Proposed market receipt"
+                : uiFinal
+                ? "Final proof"
+                : "Proposed proof"}
+            </div>
 
-            <div className="rounded-2xl border border-white/10 bg-black/20 p-3 space-y-3">
+            <div
+              className={`rounded-2xl border p-3 space-y-3 ${
+                isCryptoProof
+                  ? "border-pump-green/25 bg-[radial-gradient(circle_at_10%_0%,rgba(34,197,94,0.12),transparent_45%),linear-gradient(140deg,rgba(2,7,11,0.98),rgba(9,14,18,0.98))]"
+                  : "border-white/10 bg-black/20"
+              }`}
+            >
+              {isCryptoProof && (
+                <div className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-xs text-gray-300">
+                    Settlement: <span className="text-white font-semibold">YES if end price &gt; start price</span>
+                  </div>
+                  <div className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1 text-[11px] font-semibold text-pump-green">
+                    {displayedOutcome ? `Outcome ${displayedOutcome}` : "Outcome pending"}
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <ProofRow label="Window start" value={formatDt(parsedProof.windowStart) || "—"} />
-                <ProofRow label="Window end" value={formatDt(parsedProof.windowEnd) || "—"} />
+                <ProofRow
+                  label="Window start"
+                  value={formatDt(parsedProof.windowStart) || "—"}
+                  className={isCryptoProof ? "bg-black/30 border-white/12" : ""}
+                />
+                <ProofRow
+                  label="Window end"
+                  value={formatDt(parsedProof.windowEnd) || "—"}
+                  className={isCryptoProof ? "bg-black/30 border-white/12" : ""}
+                />
                 {isCryptoProof ? (
                   <>
-                    <ProofRow label="Start price" value={formatCryptoPrice(parsedProof.startPrice)} />
-                    <ProofRow label="End price" value={formatCryptoPrice(parsedProof.endPrice)} />
+                    <ProofRow
+                      label="Start price"
+                      value={formatCryptoPrice(parsedProof.startPrice)}
+                      className="bg-black/30 border-white/12"
+                    />
+                    <ProofRow
+                      label="End price"
+                      value={formatCryptoPrice(parsedProof.endPrice)}
+                      className="bg-black/30 border-white/12"
+                    />
                     <ProofRow
                       label="Change %"
                       value={
@@ -693,10 +742,23 @@ export default function ResolutionPanel(props: Props) {
                           ? "—"
                           : `${parsedProof.percentChange >= 0 ? "+" : ""}${parsedProof.percentChange.toFixed(2)}%`
                       }
+                      className="bg-black/30 border-white/12"
                     />
-                    <ProofRow label="Outcome proposed" value={displayedOutcome || "—"} />
-                    <ProofRow label="Token mint" value={parsedProof.tokenMint || cryptoTokenMint || "—"} />
-                    <ProofRow label="Provider / source" value={parsedProof.provider || cryptoProvider || parsedProof.source || "—"} />
+                    <ProofRow
+                      label="Outcome proposed"
+                      value={displayedOutcome || "—"}
+                      className="bg-black/30 border-white/12"
+                    />
+                    <ProofRow
+                      label="Token mint"
+                      value={parsedProof.tokenMint || cryptoTokenMint || "—"}
+                      className="bg-black/30 border-white/12"
+                    />
+                    <ProofRow
+                      label="Provider / source"
+                      value={parsedProof.provider || cryptoProvider || parsedProof.source || "—"}
+                      className="bg-black/30 border-white/12"
+                    />
                     <ProofRow
                       label="On-chain tx sig"
                       value={
@@ -708,6 +770,7 @@ export default function ResolutionPanel(props: Props) {
                           "—"
                         )
                       }
+                      className="bg-black/30 border-white/12"
                     />
                   </>
                 ) : (
@@ -758,7 +821,11 @@ export default function ResolutionPanel(props: Props) {
                     onClick={() => setShowRawProof((prev) => !prev)}
                     className="text-xs text-gray-400 hover:text-white underline"
                   >
-                    {showRawProof ? "Hide raw proof" : "Show raw proof"}
+                    {showRawProof
+                      ? "Hide technical payload"
+                      : isCryptoProof
+                      ? "Show technical payload"
+                      : "Show raw proof"}
                   </button>
                   {showRawProof ? (
                     <pre className="mt-2 max-h-48 overflow-auto rounded-xl border border-white/10 bg-black/40 p-3 text-[11px] text-gray-300 whitespace-pre-wrap break-all">
