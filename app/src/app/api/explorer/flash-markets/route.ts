@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getExplorerFlashMarkets } from "@/lib/liveMicro/flashMarkets";
+import type { FlashMarketKind } from "@/lib/flashMarkets/types";
 
 export const dynamic = "force-dynamic";
 
@@ -14,12 +15,19 @@ function parseFilter(raw: string | null): "open" | "resolved" {
   return "open";
 }
 
+function parseKind(raw: string | null): FlashMarketKind | "all" {
+  if (raw === "sport") return "sport";
+  if (raw === "crypto") return "crypto";
+  return "all";
+}
+
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
     const limit = parseLimit(url.searchParams.get("limit"));
     const filter = parseFilter(url.searchParams.get("status"));
-    const markets = await getExplorerFlashMarkets(limit, filter);
+    const kind = parseKind(url.searchParams.get("kind"));
+    const markets = await getExplorerFlashMarkets(limit, filter, kind);
 
     return NextResponse.json(
       { markets },

@@ -1,5 +1,7 @@
 export type FlashMarketStatus = "active" | "locked" | "resolving" | "finalized" | "cancelled";
 
+export type FlashMarketKind = "sport" | "crypto";
+
 export type FlashMarket = {
   liveMicroId: string;
   providerMatchId: string;
@@ -27,4 +29,14 @@ export type FlashMarket = {
   status: FlashMarketStatus;
   volume: number;
   createdAt: string;
+
+  // Crypto flash market fields
+  kind: FlashMarketKind;
+  tokenMint?: string | null;
+  tokenSymbol?: string | null;
+  tokenName?: string | null;
+  tokenImageUri?: string | null;
+  priceStart?: number | null;
+  priceEnd?: number | null;
+  durationMinutes?: number | null;
 };

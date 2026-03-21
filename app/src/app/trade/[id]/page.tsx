@@ -22,6 +22,7 @@ import BlockedMarketBanner from "@/components/BlockedMarketBanner";
 import TradeBuyPopOverlay from "@/components/TradeBuyPopOverlay";
 import NbaWidgetDrawer from "@/components/NbaWidgetDrawer";
 import SoccerMatchDrawer from "@/components/SoccerMatchDrawer";
+import FlashCryptoMiniChart from "@/components/FlashCryptoMiniChart";
 
 import { supabase } from "@/lib/supabaseClient";
 import { buildOddsSeries, downsample } from "@/lib/marketHistory";
@@ -3355,6 +3356,11 @@ useEffect(() => {
     market.question,
     market.description,
   );
+  const cryptoTypeTag = String((sportMeta as any).type || (liveMicroMeta as any).type || "")
+    .trim()
+    .toLowerCase();
+  const isFlashCryptoPriceMarket =
+    market.marketMode === "flash_crypto" || cryptoTypeTag === "flash_crypto_price";
   const microLoopSequence = isSoccerNextGoalMicro
     ? extractLoopSequence(market.description, market.sportMeta)
     : null;
@@ -3454,7 +3460,7 @@ const ended = endedByTime;
   // marketClosed also respects the start_time guard:
   // if match hasn't started, sport-related locks don't apply
   const marketClosed = isResolvedOnChain || isProposed || ended || !!market.isBlocked
-    || (!sportBeforeStart && sportLocked);
+    || (!isFlashCryptoPriceMarket && !sportBeforeStart && sportLocked);
 
   const endLabel = hasValidEnd
     ? new Date(market.resolutionTime * 1000).toLocaleString("en-US", {
@@ -3705,6 +3711,51 @@ const ended = endedByTime;
                     <span>📊</span> Match Stats
                   </button>
               )}
+
+              {/* Flash Crypto Price Chart */}
+              {market.marketMode === "flash_crypto" && (() => {
+                const cryptoMeta = asObject(market.sportMeta);
+                const cryptoTokenMint = String(cryptoMeta.token_mint || "").trim();
+                const cryptoPriceStart = Number(cryptoMeta.price_start || 0);
+                const cryptoWindowEnd = String(
+                  cryptoMeta.window_end || market.endTime || ""
+                ).trim() || null;
+                const cryptoIsEnded = isResolvedOnChain || isProposed || endedByTime;
+
+                if (cryptoTokenMint && cryptoPriceStart > 0) {
+                  return (
+                    <div className="rounded-xl border border-purple-500/30 bg-purple-500/5 p-4">
+                      <div className="flex items-center gap-2 mb-3">
+                        {String(cryptoMeta.token_image_uri || "").trim() ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={String(cryptoMeta.token_image_uri)}
+                            alt=""
+                            className="w-6 h-6 rounded-full"
+                          />
+                        ) : null}
+                        <span className="text-sm font-bold text-white">
+                          ${String(cryptoMeta.token_symbol || "?")}
+                        </span>
+                        <span className="rounded-full bg-purple-500/20 border border-purple-500/40 px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-purple-300">
+                          CRYPTO
+                        </span>
+                        <span className="text-xs text-gray-400">
+                          {String(cryptoMeta.duration_minutes || "")}m flash
+                        </span>
+                      </div>
+                      <FlashCryptoMiniChart
+                        tokenMint={cryptoTokenMint}
+                        priceStart={cryptoPriceStart}
+                        windowEnd={cryptoWindowEnd}
+                        isEnded={cryptoIsEnded}
+                        pollIntervalMs={4000}
+                      />
+                    </div>
+                  );
+                }
+                return null;
+              })()}
 
               {/* Market card */}
               <div className="bg-black border border-gray-800 rounded-xl p-4 md:p-5 hover:border-pump-green/60 transition-all duration-200">
@@ -4158,6 +4209,9 @@ const ended = endedByTime;
                 <ResolutionPanel
                   marketAddress={market.publicKey}
                   resolutionStatus={market.resolutionStatus ?? "open"}
+                  isFlashCrypto={isFlashCryptoPriceMarket}
+                  cryptoTokenMint={String(sportMeta.token_mint || "").trim() || null}
+                  cryptoProvider={String(sportMeta.provider_name || sportMeta.provider_source || "pump_fun").trim() || null}
                   proposedOutcomeLabel={proposedLabel}
                   proposedAt={market.proposedAt}
                   contestDeadline={market.contestDeadline}

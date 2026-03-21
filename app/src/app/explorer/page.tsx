@@ -6,7 +6,7 @@ import Link from "next/link";
 import { Zap } from "lucide-react";
 import FlashMarketCard from "@/components/FlashMarketCard";
 import { supabase } from "@/lib/supabaseClient";
-import type { FlashMarket } from "@/lib/flashMarkets/types";
+import type { FlashMarket, FlashMarketKind } from "@/lib/flashMarkets/types";
 
 interface Market {
   market_address: string;
@@ -51,8 +51,10 @@ export default function ExplorerPage() {
   const [searchResults, setSearchResults] = useState<Market[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
 
-  const [flashMarkets, setFlashMarkets] = useState<FlashMarket[]>([]);
-  const [flashLoading, setFlashLoading] = useState(true);
+  const [sportsFlashMarkets, setSportsFlashMarkets] = useState<FlashMarket[]>([]);
+  const [sportsFlashLoading, setSportsFlashLoading] = useState(true);
+  const [cryptoFlashMarkets, setCryptoFlashMarkets] = useState<FlashMarket[]>([]);
+  const [cryptoFlashLoading, setCryptoFlashLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("open");
   const [cryptoStatusFilter, setCryptoStatusFilter] = useState<StatusFilter>("open");
   const [irlStatusFilter, setIrlStatusFilter] = useState<StatusFilter>("open");
@@ -62,34 +64,43 @@ export default function ExplorerPage() {
   const desktopResolvedGridTopRef = useRef<HTMLDivElement | null>(null);
   const mobileResolvedGridTopRef = useRef<HTMLDivElement | null>(null);
 
-  const fetchFlashMarkets = useCallback(async (filter: StatusFilter) => {
-    setFlashLoading(true);
+  const fetchFlashMarkets = useCallback(async (kind: FlashMarketKind, filter: StatusFilter) => {
+    if (kind === "sport") setSportsFlashLoading(true);
+    if (kind === "crypto") setCryptoFlashLoading(true);
     try {
       const limit = filter === "resolved" ? 200 : 20;
       const res = await fetch(
-        `/api/explorer/flash-markets?limit=${limit}&status=${filter}`,
+        `/api/explorer/flash-markets?limit=${limit}&status=${filter}&kind=${kind}`,
         { cache: "no-store" },
       );
       if (!res.ok) throw new Error(`Flash markets fetch failed (${res.status})`);
       const json = await res.json();
-      setFlashMarkets((json?.markets as FlashMarket[]) || []);
+      const rows = (json?.markets as FlashMarket[]) || [];
+      if (kind === "sport") setSportsFlashMarkets(rows);
+      if (kind === "crypto") setCryptoFlashMarkets(rows);
     } catch (error) {
-      console.warn("Flash markets fetch failed:", error);
-      setFlashMarkets([]);
+      console.warn(`Flash ${kind} markets fetch failed:`, error);
+      if (kind === "sport") setSportsFlashMarkets([]);
+      if (kind === "crypto") setCryptoFlashMarkets([]);
     } finally {
-      setFlashLoading(false);
+      if (kind === "sport") setSportsFlashLoading(false);
+      if (kind === "crypto") setCryptoFlashLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    void fetchFlashMarkets(statusFilter);
+    void fetchFlashMarkets("sport", statusFilter);
   }, [statusFilter, fetchFlashMarkets]);
 
+  useEffect(() => {
+    void fetchFlashMarkets("crypto", cryptoStatusFilter);
+  }, [cryptoStatusFilter, fetchFlashMarkets]);
+
   const visibleFlashMarkets = useMemo(() => {
-    if (statusFilter !== "resolved") return flashMarkets;
+    if (statusFilter !== "resolved") return sportsFlashMarkets;
     const q = resolvedSearch.trim().toLowerCase();
     const filtered = q
-      ? flashMarkets.filter((m) => {
+      ? sportsFlashMarkets.filter((m) => {
           const match = `${m.homeTeam} vs ${m.awayTeam}`.toLowerCase();
           const question = String(m.question || "").toLowerCase();
           const windowLabel = m.loopSequence != null ? `window #${m.loopSequence}` : "";
@@ -101,7 +112,7 @@ export default function ExplorerPage() {
             windowLabel.includes(q)
           );
         })
-      : [...flashMarkets];
+      : [...sportsFlashMarkets];
 
     const createdMs = (m: FlashMarket) => {
       const t = Date.parse(String(m.createdAt || ""));
@@ -124,7 +135,19 @@ export default function ExplorerPage() {
     });
 
     return filtered;
-  }, [flashMarkets, resolvedSearch, resolvedSort, statusFilter]);
+  }, [sportsFlashMarkets, resolvedSearch, resolvedSort, statusFilter]);
+
+  const visibleCryptoFlashMarkets = useMemo(() => {
+    const rows = [...cryptoFlashMarkets];
+    rows.sort((a, b) => {
+      const ams = Date.parse(String(a.createdAt || ""));
+      const bms = Date.parse(String(b.createdAt || ""));
+      const safeA = Number.isFinite(ams) ? ams : 0;
+      const safeB = Number.isFinite(bms) ? bms : 0;
+      return safeB - safeA;
+    });
+    return rows;
+  }, [cryptoFlashMarkets]);
 
   const resolvedTotalPages = useMemo(() => {
     if (statusFilter !== "resolved") return 1;
@@ -267,7 +290,7 @@ export default function ExplorerPage() {
               </div>
             )}
 
-            {flashLoading ? (
+            {sportsFlashLoading ? (
               <LoadingSpinner />
             ) : visibleFlashMarkets.length === 0 ? (
               <PremiumFlashEmptyState
@@ -338,18 +361,28 @@ export default function ExplorerPage() {
               />
             </div>
 
-            <PremiumFlashEmptyState
-              title={
-                cryptoStatusFilter === "resolved"
-                  ? "No resolved crypto flash markets right now"
-                  : "No live crypto flash session right now"
-              }
-              subtitle={
-                cryptoStatusFilter === "resolved"
-                  ? "Resolved crypto flash markets will appear here soon"
-                  : "Crypto flash sessions start soon"
-              }
-            />
+            {cryptoFlashLoading ? (
+              <LoadingSpinner />
+            ) : visibleCryptoFlashMarkets.length === 0 ? (
+              <PremiumFlashEmptyState
+                title={
+                  cryptoStatusFilter === "resolved"
+                    ? "No resolved crypto flash markets right now"
+                    : "No live crypto flash session right now"
+                }
+                subtitle={
+                  cryptoStatusFilter === "resolved"
+                    ? "Resolved crypto flash markets will appear here soon"
+                    : "Crypto flash sessions start soon"
+                }
+              />
+            ) : (
+              <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+                {visibleCryptoFlashMarkets.map((market) => (
+                  <FlashMarketCard key={market.liveMicroId} market={market} />
+                ))}
+              </div>
+            )}
           </section>
 
           <section>
@@ -433,7 +466,7 @@ export default function ExplorerPage() {
               </div>
             )}
 
-            {flashLoading ? (
+            {sportsFlashLoading ? (
               <LoadingSpinner />
             ) : visibleFlashMarkets.length === 0 ? (
               <PremiumFlashEmptyState
@@ -505,19 +538,29 @@ export default function ExplorerPage() {
               />
             </div>
 
-            <PremiumFlashEmptyState
-              compact
-              title={
-                cryptoStatusFilter === "resolved"
-                  ? "No resolved crypto flash markets right now"
-                  : "No live crypto flash session right now"
-              }
-              subtitle={
-                cryptoStatusFilter === "resolved"
-                  ? "Resolved crypto flash markets will appear here soon"
-                  : "Crypto flash sessions start soon"
-              }
-            />
+            {cryptoFlashLoading ? (
+              <LoadingSpinner />
+            ) : visibleCryptoFlashMarkets.length === 0 ? (
+              <PremiumFlashEmptyState
+                compact
+                title={
+                  cryptoStatusFilter === "resolved"
+                    ? "No resolved crypto flash markets right now"
+                    : "No live crypto flash session right now"
+                }
+                subtitle={
+                  cryptoStatusFilter === "resolved"
+                    ? "Resolved crypto flash markets will appear here soon"
+                    : "Crypto flash sessions start soon"
+                }
+              />
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                {visibleCryptoFlashMarkets.map((market) => (
+                  <FlashMarketCard key={market.liveMicroId} market={market} />
+                ))}
+              </div>
+            )}
           </section>
 
           <section>

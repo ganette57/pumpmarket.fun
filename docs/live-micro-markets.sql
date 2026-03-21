@@ -8,8 +8,8 @@ CREATE TABLE IF NOT EXISTS public.live_micro_markets (
 
   provider_match_id TEXT NOT NULL,
   provider_name TEXT NOT NULL,
-  sport TEXT NOT NULL CHECK (sport = 'soccer'),
-  micro_market_type TEXT NOT NULL CHECK (micro_market_type = 'soccer_next_goal_5m'),
+  sport TEXT NOT NULL CHECK (sport IN ('soccer', 'crypto')),
+  micro_market_type TEXT NOT NULL CHECK (micro_market_type IN ('soccer_next_goal_5m', 'flash_crypto_price')),
 
   linked_market_id UUID NULL REFERENCES public.markets(id),
   linked_market_address TEXT NULL,

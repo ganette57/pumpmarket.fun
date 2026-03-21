@@ -6,6 +6,10 @@ import {
   getLiveMicroFlags,
 } from "@/lib/liveMicro/config";
 import { tickLiveMicroMarkets } from "@/lib/liveMicro/engine";
+import {
+  tickFlashCryptoCampaigns,
+  tickFlashCryptoResolutions,
+} from "@/lib/flashCrypto/engine";
 
 type AutoTickState = {
   started: boolean;
@@ -94,6 +98,21 @@ async function runTick(reason: "startup" | "interval") {
   state.lastRunAt = nowIso();
   try {
     const result = await tickLiveMicroMarkets({ limit: cfg.limit });
+
+    // ── Flash Crypto campaigns & auto-resolve ──
+    let cryptoCampaigns = { campaignsProcessed: 0, marketsCreated: 0, errors: [] as string[] };
+    let cryptoResolutions = { resolved: 0, pending: [] as any[], errors: [] as string[] };
+    try {
+      cryptoCampaigns = await tickFlashCryptoCampaigns();
+    } catch (e: any) {
+      log("flash-crypto campaign tick failed", { error: String(e?.message || e) });
+    }
+    try {
+      cryptoResolutions = await tickFlashCryptoResolutions();
+    } catch (e: any) {
+      log("flash-crypto resolution tick failed", { error: String(e?.message || e) });
+    }
+
     state.lastSuccessAt = nowIso();
     state.lastError = null;
     state.runCount += 1;
@@ -102,12 +121,17 @@ async function runTick(reason: "startup" | "interval") {
       cfg.verboseLogs ||
       reason === "startup" ||
       result.processed > 0 ||
-      result.loopProcessed > 0;
+      result.loopProcessed > 0 ||
+      cryptoCampaigns.marketsCreated > 0 ||
+      cryptoResolutions.resolved > 0;
     if (shouldLog) {
       log("tick completed", {
         reason,
         processed: result.processed,
         loopProcessed: result.loopProcessed,
+        cryptoCampaignsProcessed: cryptoCampaigns.campaignsProcessed,
+        cryptoMarketsCreated: cryptoCampaigns.marketsCreated,
+        cryptoResolved: cryptoResolutions.resolved,
       });
     }
   } catch (e: any) {

@@ -11,8 +11,10 @@ const sb = createClient(supabaseUrl, supabaseKey, { auth: { persistSession: fals
 // CDN caching is handled via Cache-Control header in the response.
 export const dynamic = "force-dynamic";
 const FEATURED_LIMIT = 5;
-const OPEN_LIMIT = 120;
-const RESOLVED_LIMIT = 120;
+// Keep these generous so classic markets are not evicted when many recent
+// flash rows exist; final payload is still filtered/deduped below.
+const OPEN_LIMIT = 1000;
+const RESOLVED_LIMIT = 1000;
 
 type MarketRow = Record<string, any>;
 
@@ -45,6 +47,10 @@ function isSoccerNextGoalMicroMarket(row: Record<string, unknown>): boolean {
     .toLowerCase();
 
   return type === "soccer_next_goal_5m" || type.includes("next_goal");
+}
+
+function isFlashCryptoMarket(row: Record<string, unknown>): boolean {
+  return String(row.market_mode || "").trim() === "flash_crypto";
 }
 
 function normalizeImage(url: unknown): string | null {
@@ -93,6 +99,7 @@ function sanitizeClassicRows(rows: MarketRow[]): MarketRow[] {
   return rows
     .filter((m) => !(isProdPublicListing && isDevnetOnlyLiveMicroMarket(m)))
     .filter((m) => !isSoccerNextGoalMicroMarket(m))
+    .filter((m) => !isFlashCryptoMarket(m))
     .map((m) => ({
       ...m,
       image_url: normalizeImage(m.image_url),
@@ -101,7 +108,7 @@ function sanitizeClassicRows(rows: MarketRow[]): MarketRow[] {
 
 export async function GET() {
   try {
-    const homeLiveFlashPromise = getTopHomeLiveFlashMarket().catch((error) => {
+    const homeLiveFlashPromise = getTopHomeLiveFlashMarket("sport").catch((error) => {
       console.error("/api/home top flash market error:", error);
       return null;
     });

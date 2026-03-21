@@ -8,6 +8,7 @@ import { useProgram } from "@/hooks/useProgram";
 import { sendSignedTx } from "@/lib/solanaSend";
 import AdminReportsTab from "@/components/AdminReportsTab";
 import AdminLiveMicroPanel from "@/components/admin/AdminLiveMicroPanel";
+import AdminFlashCryptoPanel from "@/components/admin/AdminFlashCryptoPanel";
 import { solanaExplorerAddressUrl } from "@/utils/explorer";
 import { PLATFORM_WALLET } from "@/utils/solana";
 
@@ -1163,6 +1164,8 @@ export default function AdminOverviewPage() {
             </div>
 
             <AdminLiveMicroPanel />
+
+            <AdminFlashCryptoPanel />
 
             {/* Filters */}
             <div className="flex flex-wrap items-center gap-3 mb-4">

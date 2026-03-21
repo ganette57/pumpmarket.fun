@@ -2,7 +2,9 @@ import "server-only";
 
 import { supabaseServer } from "@/lib/supabaseServer";
 import { LIVE_MICRO_TYPE, setLinkedMarketImageUrlIfMissing } from "@/lib/liveMicro/repository";
-import type { FlashMarket, FlashMarketStatus } from "@/lib/flashMarkets/types";
+import { FLASH_CRYPTO_MICRO_TYPE } from "@/lib/flashCrypto/types";
+import { listFlashCryptoMarketsForExplorer } from "@/lib/flashCrypto/repository";
+import type { FlashMarket, FlashMarketKind, FlashMarketStatus } from "@/lib/flashMarkets/types";
 
 type LiveMicroDbRow = {
   id: string;
@@ -601,6 +603,7 @@ async function loadFlashCandidates(maxRows: number): Promise<FlashMarket[]> {
       status,
       volume: Math.max(0, Math.floor(toFiniteNumber(market?.total_volume) ?? 0)),
       createdAt: String(row.created_at || market?.created_at || new Date(0).toISOString()),
+      kind: "sport",
     });
   }
 
@@ -617,6 +620,96 @@ async function loadFlashCandidates(maxRows: number): Promise<FlashMarket[]> {
   }
 
   return out;
+}
+
+async function loadCryptoFlashCandidates(maxRows: number): Promise<FlashMarket[]> {
+  try {
+    const pairs = await listFlashCryptoMarketsForExplorer(maxRows);
+    const nowMs = Date.now();
+    const out: FlashMarket[] = [];
+
+    for (const { liveMicro: row, market } of pairs) {
+      const marketAddress = String(row.linked_market_address || "").trim();
+      if (!marketAddress) continue;
+
+      const payloadStart = (row.provider_payload_start || {}) as Record<string, unknown>;
+      const payloadEnd = (row.provider_payload_end || {}) as Record<string, unknown>;
+      const meta = (market?.sport_meta || {}) as Record<string, unknown>;
+
+      const engineStatus = String(row.engine_status || "").toLowerCase();
+      const resolutionStatus = String(market?.resolution_status || "open").toLowerCase();
+      const windowEndMs = Date.parse(String(row.window_end || ""));
+      const windowEnded = Number.isFinite(windowEndMs) ? nowMs >= windowEndMs : false;
+
+      let status: FlashMarketStatus;
+      if (resolutionStatus === "finalized") status = "finalized";
+      else if (resolutionStatus === "cancelled") status = "cancelled";
+      else if (engineStatus === "active") {
+        status = windowEnded || resolutionStatus !== "open" ? "resolving" : "active";
+      } else if (windowEnded) {
+        // Keep Explorer UX aligned with sports flash: once the engine closed and
+        // the market window is done, treat it as resolved for listing purposes.
+        status = "finalized";
+      } else {
+        status = "resolving";
+      }
+
+      const remainingSec =
+        status === "active" && Number.isFinite(windowEndMs)
+          ? Math.max(0, Math.ceil((windowEndMs - nowMs) / 1000))
+          : null;
+
+      const tokenMint = String(payloadStart.token_mint || meta.token_mint || "");
+      const tokenSymbol = String(payloadStart.token_symbol || meta.token_symbol || "");
+      const tokenName = String(payloadStart.token_name || meta.token_name || "");
+      const tokenImageUri = String(payloadStart.token_image_uri || meta.token_image_uri || "").trim() || null;
+      const priceStart = Number(payloadStart.price_start || meta.price_start || 0);
+      const priceEnd = Number(payloadEnd.price_end || meta.price_end || 0) || null;
+      const durationMinutes = Number(payloadStart.duration_minutes || meta.duration_minutes || 0);
+
+      out.push({
+        liveMicroId: row.id,
+        providerMatchId: tokenMint,
+        marketAddress,
+        marketId: market?.id ?? null,
+        question: market?.question || `Will $${tokenSymbol} go UP in ${durationMinutes} minutes?`,
+        league: null,
+        sport: "crypto",
+        providerImageUrl: tokenImageUri,
+        marketImageUrl: String(market?.image_url || "").trim() || tokenImageUri,
+        heroImageUrl: tokenImageUri,
+        homeTeam: `$${tokenSymbol}`,
+        awayTeam: "",
+        homeLogo: tokenImageUri,
+        awayLogo: null,
+        startScoreHome: 0,
+        startScoreAway: 0,
+        currentScoreHome: 0,
+        currentScoreAway: 0,
+        minute: null,
+        windowEnd: row.window_end,
+        loopSequence: null,
+        loopPhase: null,
+        remainingSec,
+        status,
+        volume: Math.max(0, Math.floor(Number(market?.total_volume) || 0)),
+        createdAt: String(row.created_at || market?.created_at || new Date(0).toISOString()),
+        kind: "crypto",
+        tokenMint,
+        tokenSymbol,
+        tokenName,
+        tokenImageUri,
+        priceStart: priceStart || null,
+        priceEnd,
+        durationMinutes: durationMinutes || null,
+      });
+    }
+
+    return out;
+  } catch (e) {
+    console.warn("[flashMarkets] crypto candidates load failed:", e);
+    return [];
+  }
 }
 
 /** Returns true if the flash market is still relevant for live UX display. */
@@ -641,16 +734,25 @@ function isStillLiveUx(m: FlashMarket): boolean {
 
 export async function getTopLiveFlashMarkets(limit = 6): Promise<FlashMarket[]> {
   const cap = normalizeLimit(limit, 6);
-  const candidates = await loadFlashCandidates(20);
+  const [sportCandidates, cryptoCandidates] = await Promise.all([
+    loadFlashCandidates(20),
+    loadCryptoFlashCandidates(20),
+  ]);
+  const candidates = [...sportCandidates, ...cryptoCandidates];
   const scoped = dedupeByMatch(candidates, explorerComparator)
     .filter(isStillLiveUx)
     .sort(explorerComparator);
   return scoped.slice(0, cap);
 }
 
-export async function getTopHomeLiveFlashMarket(): Promise<FlashMarket | null> {
-  const candidates = await loadFlashCandidates(20);
+export async function getTopHomeLiveFlashMarket(kind: FlashMarketKind | "all" = "all"): Promise<FlashMarket | null> {
+  const [sportCandidates, cryptoCandidates] = await Promise.all([
+    loadFlashCandidates(20),
+    loadCryptoFlashCandidates(20),
+  ]);
+  const candidates = [...sportCandidates, ...cryptoCandidates];
   const deduped = dedupeByMatch(candidates, homeComparator)
+    .filter((m) => kind === "all" || m.kind === kind)
     .filter(isStillLiveUx)
     .sort(homeComparator);
   return deduped[0] ?? null;
@@ -663,12 +765,19 @@ const RESOLVED_STATUSES: ReadonlySet<FlashMarketStatus> = new Set<FlashMarketSta
 export async function getExplorerFlashMarkets(
   limit = 6,
   filter: "open" | "resolved" = "open",
+  kind: FlashMarketKind | "all" = "all",
 ): Promise<FlashMarket[]> {
   const cap = normalizeLimit(limit, 6, 200);
   const desiredRows = filter === "resolved" ? Math.max(cap, 200) : Math.max(cap, 20);
-  const candidates = await loadFlashCandidates(desiredRows);
+  const [sportCandidates, cryptoCandidates] = await Promise.all([
+    loadFlashCandidates(desiredRows),
+    loadCryptoFlashCandidates(desiredRows),
+  ]);
+  const candidates = [...sportCandidates, ...cryptoCandidates];
   const allowed = filter === "resolved" ? RESOLVED_STATUSES : OPEN_STATUSES;
-  const filtered = candidates.filter((m) => allowed.has(m.status));
+  const filtered = candidates
+    .filter((m) => kind === "all" || m.kind === kind)
+    .filter((m) => allowed.has(m.status));
   const deduped = filter === "open"
     ? dedupeByMatch(filtered, explorerComparator).filter(isStillLiveUx)
     : filtered; // resolved: show all recent, no deduplication needed
