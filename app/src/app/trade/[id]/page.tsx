@@ -3277,12 +3277,25 @@ useEffect(() => {
     }
   }
 
-  // Client-side timer: update `now` every 15s so status badges auto-transition
+  const uiLockSportMeta = asObject(market?.sportMeta);
+  const uiLockLiveMicroMeta = asObject(uiLockSportMeta.live_micro);
+  const flashCryptoTypeTagForUiLock = String(uiLockSportMeta.type || uiLockLiveMicroMeta.type || "")
+    .trim()
+    .toLowerCase();
+  const isFlashCryptoPriceForUiLock =
+    !!market &&
+    (market.marketMode === "flash_crypto" || flashCryptoTypeTagForUiLock === "flash_crypto_price");
+
+  // Client-side timer:
+  // - flash crypto gets 1s precision for immediate UI lock at 00:00
+  // - others keep 15s refresh for lighter UI churn
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
-    const iv = setInterval(() => setNowMs(Date.now()), 15_000);
+    const tickMs = isFlashCryptoPriceForUiLock ? 1_000 : 15_000;
+    setNowMs(Date.now());
+    const iv = setInterval(() => setNowMs(Date.now()), tickMs);
     return () => clearInterval(iv);
-  }, []);
+  }, [isFlashCryptoPriceForUiLock]);
   const isSoccerNextGoalMicroForScore = market
     ? isSoccerNextGoalMicroMarket(market.sportMeta, market.question, market.description)
     : false;
@@ -3565,11 +3578,6 @@ const ended = endedByTime;
     return "scheduled";
   })();
 
-  // marketClosed also respects the start_time guard:
-  // if match hasn't started, sport-related locks don't apply
-  const marketClosed = isResolvedOnChain || isProposed || ended || !!market.isBlocked
-    || (!isFlashCryptoPriceMarket && !sportBeforeStart && sportLocked);
-
   const endLabel = hasValidEnd
     ? new Date(market.resolutionTime * 1000).toLocaleString("en-US", {
         month: "short",
@@ -3600,6 +3608,20 @@ const ended = endedByTime;
   const cryptoWindowEnd = isFlashCryptoPriceMarket
     ? String(cryptoMeta.window_end || market.endTime || "").trim() || null
     : null;
+  const cryptoWindowEndMs = (() => {
+    const parsed = parseIsoUtc(cryptoWindowEnd)?.getTime() ?? NaN;
+    if (Number.isFinite(parsed)) return parsed;
+    return hasValidEnd ? market.resolutionTime * 1000 : NaN;
+  })();
+  const cryptoUiTradingClosed =
+    isFlashCryptoPriceMarket &&
+    Number.isFinite(cryptoWindowEndMs) &&
+    nowMs >= cryptoWindowEndMs;
+  const showCryptoUiLockState =
+    cryptoUiTradingClosed &&
+    !isProposed &&
+    !isResolvedOnChain &&
+    !ended;
   const microGoalObserved = isTruthyFlag(liveMicroMeta.goal_observed ?? sportMeta.goal_observed);
   const microTradingLocked = isTruthyFlag(liveMicroMeta.trading_locked ?? sportMeta.trading_locked);
   const blockedReasonLower = String(market.blockedReason || "").toLowerCase();
@@ -3617,6 +3639,11 @@ const ended = endedByTime;
     return "active";
   })();
   const showGenericBlockedBanner = !!market.isBlocked && !liveMicroAutoLocked;
+  // marketClosed also respects the start_time guard:
+  // if match hasn't started, sport-related locks don't apply
+  const marketClosed = isResolvedOnChain || isProposed || ended || !!market.isBlocked
+    || cryptoUiTradingClosed
+    || (!isFlashCryptoPriceMarket && !sportBeforeStart && sportLocked);
 
   const winningLabel =
     market.winningOutcome != null && Number.isFinite(Number(market.winningOutcome))
@@ -4328,6 +4355,12 @@ const ended = endedByTime;
                     marketBalanceLamports={marketBalanceLamports}
                     userHoldings={userSharesForUi}
                     marketClosed={marketClosed}
+                    marketClosedTitle={showCryptoUiLockState ? "Trading locked" : undefined}
+                    marketClosedMessage={
+                      showCryptoUiLockState
+                        ? "Market window ended. Waiting for settlement / resolution."
+                        : undefined
+                    }
                   />
                 ) : null}
   
@@ -4473,6 +4506,12 @@ const ended = endedByTime;
                 marketBalanceLamports={marketBalanceLamports}
                 userHoldings={userSharesForUi}
                 marketClosed={marketClosed}
+                marketClosedTitle={showCryptoUiLockState ? "Trading locked" : undefined}
+                marketClosedMessage={
+                  showCryptoUiLockState
+                    ? "Market window ended. Waiting for settlement / resolution."
+                    : undefined
+                }
               />
             </div>
           </div>

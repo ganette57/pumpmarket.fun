@@ -1,6 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  AreaSeries,
+  ColorType,
+  CrosshairMode,
+  LineStyle,
+  LineType,
+  createChart,
+  type IChartApi,
+  type IPriceLine,
+  type ISeriesApi,
+  type UTCTimestamp,
+} from "lightweight-charts";
 
 type PricePoint = {
   time: number; // ms epoch
@@ -21,8 +33,6 @@ type FlashCryptoMiniChartProps = {
   pollIntervalMs?: number;
   className?: string;
 };
-
-type ChartCoord = { x: number; y: number };
 
 function formatPrice(price: number): string {
   if (price === 0) return "0";
@@ -46,28 +56,32 @@ function formatCountdownMmSs(totalSec: number): string {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
-function smoothPathFromCoords(coords: ChartCoord[]): string {
-  if (coords.length === 0) return "";
-  if (coords.length === 1) return `M${coords[0].x.toFixed(1)},${coords[0].y.toFixed(1)}`;
-  if (coords.length === 2) {
-    return `M${coords[0].x.toFixed(1)},${coords[0].y.toFixed(1)} L${coords[1].x.toFixed(1)},${coords[1].y.toFixed(1)}`;
+type SeriesPoint = { time: UTCTimestamp; value: number };
+
+function buildSeriesData(points: PricePoint[]): SeriesPoint[] {
+  const data: SeriesPoint[] = [];
+  let lastTs = 0;
+
+  for (const point of points) {
+    const price = Number(point.price);
+    if (!Number.isFinite(price) || price <= 0) continue;
+
+    let ts = Math.floor(Number(point.time) / 1000);
+    if (!Number.isFinite(ts) || ts <= 0) {
+      ts = Math.floor(Date.now() / 1000);
+    }
+    if (ts <= lastTs) ts = lastTs + 1;
+    lastTs = ts;
+
+    data.push({ time: ts as UTCTimestamp, value: price });
   }
 
-  let path = `M${coords[0].x.toFixed(1)},${coords[0].y.toFixed(1)}`;
-  for (let i = 0; i < coords.length - 1; i++) {
-    const p0 = i > 0 ? coords[i - 1] : coords[i];
-    const p1 = coords[i];
-    const p2 = coords[i + 1];
-    const p3 = i + 2 < coords.length ? coords[i + 2] : p2;
-
-    const cp1x = p1.x + (p2.x - p0.x) / 6;
-    const cp1y = p1.y + (p2.y - p0.y) / 6;
-    const cp2x = p2.x - (p3.x - p1.x) / 6;
-    const cp2y = p2.y - (p3.y - p1.y) / 6;
-
-    path += ` C${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
+  if (data.length === 1) {
+    const first = data[0];
+    data.push({ time: (Number(first.time) + 1) as UTCTimestamp, value: first.value });
   }
-  return path;
+
+  return data;
 }
 
 export default function FlashCryptoMiniChart({
@@ -88,24 +102,23 @@ export default function FlashCryptoMiniChart({
   const [currentPrice, setCurrentPrice] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [countdownNowMs, setCountdownNowMs] = useState(() => Date.now());
+  const [chartReady, setChartReady] = useState(false);
+
   const mountedRef = useRef(true);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const chartContainerRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const areaSeriesRef = useRef<ISeriesApi<"Area"> | null>(null);
+  const startPriceLineRef = useRef<IPriceLine | null>(null);
+
   const windowEndMs = Date.parse(String(windowEnd || ""));
   const hasCountdown = !isEnded && Number.isFinite(windowEndMs);
-  const remainingSec =
-    hasCountdown
-      ? Math.max(0, Math.ceil((windowEndMs - countdownNowMs) / 1000))
-      : 0;
+  const remainingSec = hasCountdown ? Math.max(0, Math.ceil((windowEndMs - countdownNowMs) / 1000)) : 0;
   const pollTier = !hasCountdown ? "default" : remainingSec <= 10 ? "end-10" : remainingSec <= 30 ? "end-30" : "base";
   const adaptivePollMs =
-    pollTier === "end-10"
-      ? 1000
-      : pollTier === "end-30"
-      ? 1500
-      : pollTier === "base"
-      ? 2000
-      : pollIntervalMs;
+    pollTier === "end-10" ? 1000 : pollTier === "end-30" ? 1500 : pollTier === "base" ? 2000 : pollIntervalMs;
+
   const resolvedFinalPrice =
     Number.isFinite(Number(finalPrice)) && Number(finalPrice) > 0
       ? Number(finalPrice)
@@ -203,42 +216,6 @@ export default function FlashCryptoMiniChart({
     };
   }, [isEnded]);
 
-  const svgWidth = 360;
-  const svgHeight = 170;
-  const padding = { top: 10, right: 10, bottom: 8, left: 10 };
-  const chartW = svgWidth - padding.left - padding.right;
-  const chartH = svgHeight - padding.top - padding.bottom;
-
-  const allPrices = points.map((p) => p.price);
-  if (currentPrice != null && Number.isFinite(currentPrice)) allPrices.push(currentPrice);
-  if (priceStart > 0) allPrices.push(priceStart);
-  const rawMin = allPrices.length ? Math.min(...allPrices) : 0;
-  const rawMax = allPrices.length ? Math.max(...allPrices) : 1;
-  const sameValue = Math.abs(rawMax - rawMin) < Number.EPSILON;
-  const dynamicPad = sameValue ? Math.max(Math.abs(rawMax || 1) * 0.004, 1e-10) : 0;
-  const minPrice = rawMin - dynamicPad;
-  const maxPrice = rawMax + dynamicPad;
-  const priceRange = maxPrice - minPrice || 1;
-
-  const minTime = points.length ? points[0].time : Date.now();
-  const maxTime = points.length ? points[points.length - 1].time : Date.now() + 1;
-  const timeRange = maxTime - minTime || 1;
-
-  const coords: ChartCoord[] = points.map((p) => {
-    const x = padding.left + ((p.time - minTime) / timeRange) * chartW;
-    const y = padding.top + chartH - ((p.price - minPrice) / priceRange) * chartH;
-    return { x, y };
-  });
-  const pathD = smoothPathFromCoords(coords);
-  const baselineY = padding.top + chartH;
-  const areaD =
-    coords.length > 1
-      ? `${pathD} L${coords[coords.length - 1].x.toFixed(1)},${baselineY.toFixed(1)} L${coords[0].x.toFixed(1)},${baselineY.toFixed(1)} Z`
-      : "";
-
-  const startY = padding.top + chartH - ((priceStart - minPrice) / priceRange) * chartH;
-  const lastCoord = coords.length ? coords[coords.length - 1] : null;
-
   const nowPriceForDisplay =
     currentPrice != null
       ? currentPrice
@@ -247,6 +224,7 @@ export default function FlashCryptoMiniChart({
       : isEnded && resolvedFinalPrice != null
       ? resolvedFinalPrice
       : null;
+
   const trend =
     nowPriceForDisplay == null || !Number.isFinite(nowPriceForDisplay)
       ? "flat"
@@ -255,6 +233,7 @@ export default function FlashCryptoMiniChart({
       : nowPriceForDisplay < priceStart
       ? "down"
       : "flat";
+
   const trendLabel = trend === "up" ? "Above start" : trend === "down" ? "Below start" : "Flat";
   const trendTone =
     trend === "up"
@@ -262,7 +241,10 @@ export default function FlashCryptoMiniChart({
       : trend === "down"
       ? "text-red-300 border-red-500/35 bg-red-500/10"
       : "text-gray-300 border-white/15 bg-white/5";
+
   const lineColor = trend === "up" ? "#61ff9a" : trend === "down" ? "#f87171" : "#94a3b8";
+  const areaTopColor = trend === "up" ? "rgba(97,255,154,0.24)" : trend === "down" ? "rgba(248,113,113,0.24)" : "rgba(148,163,184,0.2)";
+  const areaBottomColor = trend === "up" ? "rgba(97,255,154,0.02)" : trend === "down" ? "rgba(248,113,113,0.02)" : "rgba(148,163,184,0.02)";
   const changeText = nowPriceForDisplay == null ? "—" : pctStr(priceStart, nowPriceForDisplay);
 
   const countdownCritical = hasCountdown && remainingSec <= 10;
@@ -275,6 +257,119 @@ export default function FlashCryptoMiniChart({
   const countdownLabel = hasCountdown ? formatCountdownMmSs(remainingSec) : "00:00";
   const symbolText = String(tokenSymbol || "").trim() || tokenMint.slice(0, 6);
   const nameText = String(tokenName || "").trim() || "Flash token";
+
+  useEffect(() => {
+    const container = chartContainerRef.current;
+    if (!container) return;
+
+    const chart = createChart(container, {
+      width: Math.max(1, container.clientWidth),
+      height: 170,
+      layout: {
+        background: { type: ColorType.Solid, color: "transparent" },
+        textColor: "#8da2b7",
+      },
+      grid: {
+        vertLines: { color: "rgba(255,255,255,0.04)", style: LineStyle.Solid },
+        horzLines: { color: "rgba(255,255,255,0.06)", style: LineStyle.Solid },
+      },
+      leftPriceScale: { visible: false, borderVisible: false },
+      rightPriceScale: { visible: false, borderVisible: false },
+      timeScale: {
+        visible: false,
+        borderVisible: false,
+        fixLeftEdge: true,
+        fixRightEdge: true,
+      },
+      handleScroll: false,
+      handleScale: false,
+      crosshair: { mode: CrosshairMode.Hidden },
+    });
+
+    const areaSeries = chart.addSeries(AreaSeries, {
+      topColor: areaTopColor,
+      bottomColor: areaBottomColor,
+      lineColor,
+      lineWidth: 2,
+      lineType: LineType.Curved,
+      crosshairMarkerVisible: false,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+
+    chartRef.current = chart;
+    areaSeriesRef.current = areaSeries;
+    setChartReady(true);
+
+    const resizeChart = () => {
+      const width = Math.max(1, container.clientWidth);
+      chart.applyOptions({ width, height: 170 });
+    };
+
+    resizeChart();
+
+    let cleanupResize: (() => void) | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      const observer = new ResizeObserver(() => resizeChart());
+      observer.observe(container);
+      cleanupResize = () => observer.disconnect();
+    } else {
+      window.addEventListener("resize", resizeChart);
+      cleanupResize = () => window.removeEventListener("resize", resizeChart);
+    }
+
+    return () => {
+      if (cleanupResize) cleanupResize();
+      if (startPriceLineRef.current && areaSeriesRef.current) {
+        areaSeriesRef.current.removePriceLine(startPriceLineRef.current);
+        startPriceLineRef.current = null;
+      }
+      chart.remove();
+      chartRef.current = null;
+      areaSeriesRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const areaSeries = areaSeriesRef.current;
+    if (!areaSeries) return;
+
+    areaSeries.applyOptions({
+      lineColor,
+      topColor: areaTopColor,
+      bottomColor: areaBottomColor,
+    });
+  }, [lineColor, areaTopColor, areaBottomColor]);
+
+  useEffect(() => {
+    if (!chartReady) return;
+
+    const areaSeries = areaSeriesRef.current;
+    const chart = chartRef.current;
+    if (!areaSeries || !chart) return;
+
+    const seriesData = buildSeriesData(points);
+    areaSeries.setData(seriesData);
+
+    if (startPriceLineRef.current) {
+      areaSeries.removePriceLine(startPriceLineRef.current);
+      startPriceLineRef.current = null;
+    }
+
+    if (priceStart > 0) {
+      startPriceLineRef.current = areaSeries.createPriceLine({
+        price: priceStart,
+        color: "rgba(255,255,255,0.26)",
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        lineVisible: true,
+        axisLabelVisible: false,
+        title: "",
+      });
+    }
+
+    chart.timeScale().fitContent();
+  }, [chartReady, points, priceStart]);
 
   return (
     <div
@@ -339,71 +434,7 @@ export default function FlashCryptoMiniChart({
       </div>
 
       <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-3">
-        <svg
-          viewBox={`0 0 ${svgWidth} ${svgHeight}`}
-          width="100%"
-          height={170}
-          className="block"
-          preserveAspectRatio="none"
-        >
-          <line
-            x1={padding.left}
-            y1={startY}
-            x2={svgWidth - padding.right}
-            y2={startY}
-            stroke="#ffffff2e"
-            strokeWidth={1}
-            strokeDasharray="5,5"
-          />
-
-          {areaD && (
-            <path
-              d={areaD}
-              fill={lineColor}
-              fillOpacity={0.08}
-            />
-          )}
-
-          {pathD && (
-            <path
-              d={pathD}
-              fill="none"
-              stroke={lineColor}
-              strokeWidth={2.2}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          )}
-
-          {lastCoord ? (
-            trend === "up" ? (
-              <text
-                x={lastCoord.x}
-                y={lastCoord.y - 8}
-                textAnchor="middle"
-                fontSize="15"
-                className="flash-marker-up"
-              >
-                🚀
-              </text>
-            ) : trend === "down" ? (
-              <text
-                x={lastCoord.x}
-                y={lastCoord.y - 8}
-                textAnchor="middle"
-                fontSize="15"
-                className="flash-marker-down"
-              >
-                🔥
-              </text>
-            ) : (
-              <>
-                <circle cx={lastCoord.x} cy={lastCoord.y} r={6} fill={`${lineColor}33`} />
-                <circle cx={lastCoord.x} cy={lastCoord.y} r={3.4} fill={lineColor} />
-              </>
-            )
-          ) : null}
-        </svg>
+        <div ref={chartContainerRef} className="h-[170px] w-full overflow-hidden" />
       </div>
 
       <div className="mt-3 text-[11px]">
@@ -413,43 +444,6 @@ export default function FlashCryptoMiniChart({
       </div>
 
       {error && <div className="mt-2 text-[10px] text-red-400">{error}</div>}
-
-      <style jsx>{`
-        :global(.flash-marker-up) {
-          animation: flashRocketSpin 2.2s ease-in-out infinite;
-          transform-origin: center;
-          filter: drop-shadow(0 0 8px rgba(97, 255, 154, 0.45));
-        }
-        :global(.flash-marker-down) {
-          animation: flashFireFlicker 1.25s ease-in-out infinite;
-          transform-origin: center;
-          filter: drop-shadow(0 0 8px rgba(248, 113, 113, 0.4));
-        }
-        @keyframes flashRocketSpin {
-          0%, 100% {
-            transform: rotate(-4deg) translateY(0px);
-          }
-          50% {
-            transform: rotate(6deg) translateY(-1px);
-          }
-        }
-        @keyframes flashFireFlicker {
-          0%, 100% {
-            transform: scale(1);
-            opacity: 1;
-          }
-          50% {
-            transform: scale(1.06);
-            opacity: 0.9;
-          }
-        }
-        @media (prefers-reduced-motion: reduce) {
-          :global(.flash-marker-up),
-          :global(.flash-marker-down) {
-            animation: none !important;
-          }
-        }
-      `}</style>
     </div>
   );
 }
