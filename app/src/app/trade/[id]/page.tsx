@@ -574,6 +574,61 @@ function firstFiniteNumber(values: unknown[]): number | null {
   return null;
 }
 
+function parseJsonObjectFromText(input: string | null | undefined): Record<string, unknown> | null {
+  const raw = String(input ?? "").trim();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {}
+  return null;
+}
+
+type FlashCryptoProofMetrics = {
+  startPrice: number | null;
+  finalPrice: number | null;
+  percentChange: number | null;
+};
+
+function parseFlashCryptoProofMetrics(note: string | null | undefined): FlashCryptoProofMetrics {
+  const parsed = parseJsonObjectFromText(note);
+  if (!parsed) {
+    return { startPrice: null, finalPrice: null, percentChange: null };
+  }
+
+  const startPrice = firstFiniteNumber([
+    parsed.start_price,
+    parsed.price_start,
+    parsed.priceStart,
+  ]);
+  const finalPrice = firstFiniteNumber([
+    parsed.end_price,
+    parsed.price_end,
+    parsed.priceEnd,
+    parsed.final_price,
+    parsed.finalPrice,
+  ]);
+  const percentChange = firstFiniteNumber([
+    parsed.percent_change,
+    parsed.pct_change,
+    parsed.change_pct,
+    parsed.percentChange,
+  ]);
+
+  return { startPrice, finalPrice, percentChange };
+}
+
+function formatFlashCryptoPrice(value: number | null): string {
+  if (value == null) return "—";
+  if (value === 0) return "0";
+  if (Math.abs(value) < 0.000001) return value.toExponential(4);
+  if (Math.abs(value) < 0.01) return value.toFixed(8);
+  if (Math.abs(value) < 1) return value.toFixed(6);
+  return value.toFixed(4);
+}
+
 function scoreFromLiveMicroPayload(payload: Record<string, unknown> | null | undefined): ScorePair | null {
   const home = firstFiniteNumber([
     readPath(payload, ["current_score", "home"]),
@@ -3392,6 +3447,52 @@ useEffect(() => {
 
   const showProposedBox = isProposed && !isResolvedOnChain;
   const showResolvedProofBox = isResolvedOnChain;
+  const cryptoProposedProofMetrics = parseFlashCryptoProofMetrics(market.proposedProofNote);
+  const cryptoResolvedProofMetrics = parseFlashCryptoProofMetrics(market.resolutionProofNote);
+  const cryptoStartFromMeta = firstFiniteNumber([
+    cryptoMeta.start_price,
+    cryptoMeta.price_start,
+    cryptoMeta.priceStart,
+  ]);
+  const cryptoFinalFromMeta = firstFiniteNumber([
+    cryptoMeta.end_price,
+    cryptoMeta.price_end,
+    cryptoMeta.priceEnd,
+    cryptoMeta.final_price,
+    cryptoMeta.finalPrice,
+  ]);
+  const cryptoPercentFromMeta = firstFiniteNumber([
+    cryptoMeta.percent_change,
+    cryptoMeta.pct_change,
+    cryptoMeta.change_pct,
+    cryptoMeta.percentChange,
+  ]);
+  const cryptoCardMetrics = (() => {
+    const startPrice =
+      cryptoResolvedProofMetrics.startPrice ??
+      cryptoProposedProofMetrics.startPrice ??
+      cryptoStartFromMeta;
+    const finalPrice =
+      cryptoResolvedProofMetrics.finalPrice ??
+      cryptoProposedProofMetrics.finalPrice ??
+      cryptoFinalFromMeta;
+    const persistedPercent =
+      cryptoResolvedProofMetrics.percentChange ??
+      cryptoProposedProofMetrics.percentChange ??
+      cryptoPercentFromMeta;
+    const percentChange =
+      persistedPercent != null
+        ? persistedPercent
+        : startPrice != null && finalPrice != null && startPrice !== 0
+        ? ((finalPrice - startPrice) / startPrice) * 100
+        : null;
+    const hasAny = startPrice != null || finalPrice != null || percentChange != null;
+    return { startPrice, finalPrice, percentChange, hasAny };
+  })();
+  const showCryptoCardSummary =
+    isFlashCryptoPriceMarket &&
+    (endedByTime || isProposed || isResolvedOnChain || status === "finalized" || status === "cancelled") &&
+    cryptoCardMetrics.hasAny;
 
   // Sport status: scheduled → live → locked → finished
   // Read sportStartTime from sportMeta or sportEvent
@@ -3735,6 +3836,8 @@ const ended = endedByTime;
                     tokenImageUri={cryptoTokenImageUri}
                     durationMinutes={cryptoDurationMinutes}
                     priceStart={cryptoPriceStart}
+                    finalPrice={cryptoCardMetrics.finalPrice}
+                    percentChange={cryptoCardMetrics.percentChange}
                     windowEnd={cryptoWindowEnd}
                     isEnded={cryptoIsEnded}
                   />
@@ -3813,6 +3916,44 @@ const ended = endedByTime;
                     )}
                   </div>
                 </div>
+
+                {showCryptoCardSummary && (
+                  <div className="mt-3 rounded-xl border border-cyan-400/20 bg-cyan-500/5 p-3">
+                    <div className="text-[11px] uppercase tracking-[0.08em] text-cyan-200/80 mb-2">
+                      Flash Crypto Snapshot
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
+                        <div className="text-[11px] text-gray-500">Start price</div>
+                        <div className="text-sm font-semibold text-white tabular-nums">
+                          {formatFlashCryptoPrice(cryptoCardMetrics.startPrice)}
+                        </div>
+                      </div>
+                      <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
+                        <div className="text-[11px] text-gray-500">Final price</div>
+                        <div className="text-sm font-semibold text-white tabular-nums">
+                          {formatFlashCryptoPrice(cryptoCardMetrics.finalPrice)}
+                        </div>
+                      </div>
+                      <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
+                        <div className="text-[11px] text-gray-500">Change %</div>
+                        <div
+                          className={`text-sm font-semibold tabular-nums ${
+                            cryptoCardMetrics.percentChange == null
+                              ? "text-gray-300"
+                              : cryptoCardMetrics.percentChange >= 0
+                              ? "text-pump-green"
+                              : "text-[#ff5c73]"
+                          }`}
+                        >
+                          {cryptoCardMetrics.percentChange == null
+                            ? "—"
+                            : `${cryptoCardMetrics.percentChange >= 0 ? "+" : ""}${cryptoCardMetrics.percentChange.toFixed(2)}%`}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
   
                 <div className="flex items-center gap-4 text-sm text-gray-400 mt-3 pt-3 border-t border-gray-800">
                   <div>

@@ -93,6 +93,7 @@ type ActiveMarket = {
 
 type AdminFilter = "inbox" | "resolved" | "blocked" | "active" | "reports" | "all";
 type TableFilter = Exclude<AdminFilter, "reports">;
+type OverviewSection = "sports_flash" | "crypto_flash" | "resolutions";
 
 /* ========= Config ========= */
 
@@ -256,6 +257,7 @@ export default function AdminOverviewPage() {
 
   const [now, setNow] = useState(() => Date.now());
 
+  const [activeSection, setActiveSection] = useState<OverviewSection>("sports_flash");
   const [filter, setFilter] = useState<AdminFilter>("inbox");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [search, setSearch] = useState("");
@@ -1110,10 +1112,24 @@ export default function AdminOverviewPage() {
   // RENDER
 
   const isBusy = flowStep !== "idle" && flowStep !== "done" && flowStep !== "error";
+  const sectionMeta: Record<OverviewSection, { title: string; description: string }> = {
+    sports_flash: {
+      title: "Sports Flash",
+      description: "Live soccer controls, loops and sport flash operations.",
+    },
+    crypto_flash: {
+      title: "Crypto Flash",
+      description: "Crypto campaign launcher, campaign statuses and pending crypto resolutions.",
+    },
+    resolutions: {
+      title: "Resolutions",
+      description: "Pending/admin actions, resolved history, blocked markets and reports moderation.",
+    },
+  };
 
   return (
     <div className="min-h-screen bg-pump-dark">
-      <div className="max-w-7xl mx-auto px-4 py-6">
+      <div className="mx-auto w-full max-w-[1500px] px-4 py-6">
         <div className="mb-4">
           <div className="text-sm text-gray-400">
             Inbox style • safe actions • on-chain tx + DB commit.
@@ -1129,46 +1145,85 @@ export default function AdminOverviewPage() {
         ) : !data || !k ? (
           <div className="card-pump p-4 text-gray-400">No data.</div>
         ) : (
-          <>
-            {/* KPI Cards */}
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 md:gap-4 mb-6">
-              <StatCard
-                label="Markets"
-                value={`${k.markets_total}`}
-                hint={`open ${k.markets_open} • proposed ${k.markets_proposed}`}
-              />
-              <StatCard
-                label="Volume"
-                value={`${k.volume_sol_total.toFixed(2)} SOL`}
-                hint="total traded"
-              />
-              <StatCard
-                label="Transactions"
-                value={`${k.tx_count}`}
-                hint={`${k.unique_traders} traders`}
-              />
-              <StatCard
-                label="Disputes"
-                value={`${k.disputes_total}`}
-                hint={`open ${k.disputes_open}`}
-              />
-              <StatCard
-                label="Platform Fees"
-                value={`${platformFeesSol.toFixed(4)} SOL`}
-                hint="1% of volume"
-                link={{
-                  href: solanaExplorerAddressUrl(PLATFORM_WALLET.toBase58()),
-                  text: "Verify on Explorer",
-                }}
-              />
-            </div>
+          <div className="grid grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)] gap-6">
+            <aside className="h-fit rounded-2xl border border-white/10 bg-black/25 p-3 lg:sticky lg:top-6">
+              <div className="text-xs text-gray-500 uppercase tracking-wide px-2">Admin Sections</div>
+              <div className="mt-2 space-y-1.5">
+                {([
+                  { id: "sports_flash" as const, label: "Sports Flash" },
+                  { id: "crypto_flash" as const, label: "Crypto Flash" },
+                  { id: "resolutions" as const, label: "Resolutions" },
+                ]).map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => setActiveSection(item.id)}
+                    className={`w-full text-left px-3 py-2.5 rounded-xl text-sm transition border ${
+                      activeSection === item.id
+                        ? "bg-white/10 border-white/20 text-white"
+                        : "bg-transparent border-white/5 text-gray-400 hover:text-white hover:bg-white/5"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span>{item.label}</span>
+                      {item.id === "resolutions" && pendingReportsCount > 0 ? (
+                        <span className="px-1.5 py-0.5 rounded-md bg-red-500/20 text-red-300 text-[10px] font-semibold">
+                          {pendingReportsCount}
+                        </span>
+                      ) : null}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </aside>
 
-            <AdminLiveMicroPanel />
+            <div className="min-w-0 space-y-6">
+              <div className="card-pump p-4">
+                <div className="text-xs text-gray-500 uppercase tracking-wide">Overview</div>
+                <div className="text-xl font-bold text-white mt-1">{sectionMeta[activeSection].title}</div>
+                <div className="text-sm text-gray-400 mt-1">{sectionMeta[activeSection].description}</div>
+              </div>
 
-            <AdminFlashCryptoPanel />
+              {/* KPI Cards */}
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3 md:gap-4">
+                <StatCard
+                  label="Markets"
+                  value={`${k.markets_total}`}
+                  hint={`open ${k.markets_open} • proposed ${k.markets_proposed}`}
+                />
+                <StatCard
+                  label="Volume"
+                  value={`${k.volume_sol_total.toFixed(2)} SOL`}
+                  hint="total traded"
+                />
+                <StatCard
+                  label="Transactions"
+                  value={`${k.tx_count}`}
+                  hint={`${k.unique_traders} traders`}
+                />
+                <StatCard
+                  label="Disputes"
+                  value={`${k.disputes_total}`}
+                  hint={`open ${k.disputes_open}`}
+                />
+                <StatCard
+                  label="Platform Fees"
+                  value={`${platformFeesSol.toFixed(4)} SOL`}
+                  hint="1% of volume"
+                  link={{
+                    href: solanaExplorerAddressUrl(PLATFORM_WALLET.toBase58()),
+                    text: "Verify on Explorer",
+                  }}
+                />
+              </div>
 
-            {/* Filters */}
-            <div className="flex flex-wrap items-center gap-3 mb-4">
+              {activeSection === "sports_flash" && <AdminLiveMicroPanel />}
+
+              {activeSection === "crypto_flash" && <AdminFlashCryptoPanel />}
+
+              {activeSection === "resolutions" && (
+                <>
+                  {/* Filters */}
+                  <div className="flex flex-wrap items-center gap-3 mb-4">
               <div className="flex items-center gap-1 bg-pump-dark-lighter rounded-lg p-1">
                 <button
                   onClick={() => switchFilter("inbox")}
@@ -1241,16 +1296,16 @@ export default function AdminOverviewPage() {
                 onChange={(e) => setSearch(e.target.value)}
                 className="w-full md:w-72 px-3 md:px-4 py-2 rounded-lg bg-white text-black placeholder-gray-500 border border-white/20 text-xs md:text-sm focus:outline-none focus:ring-2 focus:ring-pump-green"
               />
-            </div>
+                  </div>
 
-            {/* Reports Tab */}
-            {filter === "reports" ? (
-              <div className="card-pump p-4">
-                <AdminReportsTab onBlockMarket={handleBlockFromReports} />
-              </div>
-            ) : (
-              /* Table */
-              <div ref={tableRef} className="card-pump overflow-hidden">
+                  {/* Reports Tab */}
+                  {filter === "reports" ? (
+                    <div className="card-pump p-4">
+                      <AdminReportsTab onBlockMarket={handleBlockFromReports} />
+                    </div>
+                  ) : (
+                    /* Table */
+                    <div ref={tableRef} className="card-pump overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full min-w-[600px]">
                     <thead>
@@ -1502,9 +1557,12 @@ export default function AdminOverviewPage() {
                     Next
                   </button>
                 </div>
-              </div>
-            )}
-          </>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
         )}
       </div>
 

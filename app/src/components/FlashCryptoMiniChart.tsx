@@ -12,6 +12,8 @@ type FlashCryptoMiniChartProps = {
   priceStart: number;
   windowEnd: string | null;
   isEnded: boolean;
+  finalPrice?: number | null;
+  percentChange?: number | null;
   tokenSymbol?: string;
   tokenName?: string;
   tokenImageUri?: string | null;
@@ -73,6 +75,8 @@ export default function FlashCryptoMiniChart({
   priceStart,
   windowEnd,
   isEnded,
+  finalPrice = null,
+  percentChange = null,
   tokenSymbol,
   tokenName,
   tokenImageUri,
@@ -102,6 +106,12 @@ export default function FlashCryptoMiniChart({
       : pollTier === "base"
       ? 2000
       : pollIntervalMs;
+  const resolvedFinalPrice =
+    Number.isFinite(Number(finalPrice)) && Number(finalPrice) > 0
+      ? Number(finalPrice)
+      : Number.isFinite(Number(percentChange)) && priceStart > 0
+      ? priceStart * (1 + Number(percentChange) / 100)
+      : null;
 
   const fetchPrice = useCallback(async () => {
     if (!mountedRef.current) return;
@@ -163,6 +173,20 @@ export default function FlashCryptoMiniChart({
   }, [tokenMint, priceStart]);
 
   useEffect(() => {
+    if (!isEnded) return;
+    if (!(priceStart > 0) || resolvedFinalPrice == null) return;
+
+    setPoints((prev) => {
+      if (prev.length > 1) return prev;
+      const startPoint = prev.length === 1 ? prev[0] : { time: Date.now(), price: priceStart };
+      const endPoint = { time: startPoint.time + 1, price: resolvedFinalPrice };
+      return [startPoint, endPoint];
+    });
+    setCurrentPrice((prev) => (prev != null ? prev : resolvedFinalPrice));
+    setError(null);
+  }, [isEnded, priceStart, resolvedFinalPrice]);
+
+  useEffect(() => {
     if (countdownIntervalRef.current) {
       clearInterval(countdownIntervalRef.current);
       countdownIntervalRef.current = null;
@@ -215,12 +239,20 @@ export default function FlashCryptoMiniChart({
   const startY = padding.top + chartH - ((priceStart - minPrice) / priceRange) * chartH;
   const lastCoord = coords.length ? coords[coords.length - 1] : null;
 
+  const nowPriceForDisplay =
+    currentPrice != null
+      ? currentPrice
+      : points.length
+      ? points[points.length - 1].price
+      : isEnded && resolvedFinalPrice != null
+      ? resolvedFinalPrice
+      : null;
   const trend =
-    currentPrice == null || !Number.isFinite(currentPrice)
+    nowPriceForDisplay == null || !Number.isFinite(nowPriceForDisplay)
       ? "flat"
-      : currentPrice > priceStart
+      : nowPriceForDisplay > priceStart
       ? "up"
-      : currentPrice < priceStart
+      : nowPriceForDisplay < priceStart
       ? "down"
       : "flat";
   const trendLabel = trend === "up" ? "Above start" : trend === "down" ? "Below start" : "Flat";
@@ -231,7 +263,7 @@ export default function FlashCryptoMiniChart({
       ? "text-red-300 border-red-500/35 bg-red-500/10"
       : "text-gray-300 border-white/15 bg-white/5";
   const lineColor = trend === "up" ? "#61ff9a" : trend === "down" ? "#f87171" : "#94a3b8";
-  const changeText = currentPrice == null ? "—" : pctStr(priceStart, currentPrice);
+  const changeText = nowPriceForDisplay == null ? "—" : pctStr(priceStart, nowPriceForDisplay);
 
   const countdownCritical = hasCountdown && remainingSec <= 10;
   const countdownUrgent = hasCountdown && !countdownCritical && remainingSec <= 30;
@@ -243,7 +275,6 @@ export default function FlashCryptoMiniChart({
   const countdownLabel = hasCountdown ? formatCountdownMmSs(remainingSec) : "00:00";
   const symbolText = String(tokenSymbol || "").trim() || tokenMint.slice(0, 6);
   const nameText = String(tokenName || "").trim() || "Flash token";
-  const nowPriceForDisplay = currentPrice != null ? currentPrice : points.length ? points[points.length - 1].price : null;
 
   return (
     <div
@@ -280,7 +311,7 @@ export default function FlashCryptoMiniChart({
               <div className="mt-1 text-sm font-mono font-semibold text-white">{formatPrice(priceStart)}</div>
             </div>
             <div className="rounded-xl border border-white/12 bg-black/25 px-3 py-2.5">
-              <div className="text-[10px] uppercase tracking-[0.12em] text-gray-500">Current</div>
+              <div className="text-[10px] uppercase tracking-[0.12em] text-gray-500">{isEnded ? "Final" : "Current"}</div>
               <div className={`mt-1 text-sm font-mono font-semibold ${trend === "up" ? "text-pump-green" : trend === "down" ? "text-red-300" : "text-white"}`}>
                 {nowPriceForDisplay == null ? "Loading..." : formatPrice(nowPriceForDisplay)}
               </div>
@@ -292,7 +323,7 @@ export default function FlashCryptoMiniChart({
               </div>
             </div>
             <div className={`rounded-xl border px-3 py-2.5 ${trendTone}`}>
-              <div className="text-[10px] uppercase tracking-[0.12em] text-white/65">Signal</div>
+              <div className="text-[10px] uppercase tracking-[0.12em] text-white/65">{isEnded ? "Final signal" : "Signal"}</div>
               <div className="mt-1 text-sm font-bold">{trendLabel}</div>
             </div>
           </div>

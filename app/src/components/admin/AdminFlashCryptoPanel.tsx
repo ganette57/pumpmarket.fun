@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2, Play, Square, X } from "lucide-react";
 
 type CampaignStatus = "running" | "stopped" | "completed";
@@ -37,6 +37,9 @@ type PendingResolution = {
 
 type NoticeTone = "ok" | "error" | "neutral";
 type Notice = { tone: NoticeTone; message: string };
+
+const CAMPAIGNS_PAGE_SIZE = 5;
+const PENDING_PAGE_SIZE = 6;
 
 function statusBadge(status: CampaignStatus) {
   const colors: Record<CampaignStatus, string> = {
@@ -86,6 +89,8 @@ export default function AdminFlashCryptoPanel() {
 
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [pending, setPending] = useState<PendingResolution[]>([]);
+  const [campaignPage, setCampaignPage] = useState(1);
+  const [pendingPage, setPendingPage] = useState(1);
 
   const refresh = useCallback(async () => {
     try {
@@ -105,6 +110,26 @@ export default function AdminFlashCryptoPanel() {
     const iv = setInterval(refresh, 10_000);
     return () => clearInterval(iv);
   }, [refresh]);
+
+  const campaignsTotalPages = Math.max(1, Math.ceil(campaigns.length / CAMPAIGNS_PAGE_SIZE));
+  const paginatedCampaigns = useMemo(() => {
+    const start = (campaignPage - 1) * CAMPAIGNS_PAGE_SIZE;
+    return campaigns.slice(start, start + CAMPAIGNS_PAGE_SIZE);
+  }, [campaignPage, campaigns]);
+
+  const pendingTotalPages = Math.max(1, Math.ceil(pending.length / PENDING_PAGE_SIZE));
+  const paginatedPending = useMemo(() => {
+    const start = (pendingPage - 1) * PENDING_PAGE_SIZE;
+    return pending.slice(start, start + PENDING_PAGE_SIZE);
+  }, [pending, pendingPage]);
+
+  useEffect(() => {
+    setCampaignPage((prev) => Math.min(prev, campaignsTotalPages));
+  }, [campaignsTotalPages]);
+
+  useEffect(() => {
+    setPendingPage((prev) => Math.min(prev, pendingTotalPages));
+  }, [pendingTotalPages]);
 
   const handleStart = async () => {
     if (!tokenMint.trim()) {
@@ -240,8 +265,13 @@ export default function AdminFlashCryptoPanel() {
       {/* Active Campaigns */}
       {campaigns.length > 0 && (
         <div className="space-y-3">
-          <h3 className="text-sm font-semibold text-gray-300">Campaigns</h3>
-          {campaigns.map((c) => (
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-gray-300">Campaigns</h3>
+            <div className="text-[11px] text-gray-500">
+              {campaigns.length} total • page {campaignPage}/{campaignsTotalPages}
+            </div>
+          </div>
+          {paginatedCampaigns.map((c) => (
             <div key={c.id} className="p-3 rounded-lg bg-pump-dark border border-white/10 space-y-2">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -273,14 +303,40 @@ export default function AdminFlashCryptoPanel() {
               )}
             </div>
           ))}
+          <div className="flex items-center justify-between gap-3 border-t border-white/10 pt-3">
+            <button
+              type="button"
+              onClick={() => setCampaignPage((p) => Math.max(1, p - 1))}
+              disabled={campaignPage <= 1}
+              className="px-2.5 py-1.5 rounded-md border border-white/15 bg-white/5 text-gray-200 text-[11px] hover:bg-white/10 disabled:opacity-50 transition"
+            >
+              Previous
+            </button>
+            <div className="text-[11px] text-gray-500">
+              Showing {(campaignPage - 1) * CAMPAIGNS_PAGE_SIZE + 1}-{Math.min(campaignPage * CAMPAIGNS_PAGE_SIZE, campaigns.length)}
+            </div>
+            <button
+              type="button"
+              onClick={() => setCampaignPage((p) => Math.min(campaignsTotalPages, p + 1))}
+              disabled={campaignPage >= campaignsTotalPages}
+              className="px-2.5 py-1.5 rounded-md border border-white/15 bg-white/5 text-gray-200 text-[11px] hover:bg-white/10 disabled:opacity-50 transition"
+            >
+              Next
+            </button>
+          </div>
         </div>
       )}
 
       {/* Auto-proposed Resolutions */}
       {pending.length > 0 && (
         <div className="space-y-3">
-          <h3 className="text-sm font-semibold text-gray-300">Auto-Proposed Resolutions</h3>
-          {pending.map((p) => (
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-gray-300">Auto-Proposed Resolutions</h3>
+            <div className="text-[11px] text-gray-500">
+              {pending.length} total • page {pendingPage}/{pendingTotalPages}
+            </div>
+          </div>
+          {paginatedPending.map((p) => (
             <div key={p.marketAddress} className="p-3 rounded-lg bg-pump-dark border border-white/10 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="font-semibold text-white">${p.tokenSymbol}</span>
@@ -323,6 +379,27 @@ export default function AdminFlashCryptoPanel() {
               )}
             </div>
           ))}
+          <div className="flex items-center justify-between gap-3 border-t border-white/10 pt-3">
+            <button
+              type="button"
+              onClick={() => setPendingPage((p) => Math.max(1, p - 1))}
+              disabled={pendingPage <= 1}
+              className="px-2.5 py-1.5 rounded-md border border-white/15 bg-white/5 text-gray-200 text-[11px] hover:bg-white/10 disabled:opacity-50 transition"
+            >
+              Previous
+            </button>
+            <div className="text-[11px] text-gray-500">
+              Showing {(pendingPage - 1) * PENDING_PAGE_SIZE + 1}-{Math.min(pendingPage * PENDING_PAGE_SIZE, pending.length)}
+            </div>
+            <button
+              type="button"
+              onClick={() => setPendingPage((p) => Math.min(pendingTotalPages, p + 1))}
+              disabled={pendingPage >= pendingTotalPages}
+              className="px-2.5 py-1.5 rounded-md border border-white/15 bg-white/5 text-gray-200 text-[11px] hover:bg-white/10 disabled:opacity-50 transition"
+            >
+              Next
+            </button>
+          </div>
         </div>
       )}
     </div>

@@ -86,6 +86,8 @@ type Notice = {
   message: string;
 };
 
+const LOOPS_PAGE_SIZE = 6;
+
 function isValidIanaTimeZone(tz?: string | null): tz is string {
   if (!tz) return false;
   try {
@@ -581,6 +583,7 @@ export default function AdminLiveMicroPanel() {
   const [stoppingLoopId, setStoppingLoopId] = useState<string | null>(null);
 
   const [loops, setLoops] = useState<LiveMicroLoop[]>([]);
+  const [loopsPage, setLoopsPage] = useState(1);
   const [loopsLoading, setLoopsLoading] = useState(true);
   const [loopsError, setLoopsError] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -868,6 +871,17 @@ export default function AdminLiveMicroPanel() {
   const selectedMatchTime = selectedMatch
     ? parseEventStartDate(selectedMatch.start_time, extractEventTimeZone(selectedMatch))
     : null;
+  const totalLoopsPages = Math.max(1, Math.ceil(loops.length / LOOPS_PAGE_SIZE));
+  const paginatedLoops = useMemo(() => {
+    const start = (loopsPage - 1) * LOOPS_PAGE_SIZE;
+    return loops.slice(start, start + LOOPS_PAGE_SIZE);
+  }, [loops, loopsPage]);
+  const loopsRangeStart = loops.length === 0 ? 0 : (loopsPage - 1) * LOOPS_PAGE_SIZE + 1;
+  const loopsRangeEnd = Math.min(loopsPage * LOOPS_PAGE_SIZE, loops.length);
+
+  useEffect(() => {
+    setLoopsPage((prev) => Math.min(prev, totalLoopsPages));
+  }, [totalLoopsPages]);
 
   return (
     <>
@@ -890,8 +904,8 @@ export default function AdminLiveMicroPanel() {
           </button>
         </div>
 
-        <div className="mt-4 grid grid-cols-1 lg:grid-cols-5 gap-4">
-          <div className="lg:col-span-2 space-y-3">
+        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[minmax(260px,0.9fr)_minmax(0,1.55fr)] xl:grid-cols-[minmax(280px,0.85fr)_minmax(0,1.75fr)]">
+          <div className="space-y-3">
             <div className="rounded-xl border border-white/10 bg-black/20 p-3">
               <div className="flex items-center justify-between gap-2">
                 <div className="text-xs text-gray-400 uppercase tracking-wide">Selected Match</div>
@@ -969,10 +983,12 @@ export default function AdminLiveMicroPanel() {
             )}
           </div>
 
-          <div className="lg:col-span-3 rounded-xl border border-white/10 bg-black/20 p-3">
-            <div className="flex items-center justify-between gap-2">
+          <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="text-xs text-gray-400 uppercase tracking-wide">Activated Loops</div>
-              <div className="text-[11px] text-gray-500">{loops.length} shown</div>
+              <div className="text-[11px] text-gray-500">
+                {loops.length} total • page {loopsPage}/{totalLoopsPages}
+              </div>
             </div>
 
             {loopsLoading ? (
@@ -987,93 +1003,116 @@ export default function AdminLiveMicroPanel() {
             ) : loops.length === 0 ? (
               <div className="py-6 text-sm text-gray-500">No activated loops found yet.</div>
             ) : (
-              <div className="mt-3 space-y-2 max-h-[320px] overflow-y-auto pr-1">
-                {loops.map((loop) => {
-                  const label = loopMatchLabel(loop, knownMatchesById);
-                  const league = loopLeague(loop, knownMatchesById);
-                  const retryInfo = readLoopRetryInfo(loop);
-                  const displayStatus = loopDisplayStatus(loop);
-                  const canResume =
-                    loop.loop_status === "error" ||
-                    loop.loop_status === "halftime" ||
-                    displayStatus === "retrying" ||
-                    displayStatus === "stopped";
-                  const canStop = loop.loop_status !== "ended";
-                  const isResuming = resumingLoopId === loop.id;
-                  const isStopping = stoppingLoopId === loop.id;
-                  return (
-                    <div key={loop.id} className="rounded-lg border border-white/10 bg-black/20 p-2.5">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="text-sm font-medium text-white truncate">{label}</div>
-                        <div className="flex items-center gap-1.5">
-                          <span className={`px-2 py-0.5 rounded-full border text-[10px] font-medium ${loopPhaseTone(loop.loop_phase)}`}>
-                            {loop.loop_phase.replace("_", " ")}
-                          </span>
-                          <span className={`px-2 py-0.5 rounded-full border text-[10px] font-medium ${loopStatusTone(displayStatus)}`}>
-                            {displayStatus}
-                          </span>
+              <>
+                <div className="mt-3 space-y-2.5 max-h-[430px] overflow-y-auto pr-1.5">
+                  {paginatedLoops.map((loop) => {
+                    const label = loopMatchLabel(loop, knownMatchesById);
+                    const league = loopLeague(loop, knownMatchesById);
+                    const retryInfo = readLoopRetryInfo(loop);
+                    const displayStatus = loopDisplayStatus(loop);
+                    const canResume =
+                      loop.loop_status === "error" ||
+                      loop.loop_status === "halftime" ||
+                      displayStatus === "retrying" ||
+                      displayStatus === "stopped";
+                    const canStop = loop.loop_status !== "ended";
+                    const isResuming = resumingLoopId === loop.id;
+                    const isStopping = stoppingLoopId === loop.id;
+                    return (
+                      <div key={loop.id} className="rounded-lg border border-white/10 bg-black/20 p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="text-sm font-medium text-white truncate">{label}</div>
+                          <div className="flex items-center gap-1.5">
+                            <span className={`px-2 py-0.5 rounded-full border text-[10px] font-medium ${loopPhaseTone(loop.loop_phase)}`}>
+                              {loop.loop_phase.replace("_", " ")}
+                            </span>
+                            <span className={`px-2 py-0.5 rounded-full border text-[10px] font-medium ${loopStatusTone(displayStatus)}`}>
+                              {displayStatus}
+                            </span>
+                          </div>
                         </div>
+
+                        <div className="mt-1.5 text-[11px] text-gray-400 flex flex-wrap gap-x-3 gap-y-1">
+                          <span className="font-mono">id: {loop.provider_match_id}</span>
+                          {league ? <span>{league}</span> : null}
+                          <span>1H: {loop.first_half_count}</span>
+                          <span>2H: {loop.second_half_count}</span>
+                          <span>active market: {loop.current_active_live_micro_id ? "yes" : "no"}</span>
+                          <span>updated: {formatDateTime(loop.updated_at)}</span>
+                        </div>
+
+                        {displayStatus === "retrying" ? (
+                          <div className="mt-1 text-[11px] text-amber-300">
+                            retry: {retryInfo.retryCount}/{retryInfo.maxAttempts}
+                            {retryInfo.nextRetryAt ? ` • next: ${formatDateTime(retryInfo.nextRetryAt)}` : ""}
+                          </div>
+                        ) : null}
+
+                        {loop.stop_reason ? (
+                          <div className="mt-1 text-[11px] text-gray-400">
+                            stop reason: <span className="text-gray-300">{loop.stop_reason}</span>
+                          </div>
+                        ) : null}
+
+                        {retryInfo.lastError ? (
+                          <div className="mt-1 text-[11px] text-red-300">
+                            last error: {retryInfo.lastError}
+                            {retryInfo.lastErrorAt ? ` (${formatDateTime(retryInfo.lastErrorAt)})` : ""}
+                          </div>
+                        ) : null}
+
+                        {loop.error_message ? (
+                          <div className="mt-1 text-[11px] text-red-300">error: {loop.error_message}</div>
+                        ) : null}
+
+                        {canResume || canStop ? (
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => void resumeLoop(loop)}
+                              disabled={!canResume || !!resumingLoopId || !!stoppingLoopId}
+                              className="px-2.5 py-1.5 rounded-md border border-white/15 bg-white/5 text-gray-200 text-[11px] hover:bg-white/10 disabled:opacity-50 transition inline-flex items-center gap-1.5"
+                            >
+                              {isResuming ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                              Resume loop
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void stopLoop(loop)}
+                              disabled={!canStop || !!resumingLoopId || !!stoppingLoopId}
+                              className="px-2.5 py-1.5 rounded-md border border-red-500/25 bg-red-500/10 text-red-200 text-[11px] hover:bg-red-500/20 disabled:opacity-50 transition inline-flex items-center gap-1.5"
+                            >
+                              {isStopping ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                              Stop loop
+                            </button>
+                          </div>
+                        ) : null}
                       </div>
-
-                      <div className="mt-1.5 text-[11px] text-gray-400 flex flex-wrap gap-x-3 gap-y-1">
-                        <span className="font-mono">id: {loop.provider_match_id}</span>
-                        {league ? <span>{league}</span> : null}
-                        <span>1H: {loop.first_half_count}</span>
-                        <span>2H: {loop.second_half_count}</span>
-                        <span>active market: {loop.current_active_live_micro_id ? "yes" : "no"}</span>
-                        <span>updated: {formatDateTime(loop.updated_at)}</span>
-                      </div>
-
-                      {displayStatus === "retrying" ? (
-                        <div className="mt-1 text-[11px] text-amber-300">
-                          retry: {retryInfo.retryCount}/{retryInfo.maxAttempts}
-                          {retryInfo.nextRetryAt ? ` • next: ${formatDateTime(retryInfo.nextRetryAt)}` : ""}
-                        </div>
-                      ) : null}
-
-                      {loop.stop_reason ? (
-                        <div className="mt-1 text-[11px] text-gray-400">
-                          stop reason: <span className="text-gray-300">{loop.stop_reason}</span>
-                        </div>
-                      ) : null}
-
-                      {retryInfo.lastError ? (
-                        <div className="mt-1 text-[11px] text-red-300">
-                          last error: {retryInfo.lastError}
-                          {retryInfo.lastErrorAt ? ` (${formatDateTime(retryInfo.lastErrorAt)})` : ""}
-                        </div>
-                      ) : null}
-
-                      {loop.error_message ? (
-                        <div className="mt-1 text-[11px] text-red-300">error: {loop.error_message}</div>
-                      ) : null}
-
-                      {canResume || canStop ? (
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            onClick={() => void resumeLoop(loop)}
-                            disabled={!canResume || !!resumingLoopId || !!stoppingLoopId}
-                            className="px-2.5 py-1.5 rounded-md border border-white/15 bg-white/5 text-gray-200 text-[11px] hover:bg-white/10 disabled:opacity-50 transition inline-flex items-center gap-1.5"
-                          >
-                            {isResuming ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-                            Resume loop
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void stopLoop(loop)}
-                            disabled={!canStop || !!resumingLoopId || !!stoppingLoopId}
-                            className="px-2.5 py-1.5 rounded-md border border-red-500/25 bg-red-500/10 text-red-200 text-[11px] hover:bg-red-500/20 disabled:opacity-50 transition inline-flex items-center gap-1.5"
-                          >
-                            {isStopping ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
-                            Stop loop
-                          </button>
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+                <div className="mt-3 flex items-center justify-between gap-3 border-t border-white/10 pt-3">
+                  <button
+                    type="button"
+                    onClick={() => setLoopsPage((p) => Math.max(1, p - 1))}
+                    disabled={loopsPage <= 1}
+                    className="px-2.5 py-1.5 rounded-md border border-white/15 bg-white/5 text-gray-200 text-[11px] hover:bg-white/10 disabled:opacity-50 transition"
+                  >
+                    Previous
+                  </button>
+                  <div className="text-[11px] text-gray-500">
+                    Page {loopsPage}/{totalLoopsPages} • Showing {loopsRangeStart}-{loopsRangeEnd} of {loops.length}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setLoopsPage((p) => Math.min(totalLoopsPages, p + 1))}
+                    disabled={loopsPage >= totalLoopsPages}
+                    className="px-2.5 py-1.5 rounded-md border border-white/15 bg-white/5 text-gray-200 text-[11px] hover:bg-white/10 disabled:opacity-50 transition"
+                  >
+                    Next
+                  </button>
+                </div>
+              </>
             )}
           </div>
         </div>
