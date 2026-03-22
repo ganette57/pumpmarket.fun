@@ -1,0 +1,15 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bnbBg" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(144 96) rotate(40) scale(500)">
+      <stop stop-color="#FFE08A"/>
+      <stop offset="1" stop-color="#F3BA2F"/>
+    </radialGradient>
+  </defs>
+  <circle cx="256" cy="256" r="240" fill="url(#bnbBg)"/>
+  <circle cx="256" cy="256" r="226" stroke="white" stroke-opacity="0.2" stroke-width="8"/>
+  <path d="M256 126L308 178L256 230L204 178L256 126Z" fill="white"/>
+  <path d="M164 218L216 270L164 322L112 270L164 218Z" fill="white"/>
+  <path d="M348 218L400 270L348 322L296 270L348 218Z" fill="white"/>
+  <path d="M256 218L308 270L256 322L204 270L256 218Z" fill="white"/>
+  <path d="M256 310L308 362L256 414L204 362L256 310Z" fill="white"/>
+</svg>

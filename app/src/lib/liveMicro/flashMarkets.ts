@@ -2,8 +2,9 @@ import "server-only";
 
 import { supabaseServer } from "@/lib/supabaseServer";
 import { LIVE_MICRO_TYPE, setLinkedMarketImageUrlIfMissing } from "@/lib/liveMicro/repository";
-import { FLASH_CRYPTO_MICRO_TYPE } from "@/lib/flashCrypto/types";
+import { FLASH_CRYPTO_GRADUATION_MICRO_TYPE, FLASH_CRYPTO_MICRO_TYPE } from "@/lib/flashCrypto/types";
 import { listFlashCryptoMarketsForExplorer } from "@/lib/flashCrypto/repository";
+import { getFlashCryptoMajorConfigBySymbol } from "@/lib/flashCrypto/majors";
 import type { FlashMarket, FlashMarketKind, FlashMarketStatus } from "@/lib/flashMarkets/types";
 
 type LiveMicroDbRow = {
@@ -145,6 +146,7 @@ function loopPhaseFromPayload(payloadStart: Record<string, unknown> | null, spor
 function normalizeImageUrl(value: unknown): string | null {
   const raw = String(value ?? "").trim();
   if (!raw || raw === "null" || raw === "undefined" || raw.startsWith("data:")) return null;
+  if (raw.startsWith("/")) return raw;
   if (!/^https?:\/\//i.test(raw)) return null;
   return raw.replace(/^http:\/\//i, "https://");
 }
@@ -660,19 +662,65 @@ async function loadCryptoFlashCandidates(maxRows: number): Promise<FlashMarket[]
           : null;
 
       const tokenMint = String(payloadStart.token_mint || meta.token_mint || "");
-      const tokenSymbol = String(payloadStart.token_symbol || meta.token_symbol || "");
+      const sourceType = String(payloadStart.source_type || meta.source_type || "").trim().toLowerCase() === "major"
+        ? "major"
+        : "pump_fun";
+      const majorSymbol = String(payloadStart.major_symbol || meta.major_symbol || "").trim().toUpperCase();
+      const majorPair = String(payloadStart.major_pair || meta.major_pair || "").trim().toUpperCase();
+      const majorConfig = majorSymbol ? getFlashCryptoMajorConfigBySymbol(majorSymbol) : null;
+      const tokenSymbol = String(payloadStart.token_symbol || meta.token_symbol || majorSymbol || "");
       const tokenName = String(payloadStart.token_name || meta.token_name || "");
-      const tokenImageUri = String(payloadStart.token_image_uri || meta.token_image_uri || "").trim() || null;
+      const tokenImageUri =
+        String(payloadStart.token_image_uri || meta.token_image_uri || majorConfig?.imageUri || "").trim() || null;
+      const cryptoType = String(payloadStart.type || meta.type || FLASH_CRYPTO_MICRO_TYPE).trim().toLowerCase();
+      const cryptoMode = cryptoType === FLASH_CRYPTO_GRADUATION_MICRO_TYPE ? "graduation" : "price";
       const priceStart = Number(payloadStart.price_start || meta.price_start || 0);
       const priceEnd = Number(payloadEnd.price_end || meta.price_end || 0) || null;
+      const progressStart = firstNumber([
+        payloadStart.progress_start,
+        meta.progress_start,
+      ]);
+      const progressEnd = firstNumber([
+        payloadEnd.progress_end,
+        meta.progress_end,
+      ]);
+      const progressCurrent =
+        status === "active"
+          ? progressStart
+          : progressEnd != null
+          ? progressEnd
+          : progressStart;
+      const didGraduateStartRaw = payloadStart.did_graduate_start ?? meta.did_graduate_start ?? "";
+      const didGraduateStart =
+        payloadStart.did_graduate_start === true ||
+        meta.did_graduate_start === true ||
+        String(didGraduateStartRaw).trim().toLowerCase() === "true";
+      const didGraduateEndRaw = payloadEnd.did_graduate_end ?? meta.did_graduate_end ?? "";
+      const didGraduateEnd =
+        payloadEnd.did_graduate_end === true ||
+        meta.did_graduate_end === true ||
+        String(didGraduateEndRaw).trim().toLowerCase() === "true";
+      const remainingToGraduate = firstNumber([
+        payloadEnd.remaining_to_graduate_end,
+        meta.remaining_to_graduate_end,
+        payloadStart.remaining_to_graduate_start,
+        meta.remaining_to_graduate_start,
+      ]);
       const durationMinutes = Number(payloadStart.duration_minutes || meta.duration_minutes || 0);
+      const durationLabel = durationMinutes === 1 ? "1 minute" : `${durationMinutes} minutes`;
+      const defaultQuestion =
+        cryptoMode === "graduation"
+          ? `Will $${tokenSymbol} graduate in ${durationMinutes === 60 ? "1 hour" : `${durationMinutes} minutes`}?`
+          : sourceType === "major"
+          ? `Will ${tokenSymbol} go UP in ${durationLabel}?`
+          : `Will $${tokenSymbol} go UP in ${durationMinutes} minutes?`;
 
       out.push({
         liveMicroId: row.id,
-        providerMatchId: tokenMint,
+        providerMatchId: tokenMint || majorPair || tokenSymbol,
         marketAddress,
         marketId: market?.id ?? null,
-        question: market?.question || `Will $${tokenSymbol} go UP in ${durationMinutes} minutes?`,
+        question: market?.question || defaultQuestion,
         league: null,
         sport: "crypto",
         providerImageUrl: tokenImageUri,
@@ -699,8 +747,21 @@ async function loadCryptoFlashCandidates(maxRows: number): Promise<FlashMarket[]
         tokenSymbol,
         tokenName,
         tokenImageUri,
+        cryptoSourceType: sourceType,
+        majorSymbol: majorSymbol || null,
+        majorPair: majorPair || null,
+        providerName: String(meta.provider_name || payloadStart.provider_name || "").trim() || null,
+        providerSource: String(payloadEnd.provider_source || meta.provider_source || "").trim() || null,
+        cryptoType: cryptoType === FLASH_CRYPTO_GRADUATION_MICRO_TYPE ? FLASH_CRYPTO_GRADUATION_MICRO_TYPE : FLASH_CRYPTO_MICRO_TYPE,
+        cryptoMode,
         priceStart: priceStart || null,
         priceEnd,
+        progressStart: progressStart ?? null,
+        progressCurrent: progressCurrent ?? null,
+        progressEnd: progressEnd ?? null,
+        didGraduateStart,
+        didGraduateEnd,
+        remainingToGraduate: remainingToGraduate ?? null,
         durationMinutes: durationMinutes || null,
       });
     }

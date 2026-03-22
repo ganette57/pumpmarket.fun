@@ -10,8 +10,12 @@ type ResolutionStatus = "open" | "proposed" | "finalized" | "cancelled";
 type Props = {
   marketAddress: string;
   isFlashCrypto?: boolean;
+  cryptoFlashType?: "price" | "graduation" | null;
   cryptoTokenMint?: string | null;
   cryptoProvider?: string | null;
+  cryptoSourceType?: "pump_fun" | "major" | null;
+  cryptoMajorSymbol?: string | null;
+  cryptoMajorPair?: string | null;
 
   // derived from DB row
   resolutionStatus: ResolutionStatus;
@@ -133,6 +137,15 @@ function normalizeOutcomeCandidate(value: unknown): "YES" | "NO" | null {
   return null;
 }
 
+function parseBoolFlag(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (!raw) return null;
+  if (["true", "1", "yes", "y", "graduated", "complete", "completed"].includes(raw)) return true;
+  if (["false", "0", "no", "n"].includes(raw)) return false;
+  return null;
+}
+
 function deriveOutcomeFromScoreDelta(start: ScorePair | null, end: ScorePair | null): "YES" | "NO" | null {
   if (!start || !end) return null;
   const startTotal = start.home + start.away;
@@ -150,12 +163,21 @@ type ParsedProofPayload = {
   raw: string;
   source: string | null;
   provider: string | null;
+  sourceType: string | null;
+  majorSymbol: string | null;
+  majorPair: string | null;
   tokenMint: string | null;
   windowStart: string | null;
   windowEnd: string | null;
   startPrice: number | null;
   endPrice: number | null;
   percentChange: number | null;
+  progressStart: number | null;
+  progressEnd: number | null;
+  didGraduateStart: boolean | null;
+  didGraduateEnd: boolean | null;
+  remainingToGraduateStart: number | null;
+  remainingToGraduateEnd: number | null;
   startScore: ScorePair | null;
   endScore: ScorePair | null;
   payloadOutcome: "YES" | "NO" | null;
@@ -177,6 +199,12 @@ function formatCryptoPrice(value: number | null): string {
   return value.toFixed(4);
 }
 
+function formatProgress(value: number | null): string {
+  if (value == null) return "—";
+  const safe = Math.max(0, Math.min(100, value));
+  return `${safe.toFixed(1)}%`;
+}
+
 function parseProofPayload(proofNote: string | null | undefined): ParsedProofPayload {
   const raw = String(proofNote ?? "").trim();
   if (!raw) {
@@ -184,12 +212,21 @@ function parseProofPayload(proofNote: string | null | undefined): ParsedProofPay
       raw: "",
       source: null,
       provider: null,
+      sourceType: null,
+      majorSymbol: null,
+      majorPair: null,
       tokenMint: null,
       windowStart: null,
       windowEnd: null,
       startPrice: null,
       endPrice: null,
       percentChange: null,
+      progressStart: null,
+      progressEnd: null,
+      didGraduateStart: null,
+      didGraduateEnd: null,
+      remainingToGraduateStart: null,
+      remainingToGraduateEnd: null,
       startScore: null,
       endScore: null,
       payloadOutcome: null,
@@ -212,12 +249,21 @@ function parseProofPayload(proofNote: string | null | undefined): ParsedProofPay
       raw,
       source: null,
       provider: null,
+      sourceType: null,
+      majorSymbol: null,
+      majorPair: null,
       tokenMint: null,
       windowStart: null,
       windowEnd: null,
       startPrice: null,
       endPrice: null,
       percentChange: null,
+      progressStart: null,
+      progressEnd: null,
+      didGraduateStart: null,
+      didGraduateEnd: null,
+      remainingToGraduateStart: null,
+      remainingToGraduateEnd: null,
       startScore: null,
       endScore: null,
       payloadOutcome: null,
@@ -227,6 +273,9 @@ function parseProofPayload(proofNote: string | null | undefined): ParsedProofPay
 
   const source = firstText([parsedJson.source, parsedJson.type]);
   const provider = firstText([parsedJson.provider, parsedJson.provider_name, parsedJson.provider_source]);
+  const sourceType = firstText([parsedJson.source_type, parsedJson.crypto_source_type]);
+  const majorSymbol = firstText([parsedJson.major_symbol, parsedJson.symbol]);
+  const majorPair = firstText([parsedJson.major_pair, parsedJson.pair]);
   const tokenMint = firstText([parsedJson.token_mint, parsedJson.mint]);
   const windowStart = firstText([parsedJson.window_start, parsedJson.start_time]);
   const windowEnd = firstText([parsedJson.window_end, parsedJson.end_time]);
@@ -254,6 +303,30 @@ function parseProofPayload(proofNote: string | null | undefined): ParsedProofPay
       : startPrice != null && endPrice != null && startPrice !== 0
       ? ((endPrice - startPrice) / startPrice) * 100
       : null;
+  const progressStart = parseFiniteNumber(
+    firstText([parsedJson.progress_start, parsedJson.progressStart, parsedJson.bonding_progress_start]) ??
+      parsedJson.progress_start ??
+      parsedJson.progressStart ??
+      parsedJson.bonding_progress_start,
+  );
+  const progressEnd = parseFiniteNumber(
+    firstText([parsedJson.progress_end, parsedJson.progressEnd, parsedJson.bonding_progress_end]) ??
+      parsedJson.progress_end ??
+      parsedJson.progressEnd ??
+      parsedJson.bonding_progress_end,
+  );
+  const didGraduateStart = parseBoolFlag(parsedJson.did_graduate_start);
+  const didGraduateEnd = parseBoolFlag(parsedJson.did_graduate_end ?? parsedJson.graduate_status_final);
+  const remainingToGraduateStart = parseFiniteNumber(
+    firstText([parsedJson.remaining_to_graduate_start, parsedJson.remainingToGraduateStart]) ??
+      parsedJson.remaining_to_graduate_start ??
+      parsedJson.remainingToGraduateStart,
+  );
+  const remainingToGraduateEnd = parseFiniteNumber(
+    firstText([parsedJson.remaining_to_graduate_end, parsedJson.remainingToGraduateEnd]) ??
+      parsedJson.remaining_to_graduate_end ??
+      parsedJson.remainingToGraduateEnd,
+  );
   const startScore = parseScorePair(parsedJson.start_score) || parseScorePair(parsedJson.score_start);
   const endScore = parseScorePair(parsedJson.end_score) || parseScorePair(parsedJson.score_end);
   const payloadOutcome = normalizeOutcomeCandidate(
@@ -265,12 +338,21 @@ function parseProofPayload(proofNote: string | null | undefined): ParsedProofPay
     raw,
     source,
     provider,
+    sourceType,
+    majorSymbol,
+    majorPair,
     tokenMint,
     windowStart,
     windowEnd,
     startPrice,
     endPrice,
     percentChange,
+    progressStart,
+    progressEnd,
+    didGraduateStart,
+    didGraduateEnd,
+    remainingToGraduateStart,
+    remainingToGraduateEnd,
     startScore,
     endScore,
     payloadOutcome,
@@ -372,8 +454,12 @@ export default function ResolutionPanel(props: Props) {
   const {
     marketAddress,
     isFlashCrypto,
+    cryptoFlashType,
     cryptoTokenMint,
     cryptoProvider,
+    cryptoSourceType,
+    cryptoMajorSymbol,
+    cryptoMajorPair,
     resolutionStatus,
     proposedOutcomeLabel,
     proposedAt,
@@ -468,18 +554,53 @@ export default function ResolutionPanel(props: Props) {
   const isCryptoProof = useMemo(() => {
     if (isFlashCrypto) return true;
     if (parsedProof.startPrice != null || parsedProof.endPrice != null) return true;
+    if (parsedProof.progressStart != null || parsedProof.progressEnd != null || parsedProof.didGraduateEnd != null) return true;
     const source = String(parsedProof.source || "").toLowerCase();
     return source.includes("flash_crypto");
-  }, [isFlashCrypto, parsedProof.endPrice, parsedProof.source, parsedProof.startPrice]);
+  }, [
+    isFlashCrypto,
+    parsedProof.didGraduateEnd,
+    parsedProof.endPrice,
+    parsedProof.progressEnd,
+    parsedProof.progressStart,
+    parsedProof.source,
+    parsedProof.startPrice,
+  ]);
+  const isGraduationProof = useMemo(() => {
+    if (cryptoFlashType === "graduation") return true;
+    if (parsedProof.progressStart != null || parsedProof.progressEnd != null || parsedProof.didGraduateEnd != null) return true;
+    const source = String(parsedProof.source || "").toLowerCase();
+    return source.includes("graduation");
+  }, [
+    cryptoFlashType,
+    parsedProof.didGraduateEnd,
+    parsedProof.progressEnd,
+    parsedProof.progressStart,
+    parsedProof.source,
+  ]);
   const derivedOutcome = useMemo(
     () => {
+      if (isCryptoProof && isGraduationProof) {
+        if (parsedProof.didGraduateEnd != null) return parsedProof.didGraduateEnd ? "YES" : "NO";
+        if (parsedProof.progressEnd != null) return parsedProof.progressEnd >= 100 ? "YES" : "NO";
+        return null;
+      }
       if (isCryptoProof) {
         if (parsedProof.startPrice == null || parsedProof.endPrice == null) return null;
         return parsedProof.endPrice > parsedProof.startPrice ? "YES" : "NO";
       }
       return deriveOutcomeFromScoreDelta(parsedProof.startScore, parsedProof.endScore);
     },
-    [isCryptoProof, parsedProof.endPrice, parsedProof.endScore, parsedProof.startPrice, parsedProof.startScore],
+    [
+      isCryptoProof,
+      isGraduationProof,
+      parsedProof.didGraduateEnd,
+      parsedProof.endPrice,
+      parsedProof.endScore,
+      parsedProof.progressEnd,
+      parsedProof.startPrice,
+      parsedProof.startScore,
+    ],
   );
   const displayedOutcome = derivedOutcome && parsedProof.payloadOutcome && derivedOutcome !== parsedProof.payloadOutcome
     ? derivedOutcome
@@ -704,7 +825,12 @@ export default function ResolutionPanel(props: Props) {
               {isCryptoProof && (
                 <div className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 flex flex-wrap items-center justify-between gap-2">
                   <div className="text-xs text-gray-300">
-                    Settlement: <span className="text-white font-semibold">YES if end price &gt; start price</span>
+                    Settlement:{" "}
+                    <span className="text-white font-semibold">
+                      {isGraduationProof
+                        ? "YES if token graduates by window end"
+                        : "YES if end price > start price"}
+                    </span>
                   </div>
                   <div className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1 text-[11px] font-semibold text-pump-green">
                     {displayedOutcome ? `Outcome ${displayedOutcome}` : "Outcome pending"}
@@ -724,55 +850,148 @@ export default function ResolutionPanel(props: Props) {
                   className={isCryptoProof ? "bg-black/30 border-white/12" : ""}
                 />
                 {isCryptoProof ? (
-                  <>
-                    <ProofRow
-                      label="Start price"
-                      value={formatCryptoPrice(parsedProof.startPrice)}
-                      className="bg-black/30 border-white/12"
-                    />
-                    <ProofRow
-                      label="End price"
-                      value={formatCryptoPrice(parsedProof.endPrice)}
-                      className="bg-black/30 border-white/12"
-                    />
-                    <ProofRow
-                      label="Change %"
-                      value={
-                        parsedProof.percentChange == null
-                          ? "—"
-                          : `${parsedProof.percentChange >= 0 ? "+" : ""}${parsedProof.percentChange.toFixed(2)}%`
-                      }
-                      className="bg-black/30 border-white/12"
-                    />
-                    <ProofRow
-                      label="Outcome proposed"
-                      value={displayedOutcome || "—"}
-                      className="bg-black/30 border-white/12"
-                    />
-                    <ProofRow
-                      label="Token mint"
-                      value={parsedProof.tokenMint || cryptoTokenMint || "—"}
-                      className="bg-black/30 border-white/12"
-                    />
-                    <ProofRow
-                      label="Provider / source"
-                      value={parsedProof.provider || cryptoProvider || parsedProof.source || "—"}
-                      className="bg-black/30 border-white/12"
-                    />
-                    <ProofRow
-                      label="On-chain tx sig"
-                      value={
-                        txExplorerUrl && parsedProof.onchainTxSig ? (
-                          <a href={txExplorerUrl} target="_blank" rel="noreferrer" className="text-pump-green underline">
-                            {truncateMiddle(parsedProof.onchainTxSig, 10)}
-                          </a>
-                        ) : (
-                          "—"
-                        )
-                      }
-                      className="bg-black/30 border-white/12"
-                    />
-                  </>
+                  isGraduationProof ? (
+                    <>
+                      <ProofRow
+                        label="Progress start"
+                        value={formatProgress(parsedProof.progressStart)}
+                        className="bg-black/30 border-white/12"
+                      />
+                      <ProofRow
+                        label="Progress end"
+                        value={formatProgress(parsedProof.progressEnd)}
+                        className="bg-black/30 border-white/12"
+                      />
+                      <ProofRow
+                        label="Graduate status final"
+                        value={
+                          parsedProof.didGraduateEnd == null
+                            ? "—"
+                            : parsedProof.didGraduateEnd
+                            ? "Graduated"
+                            : "Not graduated"
+                        }
+                        className="bg-black/30 border-white/12"
+                      />
+                      <ProofRow
+                        label="Outcome proposed"
+                        value={displayedOutcome || "—"}
+                        className="bg-black/30 border-white/12"
+                      />
+                      <ProofRow
+                        label="Token mint"
+                        value={parsedProof.tokenMint || cryptoTokenMint || "—"}
+                        className="bg-black/30 border-white/12"
+                      />
+                      <ProofRow
+                        label="Source type"
+                        value={parsedProof.sourceType || cryptoSourceType || "—"}
+                        className="bg-black/30 border-white/12"
+                      />
+                      <ProofRow
+                        label="Major symbol"
+                        value={parsedProof.majorSymbol || cryptoMajorSymbol || "—"}
+                        className="bg-black/30 border-white/12"
+                      />
+                      <ProofRow
+                        label="Pair"
+                        value={parsedProof.majorPair || cryptoMajorPair || "—"}
+                        className="bg-black/30 border-white/12"
+                      />
+                      <ProofRow
+                        label="Provider / source"
+                        value={parsedProof.provider || cryptoProvider || parsedProof.source || "—"}
+                        className="bg-black/30 border-white/12"
+                      />
+                      <ProofRow
+                        label="Remaining to graduate"
+                        value={
+                          parsedProof.remainingToGraduateEnd == null
+                            ? "—"
+                            : parsedProof.remainingToGraduateEnd.toFixed(2)
+                        }
+                        className="bg-black/30 border-white/12"
+                      />
+                      <ProofRow
+                        label="On-chain tx sig"
+                        value={
+                          txExplorerUrl && parsedProof.onchainTxSig ? (
+                            <a href={txExplorerUrl} target="_blank" rel="noreferrer" className="text-pump-green underline">
+                              {truncateMiddle(parsedProof.onchainTxSig, 10)}
+                            </a>
+                          ) : (
+                            "—"
+                          )
+                        }
+                        className="bg-black/30 border-white/12"
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <ProofRow
+                        label="Start price"
+                        value={formatCryptoPrice(parsedProof.startPrice)}
+                        className="bg-black/30 border-white/12"
+                      />
+                      <ProofRow
+                        label="End price"
+                        value={formatCryptoPrice(parsedProof.endPrice)}
+                        className="bg-black/30 border-white/12"
+                      />
+                      <ProofRow
+                        label="Change %"
+                        value={
+                          parsedProof.percentChange == null
+                            ? "—"
+                            : `${parsedProof.percentChange >= 0 ? "+" : ""}${parsedProof.percentChange.toFixed(2)}%`
+                        }
+                        className="bg-black/30 border-white/12"
+                      />
+                      <ProofRow
+                        label="Outcome proposed"
+                        value={displayedOutcome || "—"}
+                        className="bg-black/30 border-white/12"
+                      />
+                      <ProofRow
+                        label="Token mint"
+                        value={parsedProof.tokenMint || cryptoTokenMint || "—"}
+                        className="bg-black/30 border-white/12"
+                      />
+                      <ProofRow
+                        label="Source type"
+                        value={parsedProof.sourceType || cryptoSourceType || "—"}
+                        className="bg-black/30 border-white/12"
+                      />
+                      <ProofRow
+                        label="Major symbol"
+                        value={parsedProof.majorSymbol || cryptoMajorSymbol || "—"}
+                        className="bg-black/30 border-white/12"
+                      />
+                      <ProofRow
+                        label="Pair"
+                        value={parsedProof.majorPair || cryptoMajorPair || "—"}
+                        className="bg-black/30 border-white/12"
+                      />
+                      <ProofRow
+                        label="Provider / source"
+                        value={parsedProof.provider || cryptoProvider || parsedProof.source || "—"}
+                        className="bg-black/30 border-white/12"
+                      />
+                      <ProofRow
+                        label="On-chain tx sig"
+                        value={
+                          txExplorerUrl && parsedProof.onchainTxSig ? (
+                            <a href={txExplorerUrl} target="_blank" rel="noreferrer" className="text-pump-green underline">
+                              {truncateMiddle(parsedProof.onchainTxSig, 10)}
+                            </a>
+                          ) : (
+                            "—"
+                          )
+                        }
+                        className="bg-black/30 border-white/12"
+                      />
+                    </>
+                  )
                 ) : (
                   <>
                     <ProofRow label="Start score" value={scoreLabel(parsedProof.startScore) || "—"} />
@@ -796,7 +1015,7 @@ export default function ResolutionPanel(props: Props) {
 
               {outcomeDerivedFromDelta ? (
                 <div className="rounded-lg border border-amber-400/25 bg-amber-400/10 px-3 py-2 text-xs text-amber-200">
-                  Displayed outcome derived from {isCryptoProof ? "price delta" : "score delta"}.
+                  Displayed outcome derived from {isCryptoProof ? (isGraduationProof ? "graduate status" : "price delta") : "score delta"}.
                 </div>
               ) : null}
 

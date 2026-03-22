@@ -23,6 +23,7 @@ import TradeBuyPopOverlay from "@/components/TradeBuyPopOverlay";
 import NbaWidgetDrawer from "@/components/NbaWidgetDrawer";
 import SoccerMatchDrawer from "@/components/SoccerMatchDrawer";
 import FlashCryptoMiniChart from "@/components/FlashCryptoMiniChart";
+import FlashCryptoGraduationHero from "@/components/FlashCryptoGraduationHero";
 
 import { supabase } from "@/lib/supabaseClient";
 import { buildOddsSeries, downsample } from "@/lib/marketHistory";
@@ -37,6 +38,7 @@ import { lamportsToSol, solToLamports, getUserPositionPDA, PLATFORM_WALLET } fro
 import { solanaExplorerTxUrl } from "@/utils/explorer";
 import { getActiveLiveSessionForMarket, type LiveSessionStatus } from "@/lib/liveSessions";
 import { getSportEvent, refreshSportEvent, type SportEvent } from "@/lib/sportEvents";
+import { getFlashCryptoMajorConfigBySymbol } from "@/lib/flashCrypto/majors";
 
 import type { SocialLinks } from "@/components/SocialLinksForm";
 import { useCallback } from "react";
@@ -592,6 +594,15 @@ type FlashCryptoProofMetrics = {
   percentChange: number | null;
 };
 
+type FlashCryptoGraduationMetrics = {
+  progressStart: number | null;
+  progressEnd: number | null;
+  didGraduateStart: boolean | null;
+  didGraduateEnd: boolean | null;
+  remainingToGraduateStart: number | null;
+  remainingToGraduateEnd: number | null;
+};
+
 function parseFlashCryptoProofMetrics(note: string | null | undefined): FlashCryptoProofMetrics {
   const parsed = parseJsonObjectFromText(note);
   if (!parsed) {
@@ -620,6 +631,59 @@ function parseFlashCryptoProofMetrics(note: string | null | undefined): FlashCry
   return { startPrice, finalPrice, percentChange };
 }
 
+function parseTruthyFlag(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (!raw) return null;
+  if (["true", "1", "yes", "y", "graduated", "complete"].includes(raw)) return true;
+  if (["false", "0", "no", "n"].includes(raw)) return false;
+  return null;
+}
+
+function parseFlashCryptoGraduationMetrics(note: string | null | undefined): FlashCryptoGraduationMetrics {
+  const parsed = parseJsonObjectFromText(note);
+  if (!parsed) {
+    return {
+      progressStart: null,
+      progressEnd: null,
+      didGraduateStart: null,
+      didGraduateEnd: null,
+      remainingToGraduateStart: null,
+      remainingToGraduateEnd: null,
+    };
+  }
+
+  const progressStart = firstFiniteNumber([
+    parsed.progress_start,
+    parsed.progressStart,
+    parsed.bonding_progress_start,
+  ]);
+  const progressEnd = firstFiniteNumber([
+    parsed.progress_end,
+    parsed.progressEnd,
+    parsed.bonding_progress_end,
+  ]);
+  const didGraduateStart = parseTruthyFlag(parsed.did_graduate_start);
+  const didGraduateEnd = parseTruthyFlag(parsed.did_graduate_end ?? parsed.graduate_status_final);
+  const remainingToGraduateStart = firstFiniteNumber([
+    parsed.remaining_to_graduate_start,
+    parsed.remainingToGraduateStart,
+  ]);
+  const remainingToGraduateEnd = firstFiniteNumber([
+    parsed.remaining_to_graduate_end,
+    parsed.remainingToGraduateEnd,
+  ]);
+
+  return {
+    progressStart,
+    progressEnd,
+    didGraduateStart,
+    didGraduateEnd,
+    remainingToGraduateStart,
+    remainingToGraduateEnd,
+  };
+}
+
 function formatFlashCryptoPrice(value: number | null): string {
   if (value == null) return "—";
   if (value === 0) return "0";
@@ -627,6 +691,12 @@ function formatFlashCryptoPrice(value: number | null): string {
   if (Math.abs(value) < 0.01) return value.toFixed(8);
   if (Math.abs(value) < 1) return value.toFixed(6);
   return value.toFixed(4);
+}
+
+function formatFlashProgress(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  const safe = Math.max(0, Math.min(100, value));
+  return `${safe.toFixed(1)}%`;
 }
 
 function scoreFromLiveMicroPayload(payload: Record<string, unknown> | null | undefined): ScorePair | null {
@@ -923,6 +993,7 @@ function pickEventBanner(event: any, meta?: any): string | null {
 function normalizeVisualUrl(value: unknown): string | null {
   const raw = String(value ?? "").trim();
   if (!raw || raw === "null" || raw === "undefined" || raw.startsWith("data:")) return null;
+  if (raw.startsWith("/")) return raw;
   if (!/^https?:\/\//i.test(raw)) return null;
   return raw.replace(/^http:\/\//i, "https://");
 }
@@ -3282,9 +3353,13 @@ useEffect(() => {
   const flashCryptoTypeTagForUiLock = String(uiLockSportMeta.type || uiLockLiveMicroMeta.type || "")
     .trim()
     .toLowerCase();
-  const isFlashCryptoPriceForUiLock =
+  const isFlashCryptoForUiLock =
     !!market &&
-    (market.marketMode === "flash_crypto" || flashCryptoTypeTagForUiLock === "flash_crypto_price");
+    (
+      market.marketMode === "flash_crypto" ||
+      flashCryptoTypeTagForUiLock === "flash_crypto_price" ||
+      flashCryptoTypeTagForUiLock === "flash_crypto_graduation"
+    );
   const isFlashFootForUiLock = market
     ? isSoccerNextGoalMicroMarket(market.sportMeta, market.question, market.description)
     : false;
@@ -3294,11 +3369,11 @@ useEffect(() => {
   // - others keep 15s refresh for lighter UI churn
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
-    const tickMs = isFlashCryptoPriceForUiLock || isFlashFootForUiLock ? 1_000 : 15_000;
+    const tickMs = isFlashCryptoForUiLock || isFlashFootForUiLock ? 1_000 : 15_000;
     setNowMs(Date.now());
     const iv = setInterval(() => setNowMs(Date.now()), tickMs);
     return () => clearInterval(iv);
-  }, [isFlashCryptoPriceForUiLock, isFlashFootForUiLock]);
+  }, [isFlashCryptoForUiLock, isFlashFootForUiLock]);
   const isSoccerNextGoalMicroForScore = isFlashFootForUiLock;
   const isSportLikeMarketForScore = !!market && (market.marketMode === "sport" || isSoccerNextGoalMicroForScore);
   const scoreStartRawForDisplay = market
@@ -3428,14 +3503,31 @@ useEffect(() => {
   const cryptoTypeTag = String((sportMeta as any).type || (liveMicroMeta as any).type || "")
     .trim()
     .toLowerCase();
-  const isFlashCryptoPriceMarket =
-    market.marketMode === "flash_crypto" || cryptoTypeTag === "flash_crypto_price";
-  const cryptoMeta = isFlashCryptoPriceMarket ? asObject(market.sportMeta) : {};
-  const cryptoTokenMint = String(cryptoMeta.token_mint || "").trim();
-  const cryptoTokenSymbol = String(cryptoMeta.token_symbol || "").trim();
+  const isFlashCryptoMarket =
+    market.marketMode === "flash_crypto" ||
+    cryptoTypeTag === "flash_crypto_price" ||
+    cryptoTypeTag === "flash_crypto_graduation";
+  const isFlashCryptoGraduationMarket = isFlashCryptoMarket && cryptoTypeTag === "flash_crypto_graduation";
+  const isFlashCryptoPriceMarket = isFlashCryptoMarket && !isFlashCryptoGraduationMarket;
+  const cryptoMeta = isFlashCryptoMarket ? asObject(market.sportMeta) : {};
+  const cryptoSourceType =
+    String(cryptoMeta.source_type || "").trim().toLowerCase() === "major" ? "major" : "pump_fun";
+  const cryptoMajorSymbol = String(cryptoMeta.major_symbol || "").trim().toUpperCase() || null;
+  const cryptoMajorPair = String(cryptoMeta.major_pair || "").trim().toUpperCase() || null;
+  const majorConfig = cryptoMajorSymbol ? getFlashCryptoMajorConfigBySymbol(cryptoMajorSymbol) : null;
+  const cryptoTokenMint = String(cryptoMeta.token_mint || cryptoMajorPair || "").trim();
+  const cryptoTokenSymbol = String(cryptoMeta.token_symbol || cryptoMajorSymbol || "").trim();
   const cryptoTokenName = String(cryptoMeta.token_name || "").trim();
-  const cryptoTokenImageUri = String(cryptoMeta.token_image_uri || "").trim() || null;
+  const cryptoTokenImageUri =
+    String(cryptoMeta.token_image_uri || majorConfig?.imageUri || "").trim() || null;
   const cryptoPriceStart = Number(cryptoMeta.price_start || 0);
+  const cryptoProgressStart = firstFiniteNumber([cryptoMeta.progress_start, cryptoMeta.progressStart]);
+  const cryptoProgressEnd = firstFiniteNumber([cryptoMeta.progress_end, cryptoMeta.progressEnd]);
+  const cryptoDidGraduateEnd = parseTruthyFlag(cryptoMeta.did_graduate_end);
+  const cryptoRemainingToGraduateEnd = firstFiniteNumber([
+    cryptoMeta.remaining_to_graduate_end,
+    cryptoMeta.remainingToGraduateEnd,
+  ]);
   const cryptoDurationMinutes = Number(cryptoMeta.duration_minutes || 0) || null;
   const microLoopSequence = isSoccerNextGoalMicro
     ? extractLoopSequence(market.description, market.sportMeta)
@@ -3463,6 +3555,8 @@ useEffect(() => {
   const showResolvedProofBox = isResolvedOnChain;
   const cryptoProposedProofMetrics = parseFlashCryptoProofMetrics(market.proposedProofNote);
   const cryptoResolvedProofMetrics = parseFlashCryptoProofMetrics(market.resolutionProofNote);
+  const cryptoProposedGradMetrics = parseFlashCryptoGraduationMetrics(market.proposedProofNote);
+  const cryptoResolvedGradMetrics = parseFlashCryptoGraduationMetrics(market.resolutionProofNote);
   const cryptoStartFromMeta = firstFiniteNumber([
     cryptoMeta.start_price,
     cryptoMeta.price_start,
@@ -3507,6 +3601,40 @@ useEffect(() => {
     isFlashCryptoPriceMarket &&
     (endedByTime || isProposed || isResolvedOnChain || status === "finalized" || status === "cancelled") &&
     cryptoCardMetrics.hasAny;
+  const cryptoGraduationCardMetrics = (() => {
+    const startProgress =
+      cryptoResolvedGradMetrics.progressStart ??
+      cryptoProposedGradMetrics.progressStart ??
+      cryptoProgressStart;
+    const finalProgress =
+      cryptoResolvedGradMetrics.progressEnd ??
+      cryptoProposedGradMetrics.progressEnd ??
+      cryptoProgressEnd;
+    const didGraduateFinal =
+      cryptoResolvedGradMetrics.didGraduateEnd ??
+      cryptoProposedGradMetrics.didGraduateEnd ??
+      cryptoDidGraduateEnd;
+    const remainingToGraduateFinal =
+      cryptoResolvedGradMetrics.remainingToGraduateEnd ??
+      cryptoProposedGradMetrics.remainingToGraduateEnd ??
+      cryptoRemainingToGraduateEnd;
+    const hasAny =
+      startProgress != null ||
+      finalProgress != null ||
+      didGraduateFinal != null ||
+      remainingToGraduateFinal != null;
+    return {
+      startProgress,
+      finalProgress,
+      didGraduateFinal,
+      remainingToGraduateFinal,
+      hasAny,
+    };
+  })();
+  const showCryptoGraduationCardSummary =
+    isFlashCryptoGraduationMarket &&
+    (endedByTime || isProposed || isResolvedOnChain || status === "finalized" || status === "cancelled") &&
+    cryptoGraduationCardMetrics.hasAny;
 
   // Sport status: scheduled → live → locked → finished
   // Read sportStartTime from sportMeta or sportEvent
@@ -3606,7 +3734,7 @@ const ended = endedByTime;
     if (Number.isFinite(fromMeta)) return fromMeta;
     return hasValidEnd ? market.resolutionTime * 1000 : NaN;
   })();
-  const cryptoWindowEnd = isFlashCryptoPriceMarket
+  const cryptoWindowEnd = isFlashCryptoMarket
     ? String(cryptoMeta.window_end || market.endTime || "").trim() || null
     : null;
   const cryptoWindowEndMs = (() => {
@@ -3615,7 +3743,7 @@ const ended = endedByTime;
     return hasValidEnd ? market.resolutionTime * 1000 : NaN;
   })();
   const cryptoUiTradingClosed =
-    isFlashCryptoPriceMarket &&
+    isFlashCryptoMarket &&
     Number.isFinite(cryptoWindowEndMs) &&
     nowMs >= cryptoWindowEndMs;
   const showCryptoUiLockState =
@@ -3656,7 +3784,7 @@ const ended = endedByTime;
   const marketClosed = isResolvedOnChain || isProposed || ended || !!market.isBlocked
     || cryptoUiTradingClosed
     || flashFootUiTradingClosed
-    || (!isFlashCryptoPriceMarket && !sportBeforeStart && sportLocked);
+    || (!isFlashCryptoMarket && !sportBeforeStart && sportLocked);
 
   const winningLabel =
     market.winningOutcome != null && Number.isFinite(Number(market.winningOutcome))
@@ -3871,6 +3999,9 @@ const ended = endedByTime;
                 return (
                   <FlashCryptoMiniChart
                     tokenMint={cryptoTokenMint}
+                    sourceType={cryptoSourceType}
+                    majorSymbol={cryptoMajorSymbol}
+                    majorPair={cryptoMajorPair}
                     tokenSymbol={cryptoTokenSymbol || undefined}
                     tokenName={cryptoTokenName || undefined}
                     tokenImageUri={cryptoTokenImageUri}
@@ -3878,6 +4009,25 @@ const ended = endedByTime;
                     priceStart={cryptoPriceStart}
                     finalPrice={cryptoCardMetrics.finalPrice}
                     percentChange={cryptoCardMetrics.percentChange}
+                    windowEnd={cryptoWindowEnd}
+                    isEnded={cryptoIsEnded}
+                  />
+                );
+              })()}
+              {isFlashCryptoGraduationMarket && (() => {
+                const cryptoIsEnded = isResolvedOnChain || isProposed || endedByTime;
+                if (!cryptoTokenMint) return null;
+
+                return (
+                  <FlashCryptoGraduationHero
+                    tokenMint={cryptoTokenMint}
+                    tokenSymbol={cryptoTokenSymbol || undefined}
+                    tokenName={cryptoTokenName || undefined}
+                    tokenImageUri={cryptoTokenImageUri}
+                    durationMinutes={cryptoDurationMinutes}
+                    progressStart={cryptoGraduationCardMetrics.startProgress ?? cryptoProgressStart}
+                    finalProgress={cryptoGraduationCardMetrics.finalProgress}
+                    didGraduateFinal={cryptoGraduationCardMetrics.didGraduateFinal}
                     windowEnd={cryptoWindowEnd}
                     isEnded={cryptoIsEnded}
                   />
@@ -3989,6 +4139,47 @@ const ended = endedByTime;
                           {cryptoCardMetrics.percentChange == null
                             ? "—"
                             : `${cryptoCardMetrics.percentChange >= 0 ? "+" : ""}${cryptoCardMetrics.percentChange.toFixed(2)}%`}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {showCryptoGraduationCardSummary && (
+                  <div className="mt-3 rounded-xl border border-cyan-400/20 bg-cyan-500/5 p-3">
+                    <div className="text-[11px] uppercase tracking-[0.08em] text-cyan-200/80 mb-2">
+                      Flash Graduation Snapshot
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                      <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
+                        <div className="text-[11px] text-gray-500">Start progress</div>
+                        <div className="text-sm font-semibold text-white tabular-nums">
+                          {formatFlashProgress(cryptoGraduationCardMetrics.startProgress)}
+                        </div>
+                      </div>
+                      <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
+                        <div className="text-[11px] text-gray-500">Final progress</div>
+                        <div className="text-sm font-semibold text-white tabular-nums">
+                          {formatFlashProgress(cryptoGraduationCardMetrics.finalProgress)}
+                        </div>
+                      </div>
+                      <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
+                        <div className="text-[11px] text-gray-500">Graduate status</div>
+                        <div className={`text-sm font-semibold ${
+                          cryptoGraduationCardMetrics.didGraduateFinal ? "text-pump-green" : "text-red-300"
+                        }`}>
+                          {cryptoGraduationCardMetrics.didGraduateFinal == null
+                            ? "—"
+                            : cryptoGraduationCardMetrics.didGraduateFinal
+                            ? "Graduated"
+                            : "Not graduated"}
+                        </div>
+                      </div>
+                      <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
+                        <div className="text-[11px] text-gray-500">Remaining</div>
+                        <div className="text-sm font-semibold text-white tabular-nums">
+                          {cryptoGraduationCardMetrics.remainingToGraduateFinal == null
+                            ? "—"
+                            : cryptoGraduationCardMetrics.remainingToGraduateFinal.toFixed(2)}
                         </div>
                       </div>
                     </div>
@@ -4380,9 +4571,13 @@ const ended = endedByTime;
                 <ResolutionPanel
                   marketAddress={market.publicKey}
                   resolutionStatus={market.resolutionStatus ?? "open"}
-                  isFlashCrypto={isFlashCryptoPriceMarket}
-                  cryptoTokenMint={String(sportMeta.token_mint || "").trim() || null}
-                  cryptoProvider={String(sportMeta.provider_name || sportMeta.provider_source || "pump_fun").trim() || null}
+                  isFlashCrypto={isFlashCryptoMarket}
+                  cryptoFlashType={isFlashCryptoGraduationMarket ? "graduation" : isFlashCryptoMarket ? "price" : null}
+                  cryptoTokenMint={cryptoTokenMint || null}
+                  cryptoProvider={String(cryptoMeta.provider_name || cryptoMeta.provider_source || "pump_fun").trim() || null}
+                  cryptoSourceType={cryptoSourceType}
+                  cryptoMajorSymbol={cryptoMajorSymbol}
+                  cryptoMajorPair={cryptoMajorPair}
                   proposedOutcomeLabel={proposedLabel}
                   proposedAt={market.proposedAt}
                   contestDeadline={market.contestDeadline}

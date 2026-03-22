@@ -21,6 +21,9 @@ type PricePoint = {
 
 type FlashCryptoMiniChartProps = {
   tokenMint: string;
+  sourceType?: "pump_fun" | "major" | null;
+  majorSymbol?: string | null;
+  majorPair?: string | null;
   priceStart: number;
   windowEnd: string | null;
   isEnded: boolean;
@@ -86,6 +89,9 @@ function buildSeriesData(points: PricePoint[]): SeriesPoint[] {
 
 export default function FlashCryptoMiniChart({
   tokenMint,
+  sourceType = null,
+  majorSymbol = null,
+  majorPair = null,
   priceStart,
   windowEnd,
   isEnded,
@@ -129,7 +135,12 @@ export default function FlashCryptoMiniChart({
   const fetchPrice = useCallback(async () => {
     if (!mountedRef.current) return;
     try {
-      const res = await fetch(`/api/flash-crypto/price?mint=${encodeURIComponent(tokenMint)}`);
+      const params = new URLSearchParams();
+      params.set("mint", tokenMint);
+      if (sourceType) params.set("source_type", sourceType);
+      if (majorSymbol) params.set("major_symbol", majorSymbol);
+      if (majorPair) params.set("pair", majorPair);
+      const res = await fetch(`/api/flash-crypto/price?${params.toString()}`);
       if (!res.ok) return;
       const data = await res.json();
       if (!mountedRef.current) return;
@@ -146,7 +157,7 @@ export default function FlashCryptoMiniChart({
     } catch {
       if (mountedRef.current) setError("Price fetch failed");
     }
-  }, [tokenMint]);
+  }, [majorPair, majorSymbol, sourceType, tokenMint]);
 
   useEffect(() => {
     mountedRef.current = true;

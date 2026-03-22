@@ -1,0 +1,13 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="btcBg" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(128 96) rotate(45) scale(480)">
+      <stop stop-color="#FFC76A"/>
+      <stop offset="1" stop-color="#F7931A"/>
+    </radialGradient>
+  </defs>
+  <circle cx="256" cy="256" r="240" fill="url(#btcBg)"/>
+  <circle cx="256" cy="256" r="226" stroke="white" stroke-opacity="0.2" stroke-width="8"/>
+  <text x="256" y="306" text-anchor="middle" font-family="Arial, sans-serif" font-size="188" font-weight="700" fill="white">B</text>
+  <rect x="212" y="132" width="20" height="248" rx="10" fill="white"/>
+  <rect x="280" y="132" width="20" height="248" rx="10" fill="white"/>
+</svg>

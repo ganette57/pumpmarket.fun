@@ -1,6 +1,8 @@
 export type FlashMarketStatus = "active" | "locked" | "resolving" | "finalized" | "cancelled";
 
 export type FlashMarketKind = "sport" | "crypto";
+export type FlashCryptoVisualMode = "price" | "graduation";
+export type FlashCryptoSourceType = "pump_fun" | "major";
 
 export type FlashMarket = {
   liveMicroId: string;
@@ -36,7 +38,20 @@ export type FlashMarket = {
   tokenSymbol?: string | null;
   tokenName?: string | null;
   tokenImageUri?: string | null;
+  cryptoSourceType?: FlashCryptoSourceType | null;
+  majorSymbol?: string | null;
+  majorPair?: string | null;
+  providerName?: string | null;
+  providerSource?: string | null;
+  cryptoType?: "flash_crypto_price" | "flash_crypto_graduation" | null;
+  cryptoMode?: FlashCryptoVisualMode | null;
   priceStart?: number | null;
   priceEnd?: number | null;
+  progressStart?: number | null;
+  progressCurrent?: number | null;
+  progressEnd?: number | null;
+  didGraduateStart?: boolean | null;
+  didGraduateEnd?: boolean | null;
+  remainingToGraduate?: number | null;
   durationMinutes?: number | null;
 };

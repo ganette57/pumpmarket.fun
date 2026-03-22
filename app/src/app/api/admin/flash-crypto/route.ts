@@ -2,7 +2,9 @@ import { NextResponse } from "next/server";
 import { isAdminRequest } from "@/lib/admin";
 import { assertLiveMicroGuards, getLiveMicroFlags } from "@/lib/liveMicro/config";
 import { ensureLiveMicroAutoTickStarted, getLiveMicroAutoTickStatus } from "@/lib/liveMicro/autoTick";
+import { resolveFlashCryptoMajorSelection } from "@/lib/flashCrypto/majors";
 import {
+  listFlashCryptoGraduationSuggestions,
   startFlashCryptoCampaign,
   stopFlashCryptoCampaign,
   listFlashCryptoCampaigns,
@@ -18,6 +20,7 @@ type ActionType =
   | "stop_campaign"
   | "list_campaigns"
   | "list_pending"
+  | "list_suggestions"
   | "confirm_resolution";
 
 function jsonError(message: string, status = 400, extra?: Record<string, unknown>) {
@@ -54,17 +57,42 @@ export async function POST(req: Request) {
     const flags = assertLiveMicroGuards({ requireOperator: true });
 
     if (action === "start_campaign") {
-      const tokenMint = String(body.token_mint || body.tokenMint || "").trim();
+      const mode = String(body.mode || "price").trim().toLowerCase() === "graduation" ? "graduation" : "price";
+      const sourceType =
+        mode === "price" && String(body.source_type || body.sourceType || "").trim().toLowerCase() === "major"
+          ? "major"
+          : "pump_fun";
+      const majorSelection =
+        sourceType === "major"
+          ? resolveFlashCryptoMajorSelection({
+              symbol: body.major_symbol || body.majorSymbol,
+              pair: body.major_pair || body.majorPair,
+              raw: body.token_mint || body.tokenMint,
+            })
+          : null;
+      if (sourceType === "major" && !majorSelection) {
+        return jsonError("major_symbol must be BTC, ETH, SOL, or BNB");
+      }
+
+      const tokenMint = String(body.token_mint || body.tokenMint || "").trim()
+        || (majorSelection?.pair ?? "");
       if (!tokenMint) return jsonError("token_mint is required");
 
-      const durationRaw = Number(body.duration_minutes || body.durationMinutes || 5);
-      const duration = [1, 3, 5].includes(durationRaw) ? (durationRaw as 1 | 3 | 5) : 5;
+      const durationRaw = Number(body.duration_minutes || body.durationMinutes || (mode === "graduation" ? 10 : 5));
+      const duration =
+        mode === "graduation"
+          ? ([10, 30, 60].includes(durationRaw) ? (durationRaw as 10 | 30 | 60) : 10)
+          : ([1, 3, 5].includes(durationRaw) ? (durationRaw as 1 | 3 | 5) : 5);
 
       const totalMarkets = Math.max(1, Math.min(100, Math.floor(Number(body.total_markets || body.totalMarkets || 10))));
       const launchInterval = Math.max(1, Math.min(60, Math.floor(Number(body.launch_interval_minutes || body.launchIntervalMinutes || duration))));
 
       const result = await startFlashCryptoCampaign({
         tokenMint,
+        mode,
+        sourceType,
+        majorSymbol: majorSelection?.symbol || null,
+        majorPair: majorSelection?.pair || null,
         durationMinutes: duration,
         totalMarkets,
         launchIntervalMinutes: launchInterval,
@@ -111,6 +139,22 @@ export async function POST(req: Request) {
         ok: true,
         action,
         pending,
+      });
+    }
+
+    if (action === "list_suggestions") {
+      const durationRaw = Number(body.duration_minutes || body.durationMinutes || 10);
+      const duration = [10, 30, 60].includes(durationRaw) ? (durationRaw as 10 | 30 | 60) : 10;
+      const limit = Math.max(3, Math.min(60, Math.floor(Number(body.limit || 20))));
+      const suggestions = await listFlashCryptoGraduationSuggestions({
+        durationMinutes: duration,
+        limit,
+      });
+      return NextResponse.json({
+        ok: true,
+        action,
+        suggestions,
+        duration_minutes: duration,
       });
     }
 

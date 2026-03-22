@@ -15,6 +15,7 @@ type FlashMarketCardProps = {
 function normalizeImageUrl(value: unknown): string | null {
   const raw = String(value ?? "").trim();
   if (!raw || raw === "null" || raw === "undefined") return null;
+  if (raw.startsWith("/")) return raw;
   if (!/^https?:\/\//i.test(raw)) return null;
   return raw.replace(/^http:\/\//i, "https://");
 }
@@ -71,6 +72,19 @@ function cryptoPctChange(start: number | null | undefined, end: number | null | 
   const pct = ((end - start) / start) * 100;
   const sign = pct >= 0 ? "+" : "";
   return `${sign}${pct.toFixed(2)}%`;
+}
+
+function formatProgressPct(value: number | null | undefined): string {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "0.0%";
+  return `${Math.max(0, Math.min(100, n)).toFixed(1)}%`;
+}
+
+function graduationStatus(progress: number, didGraduate: boolean): string {
+  if (didGraduate) return "Graduated";
+  if (progress >= 85) return "Near graduation";
+  if (progress >= 55) return "Pushing to graduate";
+  return "Falling behind";
 }
 
 function formatLoopPhaseLabel(loopPhase: string | null | undefined): string | null {
@@ -255,12 +269,29 @@ export default function FlashMarketCard({ market, variant = "explorer", classNam
 
   // ── CRYPTO variant ──
   if (market.kind === "crypto") {
+    const cryptoMode = market.cryptoMode === "graduation" || market.cryptoType === "flash_crypto_graduation"
+      ? "graduation"
+      : "price";
     const tokenImg = normalizeImageUrl(market.tokenImageUri);
     const pctStr = cryptoPctChange(market.priceStart, market.priceEnd);
     const tokenSymbol = String(market.tokenSymbol || "").trim() || "TOKEN";
     const ticker = `$${tokenSymbol}`;
     const durationMinutes = Math.max(1, Number(market.durationMinutes) || 3);
     const headerThumb = tokenImg || imageUrl;
+    const progressNow = Math.max(
+      0,
+      Math.min(
+        100,
+        Number(
+          market.progressCurrent ??
+          market.progressEnd ??
+          market.progressStart ??
+          0,
+        ) || 0,
+      ),
+    );
+    const didGraduate = market.didGraduateEnd === true || progressNow >= 100;
+    const graduationState = graduationStatus(progressNow, didGraduate);
 
     if (variant === "hero") {
       return (
@@ -319,23 +350,49 @@ export default function FlashMarketCard({ market, variant = "explorer", classNam
                   <span className={`inline-flex items-center rounded-full ${chipBg(market.status)} px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-white`}>
                     {chipLabel}
                   </span>
-                  <span className="inline-flex items-center rounded-full border border-sky-400/40 bg-sky-400/15 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-sky-200">
-                    Crypto
+                  <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] ${
+                    cryptoMode === "graduation"
+                      ? "border border-cyan-400/40 bg-cyan-500/15 text-cyan-200"
+                      : "border border-sky-400/40 bg-sky-400/15 text-sky-200"
+                  }`}>
+                    {cryptoMode === "graduation" ? "Moon or Rug" : "Crypto"}
                   </span>
                   <span className="inline-flex items-center rounded-full border border-white/25 bg-black/45 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-white/90">
-                    {durationMinutes}M Flash
+                    {durationMinutes === 60 ? "1H Flash" : `${durationMinutes}M Flash`}
                   </span>
                 </div>
               </div>
 
               <div className="flex-1 flex flex-col justify-end">
                 <div className="text-base sm:text-lg font-bold text-white leading-snug line-clamp-3 drop-shadow-lg">
-                  {question || `Will ${ticker} go UP in ${durationMinutes} minutes?`}
+                  {question || (cryptoMode === "graduation"
+                    ? `Will ${ticker} graduate in ${durationMinutes === 60 ? "1 hour" : `${durationMinutes} minutes`}?`
+                    : `Will ${ticker} go UP in ${durationMinutes} minutes?`)}
                 </div>
-                {pctStr && (
-                  <div className={`mt-2 text-sm font-semibold ${(market.priceEnd ?? 0) > (market.priceStart ?? 0) ? "text-pump-green" : "text-red-300"}`}>
-                    {pctStr}
+                {cryptoMode === "graduation" ? (
+                  <div className="mt-2">
+                    <div className="flex items-center justify-between text-xs text-white/80">
+                      <span>Bonding progress</span>
+                      <span className={didGraduate ? "text-pump-green" : "text-cyan-200"}>
+                        {formatProgressPct(progressNow)}
+                      </span>
+                    </div>
+                    <div className="mt-1 h-1.5 rounded-full bg-white/20 overflow-hidden">
+                      <div
+                        className={`h-full ${didGraduate ? "bg-pump-green" : "bg-cyan-300"}`}
+                        style={{ width: `${progressNow}%` }}
+                      />
+                    </div>
+                    <div className={`mt-1 text-xs font-semibold ${didGraduate ? "text-pump-green" : "text-cyan-200"}`}>
+                      {graduationState}
+                    </div>
                   </div>
+                ) : (
+                  pctStr && (
+                    <div className={`mt-2 text-sm font-semibold ${(market.priceEnd ?? 0) > (market.priceStart ?? 0) ? "text-pump-green" : "text-red-300"}`}>
+                      {pctStr}
+                    </div>
+                  )
                 )}
               </div>
 
@@ -348,7 +405,9 @@ export default function FlashMarketCard({ market, variant = "explorer", classNam
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className={`text-xs font-semibold ${contextColor(market.status)}`}>{contextLine}</span>
+                  <span className={`text-xs font-semibold ${contextColor(market.status)}`}>
+                    {cryptoMode === "graduation" ? graduationState : contextLine}
+                  </span>
                   {market.status === "active" ? (
                     <span className="inline-flex items-center rounded-full border border-emerald-400/40 bg-emerald-400/15 px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-[0.08em] text-emerald-300">
                       Live
@@ -386,8 +445,12 @@ export default function FlashMarketCard({ market, variant = "explorer", classNam
                 <div className={`inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.1em] text-white ${chipBg(market.status)}`}>
                   {chipLabel}
                 </div>
-                <div className="rounded-full bg-purple-500/20 border border-purple-500/40 px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-purple-300">
-                  CRYPTO
+                <div className={`rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] ${
+                  cryptoMode === "graduation"
+                    ? "bg-cyan-500/20 border-cyan-400/40 text-cyan-200"
+                    : "bg-purple-500/20 border-purple-500/40 text-purple-300"
+                }`}>
+                  {cryptoMode === "graduation" ? "GRADUATION" : "CRYPTO"}
                 </div>
               </div>
 
@@ -411,11 +474,30 @@ export default function FlashMarketCard({ market, variant = "explorer", classNam
 
             <div className="mt-3 border-t border-white/10 pt-3">
               <div className="flex items-end justify-between gap-3">
-                <div className="text-sm font-mono text-white/80">
-                  {formatCryptoPrice(market.priceStart)}
-                </div>
-                <span className={`text-xs font-semibold ${contextColor(market.status)}`}>{contextLine}</span>
+                {cryptoMode === "graduation" ? (
+                  <>
+                    <div className="text-sm font-semibold text-cyan-200">{formatProgressPct(progressNow)}</div>
+                    <span className={`text-xs font-semibold ${didGraduate ? "text-pump-green" : contextColor(market.status)}`}>
+                      {graduationState}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-sm font-mono text-white/80">
+                      {formatCryptoPrice(market.priceStart)}
+                    </div>
+                    <span className={`text-xs font-semibold ${contextColor(market.status)}`}>{contextLine}</span>
+                  </>
+                )}
               </div>
+              {cryptoMode === "graduation" && (
+                <div className="mt-2 h-1.5 rounded-full bg-white/10 overflow-hidden">
+                  <div
+                    className={`h-full ${didGraduate ? "bg-pump-green" : "bg-cyan-300"}`}
+                    style={{ width: `${progressNow}%` }}
+                  />
+                </div>
+              )}
               <div className="mt-1 text-[11px] text-white/60">
                 {timer ? (
                   <span>{timer} left</span>
