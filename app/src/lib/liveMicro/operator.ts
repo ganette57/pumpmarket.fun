@@ -162,8 +162,12 @@ export function getLiveMicroProgram() {
     preflightCommitment: "confirmed",
   });
 
-  const idlAny: any = { ...(idl as any) };
-  if (!idlAny.address) idlAny.address = programId.toBase58();
+  const idlAny: any = {
+    ...(idl as any),
+    // Anchor 0.32 derives programId from idl.address in constructor(idl, provider).
+    // Force runtime-resolved program id to avoid stale devnet id baked in IDL.
+    address: programId.toBase58(),
+  };
 
   const ProgramAny: any = Program;
   const program =
