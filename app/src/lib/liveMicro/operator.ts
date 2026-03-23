@@ -1,11 +1,13 @@
 import "server-only";
 
 import { AnchorProvider, BN, Idl, Program } from "@coral-xyz/anchor";
-import { Connection, Keypair, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
+import { Connection, Keypair, PublicKey, SYSVAR_RENT_PUBKEY, SystemProgram, Transaction } from "@solana/web3.js";
 import idl from "@/idl/funmarket_pump.json";
 import { assertLiveMicroGuards, getLiveMicroFlags, type SolanaCluster } from "@/lib/liveMicro/config";
 
 const FLASH_OPERATOR_MAINNET_PROGRAM_ID = "DADaDENa6gPZjy92BjctBDKGqNBHhqPokpr5uY2UY3uJ";
+const TOKEN_PROGRAM_ID_BASE58 = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+const ASSOCIATED_TOKEN_PROGRAM_ID_BASE58 = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
 
 function env(name: string): string {
   return String(process.env[name] || "").trim();
@@ -222,11 +224,23 @@ function getMethodBuilder<T extends keyof any>(methods: any, camel: string, snak
   return fn;
 }
 
+function logInstructionDebug(tx: Transaction) {
+  tx.instructions.forEach((ix, idx) => {
+    console.log(`[flash-create] instruction[${idx}].programId = ${ix.programId.toBase58()}`);
+    ix.keys.forEach((k, keyIdx) => {
+      console.log(
+        `[flash-create] instruction[${idx}].account[${keyIdx}] = ${k.pubkey.toBase58()} signer=${k.isSigner} writable=${k.isWritable}`,
+      );
+    });
+  });
+}
+
 export async function createBinaryMarketOnchain(params: {
   resolutionTimeSec: number;
   outcomes?: string[];
 }): Promise<CreateMarketResult> {
   const { operator, connection, program } = getLiveMicroProgram();
+  const programPubkey = ((program as any)?.programId as PublicKey | undefined)?.toBase58?.() || "unknown";
 
   const outcomes = params.outcomes && params.outcomes.length ? params.outcomes : ["YES", "NO"];
 
@@ -236,6 +250,23 @@ export async function createBinaryMarketOnchain(params: {
   const DEFAULT_COOLDOWN_SECONDS = Math.floor(Number(env("LIVE_MICRO_COOLDOWN_SECONDS") || "0") || 0);
 
   const market = Keypair.generate();
+  const createAccounts = {
+    market: market.publicKey,
+    creator: operator.publicKey,
+    systemProgram: SystemProgram.programId,
+  };
+
+  console.log("[flash-create] building createBinaryMarketOnchain", {
+    resolutionTimeSec: Math.floor(params.resolutionTimeSec),
+    outcomes,
+  });
+  console.log(`[flash-create] account.program = ${programPubkey}`);
+  console.log(`[flash-create] account.systemProgram = ${createAccounts.systemProgram.toBase58()}`);
+  console.log(`[flash-create] account.tokenProgram = ${TOKEN_PROGRAM_ID_BASE58}`);
+  console.log(`[flash-create] account.associatedTokenProgram = ${ASSOCIATED_TOKEN_PROGRAM_ID_BASE58}`);
+  console.log(`[flash-create] account.rent = ${SYSVAR_RENT_PUBKEY.toBase58()}`);
+  console.log(`[flash-create] account.market = ${createAccounts.market.toBase58()}`);
+  console.log(`[flash-create] account.creator = ${createAccounts.creator.toBase58()}`);
 
   const createMethod = getMethodBuilder(program.methods, "createMarket", "create_market");
   const tx = await createMethod(
@@ -247,12 +278,10 @@ export async function createBinaryMarketOnchain(params: {
     new BN(DEFAULT_MAX_TRADE_SHARES),
     new BN(DEFAULT_COOLDOWN_SECONDS),
   )
-    .accounts({
-      market: market.publicKey,
-      creator: operator.publicKey,
-      systemProgram: SystemProgram.programId,
-    })
+    .accounts(createAccounts)
     .transaction();
+
+  logInstructionDebug(tx);
 
   tx.feePayer = operator.publicKey;
   const { blockhash } = await connection.getLatestBlockhash("confirmed");
@@ -260,11 +289,41 @@ export async function createBinaryMarketOnchain(params: {
   tx.sign(operator, market);
 
   const raw = tx.serialize();
-  const txSig = await connection.sendRawTransaction(raw, {
-    skipPreflight: false,
-    preflightCommitment: "confirmed",
-    maxRetries: 3,
-  });
+  let txSig = "";
+  try {
+    txSig = await connection.sendRawTransaction(raw, {
+      skipPreflight: false,
+      preflightCommitment: "confirmed",
+      maxRetries: 3,
+    });
+  } catch (sendErr: any) {
+    const errMsg = String(sendErr?.message || sendErr || "unknown send error");
+    console.error(`[flash-create] send tx failed = ${errMsg}`);
+    logInstructionDebug(tx);
+    console.error("[flash-create] critical accounts", {
+      program: programPubkey,
+      market: createAccounts.market.toBase58(),
+      creator: createAccounts.creator.toBase58(),
+      systemProgram: createAccounts.systemProgram.toBase58(),
+      tokenProgram: TOKEN_PROGRAM_ID_BASE58,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID_BASE58,
+      rent: SYSVAR_RENT_PUBKEY.toBase58(),
+    });
+
+    let simulationLogs: string[] | null = null;
+    if (typeof sendErr?.getLogs === "function") {
+      try {
+        simulationLogs = await sendErr.getLogs(connection);
+      } catch (logErr: any) {
+        console.error(`[flash-create] getLogs() failed = ${String(logErr?.message || logErr)}`);
+      }
+    }
+    if (!simulationLogs && Array.isArray(sendErr?.logs)) {
+      simulationLogs = sendErr.logs.map((x: unknown) => String(x));
+    }
+    console.error("[flash-create] simulation logs =", simulationLogs || []);
+    throw sendErr;
+  }
   await confirmByPolling(connection, txSig);
 
   return {
