@@ -5,6 +5,8 @@ import { Connection, Keypair, PublicKey, SystemProgram, Transaction } from "@sol
 import idl from "@/idl/funmarket_pump.json";
 import { assertLiveMicroGuards, getLiveMicroFlags, type SolanaCluster } from "@/lib/liveMicro/config";
 
+const FLASH_OPERATOR_MAINNET_PROGRAM_ID = "DADaDENa6gPZjy92BjctBDKGqNBHhqPokpr5uY2UY3uJ";
+
 function env(name: string): string {
   return String(process.env[name] || "").trim();
 }
@@ -57,18 +59,36 @@ function rpcForCluster(cluster: SolanaCluster): string {
   return env("NEXT_PUBLIC_RPC_MAINNET") || "https://api.mainnet-beta.solana.com";
 }
 
-function programIdForCluster(cluster: SolanaCluster): PublicKey {
-  const byCluster =
-    cluster === "devnet"
-      ? env("NEXT_PUBLIC_PROGRAM_ID_DEVNET")
-      : cluster === "mainnet-beta"
-      ? env("NEXT_PUBLIC_PROGRAM_ID_MAINNET")
-      : env("NEXT_PUBLIC_PROGRAM_ID_TESTNET");
+function inferClusterFromRpcEndpoint(endpoint: string): SolanaCluster {
+  const e = String(endpoint || "").toLowerCase();
+  if (!e) return "unknown";
+  if (e.includes("devnet")) return "devnet";
+  if (e.includes("testnet")) return "testnet";
+  if (e.includes("mainnet")) return "mainnet-beta";
+  return "unknown";
+}
 
+function programIdForCluster(cluster: SolanaCluster): { programId: PublicKey; source: string } {
+  if (cluster === "mainnet-beta" && process.env.NODE_ENV === "production") {
+    return {
+      programId: new PublicKey(FLASH_OPERATOR_MAINNET_PROGRAM_ID),
+      source: "hardcoded:production-mainnet",
+    };
+  }
+
+  const [byCluster, byClusterSource] =
+    cluster === "devnet"
+      ? [env("NEXT_PUBLIC_PROGRAM_ID_DEVNET"), "env:NEXT_PUBLIC_PROGRAM_ID_DEVNET"]
+      : cluster === "mainnet-beta"
+      ? [env("NEXT_PUBLIC_PROGRAM_ID_MAINNET"), "env:NEXT_PUBLIC_PROGRAM_ID_MAINNET"]
+      : [env("NEXT_PUBLIC_PROGRAM_ID_TESTNET"), "env:NEXT_PUBLIC_PROGRAM_ID_TESTNET"];
   const fallback = env("NEXT_PUBLIC_PROGRAM_ID");
   const selected = byCluster || fallback;
   if (!selected) throw new Error(`Missing program id for cluster=${cluster}`);
-  return new PublicKey(selected);
+  return {
+    programId: new PublicKey(selected),
+    source: byCluster ? byClusterSource : "env:NEXT_PUBLIC_PROGRAM_ID",
+  };
 }
 
 function sleep(ms: number) {
@@ -104,7 +124,22 @@ export function getLiveMicroProgram() {
 
   const operator = getLiveMicroOperatorKeypair();
   const rpc = rpcForCluster(flags.currentCluster);
-  const programId = programIdForCluster(flags.currentCluster);
+  const rpcCluster = inferClusterFromRpcEndpoint(rpc);
+  const resolvedCluster = rpcCluster !== "unknown" ? rpcCluster : flags.currentCluster;
+  const { programId, source: programIdSource } = programIdForCluster(resolvedCluster);
+
+  console.log("[flash-operator] cluster resolved", {
+    currentCluster: flags.currentCluster,
+    rpcCluster,
+    resolvedCluster,
+    allowedCluster: flags.allowedCluster,
+  });
+  console.log("[flash-operator] rpc resolved", rpc);
+  console.log("[flash-operator] program id resolved", {
+    programId: programId.toBase58(),
+    source: programIdSource,
+  });
+  console.log("[flash-operator] operator pubkey", operator.publicKey.toBase58());
 
   const connection = new Connection(rpc, { commitment: "confirmed" });
 
