@@ -9,6 +9,7 @@ import { sendSignedTx } from "@/lib/solanaSend";
 import AdminReportsTab from "@/components/AdminReportsTab";
 import AdminLiveMicroPanel from "@/components/admin/AdminLiveMicroPanel";
 import AdminFlashCryptoPanel from "@/components/admin/AdminFlashCryptoPanel";
+import AdminTrafficFlashPanel from "@/components/admin/AdminTrafficFlashPanel";
 import { solanaExplorerAddressUrl } from "@/utils/explorer";
 import { PLATFORM_WALLET } from "@/utils/solana";
 
@@ -93,7 +94,7 @@ type ActiveMarket = {
 
 type AdminFilter = "inbox" | "resolved" | "blocked" | "active" | "reports" | "all";
 type TableFilter = Exclude<AdminFilter, "reports">;
-type OverviewSection = "sports_flash" | "crypto_flash" | "resolutions";
+type OverviewSection = "sports_flash" | "crypto_flash" | "traffic_flash" | "resolutions";
 
 /* ========= Config ========= */
 
@@ -1121,6 +1122,10 @@ export default function AdminOverviewPage() {
       title: "Crypto Flash",
       description: "Crypto campaign launcher, campaign statuses and pending crypto resolutions.",
     },
+    traffic_flash: {
+      title: "Traffic Flash",
+      description: "Traffic counter flash controls, camera selection and manual launch.",
+    },
     resolutions: {
       title: "Resolutions",
       description: "Pending/admin actions, resolved history, blocked markets and reports moderation.",
@@ -1152,6 +1157,7 @@ export default function AdminOverviewPage() {
                 {([
                   { id: "sports_flash" as const, label: "Sports Flash" },
                   { id: "crypto_flash" as const, label: "Crypto Flash" },
+                  { id: "traffic_flash" as const, label: "Traffic Flash" },
                   { id: "resolutions" as const, label: "Resolutions" },
                 ]).map((item) => (
                   <button
@@ -1219,6 +1225,8 @@ export default function AdminOverviewPage() {
               {activeSection === "sports_flash" && <AdminLiveMicroPanel />}
 
               {activeSection === "crypto_flash" && <AdminFlashCryptoPanel />}
+
+              {activeSection === "traffic_flash" && <AdminTrafficFlashPanel />}
 
               {activeSection === "resolutions" && (
                 <>

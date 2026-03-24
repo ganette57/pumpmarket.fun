@@ -1874,6 +1874,8 @@ const [liveMicroPayload, setLiveMicroPayload] = useState<{
 const [liveScorePolling, setLiveScorePolling] = useState(false);
 const [liveScoreFailures, setLiveScoreFailures] = useState(0);
 const [liveScoreLastSuccessAt, setLiveScoreLastSuccessAt] = useState<number | null>(null);
+const [trafficLiveCount, setTrafficLiveCount] = useState<number | null>(null);
+const [trafficPolling, setTrafficPolling] = useState(false);
 const [persistedTradeScore, setPersistedTradeScore] = useState<{
   home: number;
   away: number;
@@ -2048,6 +2050,8 @@ if (snap?.posAcc?.shares) {
       setActiveLiveSession(null);
       setCreatorProfile(null);
       setPersistedTradeScore(null);
+      setTrafficLiveCount(null);
+      setTrafficPolling(false);
       scoreLogRef.current = { lastIgnoredSignature: "", lastDisplaySignature: "" };
     }, [id]);
 
@@ -2994,6 +2998,78 @@ useEffect(() => {
   };
 }, [id, market?.marketMode, sharedSportDisplayStatus, submitting, loadMarket]);
 
+// Poll live traffic counter for flash traffic markets.
+useEffect(() => {
+  if (!market?.publicKey) {
+    setTrafficLiveCount(null);
+    setTrafficPolling(false);
+    return;
+  }
+
+  const marketMode = String(market.marketMode || "").trim().toLowerCase();
+  const trafficMeta = asObject(market.sportMeta);
+  const trafficType = String(trafficMeta.type || "").trim().toLowerCase();
+  const isTrafficFlashMarket = marketMode === "flash_traffic" || trafficType === "flash_traffic";
+  if (!isTrafficFlashMarket) {
+    setTrafficLiveCount(null);
+    setTrafficPolling(false);
+    return;
+  }
+
+  const roundId = String(trafficMeta.round_id || trafficMeta.roundId || market.publicKey).trim();
+  if (!roundId) {
+    setTrafficLiveCount(null);
+    setTrafficPolling(false);
+    return;
+  }
+
+  const seedCount = firstFiniteNumber([
+    trafficMeta.current_count,
+    trafficMeta.end_count,
+    trafficMeta.start_count,
+  ]);
+  if (seedCount != null) {
+    setTrafficLiveCount(Math.max(0, Math.floor(seedCount)));
+  }
+
+  let cancelled = false;
+  const poll = async () => {
+    if (cancelled || document.visibilityState !== "visible") return;
+    setTrafficPolling(true);
+    try {
+      const params = new URLSearchParams({
+        roundId,
+        marketAddress: market.publicKey,
+      });
+      const res = await fetch(`/api/traffic/live?${params.toString()}`, {
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json().catch(() => ({}));
+      const nextCount = Number((json as any)?.currentCount);
+      if (cancelled) return;
+      if (Number.isFinite(nextCount)) {
+        setTrafficLiveCount(Math.max(0, Math.floor(nextCount)));
+      }
+    } catch {
+      // Best-effort polling, keep last known value on failures.
+    } finally {
+      if (!cancelled) setTrafficPolling(false);
+    }
+  };
+
+  void poll();
+  const iv = window.setInterval(() => {
+    void poll();
+  }, 1_000);
+
+  return () => {
+    cancelled = true;
+    setTrafficPolling(false);
+    window.clearInterval(iv);
+  };
+}, [market?.marketMode, market?.publicKey, market?.sportMeta]);
+
   // Related block
   useEffect(() => {
     if (!market?.publicKey) return;
@@ -3360,20 +3436,26 @@ useEffect(() => {
       flashCryptoTypeTagForUiLock === "flash_crypto_price" ||
       flashCryptoTypeTagForUiLock === "flash_crypto_graduation"
     );
+  const isFlashTrafficForUiLock =
+    !!market &&
+    (
+      market.marketMode === "flash_traffic" ||
+      flashCryptoTypeTagForUiLock === "flash_traffic"
+    );
   const isFlashFootForUiLock = market
     ? isSoccerNextGoalMicroMarket(market.sportMeta, market.question, market.description)
     : false;
 
   // Client-side timer:
-  // - flash crypto + flash foot get 1s precision for immediate UI lock at 00:00
+  // - flash crypto + flash traffic + flash foot get 1s precision for immediate UI lock at 00:00
   // - others keep 15s refresh for lighter UI churn
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
-    const tickMs = isFlashCryptoForUiLock || isFlashFootForUiLock ? 1_000 : 15_000;
+    const tickMs = isFlashCryptoForUiLock || isFlashTrafficForUiLock || isFlashFootForUiLock ? 1_000 : 15_000;
     setNowMs(Date.now());
     const iv = setInterval(() => setNowMs(Date.now()), tickMs);
     return () => clearInterval(iv);
-  }, [isFlashCryptoForUiLock, isFlashFootForUiLock]);
+  }, [isFlashCryptoForUiLock, isFlashTrafficForUiLock, isFlashFootForUiLock]);
   const isSoccerNextGoalMicroForScore = isFlashFootForUiLock;
   const isSportLikeMarketForScore = !!market && (market.marketMode === "sport" || isSoccerNextGoalMicroForScore);
   const scoreStartRawForDisplay = market
@@ -3509,6 +3591,9 @@ useEffect(() => {
     cryptoTypeTag === "flash_crypto_graduation";
   const isFlashCryptoGraduationMarket = isFlashCryptoMarket && cryptoTypeTag === "flash_crypto_graduation";
   const isFlashCryptoPriceMarket = isFlashCryptoMarket && !isFlashCryptoGraduationMarket;
+  const isFlashTrafficMarket =
+    market.marketMode === "flash_traffic" ||
+    cryptoTypeTag === "flash_traffic";
   const cryptoMeta = isFlashCryptoMarket ? asObject(market.sportMeta) : {};
   const cryptoSourceType =
     String(cryptoMeta.source_type || "").trim().toLowerCase() === "major" ? "major" : "pump_fun";
@@ -3529,6 +3614,23 @@ useEffect(() => {
     cryptoMeta.remainingToGraduateEnd,
   ]);
   const cryptoDurationMinutes = Number(cryptoMeta.duration_minutes || 0) || null;
+  const trafficMeta = isFlashTrafficMarket ? asObject(market.sportMeta) : {};
+  const trafficRoundId = String(trafficMeta.round_id || trafficMeta.roundId || market.publicKey || "").trim();
+  const trafficThreshold = firstFiniteNumber([trafficMeta.threshold]);
+  const trafficDurationSec = firstFiniteNumber([trafficMeta.duration_sec, trafficMeta.durationSec]);
+  const trafficCurrentCount = trafficLiveCount ?? firstFiniteNumber([
+    trafficMeta.current_count,
+    trafficMeta.end_count,
+    trafficMeta.start_count,
+  ]);
+  const trafficWindowEnd = isFlashTrafficMarket
+    ? String(trafficMeta.window_end || market.endTime || "").trim() || null
+    : null;
+  const trafficWindowEndLabel = (() => {
+    const parsed = parseIsoUtc(trafficWindowEnd);
+    if (!parsed) return null;
+    return parsed.toLocaleTimeString("en-US");
+  })();
   const microLoopSequence = isSoccerNextGoalMicro
     ? extractLoopSequence(market.description, market.sportMeta)
     : null;
@@ -3784,7 +3886,7 @@ const ended = endedByTime;
   const marketClosed = isResolvedOnChain || isProposed || ended || !!market.isBlocked
     || cryptoUiTradingClosed
     || flashFootUiTradingClosed
-    || (!isFlashCryptoMarket && !sportBeforeStart && sportLocked);
+    || (!isFlashCryptoMarket && !isFlashTrafficMarket && !sportBeforeStart && sportLocked);
 
   const winningLabel =
     market.winningOutcome != null && Number.isFinite(Number(market.winningOutcome))
@@ -4033,6 +4135,30 @@ const ended = endedByTime;
                   />
                 );
               })()}
+              {isFlashTrafficMarket && (
+                <div className="rounded-xl border border-amber-500/35 bg-amber-500/10 px-4 py-3">
+                  <div className="text-[11px] uppercase tracking-[0.08em] text-amber-200/85">
+                    Traffic Live Count
+                  </div>
+                  <div className="mt-1 flex items-end justify-between gap-3">
+                    <div className="text-3xl font-black tabular-nums text-white">
+                      {trafficCurrentCount == null ? "—" : Math.max(0, Math.floor(trafficCurrentCount))}
+                    </div>
+                    {trafficPolling && (
+                      <span className="inline-flex items-center gap-2 rounded-full border border-amber-400/35 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-200">
+                        <span className="inline-block h-2 w-2 rounded-full bg-amber-300 animate-pulse" />
+                        LIVE
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-1 text-xs text-amber-100/80">
+                    Threshold: {trafficThreshold == null ? "—" : Math.floor(trafficThreshold)} vehicles
+                    {trafficDurationSec != null ? ` • Duration: ${Math.floor(trafficDurationSec)}s` : ""}
+                    {trafficRoundId ? ` • Round: ${trafficRoundId}` : ""}
+                    {trafficWindowEndLabel ? ` • Ends: ${trafficWindowEndLabel}` : ""}
+                  </div>
+                </div>
+              )}
 
               {/* Market card */}
               <div className="bg-black border border-gray-800 rounded-xl p-4 md:p-5 hover:border-pump-green/60 transition-all duration-200">
