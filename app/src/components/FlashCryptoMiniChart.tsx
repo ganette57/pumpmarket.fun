@@ -122,9 +122,20 @@ export default function FlashCryptoMiniChart({
   const hasCountdown = !isEnded && Number.isFinite(windowEndMs);
   const remainingSec = hasCountdown ? Math.max(0, Math.ceil((windowEndMs - countdownNowMs) / 1000)) : 0;
   const pollTier = !hasCountdown ? "default" : remainingSec <= 10 ? "end-10" : remainingSec <= 30 ? "end-30" : "base";
-  const adaptivePollMs =
-    pollTier === "end-10" ? 1000 : pollTier === "end-30" ? 1500 : pollTier === "base" ? 2000 : pollIntervalMs;
   const isMemeSource = sourceType !== "major";
+  const adaptivePollMs = isMemeSource
+    ? pollTier === "end-10"
+      ? 700
+      : pollTier === "end-30"
+      ? 800
+      : 1000
+    : pollTier === "end-10"
+    ? 1000
+    : pollTier === "end-30"
+    ? 1500
+    : pollTier === "base"
+    ? 2000
+    : pollIntervalMs;
 
   const resolvedFinalPrice =
     Number.isFinite(Number(finalPrice)) && Number(finalPrice) > 0
@@ -162,7 +173,9 @@ export default function FlashCryptoMiniChart({
       setError(null);
       setPoints((prev) => {
         const prevLast = prev.length ? prev[prev.length - 1].price : null;
-        if (prevLast != null && Math.abs(prevLast - price) < 1e-12) {
+        // Keep majors unchanged: avoid duplicate points when price is identical.
+        // For meme markets, append every real sample to keep time progression visually alive.
+        if (!isMemeSource && prevLast != null && Math.abs(prevLast - price) < 1e-12) {
           return prev;
         }
         const next = [...prev, { time: Date.now(), price }];
@@ -200,6 +213,15 @@ export default function FlashCryptoMiniChart({
 
     fetchPrice();
 
+    if (isMemeSource) {
+      console.log("[flash-meme] live poll interval = ...", {
+        tokenMint,
+        pollTier,
+        remainingSec,
+        intervalMs: adaptivePollMs,
+      });
+    }
+
     intervalRef.current = setInterval(fetchPrice, adaptivePollMs);
     return () => {
       if (intervalRef.current) {
@@ -207,7 +229,7 @@ export default function FlashCryptoMiniChart({
         intervalRef.current = null;
       }
     };
-  }, [adaptivePollMs, fetchPrice, isEnded]);
+  }, [adaptivePollMs, fetchPrice, isEnded, isMemeSource, pollTier, tokenMint]);
 
   useEffect(() => {
     if (priceStart > 0) {
