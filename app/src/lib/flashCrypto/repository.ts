@@ -400,6 +400,28 @@ export async function listActiveFlashCryptoMicros(limit = 50): Promise<LiveMicro
   return (data || []) as LiveMicroRow[];
 }
 
+export async function findActiveFlashCryptoMicroByTokenAndType(params: {
+  tokenMint: string;
+  microType: string;
+}): Promise<LiveMicroRow | null> {
+  const supabase = supabaseServer();
+  const nowIso = new Date().toISOString();
+
+  const { data, error } = await supabase
+    .from("live_micro_markets")
+    .select("*")
+    .eq("provider_match_id", params.tokenMint)
+    .eq("micro_market_type", params.microType)
+    .eq("engine_status", "active")
+    .gt("window_end", nowIso)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw new Error(`flash_crypto active token/type lookup failed: ${error.message}`);
+  return (data as LiveMicroRow | null) || null;
+}
+
 export async function markFlashCryptoResolved(params: {
   id: string;
   outcome: ResolutionOutcome;
