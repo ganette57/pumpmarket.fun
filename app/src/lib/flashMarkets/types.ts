@@ -24,6 +24,7 @@ export type FlashMarket = {
   currentScoreHome: number;
   currentScoreAway: number;
   minute: number | null;
+  windowStart: string | null;
   windowEnd: string | null;
   loopSequence: number | null;
   loopPhase: string | null;

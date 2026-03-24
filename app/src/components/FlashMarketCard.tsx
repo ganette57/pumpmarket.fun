@@ -28,6 +28,12 @@ function formatMmSs(totalSec: number | null): string | null {
   return `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
 }
 
+function formatHourMinute(value: string | null | undefined): string | null {
+  const ms = Date.parse(String(value || ""));
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
 function statusChipLabel(market: FlashMarket): string {
   if (market.kind === "crypto") {
     if (market.status === "active") return "LIVE";
@@ -48,7 +54,12 @@ function statusChipLabel(market: FlashMarket): string {
 function statusContextLine(market: FlashMarket): string {
   if (market.kind === "crypto") {
     if (market.status === "active") return "Price tracking live";
-    if (market.status === "finalized") return "Market resolved";
+    if (market.status === "finalized") {
+      const start = formatHourMinute(market.windowStart || market.createdAt || null);
+      const end = formatHourMinute(market.windowEnd);
+      if (start || end) return `Start: ${start || "--:--"} \u00b7 End: ${end || "--:--"}`;
+      return "Resolved";
+    }
     if (market.status === "cancelled") return "Market cancelled";
     return "Resolving outcome";
   }

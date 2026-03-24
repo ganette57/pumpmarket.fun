@@ -1144,6 +1144,12 @@ async function ensureLoopStepMarket(params: {
       } catch (e: any) {
         const message = String(e?.message || e || "Unknown error");
         if (message.includes("Active micro-market already exists") || isLoopStepExistsError(message)) {
+          console.log("[live-micro] skip create (already active)", {
+            providerMatchId: params.loop.provider_match_id,
+            providerName: params.loop.provider_name,
+            phase: params.phase,
+            sequence: params.sequence,
+          });
           const dedupedExisting = await findRecentLiveMicroForLoopStep({
             providerMatchId: params.loop.provider_match_id,
             providerName: params.loop.provider_name,
@@ -1255,6 +1261,11 @@ export async function activateLiveMicroMatchLoop(
 
   const active = await findActiveLiveMicroByMatch({ providerMatchId, providerName });
   if (active) {
+    console.log("[live-micro] skip create (already active)", {
+      providerMatchId,
+      providerName,
+      liveMicroId: active.id,
+    });
     loop = await updateLiveMicroMatchLoop({
       id: loop.id,
       loopStatus: "active",

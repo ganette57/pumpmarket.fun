@@ -12,6 +12,7 @@ type LiveMicroDbRow = {
   provider_match_id: string | null;
   linked_market_id: string | null;
   linked_market_address: string | null;
+  window_start: string | null;
   window_end: string | null;
   start_home_score: number | null;
   start_away_score: number | null;
@@ -598,6 +599,7 @@ async function loadFlashCandidates(maxRows: number): Promise<FlashMarket[]> {
       currentScoreHome: currentScore.home,
       currentScoreAway: currentScore.away,
       minute,
+      windowStart: row.window_start,
       windowEnd: row.window_end,
       loopSequence,
       loopPhase,
@@ -735,6 +737,7 @@ async function loadCryptoFlashCandidates(maxRows: number): Promise<FlashMarket[]
         currentScoreHome: 0,
         currentScoreAway: 0,
         minute: null,
+        windowStart: row.window_start,
         windowEnd: row.window_end,
         loopSequence: null,
         loopPhase: null,
