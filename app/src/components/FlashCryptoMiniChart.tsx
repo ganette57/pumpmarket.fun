@@ -124,6 +124,7 @@ export default function FlashCryptoMiniChart({
   const pollTier = !hasCountdown ? "default" : remainingSec <= 10 ? "end-10" : remainingSec <= 30 ? "end-30" : "base";
   const adaptivePollMs =
     pollTier === "end-10" ? 1000 : pollTier === "end-30" ? 1500 : pollTier === "base" ? 2000 : pollIntervalMs;
+  const isMemeSource = sourceType !== "major";
 
   const resolvedFinalPrice =
     Number.isFinite(Number(finalPrice)) && Number(finalPrice) > 0
@@ -147,17 +148,39 @@ export default function FlashCryptoMiniChart({
       const price = Number(data.price);
       if (!Number.isFinite(price) || price <= 0) return;
 
+      if (isMemeSource) {
+        console.log("[flash-meme] trade polling update = ...", {
+          tokenMint,
+          sourceType: String(data.source_type || sourceType || "pump_fun"),
+          provider: String(data.provider || ""),
+          source: String(data.source || ""),
+          price,
+        });
+      }
+
       setCurrentPrice(price);
       setError(null);
       setPoints((prev) => {
+        const prevLast = prev.length ? prev[prev.length - 1].price : null;
+        if (prevLast != null && Math.abs(prevLast - price) < 1e-12) {
+          return prev;
+        }
         const next = [...prev, { time: Date.now(), price }];
+        if (isMemeSource) {
+          console.log("[flash-meme] chart append = ...", {
+            tokenMint,
+            prev: prevLast,
+            next: price,
+            points: next.length,
+          });
+        }
         if (next.length > 200) return next.slice(-200);
         return next;
       });
     } catch {
       if (mountedRef.current) setError("Price fetch failed");
     }
-  }, [majorPair, majorSymbol, sourceType, tokenMint]);
+  }, [isMemeSource, majorPair, majorSymbol, sourceType, tokenMint]);
 
   useEffect(() => {
     mountedRef.current = true;

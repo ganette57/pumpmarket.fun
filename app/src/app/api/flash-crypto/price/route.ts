@@ -21,12 +21,32 @@ export async function GET(req: Request) {
     if (!resolvedInput) {
       return NextResponse.json({ error: "mint (or pair) param required" }, { status: 400 });
     }
+    const isMemeRequest = sourceType !== "major" && !majorSelection;
+
+    if (isMemeRequest) {
+      console.log("[flash-meme] live price request ...", {
+        tokenMint: resolvedInput,
+        sourceType: sourceType || "pump_fun",
+      });
+    }
 
     const snap = await getFlashCryptoLivePrice(resolvedInput, {
       sourceType: sourceType === "major" ? "major" : undefined,
       majorSymbol: majorSelection?.symbol || majorSymbol || null,
       majorPair: majorSelection?.pair || pair || null,
+      preferRealtimePump: isMemeRequest,
     });
+
+    if (isMemeRequest) {
+      console.log(`[flash-meme] provider selected = ${snap.provider}`);
+      console.log("[flash-meme] live price returned = ...", {
+        tokenMint: snap.mint,
+        sourceType: snap.sourceType || "pump_fun",
+        provider: snap.provider,
+        source: snap.source,
+        price: snap.price,
+      });
+    }
 
     return NextResponse.json(
       {

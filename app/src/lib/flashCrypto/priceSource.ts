@@ -12,6 +12,7 @@ export type FlashCryptoSnapshotOptions = {
   sourceType?: FlashCryptoSourceType;
   majorSymbol?: string | null;
   majorPair?: string | null;
+  preferRealtimePump?: boolean;
 };
 
 export type FlashCryptoPriceSnapshot = {
@@ -525,6 +526,23 @@ function logHeliusFallback(mint: string, reason: string) {
   });
 }
 
+function toPumpSnapshotFromDex(
+  snap: Awaited<ReturnType<typeof fetchPumpToken>>,
+  source: string,
+): FlashCryptoPriceSnapshot {
+  return {
+    mint: snap.mint,
+    symbol: snap.symbol,
+    name: snap.name,
+    imageUri: snap.imageUri,
+    price: snap.price,
+    provider: "pump_fun",
+    source,
+    fetchedAt: new Date().toISOString(),
+    sourceType: "pump_fun",
+  };
+}
+
 export async function getFlashCryptoLivePrice(
   rawMint: string,
   options?: FlashCryptoSnapshotOptions,
@@ -547,25 +565,58 @@ export async function getFlashCryptoLivePrice(
   }
 
   const mint = parsePumpTokenInput(rawMint);
+  const preferRealtimePump = options?.preferRealtimePump === true;
+
+  console.log("[flash-meme] live price request ...", {
+    mint,
+    sourceType: requestedSourceType,
+    preferRealtimePump,
+  });
+
+  if (preferRealtimePump) {
+    try {
+      const fromDex = await fetchPumpToken(mint);
+      const snap = toPumpSnapshotFromDex(fromDex, "dexscreener:tokens.v1.highest_liquidity_pair");
+      console.log("[flash-meme] provider selected = pump_fun");
+      console.log("[flash-meme] live price returned = ...", {
+        mint: snap.mint,
+        price: snap.price,
+        provider: snap.provider,
+        source: snap.source,
+      });
+      return snap;
+    } catch (dexError: any) {
+      console.warn("[flash-meme] dex live fetch failed, fallback to helius", {
+        mint,
+        error: String(dexError?.message || dexError || "unknown dex error"),
+      });
+    }
+  }
 
   try {
-    return await fetchHeliusAssetSnapshot(mint);
+    const snap = await fetchHeliusAssetSnapshot(mint);
+    console.log(`[flash-meme] provider selected = ${snap.provider}`);
+    console.log("[flash-meme] live price returned = ...", {
+      mint: snap.mint,
+      price: snap.price,
+      provider: snap.provider,
+      source: snap.source,
+    });
+    return snap;
   } catch (error: any) {
     logHeliusFallback(mint, String(error?.message || error || "unknown helius error"));
   }
 
   const fallback = await fetchPumpToken(mint);
-  return {
-    mint: fallback.mint,
-    symbol: fallback.symbol,
-    name: fallback.name,
-    imageUri: fallback.imageUri,
-    price: fallback.price,
-    provider: "pump_fun",
-    source: "fallback:dexscreener.highest_liquidity_pair",
-    fetchedAt: new Date().toISOString(),
-    sourceType: "pump_fun",
-  };
+  const fallbackSnap = toPumpSnapshotFromDex(fallback, "fallback:dexscreener.highest_liquidity_pair");
+  console.log("[flash-meme] provider selected = pump_fun");
+  console.log("[flash-meme] live price returned = ...", {
+    mint: fallbackSnap.mint,
+    price: fallbackSnap.price,
+    provider: fallbackSnap.provider,
+    source: fallbackSnap.source,
+  });
+  return fallbackSnap;
 }
 
 export async function getFlashCryptoStartSnapshot(
