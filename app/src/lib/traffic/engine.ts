@@ -17,7 +17,6 @@ import {
 } from "@/lib/traffic/repository";
 import {
   getTrafficCount,
-  setTrafficCounterEndTime,
   startTrafficCounter,
   stopTrafficCounter,
 } from "@/lib/traffic/trafficCounter";
@@ -133,13 +132,17 @@ export async function startTrafficFlash(input: StartTrafficFlashInput = {}): Pro
     windowStart: windowStartIso,
     windowEnd: windowEndIso,
   });
-  startTrafficCounter(roundId);
-  setTrafficCounterEndTime(roundId, windowEndMs);
+  const countStart = await startTrafficCounter(roundId, {
+    streamUrl: camera.streamUrl,
+    durationSec,
+    line: camera.line,
+    classes: ["car", "bus", "truck", "motorcycle"],
+    tracker: "bytetrack",
+  });
   console.log("[traffic-flash:engine] traffic round still tradable until exact end", {
     roundId,
     exactEndTime: windowEndIso,
   });
-  const countStart = await getTrafficCount(roundId);
   console.log("[traffic-flash:engine] round start count", {
     roundId,
     currentCount: countStart,
@@ -219,7 +222,7 @@ export async function tickTrafficFlashResolutions(): Promise<{
       status === "finalized" ||
       status === "cancelled";
     if (!terminal) continue;
-    stopTrafficCounter(roundId, `market_status_${status || "terminal"}`);
+    await stopTrafficCounter(roundId, `market_status_${status || "terminal"}`);
   }
 
   const pending = await listPendingTrafficFlashResolutions(100);
@@ -242,7 +245,8 @@ export async function tickTrafficFlashResolutions(): Promise<{
       const windowEnd = String(meta.window_end || meta.windowEnd || row.end_date || "").trim() || null;
 
       const count = await getTrafficCount(roundId);
-      const frozenCount = stopTrafficCounter(roundId, "proposal_triggered") ?? count;
+      const stoppedCount = await stopTrafficCounter(roundId, "proposal_triggered");
+      const frozenCount = stoppedCount ?? count;
       console.log("[traffic-flash:engine] traffic proposal triggered with final frozen count", {
         marketAddress,
         roundId,
