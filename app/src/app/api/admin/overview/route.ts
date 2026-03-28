@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { Connection, PublicKey } from "@solana/web3.js";
 import { isAdminRequest } from "@/lib/admin";
+import { getLiveMicroFlags, type SolanaCluster } from "@/lib/liveMicro/config";
+import { getOperatorPublicKeyBase58 } from "@/lib/liveMicro/operator";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -19,6 +22,53 @@ function env(name: string) {
 function toNumber(x: any) {
   const n = Number(x);
   return Number.isFinite(n) ? n : 0;
+}
+
+function rpcForCluster(cluster: SolanaCluster): string {
+  const direct = String(process.env.LIVE_MICRO_RPC_URL || process.env.SOLANA_RPC || "").trim();
+  if (direct) return direct;
+
+  if (cluster === "mainnet-beta") {
+    return String(process.env.NEXT_PUBLIC_RPC_MAINNET || "").trim() || "https://api.mainnet-beta.solana.com";
+  }
+  if (cluster === "testnet") {
+    return String(process.env.NEXT_PUBLIC_RPC_TESTNET || "").trim() || "https://api.testnet.solana.com";
+  }
+  return (
+    String(
+      process.env.NEXT_PUBLIC_RPC_DEVNET ||
+        process.env.NEXT_PUBLIC_SOLANA_RPC ||
+        process.env.NEXT_PUBLIC_SOLANA_RPC_URL ||
+        "",
+    ).trim() || "https://api.devnet.solana.com"
+  );
+}
+
+async function getOperatorWalletSnapshot(): Promise<{
+  operator_wallet: string | null;
+  operator_balance_sol: number | null;
+}> {
+  let operatorWallet = "";
+  try {
+    operatorWallet = getOperatorPublicKeyBase58();
+  } catch {
+    operatorWallet = "";
+  }
+  if (!operatorWallet) {
+    return { operator_wallet: null, operator_balance_sol: null };
+  }
+
+  try {
+    const flags = getLiveMicroFlags();
+    const connection = new Connection(rpcForCluster(flags.currentCluster), "confirmed");
+    const lamports = await connection.getBalance(new PublicKey(operatorWallet), "confirmed");
+    return {
+      operator_wallet: operatorWallet,
+      operator_balance_sol: Number((lamports / 1_000_000_000).toFixed(4)),
+    };
+  } catch {
+    return { operator_wallet: operatorWallet, operator_balance_sol: null };
+  }
 }
 
 type ActionableMarket = {
@@ -172,6 +222,8 @@ export async function GET(req: Request) {
       if (contestOpen && count > 0) disputes_open += count;
     }
 
+    const operatorSnapshot = await getOperatorWalletSnapshot();
+
     return NextResponse.json(
       {
         kpi: {
@@ -188,6 +240,8 @@ export async function GET(req: Request) {
           disputes_total,
         },
         actionable_markets,
+        operator_wallet: operatorSnapshot.operator_wallet,
+        operator_balance_sol: operatorSnapshot.operator_balance_sol,
       },
       { headers: NO_STORE_HEADERS }
     );

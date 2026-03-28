@@ -48,6 +48,8 @@ type Overview = {
     disputes_total: number;
   };
   actionable_markets: ActionableMarket[];
+  operator_wallet?: string | null;
+  operator_balance_sol?: number | null;
 };
 
 type OnchainInfo = {
@@ -125,6 +127,12 @@ function formatDate(x?: string | null) {
     minute: "2-digit",
     second: "2-digit",
   });
+}
+
+function formatSolBalance(value: number | null | undefined): string {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+  return n.toFixed(4);
 }
 
 function Pill({
@@ -293,6 +301,7 @@ export default function AdminOverviewPage() {
 
   // Reports count for badge
   const [pendingReportsCount, setPendingReportsCount] = useState(0);
+  const [walletCopied, setWalletCopied] = useState<"idle" | "done" | "error">("idle");
 
   const resolvedSorted = useMemo(() => {
     const list = [...resolvedRows];
@@ -306,6 +315,8 @@ export default function AdminOverviewPage() {
 
   const markets = data?.actionable_markets || [];
   const k = data?.kpi;
+  const operatorWallet = String(data?.operator_wallet || "").trim() || null;
+  const operatorBalanceSol = data?.operator_balance_sol ?? null;
 
   // Calculate platform fees (1% of total volume)
   const platformFeesSol = useMemo(() => {
@@ -317,6 +328,18 @@ export default function AdminOverviewPage() {
     if (!publicKey) return false;
     return publicKey.equals(ADMIN_PUBKEY);
   }, [publicKey]);
+
+  const handleCopyOperatorWallet = useCallback(async () => {
+    if (!operatorWallet) return;
+    try {
+      await navigator.clipboard.writeText(operatorWallet);
+      setWalletCopied("done");
+      setTimeout(() => setWalletCopied("idle"), 1200);
+    } catch {
+      setWalletCopied("error");
+      setTimeout(() => setWalletCopied("idle"), 1200);
+    }
+  }, [operatorWallet]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1187,6 +1210,39 @@ export default function AdminOverviewPage() {
                 <div className="text-xs text-gray-500 uppercase tracking-wide">Overview</div>
                 <div className="text-xl font-bold text-white mt-1">{sectionMeta[activeSection].title}</div>
                 <div className="text-sm text-gray-400 mt-1">{sectionMeta[activeSection].description}</div>
+              </div>
+
+              <div className="card-pump p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-xs text-gray-500 uppercase tracking-wide">Operator Wallet</div>
+                    <div className="mt-1 text-sm font-mono text-white break-all">
+                      {operatorWallet || "Unavailable"}
+                    </div>
+                    <div className="mt-1 text-xs text-gray-400">
+                      Balance: <span className="text-white font-semibold">{formatSolBalance(operatorBalanceSol)} SOL</span>
+                    </div>
+                    {operatorWallet && (
+                      <a
+                        href={solanaExplorerAddressUrl(operatorWallet)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-1 inline-block text-[11px] text-pump-green hover:underline"
+                      >
+                        View on Explorer ↗
+                      </a>
+                    )}
+                  </div>
+                  {operatorWallet && (
+                    <button
+                      type="button"
+                      onClick={() => void handleCopyOperatorWallet()}
+                      className="px-2.5 py-1.5 rounded-md border border-white/15 bg-white/5 text-gray-200 text-[11px] hover:bg-white/10 transition"
+                    >
+                      {walletCopied === "done" ? "Copied" : walletCopied === "error" ? "Copy failed" : "Copy"}
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* KPI Cards */}
