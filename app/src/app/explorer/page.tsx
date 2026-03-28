@@ -43,6 +43,23 @@ function marketTopPct(m: Market): number {
 type StatusFilter = "open" | "resolved";
 type ResolvedSort = "newest" | "oldest" | "match";
 const RESOLVED_PAGE_SIZE = 28;
+const FLASH_EXPLORER_POLL_MS = 5_000;
+
+function sameFlashMarketList(a: FlashMarket[], b: FlashMarket[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const left = a[i];
+    const right = b[i];
+    if (!left || !right) return false;
+    if (left.liveMicroId !== right.liveMicroId) return false;
+    if (left.marketAddress !== right.marketAddress) return false;
+    if (left.status !== right.status) return false;
+    if (String(left.windowEnd || "") !== String(right.windowEnd || "")) return false;
+    if (String(left.createdAt || "") !== String(right.createdAt || "")) return false;
+  }
+  return true;
+}
 
 export default function ExplorerPage() {
   const searchParams = useSearchParams();
@@ -64,9 +81,14 @@ export default function ExplorerPage() {
   const desktopResolvedGridTopRef = useRef<HTMLDivElement | null>(null);
   const mobileResolvedGridTopRef = useRef<HTMLDivElement | null>(null);
 
-  const fetchFlashMarkets = useCallback(async (kind: FlashMarketKind, filter: StatusFilter) => {
-    if (kind === "sport") setSportsFlashLoading(true);
-    if (kind === "crypto") setCryptoFlashLoading(true);
+  const fetchFlashMarkets = useCallback(async (
+    kind: FlashMarketKind,
+    filter: StatusFilter,
+    options?: { silent?: boolean },
+  ) => {
+    const silent = options?.silent === true;
+    if (!silent && kind === "sport") setSportsFlashLoading(true);
+    if (!silent && kind === "crypto") setCryptoFlashLoading(true);
     try {
       const limit = filter === "resolved" ? 200 : 20;
       const res = await fetch(
@@ -76,15 +98,21 @@ export default function ExplorerPage() {
       if (!res.ok) throw new Error(`Flash markets fetch failed (${res.status})`);
       const json = await res.json();
       const rows = (json?.markets as FlashMarket[]) || [];
-      if (kind === "sport") setSportsFlashMarkets(rows);
-      if (kind === "crypto") setCryptoFlashMarkets(rows);
+      if (kind === "sport") {
+        setSportsFlashMarkets((prev) => (sameFlashMarketList(prev, rows) ? prev : rows));
+      }
+      if (kind === "crypto") {
+        setCryptoFlashMarkets((prev) => (sameFlashMarketList(prev, rows) ? prev : rows));
+      }
     } catch (error) {
-      console.warn(`Flash ${kind} markets fetch failed:`, error);
-      if (kind === "sport") setSportsFlashMarkets([]);
-      if (kind === "crypto") setCryptoFlashMarkets([]);
+      if (!silent) {
+        console.warn(`Flash ${kind} markets fetch failed:`, error);
+        if (kind === "sport") setSportsFlashMarkets([]);
+        if (kind === "crypto") setCryptoFlashMarkets([]);
+      }
     } finally {
-      if (kind === "sport") setSportsFlashLoading(false);
-      if (kind === "crypto") setCryptoFlashLoading(false);
+      if (!silent && kind === "sport") setSportsFlashLoading(false);
+      if (!silent && kind === "crypto") setCryptoFlashLoading(false);
     }
   }, []);
 
@@ -95,6 +123,29 @@ export default function ExplorerPage() {
   useEffect(() => {
     void fetchFlashMarkets("crypto", cryptoStatusFilter);
   }, [cryptoStatusFilter, fetchFlashMarkets]);
+
+  useEffect(() => {
+    const tick = () => {
+      if (document.visibilityState !== "visible") return;
+      void fetchFlashMarkets("sport", statusFilter, { silent: true });
+      void fetchFlashMarkets("crypto", cryptoStatusFilter, { silent: true });
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void fetchFlashMarkets("sport", statusFilter, { silent: true });
+        void fetchFlashMarkets("crypto", cryptoStatusFilter, { silent: true });
+      }
+    };
+
+    const timer = window.setInterval(tick, FLASH_EXPLORER_POLL_MS);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [cryptoStatusFilter, fetchFlashMarkets, statusFilter]);
 
   const visibleFlashMarkets = useMemo(() => {
     if (statusFilter !== "resolved") return sportsFlashMarkets;

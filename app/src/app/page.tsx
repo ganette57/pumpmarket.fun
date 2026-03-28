@@ -80,8 +80,31 @@ type HomeCarouselSlide =
 
 type MarketStatusFilter = "all" | "open" | "resolved" | "ending_soon" | "top_volume";
 const CAROUSEL_LIMIT = 5;
+const FLASH_HOME_POLL_MS = 5_000;
 
 const DEBUG_SPORT_OPEN_FILTER = false;
+
+function isActiveFlashMarket(market: FlashMarket, nowMs = Date.now()): boolean {
+  if (!market || market.status !== "active") return false;
+  const windowEndMs = Date.parse(String(market.windowEnd || ""));
+  return Number.isFinite(windowEndMs) && nowMs < windowEndMs;
+}
+
+function sameFlashMarketList(a: FlashMarket[], b: FlashMarket[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const left = a[i];
+    const right = b[i];
+    if (!left || !right) return false;
+    if (left.liveMicroId !== right.liveMicroId) return false;
+    if (left.marketAddress !== right.marketAddress) return false;
+    if (left.status !== right.status) return false;
+    if (String(left.windowEnd || "") !== String(right.windowEnd || "")) return false;
+    if (String(left.createdAt || "") !== String(right.createdAt || "")) return false;
+  }
+  return true;
+}
 
 function normalizeCategoryId(raw: unknown): string {
   const s = String(raw || "")
@@ -358,18 +381,21 @@ export default function Home() {
 
   const refreshHomeLiveCryptoFlashMarkets = useCallback(async () => {
     try {
-      const response = await fetch("/api/explorer/flash-markets?status=open&kind=crypto&limit=12");
+      const response = await fetch("/api/explorer/flash-markets?status=open&kind=crypto&limit=12", {
+        cache: "no-store",
+      });
       if (!response.ok) return;
       const payload = await response.json();
       const nowMs = Date.now();
       const incoming = Array.isArray(payload?.markets) ? (payload.markets as FlashMarket[]) : [];
-      const filtered = incoming.filter((market) => {
-        if (!market || market.kind !== "crypto") return false;
-        if (market.status !== "active") return false;
-        const windowEndMs = Date.parse(String(market.windowEnd || ""));
-        return Number.isFinite(windowEndMs) && nowMs < windowEndMs;
+      const filtered = incoming.filter((market) => market?.kind === "crypto" && isActiveFlashMarket(market, nowMs));
+
+      setHomeLiveCryptoFlashMarkets((prev) => (sameFlashMarketList(prev, filtered) ? prev : filtered));
+      setHomeLiveFlashMarket((prev) => {
+        if (!prev || prev.kind !== "crypto") return prev;
+        if (isActiveFlashMarket(prev, nowMs) && filtered.some((m) => m.liveMicroId === prev.liveMicroId)) return prev;
+        return filtered[0] ?? null;
       });
-      setHomeLiveCryptoFlashMarkets(filtered);
     } catch {
       // Keep existing list on transient network failures.
     }
@@ -435,10 +461,24 @@ export default function Home() {
   }
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
+    const tick = () => {
+      if (document.visibilityState !== "visible") return;
       void refreshHomeLiveCryptoFlashMarkets();
-    }, 10_000);
-    return () => window.clearInterval(timer);
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void refreshHomeLiveCryptoFlashMarkets();
+      }
+    };
+
+    const timer = window.setInterval(tick, FLASH_HOME_POLL_MS);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [refreshHomeLiveCryptoFlashMarkets]);
 
   // Batch-fetch creator profiles when markets change
