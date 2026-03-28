@@ -49,6 +49,7 @@ import type { LiveMicroRow } from "@/lib/liveMicro/repository";
 // ── In-memory campaign store (like sports auto-tick) ──
 
 const CAMPAIGNS_KEY = Symbol.for("FUNMARKET_FLASH_CRYPTO_CAMPAIGNS");
+const FLASH_CRYPTO_CHAIN_COOLDOWN_MS = 5_000;
 
 function getCampaignStore(): Map<string, FlashCryptoCampaign> {
   const host = (typeof process !== "undefined" ? process : globalThis) as any;
@@ -68,6 +69,30 @@ function log(msg: string, payload?: Record<string, unknown>) {
     return;
   }
   console.log(`[flash-crypto] ${msg}`);
+}
+
+function computeNextLaunchAtFromWindowEnd(windowEndIso: string | null | undefined): number {
+  const endMs = Date.parse(String(windowEndIso || ""));
+  if (Number.isFinite(endMs)) return endMs + FLASH_CRYPTO_CHAIN_COOLDOWN_MS;
+  return Date.now() + FLASH_CRYPTO_CHAIN_COOLDOWN_MS;
+}
+
+function scheduleNextMarketFromWindowEnd(params: {
+  campaign: FlashCryptoCampaign;
+  windowEndIso: string | null | undefined;
+}) {
+  const nextLaunchAt = computeNextLaunchAtFromWindowEnd(params.windowEndIso);
+  params.campaign.nextLaunchAt = nextLaunchAt;
+  log("cooldown after finish = 5s", {
+    campaignId: params.campaign.id,
+    mode: params.campaign.mode,
+    cooldownSeconds: 5,
+  });
+  log(`next market scheduled = ${new Date(nextLaunchAt).toISOString()}`, {
+    campaignId: params.campaign.id,
+    mode: params.campaign.mode,
+    previousWindowEnd: params.windowEndIso || null,
+  });
 }
 
 function asObject(value: unknown): Record<string, unknown> {
@@ -151,7 +176,6 @@ export async function startFlashCryptoCampaign(input: StartCampaignInput): Promi
 
   const id = generateId();
   const nowMs = Date.now();
-
   const token = mode === "graduation"
     ? await (async () => {
         const grad = await getFlashCryptoGraduationSnapshot(tokenMint);
@@ -216,8 +240,11 @@ export async function startFlashCryptoCampaign(input: StartCampaignInput): Promi
   try {
     firstMarket = await createFlashCryptoMarket(campaign);
     if (firstMarket.reusedExisting) {
-      campaign.nextLaunchAt = nowMs + launchIntervalMinutes * 60_000;
       campaign.lastError = null;
+      scheduleNextMarketFromWindowEnd({
+        campaign,
+        windowEndIso: firstMarket.windowEnd,
+      });
       log("first market skipped (already active)", {
         campaignId: id,
         mode,
@@ -226,8 +253,11 @@ export async function startFlashCryptoCampaign(input: StartCampaignInput): Promi
       });
     } else {
       campaign.launchedCount++;
-      campaign.nextLaunchAt = nowMs + launchIntervalMinutes * 60_000;
       campaign.marketIds.push(firstMarket.marketAddress);
+      scheduleNextMarketFromWindowEnd({
+        campaign,
+        windowEndIso: firstMarket.windowEnd,
+      });
       log("first market created", {
         campaignId: id,
         mode,
@@ -633,6 +663,7 @@ export async function tickFlashCryptoCampaigns(): Promise<{
   errors: string[];
 }> {
   const store = getCampaignStore();
+  const nowMs = Date.now();
   let campaignsProcessed = 0;
   let marketsCreated = 0;
   const errors: string[] = [];
@@ -646,11 +677,26 @@ export async function tickFlashCryptoCampaigns(): Promise<{
       continue;
     }
 
+    if (nowMs < campaign.nextLaunchAt) continue;
+    log(`next start reached = ${new Date(campaign.nextLaunchAt).toISOString()}`, {
+      campaignId: campaign.id,
+      mode: campaign.mode,
+      now: new Date(nowMs).toISOString(),
+    });
+
+    let hasActive = false;
     try {
-      const hasActive = await hasCampaignActiveMarket(campaign.id);
+      hasActive = await hasCampaignActiveMarket(campaign.id);
       if (hasActive) continue;
     } catch {
       continue;
+    }
+
+    if (campaign.launchedCount > 0) {
+      log("previous market no longer active", {
+        campaignId: campaign.id,
+        mode: campaign.mode,
+      });
     }
 
     campaignsProcessed++;
@@ -659,6 +705,10 @@ export async function tickFlashCryptoCampaigns(): Promise<{
       const result = await createFlashCryptoMarket(campaign);
       if (result.reusedExisting) {
         campaign.lastError = null;
+        scheduleNextMarketFromWindowEnd({
+          campaign,
+          windowEndIso: result.windowEnd,
+        });
         log("campaign market skipped (already active)", {
           campaignId: campaign.id,
           mode: campaign.mode,
@@ -671,6 +721,17 @@ export async function tickFlashCryptoCampaigns(): Promise<{
       campaign.marketIds.push(result.marketAddress);
       campaign.lastError = null;
       marketsCreated++;
+      scheduleNextMarketFromWindowEnd({
+        campaign,
+        windowEndIso: result.windowEnd,
+      });
+      log("next market created", {
+        campaignId: campaign.id,
+        mode: campaign.mode,
+        marketAddress: result.marketAddress,
+        windowStart: result.windowStart,
+        windowEnd: result.windowEnd,
+      });
       log("campaign market created", {
         campaignId: campaign.id,
         mode: campaign.mode,
