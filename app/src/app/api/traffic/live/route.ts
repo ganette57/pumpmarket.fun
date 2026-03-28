@@ -58,14 +58,23 @@ export async function GET(req: Request) {
         resolutionStatus === "proposed" ||
         resolutionStatus === "finalized" ||
         resolutionStatus === "cancelled";
+      console.log("[traffic-flash:api-live] stop check", {
+        roundId,
+        workerStatus: workerStatus.status,
+        shouldStopByTime,
+        shouldStopByStatus,
+        nowMs,
+        endMs,
+        endDate: row.end_date,
+        resolutionStatus,
+        resolved: row.resolved,
+        cancelled: row.cancelled,
+      });
       if ((shouldStopByTime || shouldStopByStatus) && workerStatus.status === "running") {
-        if (shouldStopByTime) {
-          console.log("[traffic-flash:api-live] traffic round reached end_time", {
-            roundId,
-            marketAddress,
-            endDate: row.end_date,
-          });
-        }
+        console.log("[traffic-flash:api-live] STOPPING worker", {
+          roundId,
+          reason: shouldStopByStatus ? `market_status_${resolutionStatus || "terminal"}` : "end_time_reached",
+        });
         await stopTrafficCounter(
           roundId,
           shouldStopByStatus ? `market_status_${resolutionStatus || "terminal"}` : "end_time_reached",

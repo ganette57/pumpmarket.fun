@@ -371,6 +371,17 @@ class TrafficRoundManager:
                 ok, frame = cap.read()
                 if not ok or frame is None:
                     frame_read_failures += 1
+                    # For local files: rewind to keep preview alive
+                    is_local = active_source and os.path.exists(active_source)
+                    if is_local and frame_read_failures >= 3:
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        print(
+                            "[traffic-vision-worker] local file ended, rewinding for preview",
+                            {"roundId": runtime.spec.round_id, "frame_idx": frame_idx},
+                        )
+                        frame_read_failures = 0
+                        time.sleep(0.1)
+                        continue
                     if frame_read_failures <= 3 or (
                         SETTINGS.frame_log_interval > 0
                         and frame_read_failures % SETTINGS.frame_log_interval == 0

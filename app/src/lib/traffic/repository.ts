@@ -49,6 +49,7 @@ export async function upsertTrafficFlashMarketRow(input: {
     no_supply: 0,
     total_volume: 0,
     resolved: false,
+    cancelled: false,
     resolution_status: "open",
     contested: false,
     contest_count: 0,

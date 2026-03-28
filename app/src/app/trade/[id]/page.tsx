@@ -1877,6 +1877,7 @@ const [liveScoreLastSuccessAt, setLiveScoreLastSuccessAt] = useState<number | nu
 const [trafficLiveCount, setTrafficLiveCount] = useState<number | null>(null);
 const [trafficPolling, setTrafficPolling] = useState(false);
 const [trafficDebugFrameTick, setTrafficDebugFrameTick] = useState(0);
+const [trafficDebugFrameCommitted, setTrafficDebugFrameCommitted] = useState<string | null>(null);
 const [trafficDebugFrameAvailable, setTrafficDebugFrameAvailable] = useState<boolean | null>(null);
 const [trafficDebugSourceOpened, setTrafficDebugSourceOpened] = useState<boolean | null>(null);
 const [trafficDebugDetections, setTrafficDebugDetections] = useState<number | null>(null);
@@ -3031,6 +3032,7 @@ useEffect(() => {
     setTrafficLiveCount(null);
     setTrafficPolling(false);
     setTrafficDebugFrameAvailable(false);
+    setTrafficDebugFrameCommitted(null);
     setTrafficDebugSourceOpened(null);
     setTrafficDebugDetections(null);
     return;
@@ -3091,11 +3093,36 @@ useEffect(() => {
   };
 
   void poll();
-  setTrafficDebugFrameTick((v) => v + 1);
+  // Preload-based frame refresh: only commit src when image loads successfully.
+  // This prevents the preview from going blank on transient 404s.
+  let frameTickCounter = 0;
+  let preloadInFlight = false;
+  const preloadFrame = () => {
+    if (preloadInFlight || cancelled) return;
+    if (document.visibilityState !== "visible") return;
+    frameTickCounter += 1;
+    const tick = frameTickCounter;
+    const url = `/api/traffic/frame?roundId=${encodeURIComponent(roundId)}&t=${tick}`;
+    preloadInFlight = true;
+    const img = new Image();
+    img.onload = () => {
+      preloadInFlight = false;
+      if (cancelled) return;
+      console.log("[traffic-preview] image preload success", { tick });
+      setTrafficDebugFrameCommitted(url);
+      setTrafficDebugFrameAvailable(true);
+    };
+    img.onerror = () => {
+      preloadInFlight = false;
+      if (cancelled) return;
+      console.log("[traffic-preview] image preload failed", { tick });
+      // Keep showing last valid frame — do NOT hide
+    };
+    img.src = url;
+  };
+  preloadFrame();
   const iv = window.setInterval(() => {
-    if (document.visibilityState === "visible") {
-      setTrafficDebugFrameTick((v) => v + 1);
-    }
+    preloadFrame();
     void poll();
   }, 1_000);
 
@@ -3103,6 +3130,7 @@ useEffect(() => {
     cancelled = true;
     setTrafficPolling(false);
     window.clearInterval(iv);
+    console.log("[traffic-preview] round terminal, stopping timers");
   };
 }, [market?.marketMode, market?.publicKey, market?.sportMeta, market?.resolutionStatus, market?.resolved]);
 
@@ -3661,7 +3689,7 @@ useEffect(() => {
   ]);
   const trafficDebugFrameSrc =
     isFlashTrafficMarket && trafficRoundId
-      ? `/api/traffic/frame?roundId=${encodeURIComponent(trafficRoundId)}&t=${trafficDebugFrameTick}`
+      ? (trafficDebugFrameCommitted || `/api/traffic/frame?roundId=${encodeURIComponent(trafficRoundId)}&t=${trafficDebugFrameTick}`)
       : null;
   const trafficWindowEnd = isFlashTrafficMarket
     ? String(trafficMeta.window_end || market.endTime || "").trim() || null
@@ -4210,16 +4238,11 @@ const ended = endedByTime;
                       <img
                         src={trafficDebugFrameSrc}
                         alt="Traffic debug frame"
-                        className={
-                          trafficDebugFrameAvailable === false
-                            ? "hidden"
-                            : "block h-full max-h-full w-full max-w-full object-contain"
-                        }
+                        className="block h-full max-h-full w-full max-w-full object-contain"
                         onLoad={() => setTrafficDebugFrameAvailable(true)}
-                        onError={() => setTrafficDebugFrameAvailable(false)}
                       />
                     ) : null}
-                    {trafficDebugFrameAvailable === false && (
+                    {trafficDebugFrameAvailable !== true && !trafficDebugFrameCommitted && (
                       <div className="px-3 py-6 text-center text-xs text-sky-100/80">
                         No debug frame available yet
                       </div>
