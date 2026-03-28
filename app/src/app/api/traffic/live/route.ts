@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { getTrafficMarketRuntimeByAddress } from "@/lib/traffic/repository";
-import { getTrafficRoundStatus, stopTrafficCounter } from "@/lib/traffic/trafficCounter";
+import {
+  getTrafficRoundStatus,
+  stopTrafficCounter,
+  type TrafficRoundStatus,
+} from "@/lib/traffic/trafficCounter";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -15,36 +19,61 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "roundId param required" }, { status: 400 });
     }
 
-    if (marketAddress) {
-      const row = await getTrafficMarketRuntimeByAddress(marketAddress);
-      if (row) {
-        const nowMs = Date.now();
-        const endMs = Date.parse(String(row.end_date || ""));
-        const resolutionStatus = String(row.resolution_status || "").trim().toLowerCase();
-        const shouldStopByTime = Number.isFinite(endMs) && nowMs >= endMs;
-        const shouldStopByStatus =
-          row.resolved === true ||
-          row.cancelled === true ||
-          resolutionStatus === "proposed" ||
-          resolutionStatus === "finalized" ||
-          resolutionStatus === "cancelled";
-        if (shouldStopByTime || shouldStopByStatus) {
-          if (shouldStopByTime) {
-            console.log("[traffic-flash:api-live] traffic round reached end_time", {
-              roundId,
-              marketAddress,
-              endDate: row.end_date,
-            });
-          }
-          await stopTrafficCounter(
+    const row = marketAddress
+      ? await getTrafficMarketRuntimeByAddress(marketAddress)
+      : null;
+
+    let workerStatus: TrafficRoundStatus;
+    try {
+      workerStatus = await getTrafficRoundStatus(roundId);
+    } catch (error: any) {
+      const message = String(error?.message || "");
+      if (message.toLowerCase().includes("round not found")) {
+        return NextResponse.json(
+          {
+            currentCount: 0,
+            status: "stopped",
+            sourceOpened: false,
+            lastFrameAt: null,
+            detectionsLastFrame: 0,
+          },
+          {
+            headers: {
+              "Cache-Control": "no-cache, no-store, must-revalidate",
+            },
+          },
+        );
+      }
+      throw error;
+    }
+
+    if (row) {
+      const nowMs = Date.now();
+      const endMs = Date.parse(String(row.end_date || ""));
+      const resolutionStatus = String(row.resolution_status || "").trim().toLowerCase();
+      const shouldStopByTime = Number.isFinite(endMs) && nowMs >= endMs;
+      const shouldStopByStatus =
+        row.resolved === true ||
+        row.cancelled === true ||
+        resolutionStatus === "proposed" ||
+        resolutionStatus === "finalized" ||
+        resolutionStatus === "cancelled";
+      if ((shouldStopByTime || shouldStopByStatus) && workerStatus.status === "running") {
+        if (shouldStopByTime) {
+          console.log("[traffic-flash:api-live] traffic round reached end_time", {
             roundId,
-            shouldStopByStatus ? `market_status_${resolutionStatus || "terminal"}` : "end_time_reached",
-          );
+            marketAddress,
+            endDate: row.end_date,
+          });
         }
+        await stopTrafficCounter(
+          roundId,
+          shouldStopByStatus ? `market_status_${resolutionStatus || "terminal"}` : "end_time_reached",
+        );
+        workerStatus = await getTrafficRoundStatus(roundId).catch(() => workerStatus);
       }
     }
 
-    const workerStatus = await getTrafficRoundStatus(roundId);
     const currentCount = workerStatus.currentCount;
     console.log("[traffic-flash:api-live] live API returning count for roundId", {
       roundId,

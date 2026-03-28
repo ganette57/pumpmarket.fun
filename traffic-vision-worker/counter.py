@@ -147,24 +147,21 @@ class TrafficRoundManager:
         if not runtime:
             return None
 
+        with runtime.lock:
+            # Idempotent stop: once finalized, always return existing frozen count.
+            if runtime.status != "running":
+                return {"roundId": round_id, "finalCount": int(runtime.current_count)}
+            runtime.status = "stopped"
+            if runtime.stop_reason is None:
+                runtime.stop_reason = reason
+
         runtime.stop_event.set()
         if runtime.thread and runtime.thread.is_alive():
             runtime.thread.join(timeout=1.0)
 
         with runtime.lock:
-            if runtime.status == "running":
-                runtime.status = "stopped"
-            runtime.stop_reason = reason
             final_count = int(runtime.current_count)
 
-        print(
-            "[traffic-vision-worker] worker round stopped",
-            {"roundId": round_id, "reason": reason, "finalCount": final_count},
-        )
-        print(
-            "[traffic-vision-worker] final frozen count returned",
-            {"roundId": round_id, "finalCount": final_count},
-        )
         return {"roundId": round_id, "finalCount": final_count}
 
     def _maybe_count_track(self, runtime: RoundRuntime, track_id: int, class_id: int, side: int) -> None:

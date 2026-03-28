@@ -3045,6 +3045,17 @@ useEffect(() => {
     setTrafficLiveCount(Math.max(0, Math.floor(seedCount)));
   }
 
+  const resolutionStatus = String(market.resolutionStatus || "").trim().toLowerCase();
+  const isTrafficTerminal =
+    market.resolved === true ||
+    resolutionStatus === "proposed" ||
+    resolutionStatus === "finalized" ||
+    resolutionStatus === "cancelled";
+  if (isTrafficTerminal) {
+    setTrafficPolling(false);
+    return;
+  }
+
   let cancelled = false;
   const poll = async () => {
     if (cancelled || document.visibilityState !== "visible") return;
@@ -3093,7 +3104,7 @@ useEffect(() => {
     setTrafficPolling(false);
     window.clearInterval(iv);
   };
-}, [market?.marketMode, market?.publicKey, market?.sportMeta]);
+}, [market?.marketMode, market?.publicKey, market?.sportMeta, market?.resolutionStatus, market?.resolved]);
 
   // Related block
   useEffect(() => {
