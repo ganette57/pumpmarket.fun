@@ -21,13 +21,16 @@ type WorkerRoundStatus = {
   currentCount: number;
   startedAt: number;
   endsAt: number;
+  sourceOpened?: boolean;
+  lastFrameAt?: number | null;
+  detectionsLastFrame?: number;
 };
 
 const DEFAULT_TRAFFIC_CLASSES = ["car", "bus", "truck", "motorcycle"];
 const DEFAULT_TRACKER = "bytetrack";
 const DEFAULT_WORKER_URL = "http://127.0.0.1:8090";
 
-function workerBaseUrl(): string {
+export function getTrafficWorkerBaseUrl(): string {
   return (
     String(process.env.TRAFFIC_VISION_WORKER_URL || "").trim() ||
     String(process.env.NEXT_PUBLIC_TRAFFIC_VISION_WORKER_URL || "").trim() ||
@@ -36,7 +39,7 @@ function workerBaseUrl(): string {
 }
 
 async function workerFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const url = `${workerBaseUrl()}${path.startsWith("/") ? path : `/${path}`}`;
+  const url = `${getTrafficWorkerBaseUrl()}${path.startsWith("/") ? path : `/${path}`}`;
   return fetch(url, {
     cache: "no-store",
     ...init,
@@ -56,6 +59,27 @@ function normalizeCount(value: unknown): number {
   if (!Number.isFinite(n)) return 0;
   return Math.max(0, Math.floor(n));
 }
+
+function normalizeOptionalCount(value: unknown): number | null {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(0, Math.floor(n));
+}
+
+function normalizeBool(value: unknown): boolean {
+  return value === true;
+}
+
+export type TrafficRoundStatus = {
+  roundId: string;
+  status: "running" | "ended" | "stopped";
+  currentCount: number;
+  startedAt: number;
+  endsAt: number;
+  sourceOpened: boolean;
+  lastFrameAt: number | null;
+  detectionsLastFrame: number;
+};
 
 export async function startTrafficCounter(
   roundId: string,
@@ -91,8 +115,24 @@ export async function startTrafficCounter(
 }
 
 export async function getTrafficCount(roundId: string): Promise<number> {
+  const status = await getTrafficRoundStatus(roundId);
+  return status.currentCount;
+}
+
+export async function getTrafficRoundStatus(roundId: string): Promise<TrafficRoundStatus> {
   const id = normalizeRoundId(roundId);
-  if (!id) return 0;
+  if (!id) {
+    return {
+      roundId: "",
+      status: "stopped",
+      currentCount: 0,
+      startedAt: 0,
+      endsAt: 0,
+      sourceOpened: false,
+      lastFrameAt: null,
+      detectionsLastFrame: 0,
+    };
+  }
 
   const res = await workerFetch(`/rounds/${encodeURIComponent(id)}/status`, {
     method: "GET",
@@ -106,7 +146,19 @@ export async function getTrafficCount(roundId: string): Promise<number> {
   }
 
   const json = (await res.json().catch(() => ({}))) as Partial<WorkerRoundStatus>;
-  return normalizeCount(json.currentCount);
+  return {
+    roundId: String(json.roundId || id),
+    status:
+      json.status === "running" || json.status === "ended" || json.status === "stopped"
+        ? json.status
+        : "stopped",
+    currentCount: normalizeCount(json.currentCount),
+    startedAt: normalizeCount(json.startedAt),
+    endsAt: normalizeCount(json.endsAt),
+    sourceOpened: normalizeBool(json.sourceOpened),
+    lastFrameAt: normalizeOptionalCount(json.lastFrameAt),
+    detectionsLastFrame: normalizeCount(json.detectionsLastFrame),
+  };
 }
 
 export async function stopTrafficCounter(roundId: string, reason = "stopped"): Promise<number | null> {
@@ -131,4 +183,9 @@ export async function stopTrafficCounter(roundId: string, reason = "stopped"): P
 export function setTrafficCounterEndTime(roundId: string, endAtMs: number): void {
   void roundId;
   void endAtMs;
+}
+
+export function getTrafficDebugFrameUrl(roundId: string): string {
+  const id = normalizeRoundId(roundId);
+  return `${getTrafficWorkerBaseUrl()}/rounds/${encodeURIComponent(id)}/frame.jpg`;
 }

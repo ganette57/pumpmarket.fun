@@ -56,6 +56,7 @@ class RoundRuntime:
     source_url: Optional[str] = None
     last_frame_at: Optional[float] = None
     detections_last_frame: int = 0
+    last_debug_frame_jpeg: Optional[bytes] = None
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def snapshot(self) -> Dict[str, object]:
@@ -130,6 +131,16 @@ class TrafficRoundManager:
             return None
         return runtime.snapshot()
 
+    def get_debug_frame_jpeg(self, round_id: str) -> Optional[bytes]:
+        with self._lock:
+            runtime = self._rounds.get(round_id)
+        if not runtime:
+            return None
+        with runtime.lock:
+            if runtime.last_debug_frame_jpeg is None:
+                return None
+            return bytes(runtime.last_debug_frame_jpeg)
+
     def stop_round(self, round_id: str, reason: str = "manual_stop") -> Optional[Dict[str, object]]:
         with self._lock:
             runtime = self._rounds.get(round_id)
@@ -182,6 +193,89 @@ class TrafficRoundManager:
                 "currentCount": current_count,
             },
         )
+
+    def _update_debug_frame(
+        self,
+        runtime: RoundRuntime,
+        frame,
+        detections: List[Dict[str, object]],
+    ) -> None:
+        if frame is None:
+            return
+
+        annotated = frame.copy()
+        x1 = int(float(runtime.spec.line["x1"]))
+        y1 = int(float(runtime.spec.line["y1"]))
+        x2 = int(float(runtime.spec.line["x2"]))
+        y2 = int(float(runtime.spec.line["y2"]))
+
+        # Debug counting line overlay.
+        cv2.line(annotated, (x1, y1), (x2, y2), (0, 220, 255), 2)
+
+        for det in detections:
+            bbox = det.get("bbox")
+            if not isinstance(bbox, tuple) or len(bbox) != 4:
+                continue
+
+            x_min, y_min, x_max, y_max = bbox
+            px = int(det.get("point_x", 0))
+            py = int(det.get("point_y", 0))
+            track_id = int(det.get("track_id", -1))
+            class_id = int(det.get("class_id", -1))
+            side = int(det.get("side", 0))
+
+            color = (40, 190, 255)
+            if side > 0:
+                color = (40, 220, 80)
+            elif side < 0:
+                color = (80, 160, 255)
+
+            cv2.rectangle(annotated, (int(x_min), int(y_min)), (int(x_max), int(y_max)), color, 2)
+            cv2.circle(annotated, (px, py), 4, (255, 255, 255), -1)
+            class_name = COCO_CLASS_ID_TO_NAME.get(class_id, str(class_id))
+            label = f"{class_name} #{track_id}"
+            cv2.putText(
+                annotated,
+                label,
+                (int(x_min), max(14, int(y_min) - 6)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                color,
+                2,
+                cv2.LINE_AA,
+            )
+
+        with runtime.lock:
+            current_count = int(runtime.current_count)
+            status = str(runtime.status)
+
+        cv2.putText(
+            annotated,
+            f"count={current_count} detections={len(detections)} status={status}",
+            (10, 22),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            annotated,
+            f"round={runtime.spec.round_id}",
+            (10, 44),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (200, 200, 200),
+            1,
+            cv2.LINE_AA,
+        )
+
+        ok, encoded = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+        if not ok:
+            return
+
+        with runtime.lock:
+            runtime.last_debug_frame_jpeg = encoded.tobytes()
 
     def _run_round(self, runtime: RoundRuntime) -> None:
         model = self._get_model()
@@ -322,6 +416,9 @@ class TrafficRoundManager:
                     verbose=False,
                 )
                 if not results:
+                    with runtime.lock:
+                        runtime.detections_last_frame = 0
+                    self._update_debug_frame(runtime, frame, [])
                     continue
 
                 first = results[0]
@@ -329,10 +426,12 @@ class TrafficRoundManager:
                 if boxes is None:
                     with runtime.lock:
                         runtime.detections_last_frame = 0
+                    self._update_debug_frame(runtime, frame, [])
                     continue
                 if boxes.id is None or boxes.cls is None or boxes.xyxy is None:
                     with runtime.lock:
                         runtime.detections_last_frame = 0
+                    self._update_debug_frame(runtime, frame, [])
                     continue
 
                 track_ids = boxes.id.int().cpu().tolist()
@@ -354,6 +453,7 @@ class TrafficRoundManager:
                         },
                     )
 
+                debug_detections: List[Dict[str, object]] = []
                 for track_id_raw, class_id_raw, bbox in zip(track_ids, class_ids, bboxes):
                     track_id = int(track_id_raw)
                     class_id = int(class_id_raw)
@@ -365,6 +465,18 @@ class TrafficRoundManager:
                     center_y = float(y_max)
                     side = _line_side(center_x, center_y, x1, y1, x2, y2)
                     self._maybe_count_track(runtime, track_id, class_id, side)
+                    debug_detections.append(
+                        {
+                            "track_id": track_id,
+                            "class_id": class_id,
+                            "bbox": (float(x_min), float(y_min), float(x_max), float(y_max)),
+                            "point_x": int(center_x),
+                            "point_y": int(center_y),
+                            "side": side,
+                        }
+                    )
+
+                self._update_debug_frame(runtime, frame, debug_detections)
         finally:
             cap.release()
             with runtime.lock:

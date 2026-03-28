@@ -1876,6 +1876,10 @@ const [liveScoreFailures, setLiveScoreFailures] = useState(0);
 const [liveScoreLastSuccessAt, setLiveScoreLastSuccessAt] = useState<number | null>(null);
 const [trafficLiveCount, setTrafficLiveCount] = useState<number | null>(null);
 const [trafficPolling, setTrafficPolling] = useState(false);
+const [trafficDebugFrameTick, setTrafficDebugFrameTick] = useState(0);
+const [trafficDebugFrameAvailable, setTrafficDebugFrameAvailable] = useState<boolean | null>(null);
+const [trafficDebugSourceOpened, setTrafficDebugSourceOpened] = useState<boolean | null>(null);
+const [trafficDebugDetections, setTrafficDebugDetections] = useState<number | null>(null);
 const [persistedTradeScore, setPersistedTradeScore] = useState<{
   home: number;
   away: number;
@@ -3003,6 +3007,9 @@ useEffect(() => {
   if (!market?.publicKey) {
     setTrafficLiveCount(null);
     setTrafficPolling(false);
+    setTrafficDebugFrameAvailable(null);
+    setTrafficDebugSourceOpened(null);
+    setTrafficDebugDetections(null);
     return;
   }
 
@@ -3013,6 +3020,9 @@ useEffect(() => {
   if (!isTrafficFlashMarket) {
     setTrafficLiveCount(null);
     setTrafficPolling(false);
+    setTrafficDebugFrameAvailable(null);
+    setTrafficDebugSourceOpened(null);
+    setTrafficDebugDetections(null);
     return;
   }
 
@@ -3020,6 +3030,9 @@ useEffect(() => {
   if (!roundId) {
     setTrafficLiveCount(null);
     setTrafficPolling(false);
+    setTrafficDebugFrameAvailable(false);
+    setTrafficDebugSourceOpened(null);
+    setTrafficDebugDetections(null);
     return;
   }
 
@@ -3047,9 +3060,17 @@ useEffect(() => {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json().catch(() => ({}));
       const nextCount = Number((json as any)?.currentCount);
+      const nextSourceOpened = (json as any)?.sourceOpened;
+      const nextDetections = Number((json as any)?.detectionsLastFrame);
       if (cancelled) return;
       if (Number.isFinite(nextCount)) {
         setTrafficLiveCount(Math.max(0, Math.floor(nextCount)));
+      }
+      if (typeof nextSourceOpened === "boolean") {
+        setTrafficDebugSourceOpened(nextSourceOpened);
+      }
+      if (Number.isFinite(nextDetections)) {
+        setTrafficDebugDetections(Math.max(0, Math.floor(nextDetections)));
       }
     } catch {
       // Best-effort polling, keep last known value on failures.
@@ -3059,7 +3080,11 @@ useEffect(() => {
   };
 
   void poll();
+  setTrafficDebugFrameTick((v) => v + 1);
   const iv = window.setInterval(() => {
+    if (document.visibilityState === "visible") {
+      setTrafficDebugFrameTick((v) => v + 1);
+    }
     void poll();
   }, 1_000);
 
@@ -3623,6 +3648,10 @@ useEffect(() => {
     trafficMeta.end_count,
     trafficMeta.start_count,
   ]);
+  const trafficDebugFrameSrc =
+    isFlashTrafficMarket && trafficRoundId
+      ? `/api/traffic/frame?roundId=${encodeURIComponent(trafficRoundId)}&t=${trafficDebugFrameTick}`
+      : null;
   const trafficWindowEnd = isFlashTrafficMarket
     ? String(trafficMeta.window_end || market.endTime || "").trim() || null
     : null;
@@ -4156,6 +4185,44 @@ const ended = endedByTime;
                     {trafficDurationSec != null ? ` • Duration: ${Math.floor(trafficDurationSec)}s` : ""}
                     {trafficRoundId ? ` • Round: ${trafficRoundId}` : ""}
                     {trafficWindowEndLabel ? ` • Ends: ${trafficWindowEndLabel}` : ""}
+                  </div>
+                </div>
+              )}
+              {isFlashTrafficMarket && (
+                <div className="rounded-xl border border-sky-500/35 bg-sky-500/10 px-4 py-3">
+                  <div className="text-[11px] uppercase tracking-[0.08em] text-sky-200/85">
+                    Traffic Debug Preview
+                  </div>
+                  <div className="mt-2 flex h-[360px] items-center justify-center overflow-hidden rounded-lg border border-sky-400/25 bg-black/50 md:h-[420px]">
+                    {trafficDebugFrameSrc ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={trafficDebugFrameSrc}
+                        alt="Traffic debug frame"
+                        className={
+                          trafficDebugFrameAvailable === false
+                            ? "hidden"
+                            : "block h-full max-h-full w-full max-w-full object-contain"
+                        }
+                        onLoad={() => setTrafficDebugFrameAvailable(true)}
+                        onError={() => setTrafficDebugFrameAvailable(false)}
+                      />
+                    ) : null}
+                    {trafficDebugFrameAvailable === false && (
+                      <div className="px-3 py-6 text-center text-xs text-sky-100/80">
+                        No debug frame available yet
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-2 text-xs text-sky-100/80">
+                    {trafficRoundId ? `Round: ${trafficRoundId}` : "Round: —"}
+                    {trafficDebugSourceOpened != null
+                      ? ` • sourceOpened: ${trafficDebugSourceOpened ? "yes" : "no"}`
+                      : ""}
+                    {trafficDebugDetections != null ? ` • detectionsLastFrame: ${trafficDebugDetections}` : ""}
+                    {trafficCurrentCount != null
+                      ? ` • currentCount: ${Math.max(0, Math.floor(trafficCurrentCount))}`
+                      : ""}
                   </div>
                 </div>
               )}

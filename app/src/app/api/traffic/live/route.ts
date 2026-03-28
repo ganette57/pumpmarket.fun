@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getTrafficMarketRuntimeByAddress } from "@/lib/traffic/repository";
-import { getTrafficCount, stopTrafficCounter } from "@/lib/traffic/trafficCounter";
+import { getTrafficRoundStatus, stopTrafficCounter } from "@/lib/traffic/trafficCounter";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -44,13 +44,20 @@ export async function GET(req: Request) {
       }
     }
 
-    const currentCount = await getTrafficCount(roundId);
+    const workerStatus = await getTrafficRoundStatus(roundId);
+    const currentCount = workerStatus.currentCount;
     console.log("[traffic-flash:api-live] live API returning count for roundId", {
       roundId,
       currentCount,
     });
     return NextResponse.json(
-      { currentCount },
+      {
+        currentCount,
+        status: workerStatus.status,
+        sourceOpened: workerStatus.sourceOpened,
+        lastFrameAt: workerStatus.lastFrameAt,
+        detectionsLastFrame: workerStatus.detectionsLastFrame,
+      },
       {
         headers: {
           "Cache-Control": "no-cache, no-store, must-revalidate",

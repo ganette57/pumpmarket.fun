@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Literal, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from counter import COCO_CLASS_NAME_TO_ID, ROUND_MANAGER, RoundSpec
@@ -82,6 +82,18 @@ def round_status(round_id: str) -> Dict[str, object]:
     if not status:
         raise HTTPException(status_code=404, detail="Round not found.")
     return status
+
+
+@app.get("/rounds/{round_id}/frame.jpg")
+def round_frame(round_id: str) -> Response:
+    frame_jpeg = ROUND_MANAGER.get_debug_frame_jpeg(round_id.strip())
+    if not frame_jpeg:
+        raise HTTPException(status_code=404, detail="No debug frame available yet.")
+    return Response(
+        content=frame_jpeg,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 @app.post("/rounds/{round_id}/stop", response_model=StopRoundResponse)
