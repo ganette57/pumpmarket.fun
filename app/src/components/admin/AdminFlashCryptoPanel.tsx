@@ -34,6 +34,10 @@ type Campaign = {
   lastError: string | null;
 };
 
+type CampaignView = Campaign & {
+  _lastSeenAtMs: number;
+};
+
 type PendingResolution = {
   marketAddress: string;
   marketId: string | null;
@@ -87,6 +91,7 @@ type Notice = { tone: NoticeTone; message: string };
 
 const CAMPAIGNS_PAGE_SIZE = 5;
 const PENDING_PAGE_SIZE = 6;
+const CAMPAIGN_MISSING_RETENTION_MS = 30 * 60_000;
 
 const PRICE_DURATION_OPTIONS = [1, 3, 5] as const;
 const GRADUATION_DURATION_OPTIONS = [10, 30, 60] as const;
@@ -144,6 +149,46 @@ async function adminPost(action: string, extra: Record<string, unknown> = {}): P
   return res.json();
 }
 
+function campaignModeOf(campaign: Pick<Campaign, "mode" | "type">): FlashMode {
+  return campaign.mode || (campaign.type === "flash_crypto_graduation" ? "graduation" : "price");
+}
+
+function campaignHasUsefulFlow(campaign: Campaign, pendingRows: PendingResolution[]): boolean {
+  if (campaign.status === "running") return true;
+  if (campaign.launchedCount < campaign.totalMarkets) return true;
+  const mode = campaignModeOf(campaign);
+  return pendingRows.some((p) => p.tokenMint === campaign.tokenMint && p.mode === mode);
+}
+
+function mergeCampaignsForAdmin(params: {
+  previous: CampaignView[];
+  incoming: Campaign[];
+  pending: PendingResolution[];
+  nowMs: number;
+}): CampaignView[] {
+  const merged: CampaignView[] = [];
+  const seen = new Set<string>();
+
+  for (const incoming of params.incoming) {
+    merged.push({
+      ...incoming,
+      _lastSeenAtMs: params.nowMs,
+    });
+    seen.add(incoming.id);
+  }
+
+  for (const prev of params.previous) {
+    if (seen.has(prev.id)) continue;
+    const keepForFlow = campaignHasUsefulFlow(prev, params.pending);
+    const keepForGrace = params.nowMs - prev._lastSeenAtMs <= CAMPAIGN_MISSING_RETENTION_MS;
+    if (!keepForFlow && !keepForGrace) continue;
+    merged.push(prev);
+  }
+
+  merged.sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
+  return merged;
+}
+
 export default function AdminFlashCryptoPanel() {
   const [mode, setMode] = useState<FlashMode>("price");
   const [priceSourceType, setPriceSourceType] = useState<PriceSourceType>("pump_fun");
@@ -155,7 +200,7 @@ export default function AdminFlashCryptoPanel() {
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
 
-  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [campaigns, setCampaigns] = useState<CampaignView[]>([]);
   const [pending, setPending] = useState<PendingResolution[]>([]);
   const [campaignPage, setCampaignPage] = useState(1);
   const [pendingPage, setPendingPage] = useState(1);
@@ -169,12 +214,35 @@ export default function AdminFlashCryptoPanel() {
         adminPost("list_campaigns"),
         adminPost("list_pending"),
       ]);
-      if (campRes.ok) setCampaigns(campRes.campaigns || []);
-      if (pendRes.ok) setPending(pendRes.pending || []);
+      const nextPending = pendRes.ok
+        ? ((pendRes.pending || []) as PendingResolution[]).slice().sort((a, b) => {
+            const aTs = Date.parse(String(a.resolvedAt || ""));
+            const bTs = Date.parse(String(b.resolvedAt || ""));
+            const safeA = Number.isFinite(aTs) ? aTs : 0;
+            const safeB = Number.isFinite(bTs) ? bTs : 0;
+            return safeB - safeA;
+          })
+        : null;
+
+      if (nextPending) {
+        setPending(nextPending);
+      }
+
+      if (campRes.ok) {
+        const incomingCampaigns = (campRes.campaigns || []) as Campaign[];
+        setCampaigns((prev) =>
+          mergeCampaignsForAdmin({
+            previous: prev,
+            incoming: incomingCampaigns,
+            pending: nextPending || pending,
+            nowMs: Date.now(),
+          }),
+        );
+      }
     } catch {
       // ignore
     }
-  }, []);
+  }, [pending]);
 
   const loadSuggestions = useCallback(async (d: number) => {
     if (mode !== "graduation") return;
@@ -225,16 +293,18 @@ export default function AdminFlashCryptoPanel() {
   }, [duration, mode, loadSuggestions]);
 
   const campaignsTotalPages = Math.max(1, Math.ceil(campaigns.length / CAMPAIGNS_PAGE_SIZE));
+  const safeCampaignPage = Math.min(Math.max(1, campaignPage), campaignsTotalPages);
   const paginatedCampaigns = useMemo(() => {
-    const start = (campaignPage - 1) * CAMPAIGNS_PAGE_SIZE;
+    const start = (safeCampaignPage - 1) * CAMPAIGNS_PAGE_SIZE;
     return campaigns.slice(start, start + CAMPAIGNS_PAGE_SIZE);
-  }, [campaignPage, campaigns]);
+  }, [campaigns, safeCampaignPage]);
 
   const pendingTotalPages = Math.max(1, Math.ceil(pending.length / PENDING_PAGE_SIZE));
+  const safePendingPage = Math.min(Math.max(1, pendingPage), pendingTotalPages);
   const paginatedPending = useMemo(() => {
-    const start = (pendingPage - 1) * PENDING_PAGE_SIZE;
+    const start = (safePendingPage - 1) * PENDING_PAGE_SIZE;
     return pending.slice(start, start + PENDING_PAGE_SIZE);
-  }, [pending, pendingPage]);
+  }, [pending, safePendingPage]);
 
   useEffect(() => {
     setCampaignPage((prev) => Math.min(prev, campaignsTotalPages));
@@ -537,7 +607,7 @@ export default function AdminFlashCryptoPanel() {
           <div className="flex items-center justify-between gap-2">
             <h3 className="text-sm font-semibold text-gray-300">Campaigns</h3>
             <div className="text-[11px] text-gray-500">
-              {campaigns.length} total • page {campaignPage}/{campaignsTotalPages}
+              {campaigns.length} total • page {safeCampaignPage}/{campaignsTotalPages}
             </div>
           </div>
           {paginatedCampaigns.map((c) => {
@@ -588,18 +658,18 @@ export default function AdminFlashCryptoPanel() {
             <button
               type="button"
               onClick={() => setCampaignPage((p) => Math.max(1, p - 1))}
-              disabled={campaignPage <= 1}
+              disabled={safeCampaignPage <= 1}
               className="px-2.5 py-1.5 rounded-md border border-white/15 bg-white/5 text-gray-200 text-[11px] hover:bg-white/10 disabled:opacity-50 transition"
             >
               Previous
             </button>
             <div className="text-[11px] text-gray-500">
-              Showing {(campaignPage - 1) * CAMPAIGNS_PAGE_SIZE + 1}-{Math.min(campaignPage * CAMPAIGNS_PAGE_SIZE, campaigns.length)}
+              Showing {(safeCampaignPage - 1) * CAMPAIGNS_PAGE_SIZE + 1}-{Math.min(safeCampaignPage * CAMPAIGNS_PAGE_SIZE, campaigns.length)}
             </div>
             <button
               type="button"
               onClick={() => setCampaignPage((p) => Math.min(campaignsTotalPages, p + 1))}
-              disabled={campaignPage >= campaignsTotalPages}
+              disabled={safeCampaignPage >= campaignsTotalPages}
               className="px-2.5 py-1.5 rounded-md border border-white/15 bg-white/5 text-gray-200 text-[11px] hover:bg-white/10 disabled:opacity-50 transition"
             >
               Next
@@ -613,11 +683,13 @@ export default function AdminFlashCryptoPanel() {
           <div className="flex items-center justify-between gap-2">
             <h3 className="text-sm font-semibold text-gray-300">Auto-Proposed Resolutions</h3>
             <div className="text-[11px] text-gray-500">
-              {pending.length} total • page {pendingPage}/{pendingTotalPages}
+              {pending.length} total • page {safePendingPage}/{pendingTotalPages}
             </div>
           </div>
-          {paginatedPending.map((p) => (
-            <div key={p.marketAddress} className="p-3 rounded-lg bg-pump-dark border border-white/10 space-y-2">
+          {paginatedPending.map((p, idx) => {
+            const pendingIndex = (safePendingPage - 1) * PENDING_PAGE_SIZE + idx + 1;
+            return (
+            <div key={`${p.marketAddress}-${p.resolvedAt || idx}`} className="p-3 rounded-lg bg-pump-dark border border-white/10 space-y-2">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className="font-semibold text-white">${p.tokenSymbol}</span>
@@ -631,7 +703,10 @@ export default function AdminFlashCryptoPanel() {
                     {p.mode === "graduation" ? "GRADUATION" : p.sourceType === "major" ? "PRICE • MAJOR" : "PRICE • MEME"}
                   </span>
                 </div>
-                <span className="text-xs text-gray-400 font-mono">{p.marketAddress.slice(0, 8)}...</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-gray-500 tabular-nums">{pendingIndex}/{pending.length}</span>
+                  <span className="text-xs text-gray-400 font-mono">{p.marketAddress.slice(0, 8)}...</span>
+                </div>
               </div>
 
               {p.mode === "graduation" ? (
@@ -685,23 +760,23 @@ export default function AdminFlashCryptoPanel() {
                 </div>
               )}
             </div>
-          ))}
+          )})}
           <div className="flex items-center justify-between gap-3 border-t border-white/10 pt-3">
             <button
               type="button"
               onClick={() => setPendingPage((p) => Math.max(1, p - 1))}
-              disabled={pendingPage <= 1}
+              disabled={safePendingPage <= 1}
               className="px-2.5 py-1.5 rounded-md border border-white/15 bg-white/5 text-gray-200 text-[11px] hover:bg-white/10 disabled:opacity-50 transition"
             >
               Previous
             </button>
             <div className="text-[11px] text-gray-500">
-              Showing {(pendingPage - 1) * PENDING_PAGE_SIZE + 1}-{Math.min(pendingPage * PENDING_PAGE_SIZE, pending.length)}
+              Showing {(safePendingPage - 1) * PENDING_PAGE_SIZE + 1}-{Math.min(safePendingPage * PENDING_PAGE_SIZE, pending.length)}
             </div>
             <button
               type="button"
               onClick={() => setPendingPage((p) => Math.min(pendingTotalPages, p + 1))}
-              disabled={pendingPage >= pendingTotalPages}
+              disabled={safePendingPage >= pendingTotalPages}
               className="px-2.5 py-1.5 rounded-md border border-white/15 bg-white/5 text-gray-200 text-[11px] hover:bg-white/10 disabled:opacity-50 transition"
             >
               Next
