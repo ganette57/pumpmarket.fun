@@ -36,6 +36,17 @@ export async function GET(req: Request) {
             sourceOpened: false,
             lastFrameAt: null,
             detectionsLastFrame: 0,
+            frameWidth: null,
+            frameHeight: null,
+            countingLineX: null,
+            countingLineY: null,
+            lastCountedTrackId: null,
+            lastCrossingDirection: null,
+            lastDecisionTrackId: null,
+            lastDecisionReason: null,
+            lastDecisionCounted: null,
+            lastTrackDeltaX: null,
+            lastTrackSamples: null,
           },
           {
             headers: {
@@ -48,37 +59,15 @@ export async function GET(req: Request) {
     }
 
     if (row) {
-      const nowMs = Date.now();
-      const endMs = Date.parse(String(row.end_date || ""));
       const resolutionStatus = String(row.resolution_status || "").trim().toLowerCase();
-      const shouldStopByTime = Number.isFinite(endMs) && nowMs >= endMs;
       const shouldStopByStatus =
         row.resolved === true ||
         row.cancelled === true ||
-        resolutionStatus === "proposed" ||
         resolutionStatus === "finalized" ||
         resolutionStatus === "cancelled";
-      console.log("[traffic-flash:api-live] stop check", {
-        roundId,
-        workerStatus: workerStatus.status,
-        shouldStopByTime,
-        shouldStopByStatus,
-        nowMs,
-        endMs,
-        endDate: row.end_date,
-        resolutionStatus,
-        resolved: row.resolved,
-        cancelled: row.cancelled,
-      });
-      if ((shouldStopByTime || shouldStopByStatus) && workerStatus.status === "running") {
-        console.log("[traffic-flash:api-live] STOPPING worker", {
-          roundId,
-          reason: shouldStopByStatus ? `market_status_${resolutionStatus || "terminal"}` : "end_time_reached",
-        });
-        await stopTrafficCounter(
-          roundId,
-          shouldStopByStatus ? `market_status_${resolutionStatus || "terminal"}` : "end_time_reached",
-        );
+
+      if (shouldStopByStatus && workerStatus.status === "running") {
+        await stopTrafficCounter(roundId, `market_status_${resolutionStatus || "terminal"}`);
         workerStatus = await getTrafficRoundStatus(roundId).catch(() => workerStatus);
       }
     }
@@ -95,6 +84,17 @@ export async function GET(req: Request) {
         sourceOpened: workerStatus.sourceOpened,
         lastFrameAt: workerStatus.lastFrameAt,
         detectionsLastFrame: workerStatus.detectionsLastFrame,
+        frameWidth: workerStatus.frameWidth,
+        frameHeight: workerStatus.frameHeight,
+        countingLineX: workerStatus.countingLineX,
+        countingLineY: workerStatus.countingLineY,
+        lastCountedTrackId: workerStatus.lastCountedTrackId,
+        lastCrossingDirection: workerStatus.lastCrossingDirection,
+        lastDecisionTrackId: workerStatus.lastDecisionTrackId,
+        lastDecisionReason: workerStatus.lastDecisionReason,
+        lastDecisionCounted: workerStatus.lastDecisionCounted,
+        lastTrackDeltaX: workerStatus.lastTrackDeltaX,
+        lastTrackSamples: workerStatus.lastTrackSamples,
       },
       {
         headers: {

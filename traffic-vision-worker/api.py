@@ -18,6 +18,7 @@ class LinePayload(BaseModel):
 class StartRoundPayload(BaseModel):
     roundId: str = Field(min_length=1)
     streamUrl: str = Field(min_length=1)
+    sourceType: Literal["local_video", "remote_stream"] = "local_video"
     durationSec: int = Field(default=60, ge=1, le=3600)
     line: LinePayload
     classes: List[str] = Field(default_factory=lambda: ["car", "bus", "truck", "motorcycle"])
@@ -33,6 +34,17 @@ class RoundStatusResponse(BaseModel):
     sourceOpened: bool
     lastFrameAt: Optional[int] = None
     detectionsLastFrame: int = 0
+    frameWidth: Optional[int] = None
+    frameHeight: Optional[int] = None
+    countingLineX: Optional[int] = None
+    countingLineY: Optional[int] = None
+    lastCountedTrackId: Optional[int] = None
+    lastCrossingDirection: Optional[str] = None
+    lastDecisionTrackId: Optional[int] = None
+    lastDecisionReason: Optional[str] = None
+    lastDecisionCounted: Optional[bool] = None
+    lastTrackDeltaX: Optional[float] = None
+    lastTrackSamples: Optional[int] = None
 
 
 class StopRoundPayload(BaseModel):
@@ -62,6 +74,7 @@ def start_round(payload: StartRoundPayload) -> Dict[str, object]:
     spec = RoundSpec(
         round_id=payload.roundId.strip(),
         stream_url=payload.streamUrl.strip(),
+        source_type=payload.sourceType,
         duration_sec=int(payload.durationSec),
         line={
             "x1": float(payload.line.x1),

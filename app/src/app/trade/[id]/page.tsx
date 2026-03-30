@@ -1877,10 +1877,21 @@ const [liveScoreLastSuccessAt, setLiveScoreLastSuccessAt] = useState<number | nu
 const [trafficLiveCount, setTrafficLiveCount] = useState<number | null>(null);
 const [trafficPolling, setTrafficPolling] = useState(false);
 const [trafficDebugFrameTick, setTrafficDebugFrameTick] = useState(0);
-const [trafficDebugFrameCommitted, setTrafficDebugFrameCommitted] = useState<string | null>(null);
+const [trafficDebugImageUrl, setTrafficDebugImageUrl] = useState<string | null>(null);
 const [trafficDebugFrameAvailable, setTrafficDebugFrameAvailable] = useState<boolean | null>(null);
 const [trafficDebugSourceOpened, setTrafficDebugSourceOpened] = useState<boolean | null>(null);
 const [trafficDebugDetections, setTrafficDebugDetections] = useState<number | null>(null);
+const [trafficDebugFrameWidth, setTrafficDebugFrameWidth] = useState<number | null>(null);
+const [trafficDebugFrameHeight, setTrafficDebugFrameHeight] = useState<number | null>(null);
+const [trafficDebugLineX, setTrafficDebugLineX] = useState<number | null>(null);
+const [trafficDebugLineY, setTrafficDebugLineY] = useState<number | null>(null);
+const [trafficDebugLastTrackId, setTrafficDebugLastTrackId] = useState<number | null>(null);
+const [trafficDebugLastDirection, setTrafficDebugLastDirection] = useState<string | null>(null);
+const [trafficDebugDecisionTrackId, setTrafficDebugDecisionTrackId] = useState<number | null>(null);
+const [trafficDebugDecisionReason, setTrafficDebugDecisionReason] = useState<string | null>(null);
+const [trafficDebugDecisionCounted, setTrafficDebugDecisionCounted] = useState<boolean | null>(null);
+const [trafficDebugTrackDeltaX, setTrafficDebugTrackDeltaX] = useState<number | null>(null);
+const [trafficDebugTrackSamples, setTrafficDebugTrackSamples] = useState<number | null>(null);
 const [persistedTradeScore, setPersistedTradeScore] = useState<{
   home: number;
   away: number;
@@ -3003,14 +3014,126 @@ useEffect(() => {
   };
 }, [id, market?.marketMode, sharedSportDisplayStatus, submitting, loadMarket]);
 
+// Refresh traffic debug frame independently from count polling.
+useEffect(() => {
+  if (!market?.publicKey) return;
+
+  const marketMode = String(market.marketMode || "").trim().toLowerCase();
+  const trafficMeta = asObject(market.sportMeta);
+  const trafficType = String(trafficMeta.type || "").trim().toLowerCase();
+  const isTrafficFlashMarket = marketMode === "flash_traffic" || trafficType === "flash_traffic";
+  if (!isTrafficFlashMarket) return;
+
+  const roundId = String(trafficMeta.round_id || trafficMeta.roundId || market.publicKey).trim();
+  if (!roundId) return;
+
+  const resolutionStatus = String(market.resolutionStatus || "").trim().toLowerCase();
+  const isTrafficTerminal =
+    market.resolved === true ||
+    resolutionStatus === "proposed" ||
+    resolutionStatus === "finalized" ||
+    resolutionStatus === "cancelled";
+  if (isTrafficTerminal) return;
+
+  let cancelled = false;
+  const tick = () => {
+    if (cancelled || document.visibilityState !== "visible") return;
+    setTrafficDebugFrameTick((prev) => {
+      const next = prev + 1;
+      console.log("[traffic-preview] image refresh tick", { roundId, tick: next });
+      return next;
+    });
+  };
+
+  tick();
+  const iv = window.setInterval(() => tick(), 850);
+  return () => {
+    cancelled = true;
+    window.clearInterval(iv);
+  };
+}, [market?.marketMode, market?.publicKey, market?.sportMeta, market?.resolutionStatus, market?.resolved]);
+
+useEffect(() => {
+  if (!market?.publicKey) {
+    setTrafficDebugImageUrl(null);
+    setTrafficDebugFrameAvailable(null);
+    return;
+  }
+
+  const marketMode = String(market.marketMode || "").trim().toLowerCase();
+  const trafficMeta = asObject(market.sportMeta);
+  const trafficType = String(trafficMeta.type || "").trim().toLowerCase();
+  const isTrafficFlashMarket = marketMode === "flash_traffic" || trafficType === "flash_traffic";
+  if (!isTrafficFlashMarket) {
+    setTrafficDebugImageUrl(null);
+    setTrafficDebugFrameAvailable(null);
+    return;
+  }
+
+  const roundId = String(trafficMeta.round_id || trafficMeta.roundId || market.publicKey).trim();
+  if (!roundId) {
+    setTrafficDebugImageUrl(null);
+    setTrafficDebugFrameAvailable(false);
+    return;
+  }
+
+  const resolutionStatus = String(market.resolutionStatus || "").trim().toLowerCase();
+  const isTrafficTerminal =
+    market.resolved === true ||
+    resolutionStatus === "proposed" ||
+    resolutionStatus === "finalized" ||
+    resolutionStatus === "cancelled";
+  if (isTrafficTerminal || document.visibilityState !== "visible") return;
+
+  const nextUrl = `/api/traffic/frame?roundId=${encodeURIComponent(roundId)}&ts=${Date.now()}&tick=${trafficDebugFrameTick}`;
+  let cancelled = false;
+  const probe = new window.Image();
+  probe.onload = () => {
+    if (cancelled) return;
+    setTrafficDebugImageUrl(nextUrl);
+    setTrafficDebugFrameAvailable(true);
+    console.log("[traffic-preview] image url updated", { roundId, url: nextUrl });
+  };
+  probe.onerror = () => {
+    if (cancelled) return;
+    setTrafficDebugFrameAvailable((prev) => (prev === true ? true : false));
+  };
+  probe.src = nextUrl;
+
+  return () => {
+    cancelled = true;
+    probe.onload = null;
+    probe.onerror = null;
+  };
+}, [
+  trafficDebugFrameTick,
+  market?.marketMode,
+  market?.publicKey,
+  market?.sportMeta,
+  market?.resolutionStatus,
+  market?.resolved,
+]);
+
 // Poll live traffic counter for flash traffic markets.
 useEffect(() => {
   if (!market?.publicKey) {
     setTrafficLiveCount(null);
     setTrafficPolling(false);
+    setTrafficDebugImageUrl(null);
     setTrafficDebugFrameAvailable(null);
     setTrafficDebugSourceOpened(null);
     setTrafficDebugDetections(null);
+    setTrafficDebugFrameWidth(null);
+    setTrafficDebugFrameHeight(null);
+    setTrafficDebugLineX(null);
+    setTrafficDebugLineY(null);
+    setTrafficDebugLastTrackId(null);
+    setTrafficDebugLastDirection(null);
+    setTrafficDebugDecisionTrackId(null);
+    setTrafficDebugDecisionReason(null);
+    setTrafficDebugDecisionCounted(null);
+    setTrafficDebugTrackDeltaX(null);
+    setTrafficDebugTrackSamples(null);
     return;
   }
 
@@ -3021,9 +3144,21 @@ useEffect(() => {
   if (!isTrafficFlashMarket) {
     setTrafficLiveCount(null);
     setTrafficPolling(false);
+    setTrafficDebugImageUrl(null);
     setTrafficDebugFrameAvailable(null);
     setTrafficDebugSourceOpened(null);
     setTrafficDebugDetections(null);
+    setTrafficDebugFrameWidth(null);
+    setTrafficDebugFrameHeight(null);
+    setTrafficDebugLineX(null);
+    setTrafficDebugLineY(null);
+    setTrafficDebugLastTrackId(null);
+    setTrafficDebugLastDirection(null);
+    setTrafficDebugDecisionTrackId(null);
+    setTrafficDebugDecisionReason(null);
+    setTrafficDebugDecisionCounted(null);
+    setTrafficDebugTrackDeltaX(null);
+    setTrafficDebugTrackSamples(null);
     return;
   }
 
@@ -3031,10 +3166,21 @@ useEffect(() => {
   if (!roundId) {
     setTrafficLiveCount(null);
     setTrafficPolling(false);
+    setTrafficDebugImageUrl(null);
     setTrafficDebugFrameAvailable(false);
-    setTrafficDebugFrameCommitted(null);
     setTrafficDebugSourceOpened(null);
     setTrafficDebugDetections(null);
+    setTrafficDebugFrameWidth(null);
+    setTrafficDebugFrameHeight(null);
+    setTrafficDebugLineX(null);
+    setTrafficDebugLineY(null);
+    setTrafficDebugLastTrackId(null);
+    setTrafficDebugLastDirection(null);
+    setTrafficDebugDecisionTrackId(null);
+    setTrafficDebugDecisionReason(null);
+    setTrafficDebugDecisionCounted(null);
+    setTrafficDebugTrackDeltaX(null);
+    setTrafficDebugTrackSamples(null);
     return;
   }
 
@@ -3061,6 +3207,7 @@ useEffect(() => {
   let cancelled = false;
   const poll = async () => {
     if (cancelled || document.visibilityState !== "visible") return;
+    console.log("[traffic-preview] status poll", { roundId });
     setTrafficPolling(true);
     try {
       const params = new URLSearchParams({
@@ -3075,6 +3222,17 @@ useEffect(() => {
       const nextCount = Number((json as any)?.currentCount);
       const nextSourceOpened = (json as any)?.sourceOpened;
       const nextDetections = Number((json as any)?.detectionsLastFrame);
+      const nextFrameWidth = Number((json as any)?.frameWidth);
+      const nextFrameHeight = Number((json as any)?.frameHeight);
+      const nextLineX = Number((json as any)?.countingLineX);
+      const nextLineY = Number((json as any)?.countingLineY);
+      const nextLastTrackId = Number((json as any)?.lastCountedTrackId);
+      const nextLastDirection = String((json as any)?.lastCrossingDirection || "").trim();
+      const nextDecisionTrackId = Number((json as any)?.lastDecisionTrackId);
+      const nextDecisionReason = String((json as any)?.lastDecisionReason || "").trim();
+      const nextDecisionCountedRaw = (json as any)?.lastDecisionCounted;
+      const nextTrackDeltaX = Number((json as any)?.lastTrackDeltaX);
+      const nextTrackSamples = Number((json as any)?.lastTrackSamples);
       if (cancelled) return;
       if (Number.isFinite(nextCount)) {
         setTrafficLiveCount(Math.max(0, Math.floor(nextCount)));
@@ -3085,6 +3243,51 @@ useEffect(() => {
       if (Number.isFinite(nextDetections)) {
         setTrafficDebugDetections(Math.max(0, Math.floor(nextDetections)));
       }
+      if (Number.isFinite(nextFrameWidth)) {
+        setTrafficDebugFrameWidth(Math.max(0, Math.floor(nextFrameWidth)));
+      } else {
+        setTrafficDebugFrameWidth(null);
+      }
+      if (Number.isFinite(nextFrameHeight)) {
+        setTrafficDebugFrameHeight(Math.max(0, Math.floor(nextFrameHeight)));
+      } else {
+        setTrafficDebugFrameHeight(null);
+      }
+      if (Number.isFinite(nextLineX)) {
+        setTrafficDebugLineX(Math.max(0, Math.floor(nextLineX)));
+      } else {
+        setTrafficDebugLineX(null);
+      }
+      if (Number.isFinite(nextLineY)) {
+        setTrafficDebugLineY(Math.max(0, Math.floor(nextLineY)));
+      } else {
+        setTrafficDebugLineY(null);
+      }
+      if (Number.isFinite(nextLastTrackId)) {
+        setTrafficDebugLastTrackId(Math.floor(nextLastTrackId));
+      } else {
+        setTrafficDebugLastTrackId(null);
+      }
+      setTrafficDebugLastDirection(nextLastDirection || null);
+      if (Number.isFinite(nextDecisionTrackId)) {
+        setTrafficDebugDecisionTrackId(Math.floor(nextDecisionTrackId));
+      } else {
+        setTrafficDebugDecisionTrackId(null);
+      }
+      setTrafficDebugDecisionReason(nextDecisionReason || null);
+      setTrafficDebugDecisionCounted(
+        typeof nextDecisionCountedRaw === "boolean" ? nextDecisionCountedRaw : null,
+      );
+      if (Number.isFinite(nextTrackDeltaX)) {
+        setTrafficDebugTrackDeltaX(Number(nextTrackDeltaX));
+      } else {
+        setTrafficDebugTrackDeltaX(null);
+      }
+      if (Number.isFinite(nextTrackSamples)) {
+        setTrafficDebugTrackSamples(Math.max(0, Math.floor(nextTrackSamples)));
+      } else {
+        setTrafficDebugTrackSamples(null);
+      }
     } catch {
       // Best-effort polling, keep last known value on failures.
     } finally {
@@ -3093,44 +3296,14 @@ useEffect(() => {
   };
 
   void poll();
-  // Preload-based frame refresh: only commit src when image loads successfully.
-  // This prevents the preview from going blank on transient 404s.
-  let frameTickCounter = 0;
-  let preloadInFlight = false;
-  const preloadFrame = () => {
-    if (preloadInFlight || cancelled) return;
-    if (document.visibilityState !== "visible") return;
-    frameTickCounter += 1;
-    const tick = frameTickCounter;
-    const url = `/api/traffic/frame?roundId=${encodeURIComponent(roundId)}&t=${tick}`;
-    preloadInFlight = true;
-    const img = new Image();
-    img.onload = () => {
-      preloadInFlight = false;
-      if (cancelled) return;
-      console.log("[traffic-preview] image preload success", { tick });
-      setTrafficDebugFrameCommitted(url);
-      setTrafficDebugFrameAvailable(true);
-    };
-    img.onerror = () => {
-      preloadInFlight = false;
-      if (cancelled) return;
-      console.log("[traffic-preview] image preload failed", { tick });
-      // Keep showing last valid frame — do NOT hide
-    };
-    img.src = url;
-  };
-  preloadFrame();
   const iv = window.setInterval(() => {
-    preloadFrame();
     void poll();
-  }, 1_000);
+  }, 2_000);
 
   return () => {
     cancelled = true;
     setTrafficPolling(false);
     window.clearInterval(iv);
-    console.log("[traffic-preview] round terminal, stopping timers");
   };
 }, [market?.marketMode, market?.publicKey, market?.sportMeta, market?.resolutionStatus, market?.resolved]);
 
@@ -3689,7 +3862,7 @@ useEffect(() => {
   ]);
   const trafficDebugFrameSrc =
     isFlashTrafficMarket && trafficRoundId
-      ? (trafficDebugFrameCommitted || `/api/traffic/frame?roundId=${encodeURIComponent(trafficRoundId)}&t=${trafficDebugFrameTick}`)
+      ? trafficDebugImageUrl
       : null;
   const trafficWindowEnd = isFlashTrafficMarket
     ? String(trafficMeta.window_end || market.endTime || "").trim() || null
@@ -4232,17 +4405,16 @@ const ended = endedByTime;
                   <div className="text-[11px] uppercase tracking-[0.08em] text-sky-200/85">
                     Traffic Debug Preview
                   </div>
-                  <div className="mt-2 flex h-[360px] items-center justify-center overflow-hidden rounded-lg border border-sky-400/25 bg-black/50 md:h-[420px]">
+                  <div className="mt-2 flex h-[420px] items-center justify-center overflow-hidden rounded-lg border border-sky-400/25 bg-black/50 md:h-[520px]">
                     {trafficDebugFrameSrc ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
                         src={trafficDebugFrameSrc}
                         alt="Traffic debug frame"
                         className="block h-full max-h-full w-full max-w-full object-contain"
-                        onLoad={() => setTrafficDebugFrameAvailable(true)}
                       />
                     ) : null}
-                    {trafficDebugFrameAvailable !== true && !trafficDebugFrameCommitted && (
+                    {!trafficDebugFrameSrc && trafficDebugFrameAvailable === false && (
                       <div className="px-3 py-6 text-center text-xs text-sky-100/80">
                         No debug frame available yet
                       </div>
@@ -4254,6 +4426,23 @@ const ended = endedByTime;
                       ? ` • sourceOpened: ${trafficDebugSourceOpened ? "yes" : "no"}`
                       : ""}
                     {trafficDebugDetections != null ? ` • detectionsLastFrame: ${trafficDebugDetections}` : ""}
+                    {trafficDebugLineX != null ? ` • countingLineX: ${trafficDebugLineX}` : ""}
+                    {trafficDebugFrameWidth != null ? ` • frameWidth: ${trafficDebugFrameWidth}` : ""}
+                    {trafficDebugLineY != null ? ` • countingLineY: ${trafficDebugLineY}` : ""}
+                    {trafficDebugFrameHeight != null ? ` • frameHeight: ${trafficDebugFrameHeight}` : ""}
+                    {trafficDebugLastTrackId != null ? ` • lastCountedTrackId: ${trafficDebugLastTrackId}` : ""}
+                    {trafficDebugLastDirection ? ` • crossing: ${trafficDebugLastDirection}` : ""}
+                    {trafficDebugDecisionTrackId != null
+                      ? ` • decisionTrackId: ${trafficDebugDecisionTrackId}`
+                      : ""}
+                    {trafficDebugDecisionCounted != null
+                      ? ` • counted: ${trafficDebugDecisionCounted ? "yes" : "no"}`
+                      : ""}
+                    {trafficDebugDecisionReason ? ` • reason: ${trafficDebugDecisionReason}` : ""}
+                    {trafficDebugTrackDeltaX != null
+                      ? ` • deltaX: ${trafficDebugTrackDeltaX.toFixed(1)}`
+                      : ""}
+                    {trafficDebugTrackSamples != null ? ` • trackSamples: ${trafficDebugTrackSamples}` : ""}
                     {trafficCurrentCount != null
                       ? ` • currentCount: ${Math.max(0, Math.floor(trafficCurrentCount))}`
                       : ""}

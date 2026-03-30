@@ -9,6 +9,7 @@ export type TrafficCounterLine = {
 
 export type StartTrafficCounterInput = {
   streamUrl: string;
+  sourceType?: "local_video" | "remote_stream";
   durationSec: number;
   line: TrafficCounterLine;
   classes?: string[];
@@ -24,11 +25,23 @@ type WorkerRoundStatus = {
   sourceOpened?: boolean;
   lastFrameAt?: number | null;
   detectionsLastFrame?: number;
+  frameWidth?: number | null;
+  frameHeight?: number | null;
+  countingLineX?: number | null;
+  countingLineY?: number | null;
+  lastCountedTrackId?: number | null;
+  lastCrossingDirection?: string | null;
+  lastDecisionTrackId?: number | null;
+  lastDecisionReason?: string | null;
+  lastDecisionCounted?: boolean | null;
+  lastTrackDeltaX?: number | null;
+  lastTrackSamples?: number | null;
 };
 
 const DEFAULT_TRAFFIC_CLASSES = ["car", "bus", "truck", "motorcycle"];
 const DEFAULT_TRACKER = "bytetrack";
 const DEFAULT_WORKER_URL = "http://127.0.0.1:8090";
+const MISSING_WORKER_ROUNDS = new Set<string>();
 
 export function getTrafficWorkerBaseUrl(): string {
   return (
@@ -70,6 +83,11 @@ function normalizeBool(value: unknown): boolean {
   return value === true;
 }
 
+function normalizeOptionalText(value: unknown): string | null {
+  const text = String(value ?? "").trim();
+  return text || null;
+}
+
 export type TrafficRoundStatus = {
   roundId: string;
   status: "running" | "ended" | "stopped";
@@ -79,6 +97,17 @@ export type TrafficRoundStatus = {
   sourceOpened: boolean;
   lastFrameAt: number | null;
   detectionsLastFrame: number;
+  frameWidth: number | null;
+  frameHeight: number | null;
+  countingLineX: number | null;
+  countingLineY: number | null;
+  lastCountedTrackId: number | null;
+  lastCrossingDirection: string | null;
+  lastDecisionTrackId: number | null;
+  lastDecisionReason: string | null;
+  lastDecisionCounted: boolean | null;
+  lastTrackDeltaX: number | null;
+  lastTrackSamples: number | null;
 };
 
 export async function startTrafficCounter(
@@ -87,10 +116,12 @@ export async function startTrafficCounter(
 ): Promise<number> {
   const id = normalizeRoundId(roundId);
   if (!id) return 0;
+  MISSING_WORKER_ROUNDS.delete(id);
 
   const body = {
     roundId: id,
     streamUrl: String(input.streamUrl || "").trim(),
+    sourceType: input.sourceType === "remote_stream" ? "remote_stream" : "local_video",
     durationSec: Math.max(1, Math.floor(Number(input.durationSec) || 60)),
     line: input.line,
     classes: (input.classes || DEFAULT_TRAFFIC_CLASSES).filter(Boolean),
@@ -131,6 +162,40 @@ export async function getTrafficRoundStatus(roundId: string): Promise<TrafficRou
       sourceOpened: false,
       lastFrameAt: null,
       detectionsLastFrame: 0,
+      frameWidth: null,
+      frameHeight: null,
+      countingLineX: null,
+      countingLineY: null,
+      lastCountedTrackId: null,
+      lastCrossingDirection: null,
+      lastDecisionTrackId: null,
+      lastDecisionReason: null,
+      lastDecisionCounted: null,
+      lastTrackDeltaX: null,
+      lastTrackSamples: null,
+    };
+  }
+  if (MISSING_WORKER_ROUNDS.has(id)) {
+    return {
+      roundId: id,
+      status: "stopped",
+      currentCount: 0,
+      startedAt: 0,
+      endsAt: 0,
+      sourceOpened: false,
+      lastFrameAt: null,
+      detectionsLastFrame: 0,
+      frameWidth: null,
+      frameHeight: null,
+      countingLineX: null,
+      countingLineY: null,
+      lastCountedTrackId: null,
+      lastCrossingDirection: null,
+      lastDecisionTrackId: null,
+      lastDecisionReason: null,
+      lastDecisionCounted: null,
+      lastTrackDeltaX: null,
+      lastTrackSamples: null,
     };
   }
 
@@ -138,7 +203,28 @@ export async function getTrafficRoundStatus(roundId: string): Promise<TrafficRou
     method: "GET",
   });
   if (res.status === 404) {
-    throw new Error(`traffic worker round not found: ${id}`);
+    MISSING_WORKER_ROUNDS.add(id);
+    return {
+      roundId: id,
+      status: "stopped",
+      currentCount: 0,
+      startedAt: 0,
+      endsAt: 0,
+      sourceOpened: false,
+      lastFrameAt: null,
+      detectionsLastFrame: 0,
+      frameWidth: null,
+      frameHeight: null,
+      countingLineX: null,
+      countingLineY: null,
+      lastCountedTrackId: null,
+      lastCrossingDirection: null,
+      lastDecisionTrackId: null,
+      lastDecisionReason: null,
+      lastDecisionCounted: null,
+      lastTrackDeltaX: null,
+      lastTrackSamples: null,
+    };
   }
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -146,6 +232,7 @@ export async function getTrafficRoundStatus(roundId: string): Promise<TrafficRou
   }
 
   const json = (await res.json().catch(() => ({}))) as Partial<WorkerRoundStatus>;
+  MISSING_WORKER_ROUNDS.delete(id);
   return {
     roundId: String(json.roundId || id),
     status:
@@ -158,23 +245,43 @@ export async function getTrafficRoundStatus(roundId: string): Promise<TrafficRou
     sourceOpened: normalizeBool(json.sourceOpened),
     lastFrameAt: normalizeOptionalCount(json.lastFrameAt),
     detectionsLastFrame: normalizeCount(json.detectionsLastFrame),
+    frameWidth: normalizeOptionalCount(json.frameWidth),
+    frameHeight: normalizeOptionalCount(json.frameHeight),
+    countingLineX: normalizeOptionalCount(json.countingLineX),
+    countingLineY: normalizeOptionalCount(json.countingLineY),
+    lastCountedTrackId: normalizeOptionalCount(json.lastCountedTrackId),
+    lastCrossingDirection: normalizeOptionalText(json.lastCrossingDirection),
+    lastDecisionTrackId: normalizeOptionalCount(json.lastDecisionTrackId),
+    lastDecisionReason: normalizeOptionalText(json.lastDecisionReason),
+    lastDecisionCounted:
+      typeof json.lastDecisionCounted === "boolean" ? json.lastDecisionCounted : null,
+    lastTrackDeltaX:
+      typeof json.lastTrackDeltaX === "number" && Number.isFinite(json.lastTrackDeltaX)
+        ? Number(json.lastTrackDeltaX)
+        : null,
+    lastTrackSamples: normalizeOptionalCount(json.lastTrackSamples),
   };
 }
 
 export async function stopTrafficCounter(roundId: string, reason = "stopped"): Promise<number | null> {
   const id = normalizeRoundId(roundId);
   if (!id) return null;
+  if (MISSING_WORKER_ROUNDS.has(id)) return null;
 
   const res = await workerFetch(`/rounds/${encodeURIComponent(id)}/stop`, {
     method: "POST",
     body: JSON.stringify({ reason }),
   });
-  if (res.status === 404) return null;
+  if (res.status === 404) {
+    MISSING_WORKER_ROUNDS.add(id);
+    return null;
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`traffic worker stop failed (${res.status}): ${text || "unknown error"}`);
   }
 
+  MISSING_WORKER_ROUNDS.delete(id);
   const json = (await res.json().catch(() => ({}))) as { finalCount?: unknown };
   return normalizeCount(json.finalCount);
 }
