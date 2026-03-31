@@ -511,10 +511,6 @@ class TrafficRoundManager:
                 continue
 
             x_min, y_min, x_max, y_max = bbox
-            px = int(det.get("point_x", 0))
-            py = int(det.get("point_y", 0))
-            track_id = int(det.get("track_id", -1))
-            class_id = int(det.get("class_id", -1))
             side = int(det.get("side", 0))
             in_roi = bool(det.get("in_roi", True))
 
@@ -527,137 +523,31 @@ class TrafficRoundManager:
                 color = (120, 120, 120)
 
             cv2.rectangle(annotated, (int(x_min), int(y_min)), (int(x_max), int(y_max)), color, 2)
-            cv2.circle(annotated, (px, py), 4, (255, 255, 255), -1)
-            class_name = COCO_CLASS_ID_TO_NAME.get(class_id, str(class_id))
-            label = f"{class_name} #{track_id}"
-            cv2.putText(
-                annotated,
-                label,
-                (int(x_min), max(14, int(y_min) - 6)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.45,
-                color,
-                2,
-                cv2.LINE_AA,
-            )
 
         with runtime.lock:
             current_count = int(runtime.current_count)
-            status = str(runtime.status)
-            last_counted_track_id = (
-                int(runtime.last_counted_track_id)
-                if runtime.last_counted_track_id is not None
-                else None
-            )
-            last_crossing_direction = runtime.last_crossing_direction
-            last_track_samples = (
-                int(runtime.last_track_samples)
-                if runtime.last_track_samples is not None
-                else None
-            )
-            frame_width = int(runtime.frame_width) if runtime.frame_width is not None else None
-            frame_height = int(runtime.frame_height) if runtime.frame_height is not None else None
-            counting_line_x = int(runtime.counting_line_x) if runtime.counting_line_x is not None else None
-            counting_line_y = int(runtime.counting_line_y) if runtime.counting_line_y is not None else None
-            counting_direction = runtime.counting_direction or "both"
-            counting_zone_half_width = (
-                int(runtime.counting_zone_half_width) if runtime.counting_zone_half_width is not None else None
-            )
-            counting_roi_x1 = (
-                int(runtime.counting_roi_x1) if runtime.counting_roi_x1 is not None else None
-            )
-            counting_roi_y1 = (
-                int(runtime.counting_roi_y1) if runtime.counting_roi_y1 is not None else None
-            )
-            counting_roi_x2 = (
-                int(runtime.counting_roi_x2) if runtime.counting_roi_x2 is not None else None
-            )
-            counting_roi_y2 = (
-                int(runtime.counting_roi_y2) if runtime.counting_roi_y2 is not None else None
-            )
-            source_type = str(runtime.spec.source_type or "").strip().lower()
-
-        if (
-            counting_roi_x1 is not None
-            and counting_roi_y1 is not None
-            and counting_roi_x2 is not None
-            and counting_roi_y2 is not None
-        ):
-            cv2.rectangle(
-                annotated,
-                (counting_roi_x1, counting_roi_y1),
-                (counting_roi_x2, counting_roi_y2),
-                (100, 170, 255),
-                1,
-            )
-
-        if (
-            source_type == "remote_stream"
-            and counting_line_x is not None
-            and counting_zone_half_width is not None
-            and frame_width is not None
-            and frame_width > 0
-            and frame_height is not None
-            and frame_height > 0
-        ):
-            left_zone_x = _clamp_int(counting_line_x - counting_zone_half_width, 0, frame_width - 1)
-            right_zone_x = _clamp_int(counting_line_x + counting_zone_half_width, 0, frame_width - 1)
-            cv2.line(annotated, (left_zone_x, 0), (left_zone_x, frame_height - 1), (120, 120, 255), 1)
-            cv2.line(annotated, (right_zone_x, 0), (right_zone_x, frame_height - 1), (120, 120, 255), 1)
-
+        count_text = f"COUNT {current_count}"
+        font_face = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.8
+        font_thickness = 2
+        (text_w, text_h), baseline = cv2.getTextSize(count_text, font_face, font_scale, font_thickness)
+        x_text = 12
+        y_text = 16 + text_h
+        cv2.rectangle(
+            annotated,
+            (x_text - 8, y_text - text_h - 8),
+            (x_text + text_w + 8, y_text + baseline + 8),
+            (0, 0, 0),
+            -1,
+        )
         cv2.putText(
             annotated,
-            f"count={current_count} detections={len(detections)} status={status}",
-            (10, 22),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
+            count_text,
+            (x_text, y_text),
+            font_face,
+            font_scale,
             (255, 255, 255),
-            2,
-            cv2.LINE_AA,
-        )
-        cv2.putText(
-            annotated,
-            f"round={runtime.spec.round_id}",
-            (10, 44),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (200, 200, 200),
-            1,
-            cv2.LINE_AA,
-        )
-        cv2.putText(
-            annotated,
-            f"lastTrack={last_counted_track_id if last_counted_track_id is not None else '-'} "
-            f"lastDir={last_crossing_direction or '-'} "
-            f"samples={last_track_samples if last_track_samples is not None else '-'}",
-            (10, 64),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.45,
-            (180, 255, 180),
-            1,
-            cv2.LINE_AA,
-        )
-        cv2.putText(
-            annotated,
-            (
-                f"lineX={counting_line_x if counting_line_x is not None else '-'} "
-                f"frameW={frame_width if frame_width is not None else '-'} "
-                f"dir={counting_direction if source_type == 'remote_stream' else 'both'} "
-                f"roi={counting_roi_x1 if counting_roi_x1 is not None else '-'},"
-                f"{counting_roi_y1 if counting_roi_y1 is not None else '-'},"
-                f"{counting_roi_x2 if counting_roi_x2 is not None else '-'},"
-                f"{counting_roi_y2 if counting_roi_y2 is not None else '-'}"
-                if source_type == "remote_stream"
-                else (
-                    f"lineY={counting_line_y if counting_line_y is not None else '-'} "
-                    f"frameH={frame_height if frame_height is not None else '-'}"
-                )
-            ),
-            (10, 84),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.45,
-            (255, 230, 160),
-            1,
+            font_thickness,
             cv2.LINE_AA,
         )
 
