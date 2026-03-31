@@ -9,6 +9,7 @@ export type TrafficCounterLine = {
 
 export type StartTrafficCounterInput = {
   streamUrl: string;
+  cameraId?: string;
   sourceType?: "local_video" | "remote_stream";
   durationSec: number;
   line: TrafficCounterLine;
@@ -121,6 +122,7 @@ export async function startTrafficCounter(
   const body = {
     roundId: id,
     streamUrl: String(input.streamUrl || "").trim(),
+    cameraId: String(input.cameraId || "").trim() || undefined,
     sourceType: input.sourceType === "remote_stream" ? "remote_stream" : "local_video",
     durationSec: Math.max(1, Math.floor(Number(input.durationSec) || 60)),
     line: input.line,

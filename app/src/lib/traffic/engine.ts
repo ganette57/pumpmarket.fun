@@ -134,6 +134,7 @@ export async function startTrafficFlash(input: StartTrafficFlashInput = {}): Pro
   });
   const countStart = await startTrafficCounter(roundId, {
     streamUrl: camera.streamUrl,
+    cameraId: camera.id,
     sourceType: camera.sourceType,
     durationSec,
     line: camera.line,

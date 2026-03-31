@@ -18,6 +18,7 @@ class LinePayload(BaseModel):
 class StartRoundPayload(BaseModel):
     roundId: str = Field(min_length=1)
     streamUrl: str = Field(min_length=1)
+    cameraId: Optional[str] = None
     sourceType: Literal["local_video", "remote_stream"] = "local_video"
     durationSec: int = Field(default=60, ge=1, le=3600)
     line: LinePayload
@@ -74,6 +75,7 @@ def start_round(payload: StartRoundPayload) -> Dict[str, object]:
     spec = RoundSpec(
         round_id=payload.roundId.strip(),
         stream_url=payload.streamUrl.strip(),
+        camera_id=(payload.cameraId or "").strip() or None,
         source_type=payload.sourceType,
         duration_sec=int(payload.durationSec),
         line={

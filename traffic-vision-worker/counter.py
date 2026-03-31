@@ -54,6 +54,49 @@ HIGHWAY_REMOTE_STREAM_MIN_SAMPLES = 4
 HIGHWAY_REMOTE_STREAM_MIN_MOTION_PX = 18.0
 HIGHWAY_REMOTE_STREAM_MIN_BBOX_AREA_PX = 2200.0
 
+CAM1_STREAM_SIGNATURE = "wf05-24af-4d42-c307-aa51_nj"
+CAM2_STREAM_SIGNATURE = "wf05-24af-4d24-2558-f999_nj"
+CAM3_STREAM_SIGNATURE = "wf05-24b0-46ee-2155-1a86_nj"
+
+CAMERA_REMOTE_STREAM_PROFILES: Dict[str, Dict[str, object]] = {
+    "cam1": {
+        "line_x_ratio": 0.72,
+        "roi_x_min_ratio": 0.46,
+        "roi_x_max_ratio": 0.94,
+        "roi_y_min_ratio": 0.58,
+        "roi_y_max_ratio": 0.92,
+        "direction": "right_to_left",
+        "min_samples": 4,
+        "min_motion_px": 18.0,
+        "min_bbox_area_px": 2200.0,
+        "counting_zone_half_width_px": 40.0,
+    },
+    "cam2": {
+        "line_x_ratio": 0.64,
+        "roi_x_min_ratio": 0.34,
+        "roi_x_max_ratio": 0.90,
+        "roi_y_min_ratio": 0.52,
+        "roi_y_max_ratio": 0.90,
+        "direction": "right_to_left",
+        "min_samples": 3,
+        "min_motion_px": 14.0,
+        "min_bbox_area_px": 1800.0,
+        "counting_zone_half_width_px": 34.0,
+    },
+    "cam3": {
+        "line_x_ratio": 0.40,
+        "roi_x_min_ratio": 0.18,
+        "roi_x_max_ratio": 0.72,
+        "roi_y_min_ratio": 0.50,
+        "roi_y_max_ratio": 0.90,
+        "direction": "left_to_right",
+        "min_samples": 4,
+        "min_motion_px": 16.0,
+        "min_bbox_area_px": 2000.0,
+        "counting_zone_half_width_px": 38.0,
+    },
+}
+
 
 def _line_side(x: float, y: float, x1: float, y1: float, x2: float, y2: float) -> int:
     cross = (x2 - x1) * (y - y1) - (y2 - y1) * (x - x1)
@@ -78,10 +121,74 @@ def _is_highway_remote_profile(stream_url: str, round_id: str) -> bool:
     return any(signature in source for signature in HIGHWAY_STREAM_SIGNATURES)
 
 
+def _normalize_camera_id(value: Optional[str]) -> str:
+    camera_id = str(value or "").strip().lower()
+    if camera_id in CAMERA_REMOTE_STREAM_PROFILES:
+        return camera_id
+    return ""
+
+
+def _camera_id_from_stream(stream_url: str) -> str:
+    source = str(stream_url or "").strip().lower()
+    if not source:
+        return ""
+    if CAM1_STREAM_SIGNATURE in source:
+        return "cam1"
+    if CAM2_STREAM_SIGNATURE in source:
+        return "cam2"
+    if CAM3_STREAM_SIGNATURE in source:
+        return "cam3"
+    return ""
+
+
+def _resolve_remote_profile(camera_id: Optional[str], stream_url: str, round_id: str) -> Dict[str, object]:
+    normalized_camera_id = _normalize_camera_id(camera_id)
+    if not normalized_camera_id:
+        normalized_camera_id = _camera_id_from_stream(stream_url)
+
+    if normalized_camera_id and normalized_camera_id in CAMERA_REMOTE_STREAM_PROFILES:
+        profile = dict(CAMERA_REMOTE_STREAM_PROFILES[normalized_camera_id])
+        profile["profile_id"] = normalized_camera_id
+        profile["profile_source"] = "camera_id_or_stream_signature"
+        return profile
+
+    if _is_highway_remote_profile(stream_url, round_id):
+        return {
+            "profile_id": "highway_fallback",
+            "profile_source": "highway_signature",
+            "line_x_ratio": HIGHWAY_REMOTE_STREAM_LINE_X_RATIO,
+            "roi_x_min_ratio": HIGHWAY_REMOTE_STREAM_ROI_X_MIN_RATIO,
+            "roi_x_max_ratio": HIGHWAY_REMOTE_STREAM_ROI_X_MAX_RATIO,
+            "roi_y_min_ratio": HIGHWAY_REMOTE_STREAM_ROI_Y_MIN_RATIO,
+            "roi_y_max_ratio": HIGHWAY_REMOTE_STREAM_ROI_Y_MAX_RATIO,
+            "direction": HIGHWAY_REMOTE_STREAM_DIRECTION,
+            "min_samples": HIGHWAY_REMOTE_STREAM_MIN_SAMPLES,
+            "min_motion_px": HIGHWAY_REMOTE_STREAM_MIN_MOTION_PX,
+            "min_bbox_area_px": HIGHWAY_REMOTE_STREAM_MIN_BBOX_AREA_PX,
+            "counting_zone_half_width_px": REMOTE_STREAM_COUNTING_ZONE_HALF_WIDTH_PX,
+        }
+
+    return {
+        "profile_id": "default_remote",
+        "profile_source": "default",
+        "line_x_ratio": REMOTE_STREAM_LINE_X_RATIO,
+        "roi_x_min_ratio": REMOTE_STREAM_ROI_X_MIN_RATIO,
+        "roi_x_max_ratio": REMOTE_STREAM_ROI_X_MAX_RATIO,
+        "roi_y_min_ratio": REMOTE_STREAM_ROI_Y_MIN_RATIO,
+        "roi_y_max_ratio": REMOTE_STREAM_ROI_Y_MAX_RATIO,
+        "direction": REMOTE_STREAM_DIRECTION,
+        "min_samples": REMOTE_STREAM_MIN_SAMPLES,
+        "min_motion_px": REMOTE_STREAM_MIN_MOTION_PX,
+        "min_bbox_area_px": REMOTE_STREAM_MIN_BBOX_AREA_PX,
+        "counting_zone_half_width_px": REMOTE_STREAM_COUNTING_ZONE_HALF_WIDTH_PX,
+    }
+
+
 @dataclass
 class RoundSpec:
     round_id: str
     stream_url: str
+    camera_id: Optional[str]
     source_type: str
     duration_sec: int
     line: Dict[str, float]
@@ -215,6 +322,7 @@ class TrafficRoundManager:
             {
                 "roundId": spec.round_id,
                 "streamUrl": spec.stream_url,
+                "cameraId": spec.camera_id,
                 "sourceType": spec.source_type,
                 "durationSec": spec.duration_sec,
                 "classes": spec.classes,
@@ -576,20 +684,29 @@ class TrafficRoundManager:
         remote_min_bbox_area_px = REMOTE_STREAM_MIN_BBOX_AREA_PX
         remote_counting_zone_half_width_px = REMOTE_STREAM_COUNTING_ZONE_HALF_WIDTH_PX
 
-        if source_type == "remote_stream" and _is_highway_remote_profile(default_source, runtime.spec.round_id):
-            remote_line_x_ratio = HIGHWAY_REMOTE_STREAM_LINE_X_RATIO
-            remote_roi_x_min_ratio = HIGHWAY_REMOTE_STREAM_ROI_X_MIN_RATIO
-            remote_roi_x_max_ratio = HIGHWAY_REMOTE_STREAM_ROI_X_MAX_RATIO
-            remote_roi_y_min_ratio = HIGHWAY_REMOTE_STREAM_ROI_Y_MIN_RATIO
-            remote_roi_y_max_ratio = HIGHWAY_REMOTE_STREAM_ROI_Y_MAX_RATIO
-            remote_direction = HIGHWAY_REMOTE_STREAM_DIRECTION
-            remote_min_samples = HIGHWAY_REMOTE_STREAM_MIN_SAMPLES
-            remote_min_motion_px = HIGHWAY_REMOTE_STREAM_MIN_MOTION_PX
-            remote_min_bbox_area_px = HIGHWAY_REMOTE_STREAM_MIN_BBOX_AREA_PX
+        if source_type == "remote_stream":
+            profile = _resolve_remote_profile(
+                runtime.spec.camera_id,
+                default_source,
+                runtime.spec.round_id,
+            )
+            remote_line_x_ratio = float(profile["line_x_ratio"])
+            remote_roi_x_min_ratio = float(profile["roi_x_min_ratio"])
+            remote_roi_x_max_ratio = float(profile["roi_x_max_ratio"])
+            remote_roi_y_min_ratio = float(profile["roi_y_min_ratio"])
+            remote_roi_y_max_ratio = float(profile["roi_y_max_ratio"])
+            remote_direction = str(profile["direction"])
+            remote_min_samples = int(profile["min_samples"])
+            remote_min_motion_px = float(profile["min_motion_px"])
+            remote_min_bbox_area_px = float(profile["min_bbox_area_px"])
+            remote_counting_zone_half_width_px = float(profile["counting_zone_half_width_px"])
             print(
-                "[Traffic] highway calibration profile enabled",
+                "[Traffic] remote calibration profile enabled",
                 {
                     "roundId": runtime.spec.round_id,
+                    "cameraId": runtime.spec.camera_id,
+                    "profileId": profile.get("profile_id"),
+                    "profileSource": profile.get("profile_source"),
                     "lineXRatio": remote_line_x_ratio,
                     "roi": [
                         remote_roi_x_min_ratio,
