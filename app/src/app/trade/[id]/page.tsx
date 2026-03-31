@@ -3428,6 +3428,7 @@ useEffect(() => {
       return;
     }
     if (!market || !id || !derived) return;
+    if (marketClosed) return;
 
     // Tx guard: prevent double-submit (per side)
     const key = "trade";
@@ -3865,6 +3866,20 @@ useEffect(() => {
     ? Math.max(0, Math.ceil((trafficWindowEndMs - nowMs) / 1000))
     : null;
   const trafficRemainingLabel = trafficRemainingSec == null ? "—" : formatCountdownMmSs(trafficRemainingSec);
+  const trafficThresholdRaw = firstFiniteNumber([trafficMeta.threshold]);
+  const trafficThreshold = trafficThresholdRaw == null ? null : Math.max(1, Math.floor(trafficThresholdRaw));
+  const trafficCurrentCountRaw = trafficLiveCount ?? firstFiniteNumber([
+    trafficMeta.current_count,
+    trafficMeta.end_count,
+    trafficMeta.start_count,
+  ]);
+  const trafficCurrentCount =
+    trafficCurrentCountRaw == null ? null : Math.max(0, Math.floor(trafficCurrentCountRaw));
+  const trafficTargetReached =
+    isFlashTrafficMarket &&
+    trafficThreshold != null &&
+    trafficCurrentCount != null &&
+    trafficCurrentCount >= trafficThreshold;
   const microLoopSequence = isSoccerNextGoalMicro
     ? extractLoopSequence(market.description, market.sportMeta)
     : null;
@@ -4095,6 +4110,12 @@ const ended = endedByTime;
     (microGoalObserved ||
       microTradingLocked ||
       (market.isBlocked && /live micro|goal observed|goal detected|next goal/.test(blockedReasonLower)));
+  const trafficMetaLocked = isTruthyFlag(trafficMeta.target_reached ?? trafficMeta.trading_locked);
+  const trafficAutoLocked =
+    isFlashTrafficMarket &&
+    (trafficTargetReached ||
+      trafficMetaLocked ||
+      (market.isBlocked && /traffic flash engine|threshold reached|target reached/.test(blockedReasonLower)));
   const microWindowEnded = Number.isFinite(microWindowEndMs) ? nowMs >= microWindowEndMs : endedByTime;
   const flashFootUiTradingClosed =
     isSoccerNextGoalMicro &&
@@ -4106,7 +4127,18 @@ const ended = endedByTime;
     !isResolvedOnChain &&
     !ended &&
     !liveMicroAutoLocked;
-  const showWindowEndedUiLockState = showCryptoUiLockState || showFootUiLockState;
+  const showTrafficUiLockState =
+    trafficAutoLocked &&
+    !isProposed &&
+    !isResolvedOnChain &&
+    !ended;
+  const showWindowEndedUiLockState = showCryptoUiLockState || showFootUiLockState || showTrafficUiLockState;
+  const closedPanelTitle = showWindowEndedUiLockState ? "Trading locked" : undefined;
+  const closedPanelMessage = showTrafficUiLockState
+    ? "Target reached. Waiting for settlement / resolution."
+    : showWindowEndedUiLockState
+    ? "Market window ended. Waiting for settlement / resolution."
+    : undefined;
   const microHeroState: "active" | "locked" | "resolving" | "ended" | null = (() => {
     if (!isSoccerNextGoalMicro) return null;
     if (isResolvedOnChain || status === "finalized" || status === "cancelled") return "ended";
@@ -4114,11 +4146,12 @@ const ended = endedByTime;
     if (isProposed || microWindowEnded) return "resolving";
     return "active";
   })();
-  const showGenericBlockedBanner = !!market.isBlocked && !liveMicroAutoLocked;
+  const showGenericBlockedBanner = !!market.isBlocked && !liveMicroAutoLocked && !trafficAutoLocked;
   // marketClosed also respects the start_time guard:
   // if match hasn't started, sport-related locks don't apply
   const marketClosed = isResolvedOnChain || isProposed || ended || !!market.isBlocked
     || cryptoUiTradingClosed
+    || trafficAutoLocked
     || flashFootUiTradingClosed
     || (!isFlashCryptoMarket && !isFlashTrafficMarket && !sportBeforeStart && sportLocked);
 
@@ -4608,7 +4641,7 @@ const ended = endedByTime;
                   <div className="ml-auto text-xs text-gray-500 flex items-center gap-2">
                     {/* Blocked badge */}
                     {market.isBlocked && (
-                      liveMicroAutoLocked ? (
+                      liveMicroAutoLocked || trafficAutoLocked ? (
                         <span className="px-2 py-1 rounded-full border border-yellow-500/40 bg-yellow-500/10 text-yellow-300">
                           Locked
                         </span>
@@ -4911,16 +4944,20 @@ const ended = endedByTime;
             <div className="lg:col-span-1">
               <div className="lg:sticky lg:top-6 space-y-4 pb-8">
                 {/* Live micro auto-lock gets dedicated state copy; admin blocks keep the generic banner */}
-                {liveMicroAutoLocked ? (
+                {liveMicroAutoLocked || trafficAutoLocked ? (
                   <div className="rounded-2xl border border-yellow-500/40 bg-yellow-500/10 p-5">
-                    <h3 className="text-lg font-bold text-yellow-200 mb-2">Goal detected</h3>
+                    <h3 className="text-lg font-bold text-yellow-200 mb-2">
+                      {liveMicroAutoLocked ? "Goal detected" : "Target reached"}
+                    </h3>
                     <p className="text-sm text-yellow-100/90">
-                      Trading has been locked for this market and it will resolve at window end.
+                      {liveMicroAutoLocked
+                        ? "Trading has been locked for this market and it will resolve at window end."
+                        : "Trading has been locked for this market because the traffic target was reached. Waiting for normal resolution flow."}
                     </p>
-                    {Number.isFinite(microWindowEndMs) && (
+                    {Number.isFinite(liveMicroAutoLocked ? microWindowEndMs : trafficWindowEndMs) && (
                       <p className="text-xs text-yellow-200/80 mt-3">
                         Window ends at{" "}
-                        {new Date(microWindowEndMs).toLocaleTimeString("en-US", {
+                        {new Date(liveMicroAutoLocked ? microWindowEndMs : trafficWindowEndMs).toLocaleTimeString("en-US", {
                           hour: "2-digit",
                           minute: "2-digit",
                           hour12: false,
@@ -4956,12 +4993,8 @@ const ended = endedByTime;
                     marketBalanceLamports={marketBalanceLamports}
                     userHoldings={userSharesForUi}
                     marketClosed={marketClosed}
-                    marketClosedTitle={showWindowEndedUiLockState ? "Trading locked" : undefined}
-                    marketClosedMessage={
-                      showWindowEndedUiLockState
-                        ? "Market window ended. Waiting for settlement / resolution."
-                        : undefined
-                    }
+                    marketClosedTitle={closedPanelTitle}
+                    marketClosedMessage={closedPanelMessage}
                   />
                 ) : null}
   
@@ -5111,12 +5144,8 @@ const ended = endedByTime;
                 marketBalanceLamports={marketBalanceLamports}
                 userHoldings={userSharesForUi}
                 marketClosed={marketClosed}
-                marketClosedTitle={showWindowEndedUiLockState ? "Trading locked" : undefined}
-                marketClosedMessage={
-                  showWindowEndedUiLockState
-                    ? "Market window ended. Waiting for settlement / resolution."
-                    : undefined
-                }
+                marketClosedTitle={closedPanelTitle}
+                marketClosedMessage={closedPanelMessage}
               />
             </div>
           </div>
