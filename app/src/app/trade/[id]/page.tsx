@@ -4420,33 +4420,6 @@ const ended = endedByTime;
                       </div>
                     )}
                   </div>
-                  <div className="mt-2 text-xs text-sky-100/80">
-                    {trafficRoundId ? `Round: ${trafficRoundId}` : "Round: —"}
-                    {trafficDebugSourceOpened != null
-                      ? ` • sourceOpened: ${trafficDebugSourceOpened ? "yes" : "no"}`
-                      : ""}
-                    {trafficDebugDetections != null ? ` • detectionsLastFrame: ${trafficDebugDetections}` : ""}
-                    {trafficDebugLineX != null ? ` • countingLineX: ${trafficDebugLineX}` : ""}
-                    {trafficDebugFrameWidth != null ? ` • frameWidth: ${trafficDebugFrameWidth}` : ""}
-                    {trafficDebugLineY != null ? ` • countingLineY: ${trafficDebugLineY}` : ""}
-                    {trafficDebugFrameHeight != null ? ` • frameHeight: ${trafficDebugFrameHeight}` : ""}
-                    {trafficDebugLastTrackId != null ? ` • lastCountedTrackId: ${trafficDebugLastTrackId}` : ""}
-                    {trafficDebugLastDirection ? ` • crossing: ${trafficDebugLastDirection}` : ""}
-                    {trafficDebugDecisionTrackId != null
-                      ? ` • decisionTrackId: ${trafficDebugDecisionTrackId}`
-                      : ""}
-                    {trafficDebugDecisionCounted != null
-                      ? ` • counted: ${trafficDebugDecisionCounted ? "yes" : "no"}`
-                      : ""}
-                    {trafficDebugDecisionReason ? ` • reason: ${trafficDebugDecisionReason}` : ""}
-                    {trafficDebugTrackDeltaX != null
-                      ? ` • deltaX: ${trafficDebugTrackDeltaX.toFixed(1)}`
-                      : ""}
-                    {trafficDebugTrackSamples != null ? ` • trackSamples: ${trafficDebugTrackSamples}` : ""}
-                    {trafficCurrentCount != null
-                      ? ` • currentCount: ${Math.max(0, Math.floor(trafficCurrentCount))}`
-                      : ""}
-                  </div>
                 </div>
               )}
 
