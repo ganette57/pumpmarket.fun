@@ -3853,13 +3853,6 @@ useEffect(() => {
   const cryptoDurationMinutes = Number(cryptoMeta.duration_minutes || 0) || null;
   const trafficMeta = isFlashTrafficMarket ? asObject(market.sportMeta) : {};
   const trafficRoundId = String(trafficMeta.round_id || trafficMeta.roundId || market.publicKey || "").trim();
-  const trafficThreshold = firstFiniteNumber([trafficMeta.threshold]);
-  const trafficDurationSec = firstFiniteNumber([trafficMeta.duration_sec, trafficMeta.durationSec]);
-  const trafficCurrentCount = trafficLiveCount ?? firstFiniteNumber([
-    trafficMeta.current_count,
-    trafficMeta.end_count,
-    trafficMeta.start_count,
-  ]);
   const trafficDebugFrameSrc =
     isFlashTrafficMarket && trafficRoundId
       ? trafficDebugImageUrl
@@ -3867,11 +3860,11 @@ useEffect(() => {
   const trafficWindowEnd = isFlashTrafficMarket
     ? String(trafficMeta.window_end || market.endTime || "").trim() || null
     : null;
-  const trafficWindowEndLabel = (() => {
-    const parsed = parseIsoUtc(trafficWindowEnd);
-    if (!parsed) return null;
-    return parsed.toLocaleTimeString("en-US");
-  })();
+  const trafficWindowEndMs = parseIsoUtc(trafficWindowEnd)?.getTime() ?? NaN;
+  const trafficRemainingSec = Number.isFinite(trafficWindowEndMs)
+    ? Math.max(0, Math.ceil((trafficWindowEndMs - nowMs) / 1000))
+    : null;
+  const trafficRemainingLabel = trafficRemainingSec == null ? "—" : formatCountdownMmSs(trafficRemainingSec);
   const microLoopSequence = isSoccerNextGoalMicro
     ? extractLoopSequence(market.description, market.sportMeta)
     : null;
@@ -4376,36 +4369,52 @@ const ended = endedByTime;
                   />
                 );
               })()}
-              {isFlashTrafficMarket && (
-                <div className="rounded-xl border border-amber-500/35 bg-amber-500/10 px-4 py-3">
-                  <div className="text-[11px] uppercase tracking-[0.08em] text-amber-200/85">
-                    Traffic Live Count
-                  </div>
-                  <div className="mt-1 flex items-end justify-between gap-3">
-                    <div className="text-3xl font-black tabular-nums text-white">
-                      {trafficCurrentCount == null ? "—" : Math.max(0, Math.floor(trafficCurrentCount))}
+              {isFlashTrafficMarket && (() => {
+                const trafficIsLive =
+                  !isResolvedOnChain &&
+                  !isProposed &&
+                  status !== "finalized" &&
+                  status !== "cancelled" &&
+                  (trafficRemainingSec == null ? !endedByTime : trafficRemainingSec > 0);
+                const timerToneClass =
+                  trafficRemainingSec == null || trafficRemainingSec > 120
+                    ? "border-emerald-300/45 bg-emerald-400/12 text-emerald-100 shadow-[0_0_14px_rgba(52,211,153,0.22)]"
+                    : trafficRemainingSec > 45
+                    ? "border-amber-300/45 bg-amber-300/12 text-amber-100 shadow-[0_0_14px_rgba(251,191,36,0.20)]"
+                    : "border-red-300/55 bg-red-400/14 text-red-50 shadow-[0_0_16px_rgba(248,113,113,0.28)]";
+                const timerPulseClass = trafficRemainingSec != null && trafficRemainingSec <= 20
+                  ? "animate-pulse"
+                  : "";
+
+                return (
+                  <div className="rounded-xl border border-white/12 bg-[linear-gradient(135deg,rgba(20,24,32,0.82),rgba(12,15,20,0.88))] px-3.5 py-2.5 sm:px-4 sm:py-3 shadow-[0_12px_28px_rgba(0,0,0,0.28)]">
+                    <div className="flex items-center justify-between gap-2.5">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm sm:text-base font-semibold text-white">
+                          {market.question || "Traffic Market"}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        {trafficIsLive && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-red-300/35 bg-red-400/12 px-2.5 py-1 text-[11px] font-semibold text-red-100">
+                            <span className="inline-block h-1.5 w-1.5 rounded-full bg-red-300 animate-pulse" />
+                            LIVE
+                          </span>
+                        )}
+                        <div className={`rounded-lg border px-2.5 py-1 text-base sm:text-lg font-bold tabular-nums tracking-[0.04em] ${timerToneClass} ${timerPulseClass}`}>
+                          {trafficRemainingLabel}
+                        </div>
+                      </div>
                     </div>
-                    {trafficPolling && (
-                      <span className="inline-flex items-center gap-2 rounded-full border border-amber-400/35 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-200">
-                        <span className="inline-block h-2 w-2 rounded-full bg-amber-300 animate-pulse" />
-                        LIVE
-                      </span>
-                    )}
                   </div>
-                  <div className="mt-1 text-xs text-amber-100/80">
-                    Threshold: {trafficThreshold == null ? "—" : Math.floor(trafficThreshold)} vehicles
-                    {trafficDurationSec != null ? ` • Duration: ${Math.floor(trafficDurationSec)}s` : ""}
-                    {trafficRoundId ? ` • Round: ${trafficRoundId}` : ""}
-                    {trafficWindowEndLabel ? ` • Ends: ${trafficWindowEndLabel}` : ""}
-                  </div>
-                </div>
-              )}
+                );
+              })()}
               {isFlashTrafficMarket && (
-                <div className="rounded-xl border border-sky-500/35 bg-sky-500/10 px-4 py-3">
-                  <div className="text-[11px] uppercase tracking-[0.08em] text-sky-200/85">
+                <div className="rounded-xl border border-white/10 bg-black/35 px-3 py-2">
+                  <div className="text-[11px] uppercase tracking-[0.08em] text-white/70">
                     Traffic Debug Preview
                   </div>
-                  <div className="mt-2 flex h-[420px] items-center justify-center overflow-hidden rounded-lg border border-sky-400/25 bg-black/50 md:h-[520px]">
+                  <div className="mt-1.5 flex h-[420px] items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-black/50 md:h-[520px]">
                     {trafficDebugFrameSrc ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
@@ -4415,7 +4424,7 @@ const ended = endedByTime;
                       />
                     ) : null}
                     {!trafficDebugFrameSrc && trafficDebugFrameAvailable === false && (
-                      <div className="px-3 py-6 text-center text-xs text-sky-100/80">
+                      <div className="px-3 py-6 text-center text-xs text-white/70">
                         No debug frame available yet
                       </div>
                     )}
