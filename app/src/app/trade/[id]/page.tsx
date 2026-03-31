@@ -4376,15 +4376,14 @@ const ended = endedByTime;
                   status !== "finalized" &&
                   status !== "cancelled" &&
                   (trafficRemainingSec == null ? !endedByTime : trafficRemainingSec > 0);
-                const timerToneClass =
-                  trafficRemainingSec == null || trafficRemainingSec > 120
-                    ? "border-emerald-300/45 bg-emerald-400/12 text-emerald-100 shadow-[0_0_14px_rgba(52,211,153,0.22)]"
-                    : trafficRemainingSec > 45
-                    ? "border-amber-300/45 bg-amber-300/12 text-amber-100 shadow-[0_0_14px_rgba(251,191,36,0.20)]"
-                    : "border-red-300/55 bg-red-400/14 text-red-50 shadow-[0_0_16px_rgba(248,113,113,0.28)]";
-                const timerPulseClass = trafficRemainingSec != null && trafficRemainingSec <= 20
-                  ? "animate-pulse"
-                  : "";
+                const trafficTimerCritical = trafficRemainingSec != null && trafficRemainingSec <= 10;
+                const trafficTimerUrgent =
+                  trafficRemainingSec != null && !trafficTimerCritical && trafficRemainingSec <= 30;
+                const trafficTimerTone = trafficTimerCritical
+                  ? "text-red-300 border-red-500/50 bg-red-500/15 animate-pulse"
+                  : trafficTimerUrgent
+                  ? "text-amber-200 border-amber-400/45 bg-amber-400/12"
+                  : "text-pump-green border-pump-green/35 bg-pump-green/10";
 
                 return (
                   <div className="rounded-xl border border-white/12 bg-[linear-gradient(135deg,rgba(20,24,32,0.82),rgba(12,15,20,0.88))] px-3.5 py-2.5 sm:px-4 sm:py-3 shadow-[0_12px_28px_rgba(0,0,0,0.28)]">
@@ -4401,8 +4400,11 @@ const ended = endedByTime;
                             LIVE
                           </span>
                         )}
-                        <div className={`rounded-lg border px-2.5 py-1 text-base sm:text-lg font-bold tabular-nums tracking-[0.04em] ${timerToneClass} ${timerPulseClass}`}>
-                          {trafficRemainingLabel}
+                        <div className={`rounded-xl border px-2.5 py-1 text-center ${trafficTimerTone}`}>
+                          <div className="text-[9px] uppercase tracking-[0.14em] text-white/70">Time Left</div>
+                          <div className="mt-0.5 text-base sm:text-lg font-black tabular-nums leading-none tracking-[0.05em]">
+                            {trafficRemainingLabel}
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -4411,9 +4413,6 @@ const ended = endedByTime;
               })()}
               {isFlashTrafficMarket && (
                 <div className="rounded-xl border border-white/10 bg-black/35 px-3 py-2">
-                  <div className="text-[11px] uppercase tracking-[0.08em] text-white/70">
-                    Traffic Debug Preview
-                  </div>
                   <div className="mt-1.5 flex h-[420px] items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-black/50 md:h-[520px]">
                     {trafficDebugFrameSrc ? (
                       // eslint-disable-next-line @next/next/no-img-element
