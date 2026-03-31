@@ -526,6 +526,7 @@ class TrafficRoundManager:
 
         with runtime.lock:
             current_count = int(runtime.current_count)
+            ends_at = float(runtime.ends_at)
         count_text = f"COUNT {current_count}"
         font_face = cv2.FONT_HERSHEY_SIMPLEX
         font_scale = 0.8
@@ -544,6 +545,32 @@ class TrafficRoundManager:
             annotated,
             count_text,
             (x_text, y_text),
+            font_face,
+            font_scale,
+            (255, 255, 255),
+            font_thickness,
+            cv2.LINE_AA,
+        )
+
+        remaining_sec = max(0, int((ends_at - time.time()) + 0.999))
+        timer_text = f"{remaining_sec // 60:02d}:{remaining_sec % 60:02d}"
+        (timer_w, timer_h), timer_baseline = cv2.getTextSize(
+            timer_text, font_face, font_scale, font_thickness
+        )
+        frame_w = annotated.shape[1]
+        timer_x = max(8, frame_w - timer_w - 20)
+        timer_y = 16 + timer_h
+        cv2.rectangle(
+            annotated,
+            (timer_x - 8, timer_y - timer_h - 8),
+            (timer_x + timer_w + 8, timer_y + timer_baseline + 8),
+            (0, 0, 0),
+            -1,
+        )
+        cv2.putText(
+            annotated,
+            timer_text,
+            (timer_x, timer_y),
             font_face,
             font_scale,
             (255, 255, 255),
