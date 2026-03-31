@@ -60,7 +60,7 @@ CAM3_STREAM_SIGNATURE = "wf05-24b0-46ee-2155-1a86_nj"
 
 CAMERA_REMOTE_STREAM_PROFILES: Dict[str, Dict[str, object]] = {
     "cam1": {
-        "line_x_ratio": 0.72,
+        "line_x_ratio": 0.50,
         "roi_x_min_ratio": 0.46,
         "roi_x_max_ratio": 0.94,
         "roi_y_min_ratio": 0.58,
@@ -69,7 +69,7 @@ CAMERA_REMOTE_STREAM_PROFILES: Dict[str, Dict[str, object]] = {
         "min_samples": 4,
         "min_motion_px": 18.0,
         "min_bbox_area_px": 2200.0,
-        "counting_zone_half_width_px": 40.0,
+        "counting_zone_half_width_px": 10.0,
     },
     "cam2": {
         "line_x_ratio": 0.64,
@@ -445,6 +445,14 @@ class TrafficRoundManager:
                     ):
                         return
 
+                history = runtime.track_center_x_history.get(track_id)
+                if history is None:
+                    history = []
+                    runtime.track_center_x_history[track_id] = history
+                history.append(float(center_x))
+                if len(history) > REMOTE_STREAM_HISTORY_SIZE:
+                    history.pop(0)
+
                 line_x = (
                     float(runtime.counting_line_x)
                     if runtime.counting_line_x is not None
@@ -458,14 +466,6 @@ class TrafficRoundManager:
                 in_counting_zone = abs(center_x - line_x) <= remote_counting_zone_half_width_px
                 was_in_counting_zone = runtime.track_in_counting_zone_by_id.get(track_id, False)
                 runtime.track_in_counting_zone_by_id[track_id] = in_counting_zone
-
-                history = runtime.track_center_x_history.get(track_id)
-                if history is None:
-                    history = []
-                    runtime.track_center_x_history[track_id] = history
-                history.append(float(center_x))
-                if len(history) > REMOTE_STREAM_HISTORY_SIZE:
-                    history.pop(0)
 
                 samples = len(history)
                 span_x = (max(history) - min(history)) if samples >= 2 else 0.0
@@ -684,29 +684,22 @@ class TrafficRoundManager:
         remote_min_bbox_area_px = REMOTE_STREAM_MIN_BBOX_AREA_PX
         remote_counting_zone_half_width_px = REMOTE_STREAM_COUNTING_ZONE_HALF_WIDTH_PX
 
-        if source_type == "remote_stream":
-            profile = _resolve_remote_profile(
-                runtime.spec.camera_id,
-                default_source,
-                runtime.spec.round_id,
-            )
-            remote_line_x_ratio = float(profile["line_x_ratio"])
-            remote_roi_x_min_ratio = float(profile["roi_x_min_ratio"])
-            remote_roi_x_max_ratio = float(profile["roi_x_max_ratio"])
-            remote_roi_y_min_ratio = float(profile["roi_y_min_ratio"])
-            remote_roi_y_max_ratio = float(profile["roi_y_max_ratio"])
-            remote_direction = str(profile["direction"])
-            remote_min_samples = int(profile["min_samples"])
-            remote_min_motion_px = float(profile["min_motion_px"])
-            remote_min_bbox_area_px = float(profile["min_bbox_area_px"])
-            remote_counting_zone_half_width_px = float(profile["counting_zone_half_width_px"])
+        # Keep per-camera profiles defined but temporarily bypass runtime application
+        # to restore baseline global behavior (default/highway).
+        if source_type == "remote_stream" and _is_highway_remote_profile(default_source, runtime.spec.round_id):
+            remote_line_x_ratio = HIGHWAY_REMOTE_STREAM_LINE_X_RATIO
+            remote_roi_x_min_ratio = HIGHWAY_REMOTE_STREAM_ROI_X_MIN_RATIO
+            remote_roi_x_max_ratio = HIGHWAY_REMOTE_STREAM_ROI_X_MAX_RATIO
+            remote_roi_y_min_ratio = HIGHWAY_REMOTE_STREAM_ROI_Y_MIN_RATIO
+            remote_roi_y_max_ratio = HIGHWAY_REMOTE_STREAM_ROI_Y_MAX_RATIO
+            remote_direction = HIGHWAY_REMOTE_STREAM_DIRECTION
+            remote_min_samples = HIGHWAY_REMOTE_STREAM_MIN_SAMPLES
+            remote_min_motion_px = HIGHWAY_REMOTE_STREAM_MIN_MOTION_PX
+            remote_min_bbox_area_px = HIGHWAY_REMOTE_STREAM_MIN_BBOX_AREA_PX
             print(
-                "[Traffic] remote calibration profile enabled",
+                "[Traffic] highway calibration profile enabled",
                 {
                     "roundId": runtime.spec.round_id,
-                    "cameraId": runtime.spec.camera_id,
-                    "profileId": profile.get("profile_id"),
-                    "profileSource": profile.get("profile_source"),
                     "lineXRatio": remote_line_x_ratio,
                     "roi": [
                         remote_roi_x_min_ratio,
