@@ -61,6 +61,17 @@ CAM1_REMOTE_STREAM_VERTICAL_DIRECTION = os.environ.get(
 ).strip().lower() or "top_to_bottom"
 if CAM1_REMOTE_STREAM_VERTICAL_DIRECTION not in ("top_to_bottom", "bottom_to_top"):
     CAM1_REMOTE_STREAM_VERTICAL_DIRECTION = "top_to_bottom"
+CAM2_REMOTE_STREAM_LINE_Y_RATIO = 0.48
+CAM2_REMOTE_STREAM_VERTICAL_DIRECTION = os.environ.get(
+    "TRAFFIC_CAM2_VERTICAL_DIRECTION",
+    "top_to_bottom",
+).strip().lower() or "top_to_bottom"
+if CAM2_REMOTE_STREAM_VERTICAL_DIRECTION not in ("top_to_bottom", "bottom_to_top"):
+    CAM2_REMOTE_STREAM_VERTICAL_DIRECTION = "top_to_bottom"
+CAM2_REMOTE_STREAM_SEGMENT_X1_RATIO = 0.57
+CAM2_REMOTE_STREAM_SEGMENT_Y1_RATIO = 0.52
+CAM2_REMOTE_STREAM_SEGMENT_X2_RATIO = 0.75
+CAM2_REMOTE_STREAM_SEGMENT_Y2_RATIO = 0.47
 
 CAM1_STREAM_SIGNATURE = "wf05-24af-4d42-c307-aa51_nj"
 CAM2_STREAM_SIGNATURE = "wf05-24af-4d24-2558-f999_nj"
@@ -235,6 +246,7 @@ class RoundRuntime:
     last_crossing_direction: Optional[str] = None
     track_center_x_history: Dict[int, List[float]] = field(default_factory=dict)
     track_center_y_history: Dict[int, List[float]] = field(default_factory=dict)
+    track_cam2_line_side_by_id: Dict[int, int] = field(default_factory=dict)
     track_seen_right_ids: Set[int] = field(default_factory=set)
     track_seen_left_ids: Set[int] = field(default_factory=set)
     track_in_counting_zone_by_id: Dict[int, bool] = field(default_factory=dict)
@@ -467,8 +479,11 @@ class TrafficRoundManager:
                 if not normalized_camera_id:
                     normalized_camera_id = _camera_id_from_stream(runtime.spec.stream_url)
                 is_cam1 = normalized_camera_id == "cam1"
+                is_cam2 = normalized_camera_id == "cam2"
+                use_horizontal_axis = is_cam1 or is_cam2
                 history_y: Optional[List[float]] = None
-                if is_cam1:
+                prev_cam2_line_side: Optional[int] = None
+                if use_horizontal_axis:
                     history_y = runtime.track_center_y_history.get(track_id)
                     if history_y is None:
                         history_y = []
@@ -476,6 +491,10 @@ class TrafficRoundManager:
                     history_y.append(float(center_y))
                     if len(history_y) > REMOTE_STREAM_HISTORY_SIZE:
                         history_y.pop(0)
+                if is_cam2:
+                    prev_cam2_line_side = runtime.track_cam2_line_side_by_id.get(track_id)
+                    if side != 0:
+                        runtime.track_cam2_line_side_by_id[track_id] = int(side)
 
                 line_x = (
                     float(runtime.counting_line_x)
@@ -487,14 +506,23 @@ class TrafficRoundManager:
                     if runtime.counting_line_y is not None
                     else float(
                         _clamp_int(
-                            int(round(frame_height * CAM1_REMOTE_STREAM_LINE_Y_RATIO)),
+                            int(
+                                round(
+                                    frame_height
+                                    * (
+                                        CAM2_REMOTE_STREAM_LINE_Y_RATIO
+                                        if is_cam2
+                                        else CAM1_REMOTE_STREAM_LINE_Y_RATIO
+                                    )
+                                )
+                            ),
                             0,
                             max(0, frame_height - 1),
                         )
                     )
                 )
-                main_axis_value = center_y if is_cam1 else center_x
-                main_axis_line = line_y if is_cam1 else line_x
+                main_axis_value = center_y if use_horizontal_axis else center_x
+                main_axis_line = line_y if use_horizontal_axis else line_x
                 zone = (
                     -1
                     if main_axis_value > (main_axis_line + REMOTE_STREAM_LINE_MARGIN_PX)
@@ -569,6 +597,86 @@ class TrafficRoundManager:
                     runtime.last_crossing_direction = crossing_dir
                     runtime.last_reject_reason = None
                     current_count = int(runtime.current_count)
+                elif is_cam2 and history_y is not None:
+                    if len(history_y) < 2:
+                        return
+                    crossing_dir: Optional[str] = None
+                    prev_y = history_y[-2]
+                    curr_y = history_y[-1]
+                    curr_line_side = int(side)
+                    if (
+                        prev_cam2_line_side is not None
+                        and curr_line_side != 0
+                        and prev_cam2_line_side != curr_line_side
+                    ):
+                        if prev_cam2_line_side < curr_line_side:
+                            crossing_dir = "top_to_bottom"
+                        else:
+                            crossing_dir = "bottom_to_top"
+
+                    if crossing_dir is not None:
+                        if (
+                            remote_direction in ("top_to_bottom", "bottom_to_top")
+                            and crossing_dir != remote_direction
+                        ):
+                            if DEBUG_CROSSING and zone != 0:
+                                runtime.last_reject_reason = (
+                                    f"T{track_id} reject=direction {crossing_dir}!={remote_direction}"
+                                )
+                            return
+                        runtime.counted_track_ids.add(track_id)
+                        runtime.current_count += 1
+                        runtime.last_counted_track_id = track_id
+                        runtime.last_crossing_direction = crossing_dir
+                        runtime.last_reject_reason = None
+                        current_count = int(runtime.current_count)
+                    else:
+                        # Fallback: if a track enters the counting zone around the line
+                        # and has coherent direction/motion, count even without full crossing.
+                        movement_dy = (history_y[-1] - history_y[0]) if samples >= 2 else 0.0
+                        if remote_direction == "top_to_bottom":
+                            direction_ok = movement_dy >= 2.0
+                            seen_expected_side = (track_id in runtime.track_seen_left_ids) or (prev_zone == 1)
+                        elif remote_direction == "bottom_to_top":
+                            direction_ok = movement_dy <= -2.0
+                            seen_expected_side = (track_id in runtime.track_seen_right_ids) or (prev_zone == -1)
+                        else:
+                            direction_ok = abs(movement_dy) >= 2.0
+                            seen_expected_side = True
+
+                        fallback_min_samples = max(2, remote_min_samples - 1)
+                        fallback_min_motion_px = max(4.0, remote_min_motion_px * 0.7)
+                        if (
+                            remote_direction in ("top_to_bottom", "bottom_to_top")
+                            and in_counting_zone
+                            and not was_in_counting_zone
+                            and seen_expected_side
+                            and direction_ok
+                            and samples >= fallback_min_samples
+                            and span_x >= fallback_min_motion_px
+                        ):
+                            runtime.counted_track_ids.add(track_id)
+                            runtime.current_count += 1
+                            runtime.last_counted_track_id = track_id
+                            runtime.last_crossing_direction = remote_direction
+                            runtime.last_reject_reason = "counted=fallback_zone"
+                            current_count = int(runtime.current_count)
+                            if DEBUG_CROSSING:
+                                print(
+                                    f"[CROSSING_DEBUG] FALLBACK COUNTED T{track_id} "
+                                    f"dy={movement_dy:.1f} span={span_x:.1f} samples={samples}"
+                                )
+                            # keep last_side as approach side to stabilize subsequent frames
+                            if prev_zone is not None:
+                                runtime.last_side_by_track[track_id] = prev_zone
+                            return
+
+                        if DEBUG_CROSSING and zone != 0:
+                            runtime.last_reject_reason = (
+                                f"T{track_id} reject=no_crossing_y prev={prev_y:.0f} "
+                                f"curr={curr_y:.0f} ly={line_y:.0f} z={zone}"
+                            )
+                        return
                 else:
                     # Fallback: if a track enters the counting zone around the line
                     # and has coherent direction/motion, count even without full crossing.
@@ -685,15 +793,17 @@ class TrafficRoundManager:
         x2 = int(float(line_x2))
         y2 = int(float(line_y2))
         with runtime.lock:
-            cam1_horizontal_mode = (
+            normalized_camera_id = _normalize_camera_id(runtime.spec.camera_id)
+            if not normalized_camera_id:
+                normalized_camera_id = _camera_id_from_stream(runtime.spec.stream_url)
+            horizontal_vertical_mode = (
                 runtime.spec.source_type == "remote_stream"
-                and runtime.counting_line_x is None
-                and runtime.counting_line_y is not None
+                and normalized_camera_id in ("cam1", "cam2")
                 and runtime.counting_direction in ("top_to_bottom", "bottom_to_top")
             )
 
-        if cam1_horizontal_mode:
-            # Subtle glow for cam1 counting line.
+        if horizontal_vertical_mode:
+            # Subtle glow for horizontal counting lines (cam1/cam2).
             overlay = annotated.copy()
             cv2.line(overlay, (x1, y1), (x2, y2), (40, 180, 70), 8)
             cv2.line(overlay, (x1, y1), (x2, y2), (60, 210, 95), 4)
@@ -774,6 +884,7 @@ class TrafficRoundManager:
         remote_counting_zone_half_width_px = REMOTE_STREAM_COUNTING_ZONE_HALF_WIDTH_PX
         remote_line_y_ratio = CAM1_REMOTE_STREAM_LINE_Y_RATIO
         remote_use_horizontal_line = False
+        remote_use_cam2_segment_line = False
 
         if source_type == "remote_stream":
             normalized_camera_id = _normalize_camera_id(runtime.spec.camera_id)
@@ -785,6 +896,20 @@ class TrafficRoundManager:
                 remote_min_motion_px = CAM1_REMOTE_STREAM_MIN_MOTION_PX
                 print(
                     "[Traffic] cam1 horizontal counting mode enabled",
+                    {
+                        "roundId": runtime.spec.round_id,
+                        "cameraId": runtime.spec.camera_id,
+                        "lineYRatio": remote_line_y_ratio,
+                        "direction": remote_direction,
+                        "minMotionPx": remote_min_motion_px,
+                    },
+                )
+            elif normalized_camera_id == "cam2":
+                remote_use_cam2_segment_line = True
+                remote_line_y_ratio = CAM2_REMOTE_STREAM_LINE_Y_RATIO
+                remote_direction = CAM2_REMOTE_STREAM_VERTICAL_DIRECTION
+                print(
+                    "[Traffic] cam2 horizontal counting mode enabled",
                     {
                         "roundId": runtime.spec.round_id,
                         "cameraId": runtime.spec.camera_id,
@@ -943,7 +1068,37 @@ class TrafficRoundManager:
                 frame_height, frame_width = frame.shape[:2]
                 if frame_width > 0 and frame_height > 0:
                     if source_type == "remote_stream":
-                        if remote_use_horizontal_line:
+                        if remote_use_cam2_segment_line:
+                            seg_x1 = _clamp_int(
+                                int(round(frame_width * CAM2_REMOTE_STREAM_SEGMENT_X1_RATIO)),
+                                0,
+                                frame_width - 1,
+                            )
+                            seg_y1 = _clamp_int(
+                                int(round(frame_height * CAM2_REMOTE_STREAM_SEGMENT_Y1_RATIO)),
+                                0,
+                                frame_height - 1,
+                            )
+                            seg_x2 = _clamp_int(
+                                int(round(frame_width * CAM2_REMOTE_STREAM_SEGMENT_X2_RATIO)),
+                                0,
+                                frame_width - 1,
+                            )
+                            seg_y2 = _clamp_int(
+                                int(round(frame_height * CAM2_REMOTE_STREAM_SEGMENT_Y2_RATIO)),
+                                0,
+                                frame_height - 1,
+                            )
+                            if seg_x1 == seg_x2 and seg_y1 == seg_y2:
+                                seg_x2 = min(frame_width - 1, seg_x1 + 1)
+
+                            line_x1 = float(seg_x1)
+                            line_y1 = float(seg_y1)
+                            line_x2 = float(seg_x2)
+                            line_y2 = float(seg_y2)
+                            effective_line_x = None
+                            effective_line_y = int(round((float(seg_y1) + float(seg_y2)) / 2.0))
+                        elif remote_use_horizontal_line:
                             effective_line_x = None
                             effective_line_y = _clamp_int(
                                 int(round(frame_height * remote_line_y_ratio)),
@@ -1150,7 +1305,9 @@ class TrafficRoundManager:
                             and float(roi_y1) <= center_y <= float(roi_y2)
                         )
                     if source_type == "remote_stream":
-                        if remote_use_horizontal_line:
+                        if remote_use_cam2_segment_line:
+                            side = _line_side(center_x, center_y, line_x1, line_y1, line_x2, line_y2)
+                        elif remote_use_horizontal_line:
                             if center_y > (line_y1 + REMOTE_STREAM_LINE_MARGIN_PX):
                                 side = -1
                             elif center_y < (line_y1 - REMOTE_STREAM_LINE_MARGIN_PX):
