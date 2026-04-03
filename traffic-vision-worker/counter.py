@@ -72,10 +72,38 @@ CAM2_REMOTE_STREAM_SEGMENT_X1_RATIO = 0.57
 CAM2_REMOTE_STREAM_SEGMENT_Y1_RATIO = 0.52
 CAM2_REMOTE_STREAM_SEGMENT_X2_RATIO = 0.75
 CAM2_REMOTE_STREAM_SEGMENT_Y2_RATIO = 0.47
+IOWA_REMOTE_STREAM_LINE_Y_RATIO = 0.54
+IOWA_REMOTE_STREAM_DIRECTION = "bottom_to_top"
+IOWA_REMOTE_STREAM_MIN_SAMPLES = 3
+IOWA_REMOTE_STREAM_MIN_MOTION_PX = 7.0
+IOWA_REMOTE_STREAM_MIN_BBOX_AREA_PX = 1200.0
+IOWA_REMOTE_STREAM_COUNTING_ZONE_HALF_WIDTH_PX = 22.0
+IOWA_REMOTE_STREAM_ROI_X_MIN_RATIO = 0.55
+IOWA_REMOTE_STREAM_ROI_X_MAX_RATIO = 0.98
+IOWA_REMOTE_STREAM_ROI_Y_MIN_RATIO = 0.38
+IOWA_REMOTE_STREAM_ROI_Y_MAX_RATIO = 0.96
+IOWA_REMOTE_STREAM_SEGMENT_X1_RATIO = 0.50
+IOWA_REMOTE_STREAM_SEGMENT_X2_RATIO = 0.74
+MARYLAND_REMOTE_STREAM_LINE_Y_RATIO = 0.60
+MARYLAND_REMOTE_STREAM_DIRECTION = "bottom_to_top"
+MARYLAND_REMOTE_STREAM_MIN_SAMPLES = 2
+MARYLAND_REMOTE_STREAM_MIN_MOTION_PX = 6.0
+MARYLAND_REMOTE_STREAM_MIN_BBOX_AREA_PX = 700.0
+MARYLAND_REMOTE_STREAM_COUNTING_ZONE_HALF_WIDTH_PX = 24.0
+MARYLAND_REMOTE_STREAM_ROI_X_MIN_RATIO = 0.52
+MARYLAND_REMOTE_STREAM_ROI_X_MAX_RATIO = 0.99
+MARYLAND_REMOTE_STREAM_ROI_Y_MIN_RATIO = 0.35
+MARYLAND_REMOTE_STREAM_ROI_Y_MAX_RATIO = 0.98
+MARYLAND_REMOTE_STREAM_SEGMENT_X1_RATIO = 0.47
+MARYLAND_REMOTE_STREAM_SEGMENT_X2_RATIO = 0.70
+MARYLAND_DIRECT_CROSS_HYSTERESIS_PX = 1.0
+MARYLAND_DIRECT_STEP_DY_PX = 0.5
 
 CAM1_STREAM_SIGNATURE = "wf05-24af-4d42-c307-aa51_nj"
 CAM2_STREAM_SIGNATURE = "wf05-24af-4d24-2558-f999_nj"
 CAM3_STREAM_SIGNATURE = "wf05-24b0-46ee-2155-1a86_nj"
+IOWA_STREAM_SIGNATURE = "iowadotsfs2.us-east-1.skyvdn.com/rtplive/dmtv05lb"
+MARYLAND_STREAM_SIGNATURE = "strmr5.sha.maryland.gov/rtplive/0900adbd00ee00e30051fa36c4235c0a"
 
 CAMERA_REMOTE_STREAM_PROFILES: Dict[str, Dict[str, object]] = {
     "cam1": {
@@ -113,6 +141,30 @@ CAMERA_REMOTE_STREAM_PROFILES: Dict[str, Dict[str, object]] = {
         "min_motion_px": 16.0,
         "min_bbox_area_px": 2000.0,
         "counting_zone_half_width_px": 38.0,
+    },
+    "iowa": {
+        "line_x_ratio": 0.50,
+        "roi_x_min_ratio": IOWA_REMOTE_STREAM_ROI_X_MIN_RATIO,
+        "roi_x_max_ratio": IOWA_REMOTE_STREAM_ROI_X_MAX_RATIO,
+        "roi_y_min_ratio": IOWA_REMOTE_STREAM_ROI_Y_MIN_RATIO,
+        "roi_y_max_ratio": IOWA_REMOTE_STREAM_ROI_Y_MAX_RATIO,
+        "direction": IOWA_REMOTE_STREAM_DIRECTION,
+        "min_samples": IOWA_REMOTE_STREAM_MIN_SAMPLES,
+        "min_motion_px": IOWA_REMOTE_STREAM_MIN_MOTION_PX,
+        "min_bbox_area_px": IOWA_REMOTE_STREAM_MIN_BBOX_AREA_PX,
+        "counting_zone_half_width_px": IOWA_REMOTE_STREAM_COUNTING_ZONE_HALF_WIDTH_PX,
+    },
+    "maryland": {
+        "line_x_ratio": 0.50,
+        "roi_x_min_ratio": MARYLAND_REMOTE_STREAM_ROI_X_MIN_RATIO,
+        "roi_x_max_ratio": MARYLAND_REMOTE_STREAM_ROI_X_MAX_RATIO,
+        "roi_y_min_ratio": MARYLAND_REMOTE_STREAM_ROI_Y_MIN_RATIO,
+        "roi_y_max_ratio": MARYLAND_REMOTE_STREAM_ROI_Y_MAX_RATIO,
+        "direction": MARYLAND_REMOTE_STREAM_DIRECTION,
+        "min_samples": MARYLAND_REMOTE_STREAM_MIN_SAMPLES,
+        "min_motion_px": MARYLAND_REMOTE_STREAM_MIN_MOTION_PX,
+        "min_bbox_area_px": MARYLAND_REMOTE_STREAM_MIN_BBOX_AREA_PX,
+        "counting_zone_half_width_px": MARYLAND_REMOTE_STREAM_COUNTING_ZONE_HALF_WIDTH_PX,
     },
 }
 
@@ -157,6 +209,10 @@ def _camera_id_from_stream(stream_url: str) -> str:
         return "cam2"
     if CAM3_STREAM_SIGNATURE in source:
         return "cam3"
+    if IOWA_STREAM_SIGNATURE in source:
+        return "iowa"
+    if MARYLAND_STREAM_SIGNATURE in source:
+        return "maryland"
     return ""
 
 
@@ -479,8 +535,11 @@ class TrafficRoundManager:
                 if not normalized_camera_id:
                     normalized_camera_id = _camera_id_from_stream(runtime.spec.stream_url)
                 is_cam1 = normalized_camera_id == "cam1"
+                is_iowa = normalized_camera_id == "iowa"
+                is_maryland = normalized_camera_id == "maryland"
                 is_cam2 = normalized_camera_id == "cam2"
-                use_horizontal_axis = is_cam1 or is_cam2
+                is_cam1_style = is_cam1 or is_iowa or is_maryland
+                use_horizontal_axis = is_cam1_style or is_cam2
                 history_y: Optional[List[float]] = None
                 prev_cam2_line_side: Optional[int] = None
                 if use_horizontal_axis:
@@ -512,6 +571,10 @@ class TrafficRoundManager:
                                     * (
                                         CAM2_REMOTE_STREAM_LINE_Y_RATIO
                                         if is_cam2
+                                        else IOWA_REMOTE_STREAM_LINE_Y_RATIO
+                                        if is_iowa
+                                        else MARYLAND_REMOTE_STREAM_LINE_Y_RATIO
+                                        if is_maryland
                                         else CAM1_REMOTE_STREAM_LINE_Y_RATIO
                                     )
                                 )
@@ -556,6 +619,52 @@ class TrafficRoundManager:
                             f"T{track_id} reject=min_area area={bbox_area:.0f}"
                         )
                     return
+                if is_maryland and history_y is not None:
+                    if len(history_y) < 2:
+                        return
+                    prev_y = history_y[-2]
+                    curr_y = history_y[-1]
+                    step_dy = curr_y - prev_y
+                    direct_min_samples = max(2, remote_min_samples)
+                    if samples < direct_min_samples:
+                        if DEBUG_CROSSING and zone != 0:
+                            runtime.last_reject_reason = f"T{track_id} reject=md_min_samples s={samples}"
+                        return
+
+                    immediate_crossing_dir: Optional[str] = None
+                    if remote_direction == "bottom_to_top":
+                        crossed_by_y = (
+                            prev_y > (line_y + MARYLAND_DIRECT_CROSS_HYSTERESIS_PX)
+                            and curr_y <= (line_y - MARYLAND_DIRECT_CROSS_HYSTERESIS_PX)
+                        )
+                        crossed_by_zone = (prev_zone == -1 and zone == 1)
+                        if (crossed_by_y or crossed_by_zone) and step_dy <= -MARYLAND_DIRECT_STEP_DY_PX:
+                            immediate_crossing_dir = "bottom_to_top"
+                    elif remote_direction == "top_to_bottom":
+                        crossed_by_y = (
+                            prev_y < (line_y - MARYLAND_DIRECT_CROSS_HYSTERESIS_PX)
+                            and curr_y >= (line_y + MARYLAND_DIRECT_CROSS_HYSTERESIS_PX)
+                        )
+                        crossed_by_zone = (prev_zone == 1 and zone == -1)
+                        if (crossed_by_y or crossed_by_zone) and step_dy >= MARYLAND_DIRECT_STEP_DY_PX:
+                            immediate_crossing_dir = "top_to_bottom"
+
+                    if immediate_crossing_dir is not None:
+                        runtime.counted_track_ids.add(track_id)
+                        runtime.current_count += 1
+                        runtime.last_counted_track_id = track_id
+                        runtime.last_crossing_direction = immediate_crossing_dir
+                        runtime.last_reject_reason = "counted=immediate_crossing_y"
+                        current_count = int(runtime.current_count)
+                        return
+
+                    if DEBUG_CROSSING and zone != 0:
+                        runtime.last_reject_reason = (
+                            f"T{track_id} reject=md_no_cross prev={prev_y:.1f} curr={curr_y:.1f} "
+                            f"ly={line_y:.1f} step={step_dy:.1f}"
+                        )
+                    # Maryland-only: keep a single direct trigger path.
+                    return
                 if samples < remote_min_samples:
                     if DEBUG_CROSSING and zone != 0:
                         runtime.last_reject_reason = f"T{track_id} reject=min_samples s={samples}"
@@ -565,7 +674,7 @@ class TrafficRoundManager:
                         runtime.last_reject_reason = f"T{track_id} reject=min_motion span={span_x:.0f}"
                     return
 
-                if is_cam1 and history_y is not None:
+                if is_cam1_style and history_y is not None:
                     if len(history_y) < 2:
                         return
                     prev_y = history_y[-2]
@@ -584,6 +693,51 @@ class TrafficRoundManager:
                             crossing_dir = "bottom_to_top"
 
                     if crossing_dir is None:
+                        if is_cam1:
+                            if DEBUG_CROSSING and zone != 0:
+                                runtime.last_reject_reason = (
+                                    f"T{track_id} reject=no_crossing_y prev={prev_y:.0f} "
+                                    f"curr={curr_y:.0f} ly={line_y:.0f} z={zone}"
+                                )
+                            return
+
+                        movement_dy = (history_y[-1] - history_y[0]) if samples >= 2 else 0.0
+                        if remote_direction == "top_to_bottom":
+                            direction_ok = movement_dy >= 2.0
+                            seen_expected_side = (track_id in runtime.track_seen_left_ids) or (prev_zone == 1)
+                        elif remote_direction == "bottom_to_top":
+                            direction_ok = movement_dy <= -2.0
+                            seen_expected_side = (track_id in runtime.track_seen_right_ids) or (prev_zone == -1)
+                        else:
+                            direction_ok = abs(movement_dy) >= 2.0
+                            seen_expected_side = True
+
+                        fallback_min_samples = max(2, remote_min_samples - 1)
+                        fallback_min_motion_px = max(4.0, remote_min_motion_px * 0.7)
+                        if (
+                            remote_direction in ("top_to_bottom", "bottom_to_top")
+                            and in_counting_zone
+                            and not was_in_counting_zone
+                            and seen_expected_side
+                            and direction_ok
+                            and samples >= fallback_min_samples
+                            and span_x >= fallback_min_motion_px
+                        ):
+                            runtime.counted_track_ids.add(track_id)
+                            runtime.current_count += 1
+                            runtime.last_counted_track_id = track_id
+                            runtime.last_crossing_direction = remote_direction
+                            runtime.last_reject_reason = "counted=fallback_zone"
+                            current_count = int(runtime.current_count)
+                            if DEBUG_CROSSING:
+                                print(
+                                    f"[CROSSING_DEBUG] FALLBACK COUNTED T{track_id} "
+                                    f"dy={movement_dy:.1f} span={span_x:.1f} samples={samples}"
+                                )
+                            if prev_zone is not None:
+                                runtime.last_side_by_track[track_id] = prev_zone
+                            return
+
                         if DEBUG_CROSSING and zone != 0:
                             runtime.last_reject_reason = (
                                 f"T{track_id} reject=no_crossing_y prev={prev_y:.0f} "
@@ -798,7 +952,7 @@ class TrafficRoundManager:
                 normalized_camera_id = _camera_id_from_stream(runtime.spec.stream_url)
             horizontal_vertical_mode = (
                 runtime.spec.source_type == "remote_stream"
-                and normalized_camera_id in ("cam1", "cam2")
+                and normalized_camera_id in ("cam1", "cam2", "iowa", "maryland")
                 and runtime.counting_direction in ("top_to_bottom", "bottom_to_top")
             )
 
@@ -885,6 +1039,10 @@ class TrafficRoundManager:
         remote_line_y_ratio = CAM1_REMOTE_STREAM_LINE_Y_RATIO
         remote_use_horizontal_line = False
         remote_use_cam2_segment_line = False
+        remote_use_right_horizontal_segment = False
+        remote_use_bbox_center_y = False
+        remote_segment_x1_ratio = 0.0
+        remote_segment_x2_ratio = 1.0
 
         if source_type == "remote_stream":
             normalized_camera_id = _normalize_camera_id(runtime.spec.camera_id)
@@ -916,6 +1074,75 @@ class TrafficRoundManager:
                         "lineYRatio": remote_line_y_ratio,
                         "direction": remote_direction,
                         "minMotionPx": remote_min_motion_px,
+                    },
+                )
+            elif normalized_camera_id == "iowa":
+                remote_use_right_horizontal_segment = True
+                remote_line_y_ratio = IOWA_REMOTE_STREAM_LINE_Y_RATIO
+                remote_segment_x1_ratio = IOWA_REMOTE_STREAM_SEGMENT_X1_RATIO
+                remote_segment_x2_ratio = IOWA_REMOTE_STREAM_SEGMENT_X2_RATIO
+                remote_direction = IOWA_REMOTE_STREAM_DIRECTION
+                remote_min_samples = IOWA_REMOTE_STREAM_MIN_SAMPLES
+                remote_min_motion_px = IOWA_REMOTE_STREAM_MIN_MOTION_PX
+                remote_min_bbox_area_px = IOWA_REMOTE_STREAM_MIN_BBOX_AREA_PX
+                remote_counting_zone_half_width_px = IOWA_REMOTE_STREAM_COUNTING_ZONE_HALF_WIDTH_PX
+                remote_roi_x_min_ratio = IOWA_REMOTE_STREAM_ROI_X_MIN_RATIO
+                remote_roi_x_max_ratio = IOWA_REMOTE_STREAM_ROI_X_MAX_RATIO
+                remote_roi_y_min_ratio = IOWA_REMOTE_STREAM_ROI_Y_MIN_RATIO
+                remote_roi_y_max_ratio = IOWA_REMOTE_STREAM_ROI_Y_MAX_RATIO
+                print(
+                    "[Traffic] iowa horizontal right-segment mode enabled",
+                    {
+                        "roundId": runtime.spec.round_id,
+                        "cameraId": runtime.spec.camera_id,
+                        "lineYRatio": remote_line_y_ratio,
+                        "segmentX": [remote_segment_x1_ratio, remote_segment_x2_ratio],
+                        "direction": remote_direction,
+                        "minSamples": remote_min_samples,
+                        "minMotionPx": remote_min_motion_px,
+                        "minBboxAreaPx": remote_min_bbox_area_px,
+                        "countingZoneHalfWidthPx": remote_counting_zone_half_width_px,
+                        "roi": [
+                            remote_roi_x_min_ratio,
+                            remote_roi_y_min_ratio,
+                            remote_roi_x_max_ratio,
+                            remote_roi_y_max_ratio,
+                        ],
+                    },
+                )
+            elif normalized_camera_id == "maryland":
+                remote_use_right_horizontal_segment = True
+                remote_use_bbox_center_y = True
+                remote_line_y_ratio = MARYLAND_REMOTE_STREAM_LINE_Y_RATIO
+                remote_segment_x1_ratio = MARYLAND_REMOTE_STREAM_SEGMENT_X1_RATIO
+                remote_segment_x2_ratio = MARYLAND_REMOTE_STREAM_SEGMENT_X2_RATIO
+                remote_direction = MARYLAND_REMOTE_STREAM_DIRECTION
+                remote_min_samples = MARYLAND_REMOTE_STREAM_MIN_SAMPLES
+                remote_min_motion_px = MARYLAND_REMOTE_STREAM_MIN_MOTION_PX
+                remote_min_bbox_area_px = MARYLAND_REMOTE_STREAM_MIN_BBOX_AREA_PX
+                remote_counting_zone_half_width_px = MARYLAND_REMOTE_STREAM_COUNTING_ZONE_HALF_WIDTH_PX
+                remote_roi_x_min_ratio = MARYLAND_REMOTE_STREAM_ROI_X_MIN_RATIO
+                remote_roi_x_max_ratio = MARYLAND_REMOTE_STREAM_ROI_X_MAX_RATIO
+                remote_roi_y_min_ratio = MARYLAND_REMOTE_STREAM_ROI_Y_MIN_RATIO
+                remote_roi_y_max_ratio = MARYLAND_REMOTE_STREAM_ROI_Y_MAX_RATIO
+                print(
+                    "[Traffic] maryland horizontal right-segment mode enabled",
+                    {
+                        "roundId": runtime.spec.round_id,
+                        "cameraId": runtime.spec.camera_id,
+                        "lineYRatio": remote_line_y_ratio,
+                        "segmentX": [remote_segment_x1_ratio, remote_segment_x2_ratio],
+                        "direction": remote_direction,
+                        "minSamples": remote_min_samples,
+                        "minMotionPx": remote_min_motion_px,
+                        "minBboxAreaPx": remote_min_bbox_area_px,
+                        "countingZoneHalfWidthPx": remote_counting_zone_half_width_px,
+                        "roi": [
+                            remote_roi_x_min_ratio,
+                            remote_roi_y_min_ratio,
+                            remote_roi_x_max_ratio,
+                            remote_roi_y_max_ratio,
+                        ],
                     },
                 )
             elif _is_highway_remote_profile(default_source, runtime.spec.round_id):
@@ -1098,6 +1325,29 @@ class TrafficRoundManager:
                             line_y2 = float(seg_y2)
                             effective_line_x = None
                             effective_line_y = int(round((float(seg_y1) + float(seg_y2)) / 2.0))
+                        elif remote_use_right_horizontal_segment:
+                            effective_line_x = None
+                            effective_line_y = _clamp_int(
+                                int(round(frame_height * remote_line_y_ratio)),
+                                0,
+                                frame_height - 1,
+                            )
+                            seg_x1 = _clamp_int(
+                                int(round(frame_width * remote_segment_x1_ratio)),
+                                0,
+                                frame_width - 1,
+                            )
+                            seg_x2 = _clamp_int(
+                                int(round(frame_width * remote_segment_x2_ratio)),
+                                0,
+                                frame_width - 1,
+                            )
+                            if seg_x2 <= seg_x1:
+                                seg_x2 = min(frame_width - 1, seg_x1 + 1)
+                            line_x1 = float(seg_x1)
+                            line_x2 = float(seg_x2)
+                            line_y1 = float(effective_line_y)
+                            line_y2 = float(effective_line_y)
                         elif remote_use_horizontal_line:
                             effective_line_x = None
                             effective_line_y = _clamp_int(
@@ -1291,7 +1541,11 @@ class TrafficRoundManager:
                     x_min, y_min, x_max, y_max = bbox
                     bbox_area = max(0.0, (float(x_max) - float(x_min)) * (float(y_max) - float(y_min)))
                     center_x = (float(x_min) + float(x_max)) / 2.0
-                    center_y = float(y_max)
+                    center_y = (
+                        (float(y_min) + float(y_max)) / 2.0
+                        if remote_use_bbox_center_y
+                        else float(y_max)
+                    )
                     in_roi = True
                     if (
                         source_type == "remote_stream"
@@ -1307,6 +1561,13 @@ class TrafficRoundManager:
                     if source_type == "remote_stream":
                         if remote_use_cam2_segment_line:
                             side = _line_side(center_x, center_y, line_x1, line_y1, line_x2, line_y2)
+                        elif remote_use_right_horizontal_segment:
+                            if center_y > (line_y1 + REMOTE_STREAM_LINE_MARGIN_PX):
+                                side = -1
+                            elif center_y < (line_y1 - REMOTE_STREAM_LINE_MARGIN_PX):
+                                side = 1
+                            else:
+                                side = 0
                         elif remote_use_horizontal_line:
                             if center_y > (line_y1 + REMOTE_STREAM_LINE_MARGIN_PX):
                                 side = -1

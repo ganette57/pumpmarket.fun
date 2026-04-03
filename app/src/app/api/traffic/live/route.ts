@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
-import { getTrafficMarketRuntimeByAddress } from "@/lib/traffic/repository";
+import {
+  getTrafficMarketRuntimeByAddress,
+  lockTrafficFlashMarketByThreshold,
+} from "@/lib/traffic/repository";
 import {
   getTrafficRoundStatus,
   stopTrafficCounter,
@@ -8,6 +11,12 @@ import {
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+function normalizeThreshold(value: unknown): number | null {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n)) return null;
+  return Math.max(1, Math.min(10_000, n));
+}
 
 export async function GET(req: Request) {
   try {
@@ -69,6 +78,33 @@ export async function GET(req: Request) {
       if (shouldStopByStatus && workerStatus.status === "running") {
         await stopTrafficCounter(roundId, `market_status_${resolutionStatus || "terminal"}`);
         workerStatus = await getTrafficRoundStatus(roundId).catch(() => workerStatus);
+      }
+
+      const meta = row.sport_meta && typeof row.sport_meta === "object" ? row.sport_meta : {};
+      const threshold = normalizeThreshold((meta as any).threshold);
+      const currentCount = Math.max(0, Math.floor(Number(workerStatus.currentCount) || 0));
+      const isTradable =
+        row.resolved !== true &&
+        row.cancelled !== true &&
+        resolutionStatus !== "proposed" &&
+        resolutionStatus !== "finalized" &&
+        resolutionStatus !== "cancelled";
+      const targetReached = threshold != null && currentCount >= threshold;
+      if (isTradable && targetReached && !row.is_blocked && marketAddress) {
+        const locked = await lockTrafficFlashMarketByThreshold({
+          marketAddress,
+          roundId,
+          currentCount,
+          threshold,
+        });
+        if (locked) {
+          console.log("[traffic-flash:api-live] market locked early (threshold reached)", {
+            marketAddress,
+            roundId,
+            currentCount,
+            threshold,
+          });
+        }
       }
     }
 
