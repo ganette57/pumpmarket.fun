@@ -8,7 +8,9 @@ import SiteFooter from "@/components/SiteFooter";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const isSearch = pathname?.startsWith("/search") || pathname?.startsWith("/explorer");
+  const isSearch = pathname?.startsWith("/explorer");
+  // /search has its own mobile header (back button + search input)
+  const isSearchPage = pathname?.startsWith("/search");
   const isTrade = pathname?.startsWith("/trade/");
   // Only the /live feed page controls its own mobile header (MobileTabs);
   // /live/[id] detail pages still use MobileTopBar.
@@ -23,8 +25,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <Header />
       </div>
 
-      {/* Mobile header — hidden on /live and home feed (mobile feed has its own overlay) */}
-      {!isLiveFeed && !isHomeFeed && (
+      {/* Mobile header — hidden on /live, home feed, and /search (they have their own headers) */}
+      {!isLiveFeed && !isHomeFeed && !isSearchPage && (
         <div className="md:hidden">
           <MobileTopBar showSearch={!!isSearch} />
         </div>

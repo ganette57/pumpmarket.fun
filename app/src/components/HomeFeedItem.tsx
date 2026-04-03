@@ -28,6 +28,8 @@ interface HomeFeedItemProps {
     avatar_url?: string | null;
   } | null;
   creatorAddress?: string | null;
+  /** Called when user taps an outcome button (index 0 or 1). If not provided, falls back to Link. */
+  onOutcomeTap?: (outcomeIndex: number) => void;
 }
 
 export default function HomeFeedItem({
@@ -37,6 +39,7 @@ export default function HomeFeedItem({
   finishedMatch = false,
   creatorProfile,
   creatorAddress,
+  onOutcomeTap,
 }: HomeFeedItemProps) {
   const now = Date.now() / 1000;
   const daysLeft = Math.max(0, Math.floor((market.resolutionTime - now) / 86400));
@@ -127,10 +130,12 @@ export default function HomeFeedItem({
           )}
         </div>
 
-        {/* Title */}
-        <h2 className="text-white text-xl font-bold leading-tight line-clamp-3 mb-2 drop-shadow-lg">
-          {market.question}
-        </h2>
+        {/* Title — tapping opens the full trade page */}
+        <Link href={`/trade/${market.publicKey}`}>
+          <h2 className="text-white text-xl font-bold leading-tight line-clamp-3 mb-2 drop-shadow-lg active:opacity-70 transition-opacity">
+            {market.question}
+          </h2>
+        </Link>
 
         {/* Sub info row */}
         <div className="flex items-center gap-3 text-[12px] text-white/70 mb-3">
@@ -172,33 +177,39 @@ export default function HomeFeedItem({
         </div>
 
         {/* ── Quick Trade: outcome buttons ── */}
-        <Link href={`/trade/${market.publicKey}`} className="block">
-          <div className="flex gap-2">
-            {/* Outcome 1 (GREEN) — same color as MarketCard */}
-            <div className="flex-1 bg-[#00FF87] rounded-xl py-3 px-3 flex items-center justify-between active:scale-[0.97] transition-transform">
-              <span className="text-[12px] uppercase text-black font-bold tracking-wide truncate max-w-[60%]">
-                {outcomes[0].length > 12
-                  ? outcomes[0].slice(0, 10) + "…"
-                  : outcomes[0]}
-              </span>
-              <span className="text-[20px] font-bold text-black">
-                {percents[0]}%
-              </span>
-            </div>
+        <div className="flex gap-2">
+          {/* Outcome 1 (GREEN) — same color as MarketCard */}
+          <button
+            type="button"
+            onClick={() => onOutcomeTap ? onOutcomeTap(0) : undefined}
+            className="flex-1 bg-[#00FF87] rounded-xl py-3 px-3 flex items-center justify-between active:scale-[0.97] transition-transform"
+          >
+            <span className="text-[12px] uppercase text-black font-bold tracking-wide truncate max-w-[60%]">
+              {outcomes[0].length > 12
+                ? outcomes[0].slice(0, 10) + "…"
+                : outcomes[0]}
+            </span>
+            <span className="text-[20px] font-bold text-black">
+              {percents[0]}%
+            </span>
+          </button>
 
-            {/* Outcome 2 (RED) — same color as MarketCard */}
-            <div className="flex-1 bg-[#ff5c73] rounded-xl py-3 px-3 flex items-center justify-between active:scale-[0.97] transition-transform">
-              <span className="text-[12px] uppercase text-black font-bold tracking-wide truncate max-w-[60%]">
-                {outcomes[1].length > 12
-                  ? outcomes[1].slice(0, 10) + "…"
-                  : outcomes[1]}
-              </span>
-              <span className="text-[20px] font-bold text-black">
-                {percents[1]}%
-              </span>
-            </div>
-          </div>
-        </Link>
+          {/* Outcome 2 (RED) — same color as MarketCard */}
+          <button
+            type="button"
+            onClick={() => onOutcomeTap ? onOutcomeTap(1) : undefined}
+            className="flex-1 bg-[#ff5c73] rounded-xl py-3 px-3 flex items-center justify-between active:scale-[0.97] transition-transform"
+          >
+            <span className="text-[12px] uppercase text-black font-bold tracking-wide truncate max-w-[60%]">
+              {outcomes[1].length > 12
+                ? outcomes[1].slice(0, 10) + "…"
+                : outcomes[1]}
+            </span>
+            <span className="text-[20px] font-bold text-black">
+              {percents[1]}%
+            </span>
+          </button>
+        </div>
       </div>
     </div>
   );

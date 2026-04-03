@@ -13,6 +13,7 @@ import CategoryFilters from "@/components/CategoryFilters";
 import type { SelectedCategory } from "@/components/CategoryFilters";
 import { SkeletonCard, SkeletonFeaturedCard } from "@/components/SkeletonCard";
 import HomeFeedItem from "@/components/HomeFeedItem";
+import FeedTradeSheet from "@/components/FeedTradeSheet";
 import { isSportSubcategory } from "@/utils/categories";
 import { getProfiles, type Profile } from "@/lib/profiles";
 import type { FlashMarket } from "@/lib/flashMarkets/types";
@@ -716,6 +717,45 @@ export default function Home() {
       .sort((a, b) => (b.totalVolume || 0) - (a.totalVolume || 0));
   }, [openClassicMarkets, featuredClassicMarkets]);
 
+  // ------- MOBILE TRADE SHEET STATE -------
+  const [tradeSheetOpen, setTradeSheetOpen] = useState(false);
+  const [tradeSheetMarket, setTradeSheetMarket] = useState<typeof feedMarkets[number] | null>(null);
+  const [tradeSheetOutcome, setTradeSheetOutcome] = useState(0);
+
+  const openTradeSheet = useCallback(
+    (market: typeof feedMarkets[number], outcomeIndex: number) => {
+      setTradeSheetMarket(market);
+      setTradeSheetOutcome(outcomeIndex);
+      setTradeSheetOpen(true);
+    },
+    []
+  );
+
+  /** After a successful buy, update the local market supplies so the feed reflects the new state */
+  const handleFeedBuySuccess = useCallback(
+    (outcomeIndex: number, deltaShares: number) => {
+      if (!tradeSheetMarket) return;
+      const pk = tradeSheetMarket.publicKey;
+
+      const updateMarketList = (list: Market[]) =>
+        list.map((m) => {
+          if (m.publicKey !== pk) return m;
+          const updated = { ...m };
+          if (updated.outcomeSupplies && updated.outcomeSupplies.length > outcomeIndex) {
+            updated.outcomeSupplies = [...updated.outcomeSupplies];
+            updated.outcomeSupplies[outcomeIndex] += deltaShares;
+          }
+          if (outcomeIndex === 0) updated.yesSupply = (updated.yesSupply || 0) + deltaShares;
+          if (outcomeIndex === 1) updated.noSupply = (updated.noSupply || 0) + deltaShares;
+          return updated;
+        });
+
+      setOpenClassicMarkets(updateMarketList);
+      setFeaturedClassicMarkets(updateMarketList);
+    },
+    [tradeSheetMarket]
+  );
+
   // ------- RENDER -------
   return (
     <>
@@ -725,8 +765,47 @@ export default function Home() {
           ═══════════════════════════════════════════════════════════════ */}
       <div className="md:hidden">
         {loading ? (
-          <div className="h-[100dvh] flex items-center justify-center bg-black">
-            <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-pump-green" />
+          <div className="h-[100dvh] w-full bg-black relative overflow-hidden">
+            {/* Shimmer background placeholder */}
+            <div className="absolute inset-0 bg-gradient-to-br from-[#0a1a10] via-[#0a0a0a] to-[#0d0d1a]" />
+            <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-black/60" />
+
+            {/* Top bar skeleton */}
+            <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-4 pt-[env(safe-area-inset-top,12px)] h-16">
+              <div className="flex items-center gap-2">
+                <div className="h-10 w-10 rounded-full bg-white/10 animate-pulse" />
+                <div className="h-4 w-20 rounded bg-white/10 animate-pulse" />
+              </div>
+              <div className="h-9 w-9 rounded-full bg-white/10 animate-pulse" />
+            </div>
+
+            {/* LIVE badge skeleton */}
+            <div className="absolute top-20 left-4 z-10">
+              <div className="h-7 w-16 rounded-full bg-white/8 animate-pulse" />
+            </div>
+
+            {/* Bottom overlay skeleton */}
+            <div className="absolute bottom-0 left-0 right-0 z-10 px-4 pb-28">
+              {/* Category badge */}
+              <div className="mb-3">
+                <div className="h-6 w-20 rounded-full bg-white/10 animate-pulse" />
+              </div>
+              {/* Title lines */}
+              <div className="h-6 w-[85%] rounded bg-white/10 animate-pulse mb-2" />
+              <div className="h-6 w-[60%] rounded bg-white/10 animate-pulse mb-3" />
+              {/* Sub info row */}
+              <div className="flex items-center gap-3 mb-4">
+                <div className="h-4 w-4 rounded-full bg-white/10 animate-pulse" />
+                <div className="h-3 w-16 rounded bg-white/10 animate-pulse" />
+                <div className="h-3 w-16 rounded bg-white/10 animate-pulse" />
+                <div className="h-3 w-14 rounded bg-white/10 animate-pulse" />
+              </div>
+              {/* Outcome buttons skeleton */}
+              <div className="flex gap-2">
+                <div className="flex-1 h-14 rounded-xl bg-[#00FF87]/15 animate-pulse" />
+                <div className="flex-1 h-14 rounded-xl bg-[#ff5c73]/15 animate-pulse" />
+              </div>
+            </div>
           </div>
         ) : feedMarkets.length === 0 ? (
           <div className="h-[100dvh] flex flex-col items-center justify-center bg-black text-gray-400 gap-4">
@@ -745,7 +824,7 @@ export default function Home() {
                   <span className="font-semibold text-white text-sm drop-shadow-lg">FunMarket</span>
                 </Link>
                 <Link
-                  href="/explorer"
+                  href="/search"
                   className="pointer-events-auto h-9 w-9 flex items-center justify-center rounded-full bg-black/40 backdrop-blur-sm border border-white/15"
                   aria-label="Search markets"
                 >
@@ -771,9 +850,33 @@ export default function Home() {
                   creatorProfile={
                     market.creator ? profilesMap[market.creator] ?? null : null
                   }
+                  onOutcomeTap={(idx) => openTradeSheet(market, idx)}
                 />
               ))}
             </div>
+
+            {/* Quick trade bottom sheet */}
+            <FeedTradeSheet
+              open={tradeSheetOpen}
+              onClose={() => setTradeSheetOpen(false)}
+              market={
+                tradeSheetMarket
+                  ? {
+                      publicKey: tradeSheetMarket.publicKey,
+                      dbId: tradeSheetMarket.id,
+                      question: tradeSheetMarket.question,
+                      creator: tradeSheetMarket.creator,
+                      marketType: tradeSheetMarket.marketType,
+                      outcomeNames: tradeSheetMarket.outcomeNames,
+                      outcomeSupplies: tradeSheetMarket.outcomeSupplies,
+                      yesSupply: tradeSheetMarket.yesSupply,
+                      noSupply: tradeSheetMarket.noSupply,
+                    }
+                  : null
+              }
+              defaultOutcomeIndex={tradeSheetOutcome}
+              onBuySuccess={handleFeedBuySuccess}
+            />
           </div>
         )}
       </div>
