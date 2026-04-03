@@ -79,9 +79,14 @@ type FeaturedCarouselMarket = {
 type HomeCarouselSlide =
   | { kind: "flash"; market: FlashMarket }
   | { kind: "featured"; market: FeaturedCarouselMarket };
+type MobileFeedEntry =
+  | { kind: "classic"; market: Market }
+  | { kind: "flash"; market: FlashMarket };
 
 type MarketStatusFilter = "all" | "open" | "resolved" | "ending_soon" | "top_volume";
 const CAROUSEL_LIMIT = 5;
+const MOBILE_HOME_RETAP_EVENT = "home-feed:retap";
+const MOBILE_FEED_RESTORE_KEY = "home-feed:restore:v1";
 
 const DEBUG_SPORT_OPEN_FILTER = false;
 
@@ -198,6 +203,13 @@ function homeSportDurationMs(sport: string | null | undefined): number {
   if (s === "soccer" || s === "football") return 120 * 60_000;
   if (s === "basketball" || s === "nba") return 150 * 60_000;
   return NaN;
+}
+
+function mobileFeedEntryKey(entry: MobileFeedEntry): string {
+  if (entry.kind === "classic") return `classic:${entry.market.publicKey}`;
+  const addr = String(entry.market.marketAddress || "").trim();
+  if (addr) return `flash:${addr}`;
+  return `flash-live:${entry.market.liveMicroId}`;
 }
 
 function mapHomeRowToMarket(row: any): Market {
@@ -336,6 +348,7 @@ export default function Home() {
   const [profilesMap, setProfilesMap] = useState<Record<string, Profile>>({});
 
   const observerTarget = useRef<HTMLDivElement>(null);
+  const mobileFeedRef = useRef<HTMLDivElement | null>(null);
 
   // ✅ used only on mobile to detect which slide is centered
   const mobileFeaturedRef = useRef<HTMLDivElement | null>(null);
@@ -352,11 +365,6 @@ export default function Home() {
     }
     return out;
   }, [openClassicMarkets, resolvedClassicMarkets, featuredClassicMarkets]);
-
-  // ------- LOAD MARKETS FROM SERVER API (cached) -------
-  useEffect(() => {
-    void loadMarkets();
-  }, []);
 
   const refreshHomeLiveCryptoFlashMarkets = useCallback(async () => {
     try {
@@ -377,7 +385,7 @@ export default function Home() {
     }
   }, []);
 
-  async function loadMarkets() {
+  const loadMarkets = useCallback(async () => {
     setLoading(true);
     try {
       const reqStart = performance.now();
@@ -434,7 +442,28 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [refreshHomeLiveCryptoFlashMarkets]);
+
+  // ------- LOAD MARKETS FROM SERVER API (cached) -------
+  useEffect(() => {
+    void loadMarkets();
+  }, [loadMarkets]);
+
+  useEffect(() => {
+    const handleHomeRetap = () => {
+      const el = mobileFeedRef.current;
+      if (el) {
+        el.scrollTo({ top: 0, behavior: "smooth" });
+      } else {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+      sessionStorage.removeItem(MOBILE_FEED_RESTORE_KEY);
+      void loadMarkets();
+    };
+
+    window.addEventListener(MOBILE_HOME_RETAP_EVENT, handleHomeRetap);
+    return () => window.removeEventListener(MOBILE_HOME_RETAP_EVENT, handleHomeRetap);
+  }, [loadMarkets]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -701,8 +730,28 @@ export default function Home() {
     }
   };
 
-  // ------- Feed markets: open first (sorted by volume desc), then featured for variety -------
-  const feedMarkets = useMemo(() => {
+  const activeFlashFeedMarkets = useMemo(() => {
+    const nowMs = Date.now();
+    const out: FlashMarket[] = [];
+    const seen = new Set<string>();
+    const includeIfActive = (market: FlashMarket | null | undefined) => {
+      if (!market || market.status !== "active") return;
+      const addr = String(market.marketAddress || "").trim();
+      const dedupeKey = addr || `liveMicro:${market.liveMicroId}`;
+      if (seen.has(dedupeKey)) return;
+      const windowEndMs = Date.parse(String(market.windowEnd || ""));
+      if (Number.isFinite(windowEndMs) && nowMs >= windowEndMs) return;
+      seen.add(dedupeKey);
+      out.push(market);
+    };
+
+    includeIfActive(homeLiveFlashMarket);
+    for (const market of homeLiveCryptoFlashMarkets) includeIfActive(market);
+    return out;
+  }, [homeLiveCryptoFlashMarkets, homeLiveFlashMarket]);
+
+  // ------- Classic feed markets: live first, then remaining open -------
+  const prioritizedClassicFeedMarkets = useMemo(() => {
     const merged = [...openClassicMarkets];
     const seen = new Set(merged.map((m) => m.publicKey));
     for (const m of featuredClassicMarkets) {
@@ -711,19 +760,118 @@ export default function Home() {
         merged.push(m);
       }
     }
-    // Sort by volume desc so most interesting markets appear first
+
+    // Keep volume sort inside live/rest buckets.
     return merged
       .filter((m) => !m.resolved && !m.cancelled && !m.isBlocked)
-      .sort((a, b) => (b.totalVolume || 0) - (a.totalVolume || 0));
-  }, [openClassicMarkets, featuredClassicMarkets]);
+      .sort((a, b) => {
+        const aLive = isSportLiveInProgress(a) || !!liveMap[a.publicKey];
+        const bLive = isSportLiveInProgress(b) || !!liveMap[b.publicKey];
+        if (aLive !== bLive) return aLive ? -1 : 1;
+        return (b.totalVolume || 0) - (a.totalVolume || 0);
+      });
+  }, [featuredClassicMarkets, liveMap, openClassicMarkets]);
+
+  // ------- Mobile feed: live classic, then live flash, then remaining open -------
+  const mobileFeedEntries = useMemo<MobileFeedEntry[]>(() => {
+    const liveClassic: MobileFeedEntry[] = [];
+    const remainingClassic: MobileFeedEntry[] = [];
+
+    for (const market of prioritizedClassicFeedMarkets) {
+      const isLive = isSportLiveInProgress(market) || !!liveMap[market.publicKey];
+      if (isLive) liveClassic.push({ kind: "classic", market });
+      else remainingClassic.push({ kind: "classic", market });
+    }
+
+    const liveFlash: MobileFeedEntry[] = activeFlashFeedMarkets.map((market) => ({ kind: "flash", market }));
+    return [...liveClassic, ...liveFlash, ...remainingClassic];
+  }, [activeFlashFeedMarkets, liveMap, prioritizedClassicFeedMarkets]);
+
+  const saveFeedRestoreState = useCallback(
+    (entryKey?: string, index?: number) => {
+      const el = mobileFeedRef.current;
+      if (!el) return;
+      const safeHeight = Math.max(el.clientHeight, 1);
+      const fallbackIndex = Math.max(0, Math.round(el.scrollTop / safeHeight));
+      const parsedIndex =
+        typeof index === "number" && Number.isFinite(index) ? index : fallbackIndex;
+      const nextIndex = Math.max(0, Math.floor(parsedIndex));
+      const nextEntryKey = entryKey || (mobileFeedEntries[nextIndex] ? mobileFeedEntryKey(mobileFeedEntries[nextIndex]!) : null);
+      const payload = {
+        marketKey: nextEntryKey,
+        index: nextIndex,
+        scrollTop: el.scrollTop,
+        at: Date.now(),
+        pending: true,
+      };
+      sessionStorage.setItem(MOBILE_FEED_RESTORE_KEY, JSON.stringify(payload));
+    },
+    [mobileFeedEntries]
+  );
+
+  useEffect(() => {
+    if (loading || mobileFeedEntries.length === 0) return;
+
+    const raw = sessionStorage.getItem(MOBILE_FEED_RESTORE_KEY);
+    if (!raw) return;
+
+    try {
+      const parsed = JSON.parse(raw) as {
+        marketKey?: string | null;
+        index?: number;
+        scrollTop?: number;
+        at?: number;
+        pending?: boolean;
+      };
+      if (!parsed?.pending) return;
+
+      const savedAt = Number(parsed.at || 0);
+      if (!Number.isFinite(savedAt) || Date.now() - savedAt > 30 * 60_000) {
+        sessionStorage.removeItem(MOBILE_FEED_RESTORE_KEY);
+        return;
+      }
+
+      const el = mobileFeedRef.current;
+      if (!el) return;
+
+      let targetIndex = Number.isFinite(parsed.index) ? Number(parsed.index) : 0;
+      const savedKey = String(parsed.marketKey || "").trim();
+      if (savedKey) {
+        const foundIndex = mobileFeedEntries.findIndex((entry) => mobileFeedEntryKey(entry) === savedKey);
+        if (foundIndex >= 0) targetIndex = foundIndex;
+      }
+      targetIndex = Math.max(0, Math.min(mobileFeedEntries.length - 1, targetIndex));
+
+      const safeHeight = Math.max(el.clientHeight, 1);
+      const targetTop = Number.isFinite(parsed.scrollTop) && Number(parsed.scrollTop) >= 0
+        ? Number(parsed.scrollTop)
+        : targetIndex * safeHeight;
+
+      requestAnimationFrame(() => {
+        el.scrollTo({ top: targetTop, behavior: "auto" });
+      });
+
+      sessionStorage.setItem(
+        MOBILE_FEED_RESTORE_KEY,
+        JSON.stringify({
+          ...parsed,
+          index: targetIndex,
+          scrollTop: targetTop,
+          pending: false,
+        })
+      );
+    } catch {
+      sessionStorage.removeItem(MOBILE_FEED_RESTORE_KEY);
+    }
+  }, [loading, mobileFeedEntries]);
 
   // ------- MOBILE TRADE SHEET STATE -------
   const [tradeSheetOpen, setTradeSheetOpen] = useState(false);
-  const [tradeSheetMarket, setTradeSheetMarket] = useState<typeof feedMarkets[number] | null>(null);
+  const [tradeSheetMarket, setTradeSheetMarket] = useState<typeof prioritizedClassicFeedMarkets[number] | null>(null);
   const [tradeSheetOutcome, setTradeSheetOutcome] = useState(0);
 
   const openTradeSheet = useCallback(
-    (market: typeof feedMarkets[number], outcomeIndex: number) => {
+    (market: typeof prioritizedClassicFeedMarkets[number], outcomeIndex: number) => {
       setTradeSheetMarket(market);
       setTradeSheetOutcome(outcomeIndex);
       setTradeSheetOpen(true);
@@ -807,7 +955,7 @@ export default function Home() {
               </div>
             </div>
           </div>
-        ) : feedMarkets.length === 0 ? (
+        ) : mobileFeedEntries.length === 0 ? (
           <div className="h-[100dvh] flex flex-col items-center justify-center bg-black text-gray-400 gap-4">
             <p className="text-xl">No markets yet</p>
             <Link href="/create" className="px-6 py-3 bg-pump-green text-black font-bold rounded-xl">
@@ -835,24 +983,40 @@ export default function Home() {
 
             {/* Feed container */}
             <div
+              ref={mobileFeedRef}
               className="h-[100dvh] overflow-y-auto snap-y snap-mandatory"
               style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
             >
               <style>{`.md\\:hidden div::-webkit-scrollbar { display: none; }`}</style>
-              {feedMarkets.map((market) => (
-                <HomeFeedItem
-                  key={market.publicKey}
-                  market={market as any}
-                  liveSessionId={liveMap[market.publicKey] || null}
-                  liveMatch={isSportLiveInProgress(market)}
-                  finishedMatch={isSportFinishedByProvider(market)}
-                  creatorAddress={market.creator}
-                  creatorProfile={
-                    market.creator ? profilesMap[market.creator] ?? null : null
-                  }
-                  onOutcomeTap={(idx) => openTradeSheet(market, idx)}
-                />
-              ))}
+              {mobileFeedEntries.map((entry, index) => {
+                const entryKey = mobileFeedEntryKey(entry);
+                if (entry.kind === "flash") {
+                  return (
+                    <div
+                      key={entryKey}
+                      className="relative h-[100dvh] w-full snap-start snap-always flex-shrink-0 overflow-hidden bg-black"
+                      onClickCapture={() => saveFeedRestoreState(entryKey, index)}
+                    >
+                      <FlashMarketCard market={entry.market} variant="hero" className="h-full rounded-none border-0" />
+                    </div>
+                  );
+                }
+
+                const market = entry.market;
+                return (
+                  <HomeFeedItem
+                    key={entryKey}
+                    market={market as any}
+                    liveSessionId={liveMap[market.publicKey] || null}
+                    liveMatch={isSportLiveInProgress(market)}
+                    finishedMatch={isSportFinishedByProvider(market)}
+                    creatorAddress={market.creator}
+                    creatorProfile={market.creator ? profilesMap[market.creator] ?? null : null}
+                    onTitleTap={() => saveFeedRestoreState(entryKey, index)}
+                    onOutcomeTap={(idx) => openTradeSheet(market, idx)}
+                  />
+                );
+              })}
             </div>
 
             {/* Quick trade bottom sheet */}

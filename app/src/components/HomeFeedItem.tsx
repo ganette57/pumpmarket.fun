@@ -28,6 +28,8 @@ interface HomeFeedItemProps {
     avatar_url?: string | null;
   } | null;
   creatorAddress?: string | null;
+  /** Called when user taps market title before navigating to full trade page. */
+  onTitleTap?: () => void;
   /** Called when user taps an outcome button (index 0 or 1). If not provided, falls back to Link. */
   onOutcomeTap?: (outcomeIndex: number) => void;
 }
@@ -39,6 +41,7 @@ export default function HomeFeedItem({
   finishedMatch = false,
   creatorProfile,
   creatorAddress,
+  onTitleTap,
   onOutcomeTap,
 }: HomeFeedItemProps) {
   const now = Date.now() / 1000;
@@ -77,7 +80,10 @@ export default function HomeFeedItem({
   const volSol = lamportsToSol(market.totalVolume);
 
   return (
-    <div className="relative h-[100dvh] w-full snap-start snap-always flex-shrink-0 overflow-hidden bg-black">
+    <div
+      className="relative h-[100dvh] w-full snap-start snap-always flex-shrink-0 overflow-hidden bg-black"
+      data-feed-market={market.publicKey}
+    >
       {/* ── Background image ── */}
       {safeImageUrl ? (
         <Image
@@ -131,7 +137,7 @@ export default function HomeFeedItem({
         </div>
 
         {/* Title — tapping opens the full trade page */}
-        <Link href={`/trade/${market.publicKey}`}>
+        <Link href={`/trade/${market.publicKey}`} onClick={onTitleTap}>
           <h2 className="text-white text-xl font-bold leading-tight line-clamp-3 mb-2 drop-shadow-lg active:opacity-70 transition-opacity">
             {market.question}
           </h2>
