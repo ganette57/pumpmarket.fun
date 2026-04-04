@@ -206,22 +206,6 @@ function clampInt(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, v));
 }
 
-function parseBinaryOutcomeIndex(value: unknown, names: string[]): number | null {
-  if (value == null) return null;
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return clampInt(value, 0, Math.max(0, names.length - 1));
-  }
-  if (typeof value === "boolean") return value ? 0 : 1;
-  const raw = String(value).trim();
-  if (!raw) return null;
-  if (/^-?\d+$/.test(raw)) return clampInt(Number(raw), 0, Math.max(0, names.length - 1));
-  const up = raw.toUpperCase();
-  if (up === "YES" || up === "TRUE" || up === "UP") return 0;
-  if (up === "NO" || up === "FALSE" || up === "DOWN") return 1;
-  const byName = names.findIndex((name) => name.trim().toUpperCase() === up);
-  return byName >= 0 ? byName : null;
-}
-
 function toFiniteNumber(v: any): number {
   if (typeof v === "number") return Number.isFinite(v) ? v : 0;
   if (typeof v === "bigint") return Number(v);
@@ -3759,8 +3743,8 @@ useEffect(() => {
     ? null
     : (bestLiveScorePair ?? persistedScorePair);
 
-  // Lightweight post-countdown checks so flash result feedback can appear as soon as
-  // raw outcome data is available (without waiting for settlement/proposal cadence).
+  // Flash crypto only: quick post-countdown checks so WIN/LOSE appears as soon as
+  // we can compare end price vs start price, without waiting for settlement cadence.
   useEffect(() => {
     if (!market || !derived || derived.names.length < 2) return;
     if (!connected || !publicKey) return;
@@ -3775,10 +3759,7 @@ useEffect(() => {
       marketMode === "flash_crypto" ||
       typeTag === "flash_crypto_price" ||
       typeTag === "flash_crypto_graduation";
-    const isFlashTraffic = marketMode === "flash_traffic" || typeTag === "flash_traffic";
-    const isFlashSportsMicro = isSoccerNextGoalMicroMarket(market.sportMeta, market.question, market.description);
-    const isFlashFamilyMarket = marketMode.startsWith("flash_") || isFlashCrypto || isFlashTraffic || isFlashSportsMicro;
-    if (!isFlashFamilyMarket) return;
+    if (!isFlashCrypto) return;
 
     const totalShares = userSharesForUi.reduce((sum, qty) => sum + Math.max(0, Math.floor(Number(qty) || 0)), 0);
     if (totalShares <= 0) return;
@@ -3811,127 +3792,44 @@ useEffect(() => {
     const tick = async () => {
       if (cancelled) return;
 
-      const dbSelect =
-        "sport_meta,resolution_status,winning_outcome,proposed_winning_outcome,resolution_proposed_at,resolved_at,contest_deadline";
-      try {
-        let query = supabase.from("markets").select(dbSelect).limit(1);
-        query = market.dbId ? query.eq("id", market.dbId) : query.eq("market_address", market.publicKey);
-        const { data, error } = await query.maybeSingle();
-        if (!cancelled && !error && data) {
-          setMarket((prev) => {
-            if (!prev) return prev;
-            const patched = applyMarketDbPatch(prev, data, false);
-            return {
-              ...patched,
-              sportMeta: (data as any).sport_meta ?? patched.sportMeta,
-            };
-          });
+      const sourceType = String((sportMeta as any).source_type || "").trim().toLowerCase();
+      const tokenMint = String((sportMeta as any).token_mint || "").trim();
+      const majorPair = String((sportMeta as any).major_pair || "").trim();
+      const majorSymbol = String((sportMeta as any).major_symbol || "").trim();
+      const startPrice = firstFiniteNumber([
+        (sportMeta as any).start_price,
+        (sportMeta as any).price_start,
+        (sportMeta as any).priceStart,
+      ]);
+      const existingEndPrice = firstFiniteNumber([
+        (sportMeta as any).end_price,
+        (sportMeta as any).price_end,
+        (sportMeta as any).priceEnd,
+        (sportMeta as any).final_price,
+        (sportMeta as any).finalPrice,
+      ]);
 
-          const dbSportMeta = asObject((data as any).sport_meta);
-          const dbLiveMicroMeta = asObject(dbSportMeta.live_micro);
-          const dbOutcomeHint = [
-            dbLiveMicroMeta.auto_resolved_outcome,
-            dbSportMeta.auto_resolved_outcome,
-            dbLiveMicroMeta.proposed_outcome,
-            dbSportMeta.proposed_outcome,
-            dbLiveMicroMeta.pending_outcome,
-            dbSportMeta.pending_outcome,
-            dbLiveMicroMeta.resolution_outcome,
-            dbSportMeta.resolution_outcome,
-            (data as any).winning_outcome,
-            (data as any).proposed_winning_outcome,
-          ].find((value) => value != null && String(value).trim() !== "");
-          if (trySetHint(parseBinaryOutcomeIndex(dbOutcomeHint, derived.names), `db:${String(dbOutcomeHint)}`)) return;
-        }
-      } catch {
-        // best effort only
+      if (startPrice != null && existingEndPrice != null && startPrice > 0) {
+        if (trySetHint(existingEndPrice > startPrice ? 0 : 1, `meta-price:${startPrice}:${existingEndPrice}`)) return;
       }
 
-      if (isFlashCrypto) {
-        const sourceType = String((sportMeta as any).source_type || "").trim().toLowerCase();
-        const tokenMint = String((sportMeta as any).token_mint || "").trim();
-        const majorPair = String((sportMeta as any).major_pair || "").trim();
-        const majorSymbol = String((sportMeta as any).major_symbol || "").trim();
-        const startPrice = firstFiniteNumber([
-          (sportMeta as any).start_price,
-          (sportMeta as any).price_start,
-          (sportMeta as any).priceStart,
-        ]);
-
-        if (startPrice != null && startPrice > 0 && (tokenMint || majorPair || majorSymbol)) {
-          try {
-            const params = new URLSearchParams();
-            if (tokenMint) params.set("mint", tokenMint);
-            if (majorPair) params.set("pair", majorPair);
-            if (majorSymbol) params.set("major_symbol", majorSymbol);
-            if (sourceType === "major") params.set("source_type", "major");
-            const res = await fetch(`/api/flash-crypto/price?${params.toString()}`, { cache: "no-store" });
-            if (res.ok) {
-              const json = await res.json().catch(() => ({}));
-              const finalPrice = Number((json as any)?.price);
-              if (Number.isFinite(finalPrice) && startPrice > 0) {
-                if (trySetHint(finalPrice > startPrice ? 0 : 1, `price:${startPrice}:${finalPrice}`)) return;
-              }
+      if (startPrice != null && startPrice > 0 && (tokenMint || majorPair || majorSymbol)) {
+        try {
+          const params = new URLSearchParams();
+          if (tokenMint) params.set("mint", tokenMint);
+          if (majorPair) params.set("pair", majorPair);
+          if (majorSymbol) params.set("major_symbol", majorSymbol);
+          if (sourceType === "major") params.set("source_type", "major");
+          const res = await fetch(`/api/flash-crypto/price?${params.toString()}`, { cache: "no-store" });
+          if (res.ok) {
+            const json = await res.json().catch(() => ({}));
+            const finalPrice = Number((json as any)?.price);
+            if (Number.isFinite(finalPrice) && startPrice > 0) {
+              if (trySetHint(finalPrice > startPrice ? 0 : 1, `live-price:${startPrice}:${finalPrice}`)) return;
             }
-          } catch {
-            // best effort only
           }
-        }
-
-        if (tokenMint) {
-          try {
-            const res = await fetch(`/api/flash-crypto/graduation?mint=${encodeURIComponent(tokenMint)}`, {
-              cache: "no-store",
-            });
-            if (res.ok) {
-              const json = await res.json().catch(() => ({}));
-              if (typeof (json as any)?.didGraduate === "boolean") {
-                if (trySetHint((json as any).didGraduate ? 0 : 1, `graduation:${(json as any).didGraduate ? "yes" : "no"}`)) return;
-              }
-            }
-          } catch {
-            // best effort only
-          }
-        }
-      }
-
-      if (isFlashSportsMicro) {
-        const providerEventId = String(
-          (sportMeta as any).provider_event_id ||
-          (liveMicroMeta as any).provider_match_id ||
-          "",
-        ).trim();
-        const startHome = firstFiniteNumber([
-          liveMicroPayload?.start_home_score,
-          (liveMicroMeta as any).start_home_score,
-          (sportMeta as any).start_home_score,
-        ]);
-        const startAway = firstFiniteNumber([
-          liveMicroPayload?.start_away_score,
-          (liveMicroMeta as any).start_away_score,
-          (sportMeta as any).start_away_score,
-        ]);
-
-        if (providerEventId && startHome != null && startAway != null) {
-          try {
-            const sportKey = String((sportMeta as any).sport || "").trim().toLowerCase();
-            const params = new URLSearchParams({ event_id: providerEventId });
-            if (sportKey === "basketball" || sportKey === "nba") params.set("sport", "basketball");
-            else params.set("provider", "thesportsdb");
-            const res = await fetch(`/api/sports/live?${params.toString()}`, { cache: "no-store" });
-            if (res.ok) {
-              const json = await res.json().catch(() => ({}));
-              const endHome = Number((json as any)?.home_score);
-              const endAway = Number((json as any)?.away_score);
-              if (Number.isFinite(endHome) && Number.isFinite(endAway)) {
-                const startTotal = Math.max(0, Math.floor(startHome)) + Math.max(0, Math.floor(startAway));
-                const endTotal = Math.max(0, Math.floor(endHome)) + Math.max(0, Math.floor(endAway));
-                if (trySetHint(endTotal > startTotal ? 0 : 1, `sports-live:${startTotal}:${endTotal}`)) return;
-              }
-            }
-          } catch {
-            // best effort only
-          }
+        } catch {
+          // best effort only
         }
       }
 
@@ -3963,7 +3861,6 @@ useEffect(() => {
     derived,
     userSharesForUi,
     flashRawOutcomeHint,
-    liveMicroPayload,
   ]);
 
   const flashResultCandidate = useMemo(() => {
@@ -3977,10 +3874,7 @@ useEffect(() => {
       marketMode === "flash_crypto" ||
       typeTag === "flash_crypto_price" ||
       typeTag === "flash_crypto_graduation";
-    const isFlashTraffic = marketMode === "flash_traffic" || typeTag === "flash_traffic";
-    const isFlashSportsMicro = isSoccerNextGoalMicroMarket(market.sportMeta, market.question, market.description);
-    const isFlashFamilyMarket = marketMode.startsWith("flash_") || isFlashCrypto || isFlashTraffic || isFlashSportsMicro;
-    if (!isFlashFamilyMarket) return null;
+    if (!isFlashCrypto) return null;
 
     const windowEndMs = (() => {
       const raw = [
@@ -4008,26 +3902,6 @@ useEffect(() => {
       rawVersion = `quick-hint:${flashRawOutcomeHint.version}`;
     }
 
-    const explicitOutcomeHint = [
-      liveMicroMeta.auto_resolved_outcome,
-      sportMeta.auto_resolved_outcome,
-      liveMicroMeta.proposed_outcome,
-      sportMeta.proposed_outcome,
-      liveMicroMeta.pending_outcome,
-      sportMeta.pending_outcome,
-      liveMicroMeta.resolution_outcome,
-      sportMeta.resolution_outcome,
-      liveMicroMeta.outcome,
-      sportMeta.outcome,
-      liveMicroMeta.winner,
-      sportMeta.winner,
-    ].find((value) => value != null && String(value).trim() !== "");
-    const explicitOutcomeIndex = parseBinaryOutcomeIndex(explicitOutcomeHint, derived.names);
-    if (explicitOutcomeIndex != null) {
-      winningIndex = explicitOutcomeIndex;
-      rawVersion = `hint:${String(explicitOutcomeHint)}`;
-    }
-
     if (winningIndex == null && isFlashCrypto) {
       const startPrice = firstFiniteNumber([
         sportMeta.start_price,
@@ -4047,72 +3921,6 @@ useEffect(() => {
       }
     }
 
-    if (winningIndex == null && isFlashCrypto) {
-      const didGraduateEnd = parseTruthyFlag(
-        sportMeta.did_graduate_end ?? (sportMeta as any).didGraduateEnd,
-      );
-      if (didGraduateEnd != null) {
-        winningIndex = didGraduateEnd ? 0 : 1;
-        rawVersion = `crypto-grad:${didGraduateEnd ? "yes" : "no"}`;
-      }
-    }
-
-    if (winningIndex == null && isFlashTraffic) {
-      const threshold = firstFiniteNumber([sportMeta.threshold]);
-      const endCount = firstFiniteNumber([
-        trafficLiveCount,
-        sportMeta.end_count,
-        sportMeta.current_count,
-        sportMeta.start_count,
-      ]);
-      if (threshold != null && endCount != null) {
-        winningIndex = endCount >= threshold ? 0 : 1;
-        rawVersion = `traffic:${endCount}:${threshold}`;
-      }
-    }
-
-    if (winningIndex == null && isFlashSportsMicro) {
-      const goalObserved = isTruthyFlag(liveMicroMeta.goal_observed ?? sportMeta.goal_observed);
-      if (goalObserved) {
-        winningIndex = 0;
-        rawVersion = "micro-goal-observed";
-      } else {
-        const startHome = firstFiniteNumber([
-          liveMicroPayload?.start_home_score,
-          liveMicroMeta.start_home_score,
-          sportMeta.start_home_score,
-        ]);
-        const startAway = firstFiniteNumber([
-          liveMicroPayload?.start_away_score,
-          liveMicroMeta.start_away_score,
-          sportMeta.start_away_score,
-        ]);
-        const endHome = firstFiniteNumber([
-          liveMicroPayload?.end_home_score,
-          liveMicroMeta.end_home_score,
-          sportMeta.end_home_score,
-          unifiedTradeScorePair?.home,
-        ]);
-        const endAway = firstFiniteNumber([
-          liveMicroPayload?.end_away_score,
-          liveMicroMeta.end_away_score,
-          sportMeta.end_away_score,
-          unifiedTradeScorePair?.away,
-        ]);
-        if (startHome != null && startAway != null && endHome != null && endAway != null) {
-          const startTotal = Math.max(0, Math.floor(startHome)) + Math.max(0, Math.floor(startAway));
-          const endTotal = Math.max(0, Math.floor(endHome)) + Math.max(0, Math.floor(endAway));
-          winningIndex = endTotal > startTotal ? 0 : 1;
-          rawVersion = `micro-score:${startTotal}:${endTotal}`;
-        }
-      }
-    }
-
-    if (winningIndex == null && market.winningOutcome != null && Number.isFinite(Number(market.winningOutcome))) {
-      winningIndex = clampInt(Number(market.winningOutcome), 0, derived.names.length - 1);
-      rawVersion = `winning-outcome:${winningIndex}`;
-    }
-
     if (winningIndex == null) return null;
 
     const winningShares = Math.max(0, Number(normalizedShares[winningIndex] || 0));
@@ -4130,7 +3938,7 @@ useEffect(() => {
       secondaryText,
       resolutionStamp: `${Math.floor(windowEndMs)}:${winningIndex}:${rawVersion}`,
     };
-  }, [market, derived, userSharesForUi, nowMs, liveMicroPayload, unifiedTradeScorePair, trafficLiveCount, flashRawOutcomeHint]);
+  }, [market, derived, userSharesForUi, nowMs, flashRawOutcomeHint]);
 
   useEffect(() => {
     if (!connected || !publicKey || !market || !flashResultCandidate) return;
