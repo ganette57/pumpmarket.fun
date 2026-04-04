@@ -4242,11 +4242,13 @@ const ended = endedByTime;
         SCROLL CONTAINER - Un seul conteneur scrollable qui englobe tout.
         La colonne droite est sticky à l'intérieur.
       */}
-      <div 
+      <div
         ref={scrollContainerRef}
         className="h-full lg:overflow-y-auto"
       >
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 lg:py-8">
+        <div className={`max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 lg:py-8 ${
+          isMobile && isFlashCryptoMarket && isBinaryStyle && !marketClosed ? "pb-24" : ""
+        }`}>
           {/* Grid 2 colonnes */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 relative">
             
@@ -4360,48 +4362,7 @@ const ended = endedByTime;
                   </button>
               )}
 
-              {/* Flash Crypto Hero */}
-              {isFlashCryptoPriceMarket && (() => {
-                const cryptoIsEnded = isResolvedOnChain || isProposed || endedByTime;
-                if (!cryptoTokenMint || !(cryptoPriceStart > 0)) return null;
-
-                return (
-                  <FlashCryptoMiniChart
-                    tokenMint={cryptoTokenMint}
-                    sourceType={cryptoSourceType}
-                    majorSymbol={cryptoMajorSymbol}
-                    majorPair={cryptoMajorPair}
-                    tokenSymbol={cryptoTokenSymbol || undefined}
-                    tokenName={cryptoTokenName || undefined}
-                    tokenImageUri={cryptoTokenImageUri}
-                    durationMinutes={cryptoDurationMinutes}
-                    priceStart={cryptoPriceStart}
-                    finalPrice={cryptoCardMetrics.finalPrice}
-                    percentChange={cryptoCardMetrics.percentChange}
-                    windowEnd={cryptoWindowEnd}
-                    isEnded={cryptoIsEnded}
-                  />
-                );
-              })()}
-              {isFlashCryptoGraduationMarket && (() => {
-                const cryptoIsEnded = isResolvedOnChain || isProposed || endedByTime;
-                if (!cryptoTokenMint) return null;
-
-                return (
-                  <FlashCryptoGraduationHero
-                    tokenMint={cryptoTokenMint}
-                    tokenSymbol={cryptoTokenSymbol || undefined}
-                    tokenName={cryptoTokenName || undefined}
-                    tokenImageUri={cryptoTokenImageUri}
-                    durationMinutes={cryptoDurationMinutes}
-                    progressStart={cryptoGraduationCardMetrics.startProgress ?? cryptoProgressStart}
-                    finalProgress={cryptoGraduationCardMetrics.finalProgress}
-                    didGraduateFinal={cryptoGraduationCardMetrics.didGraduateFinal}
-                    windowEnd={cryptoWindowEnd}
-                    isEnded={cryptoIsEnded}
-                  />
-                );
-              })()}
+              {/* Flash Crypto Hero — rendered AFTER market card for flash crypto (see below) */}
               {isFlashTrafficMarket && (() => {
                 const trafficIsLive =
                   !isResolvedOnChain &&
@@ -4465,9 +4426,15 @@ const ended = endedByTime;
               )}
 
               {/* Market card */}
-              <div className="bg-black border border-gray-800 rounded-xl p-4 md:p-5 hover:border-pump-green/60 transition-all duration-200">
+              <div className={`rounded-xl p-4 md:p-5 transition-all duration-200 ${
+                isFlashCryptoMarket
+                  ? "bg-transparent border border-white/[0.06]"
+                  : "bg-black border border-gray-800 hover:border-pump-green/60"
+              }`}>
                 <div className="flex items-start gap-3">
-                  <div className="flex-shrink-0 w-16 h-16 md:w-20 md:h-20 rounded-xl overflow-hidden bg-pump-dark">
+                  <div className={`flex-shrink-0 rounded-xl overflow-hidden bg-pump-dark ${
+                    isFlashCryptoMarket ? "w-12 h-12 md:w-16 md:h-16" : "w-16 h-16 md:w-20 md:h-20"
+                  }`}>
                     {tradeCardThumbUrl ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
@@ -4484,17 +4451,44 @@ const ended = endedByTime;
                   </div>
   
                   <div className="flex-1 min-w-0">
-                    <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-2 mb-2 min-w-0">
-                      <h1 className="text-xl md:text-2xl font-bold text-white leading-tight break-words min-w-0">
+                    <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-1 mb-2 min-w-0">
+                      <h1 className={`font-bold text-white leading-tight break-words min-w-0 ${
+                        isFlashCryptoMarket ? "text-base md:text-lg" : "text-xl md:text-2xl"
+                      }`}>
                         {market.question}
                       </h1>
-  
-                      <div className="flex justify-end md:justify-start">
+
+                      <div className="flex items-center gap-2 justify-end md:justify-start shrink-0">
                         <MarketActions
                           marketAddress={market.publicKey}
                           marketDbId={market.dbId ?? null}
                           question={market.question}
                         />
+                        {isFlashCryptoMarket && isMobile && (() => {
+                          const cryptoRemSec = Number.isFinite(cryptoWindowEndMs)
+                            ? Math.max(0, Math.ceil((cryptoWindowEndMs - nowMs) / 1000))
+                            : 0;
+                          const isEnded = endedByTime || isResolvedOnChain || isProposed;
+                          const critical = !isEnded && cryptoRemSec <= 10;
+                          const urgent = !isEnded && !critical && cryptoRemSec <= 30;
+                          const tone = isEnded
+                            ? "text-gray-400 border-white/15 bg-white/5"
+                            : critical
+                            ? "text-red-300 border-red-500/50 bg-red-500/15 animate-pulse"
+                            : urgent
+                            ? "text-amber-200 border-amber-400/45 bg-amber-400/12"
+                            : "text-pump-green border-pump-green/35 bg-pump-green/10";
+                          return (
+                            <div className={`rounded-xl border px-2.5 py-1 text-center ${tone}`}>
+                              <div className="text-lg font-black tabular-nums leading-none">
+                                {isEnded ? "00:00" : formatCountdownMmSs(cryptoRemSec)}
+                              </div>
+                              <div className="text-[7px] uppercase tracking-[0.1em] text-white/40">
+                                {isEnded ? "Ended" : critical ? "Final" : urgent ? "Closing" : "Left"}
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                     {isSoccerNextGoalMicro && (microLoopSequence != null || microLoopPhaseLabel) && (
@@ -4510,9 +4504,9 @@ const ended = endedByTime;
                       </div>
                     )}
   
-                    {/* Creator profile */}
+                    {/* Creator profile — hidden on mobile for flash crypto */}
                     {market.creator && (
-                      <div className="flex items-center gap-2 mt-1">
+                      <div className={`flex items-center gap-2 mt-1 ${isFlashCryptoMarket ? "hidden md:flex" : ""}`}>
                         {creatorProfile?.avatar_url ? (
                           <img src={creatorProfile.avatar_url} alt="" className="w-5 h-5 rounded-full object-cover flex-shrink-0" />
                         ) : (
@@ -4537,89 +4531,14 @@ const ended = endedByTime;
                   </div>
                 </div>
 
-                {showCryptoCardSummary && (
-                  <div className="mt-3 rounded-xl border border-cyan-400/20 bg-cyan-500/5 p-3">
-                    <div className="text-[11px] uppercase tracking-[0.08em] text-cyan-200/80 mb-2">
-                      Flash Crypto Snapshot
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                      <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
-                        <div className="text-[11px] text-gray-500">Start price</div>
-                        <div className="text-sm font-semibold text-white tabular-nums">
-                          {formatFlashCryptoPrice(cryptoCardMetrics.startPrice)}
-                        </div>
-                      </div>
-                      <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
-                        <div className="text-[11px] text-gray-500">Final price</div>
-                        <div className="text-sm font-semibold text-white tabular-nums">
-                          {formatFlashCryptoPrice(cryptoCardMetrics.finalPrice)}
-                        </div>
-                      </div>
-                      <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
-                        <div className="text-[11px] text-gray-500">Change %</div>
-                        <div
-                          className={`text-sm font-semibold tabular-nums ${
-                            cryptoCardMetrics.percentChange == null
-                              ? "text-gray-300"
-                              : cryptoCardMetrics.percentChange >= 0
-                              ? "text-pump-green"
-                              : "text-[#ff5c73]"
-                          }`}
-                        >
-                          {cryptoCardMetrics.percentChange == null
-                            ? "—"
-                            : `${cryptoCardMetrics.percentChange >= 0 ? "+" : ""}${cryptoCardMetrics.percentChange.toFixed(2)}%`}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                {showCryptoGraduationCardSummary && (
-                  <div className="mt-3 rounded-xl border border-cyan-400/20 bg-cyan-500/5 p-3">
-                    <div className="text-[11px] uppercase tracking-[0.08em] text-cyan-200/80 mb-2">
-                      Flash Graduation Snapshot
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
-                      <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
-                        <div className="text-[11px] text-gray-500">Start progress</div>
-                        <div className="text-sm font-semibold text-white tabular-nums">
-                          {formatFlashProgress(cryptoGraduationCardMetrics.startProgress)}
-                        </div>
-                      </div>
-                      <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
-                        <div className="text-[11px] text-gray-500">Final progress</div>
-                        <div className="text-sm font-semibold text-white tabular-nums">
-                          {formatFlashProgress(cryptoGraduationCardMetrics.finalProgress)}
-                        </div>
-                      </div>
-                      <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
-                        <div className="text-[11px] text-gray-500">Graduate status</div>
-                        <div className={`text-sm font-semibold ${
-                          cryptoGraduationCardMetrics.didGraduateFinal ? "text-pump-green" : "text-red-300"
-                        }`}>
-                          {cryptoGraduationCardMetrics.didGraduateFinal == null
-                            ? "—"
-                            : cryptoGraduationCardMetrics.didGraduateFinal
-                            ? "Graduated"
-                            : "Not graduated"}
-                        </div>
-                      </div>
-                      <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
-                        <div className="text-[11px] text-gray-500">Remaining</div>
-                        <div className="text-sm font-semibold text-white tabular-nums">
-                          {cryptoGraduationCardMetrics.remainingToGraduateFinal == null
-                            ? "—"
-                            : cryptoGraduationCardMetrics.remainingToGraduateFinal.toFixed(2)}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
+                {/* Crypto card summary removed — info is in FlashCryptoMiniChart / GraduationHero below */}
   
-                <div className="flex items-center gap-4 text-sm text-gray-400 mt-3 pt-3 border-t border-gray-800">
+                <div className={`flex items-center gap-4 text-sm text-gray-400 mt-3 pt-3 ${
+                  isFlashCryptoMarket ? "border-t border-white/[0.05] hidden md:flex" : "border-t border-gray-800"
+                }`}>
                   <div>
                     <span className="text-xs text-gray-400">Vol</span>{" "}
-                    <span className="text-base md:text-lg font-semibold text-white">
+                    <span className={`font-semibold text-white ${isFlashCryptoMarket ? "text-sm" : "text-base md:text-lg"}`}>
                       {formatVol(effectiveVol)} SOL
                     </span>
                   </div>
@@ -4713,7 +4632,48 @@ const ended = endedByTime;
                     )}
                   </div>
                 </div>
-  
+
+                {/* Flash Crypto Hero — inside market card, after vol/date */}
+                {isFlashCryptoPriceMarket && (() => {
+                  const cryptoIsEnded = isResolvedOnChain || isProposed || endedByTime;
+                  if (!cryptoTokenMint || !(cryptoPriceStart > 0)) return null;
+                  return (
+                    <FlashCryptoMiniChart
+                      tokenMint={cryptoTokenMint}
+                      sourceType={cryptoSourceType}
+                      majorSymbol={cryptoMajorSymbol}
+                      majorPair={cryptoMajorPair}
+                      tokenSymbol={cryptoTokenSymbol || undefined}
+                      tokenName={cryptoTokenName || undefined}
+                      tokenImageUri={cryptoTokenImageUri}
+                      durationMinutes={cryptoDurationMinutes}
+                      priceStart={cryptoPriceStart}
+                      finalPrice={cryptoCardMetrics.finalPrice}
+                      percentChange={cryptoCardMetrics.percentChange}
+                      windowEnd={cryptoWindowEnd}
+                      isEnded={cryptoIsEnded}
+                    />
+                  );
+                })()}
+                {isFlashCryptoGraduationMarket && (() => {
+                  const cryptoIsEnded = isResolvedOnChain || isProposed || endedByTime;
+                  if (!cryptoTokenMint) return null;
+                  return (
+                    <FlashCryptoGraduationHero
+                      tokenMint={cryptoTokenMint}
+                      tokenSymbol={cryptoTokenSymbol || undefined}
+                      tokenName={cryptoTokenName || undefined}
+                      tokenImageUri={cryptoTokenImageUri}
+                      durationMinutes={cryptoDurationMinutes}
+                      progressStart={cryptoGraduationCardMetrics.startProgress ?? cryptoProgressStart}
+                      finalProgress={cryptoGraduationCardMetrics.finalProgress}
+                      didGraduateFinal={cryptoGraduationCardMetrics.didGraduateFinal}
+                      windowEnd={cryptoWindowEnd}
+                      isEnded={cryptoIsEnded}
+                    />
+                  );
+                })()}
+
                 {missingOutcomes && (
                   <div className="mb-4 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-yellow-200">
                     Outcomes are still indexing… (Supabase/outcomes not ready yet)
@@ -4751,35 +4711,42 @@ const ended = endedByTime;
 
                 {/* Outcomes */}
                 {isBinaryStyle ? (
-                  <div className="mt-4 grid grid-cols-2 gap-3">
+                  <div className={`mt-4 grid grid-cols-2 gap-3 ${
+                    isFlashCryptoMarket && isMobile ? "mt-6" : ""
+                  }`}>
                     {names.slice(0, 2).map((outcome, index) => {
                       const pct = (percentages[index] ?? 0).toFixed(1);
                       const isYes = index === 0;
+                      const flashMobile = isFlashCryptoMarket && isMobile;
 
                       return (
                         <button
                           key={index}
                           onClick={() => openMobileTrade(index)}
                           disabled={!isMobile || marketClosed}
-                          className={`text-left rounded-xl px-4 py-3 md:px-5 md:py-4 border bg-black transition ${
+                          className={`text-left rounded-xl border transition ${
                             isYes
-                              ? "border-pump-green/60"
-                              : "border-[#ff5c73]/60"
-                          } ${isMobile && !marketClosed ? "active:scale-[0.99]" : ""}`}
+                              ? "border-pump-green/40"
+                              : "border-[#ff5c73]/40"
+                          } ${
+                            flashMobile
+                              ? `px-4 py-4 ${isYes ? "bg-pump-green/[0.06]" : "bg-[#ff5c73]/[0.06]"}`
+                              : "px-4 py-3 md:px-5 md:py-4 bg-black"
+                          } ${isMobile && !marketClosed ? "active:scale-[0.98]" : ""}`}
                         >
-                          <div className="flex items-center justify-between mb-1">
-                            <span className={`uppercase tracking-wide text-xs font-semibold ${
-                              isYes ? "text-pump-green" : "text-[#ff5c73]"
-                            }`}>
+                          <div className={`flex items-center justify-between ${flashMobile ? "mb-2" : "mb-1"}`}>
+                            <span className={`uppercase tracking-wide font-semibold ${
+                              flashMobile ? "text-[11px]" : "text-xs"
+                            } ${isYes ? "text-pump-green" : "text-[#ff5c73]"}`}>
                               {outcome}
                             </span>
                             <span className="hidden md:block text-[11px] text-gray-500">Supply: {supplies[index] || 0}</span>
                           </div>
 
                           <div
-                            className={`text-2xl md:text-3xl font-bold tabular-nums ${
-                              isYes ? "text-pump-green" : "text-[#ff5c73]"
-                            }`}
+                            className={`font-bold tabular-nums ${
+                              flashMobile ? "text-3xl" : "text-2xl md:text-3xl"
+                            } ${isYes ? "text-pump-green" : "text-[#ff5c73]"}`}
                           >
                             {pct}%
                           </div>
@@ -5148,6 +5115,26 @@ const ended = endedByTime;
                 marketClosedMessage={closedPanelMessage}
               />
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Flash crypto mobile fixed bottom trade bar */}
+      {isMobile && isFlashCryptoMarket && isBinaryStyle && !marketClosed && !mobileTradeOpen && (
+        <div className="fixed inset-x-0 bottom-14 z-[150] pointer-events-auto">
+          <div className="bg-pump-dark/95 backdrop-blur-md border-t border-white/[0.06] px-4 py-3 flex gap-3">
+            <button
+              onClick={() => openMobileTrade(0)}
+              className="flex-1 py-3.5 rounded-xl bg-pump-green font-bold text-black text-base active:scale-[0.97] transition"
+            >
+              Buy {names[0] || "Yes"} <span className="opacity-70 ml-1">{(percentages[0] ?? 0).toFixed(0)}¢</span>
+            </button>
+            <button
+              onClick={() => openMobileTrade(1)}
+              className="flex-1 py-3.5 rounded-xl bg-[#ff5c73] font-bold text-white text-base active:scale-[0.97] transition"
+            >
+              Buy {names[1] || "No"} <span className="opacity-70 ml-1">{(100 - (percentages[0] ?? 0)).toFixed(0)}¢</span>
+            </button>
           </div>
         </div>
       )}
