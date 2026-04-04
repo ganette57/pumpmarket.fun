@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useWallet } from "@solana/wallet-adapter-react";
+import { getProfiles, type Profile } from "@/lib/profiles";
 
 type CommentRow = {
   id: string;
@@ -37,8 +38,20 @@ function initials(a?: string | null) {
   return (s === "—" ? "DB" : s.slice(0, 2)).toUpperCase();
 }
 
-function Bubble({ addr }: { addr?: string | null }) {
-  // petit “gradient” comme ton screen
+function Bubble({ addr, avatarUrl }: { addr?: string | null; avatarUrl?: string | null }) {
+  const img = typeof avatarUrl === "string" && avatarUrl.trim() ? avatarUrl.trim() : null;
+  if (img) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={img}
+        alt={shortAddr(addr)}
+        className="w-10 h-10 rounded-full object-cover border border-white/15"
+      />
+    );
+  }
+
+  // gradient fallback when no avatar exists
   return (
     <div className="w-10 h-10 rounded-full flex items-center justify-center text-xs font-bold text-white
                     bg-gradient-to-br from-pump-green/70 via-pink-500/60 to-purple-500/60">
@@ -94,7 +107,19 @@ function IconReply() {
   );
 }
 
-export default function CommentsSection({ marketId }: { marketId: string }) {
+type CommentsSectionProps = {
+  marketId: string;
+  embedded?: boolean;
+  composerAtBottom?: boolean;
+  onCountChange?: (count: number) => void;
+};
+
+export default function CommentsSection({
+  marketId,
+  embedded = false,
+  composerAtBottom = false,
+  onCountChange,
+}: CommentsSectionProps) {
   const { publicKey, connected } = useWallet();
   const userAddress = publicKey?.toBase58() || null;
 
@@ -104,6 +129,7 @@ export default function CommentsSection({ marketId }: { marketId: string }) {
 
   const [text, setText] = useState("");
   const [comments, setComments] = useState<CommentRow[]>([]);
+  const [profilesMap, setProfilesMap] = useState<Record<string, Profile>>({});
 
   // reply UI
   const [replyTo, setReplyTo] = useState<string | null>(null);
@@ -159,6 +185,32 @@ export default function CommentsSection({ marketId }: { marketId: string }) {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [marketDbId]);
+
+  useEffect(() => {
+    const addresses = comments
+      .map((c) => c.user_address)
+      .concat(userAddress ? [userAddress] : [])
+      .filter((a): a is string => !!a);
+    if (!addresses.length) return;
+
+    const unique = Array.from(new Set(addresses));
+    const missing = unique.filter((a) => !profilesMap[a]);
+    if (!missing.length) return;
+
+    let cancelled = false;
+    getProfiles(missing).then((profiles) => {
+      if (cancelled) return;
+      setProfilesMap((prev) => {
+        const next = { ...prev };
+        for (const profile of profiles) next[profile.wallet_address] = profile;
+        return next;
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [comments, userAddress, profilesMap]);
 
   const { roots, childrenByParent } = useMemo(() => {
     const roots = comments.filter((c) => !c.parent_id);
@@ -233,210 +285,245 @@ export default function CommentsSection({ marketId }: { marketId: string }) {
   const count = comments.filter((c) => !c.parent_id).length;
   const canPost = !!marketDbId && connected && !!userAddress && !posting;
 
-  return (
-    <div className="border-t border-gray-800 pt-8">
-      {/* Header */}
-      <div className="flex items-center gap-2 mb-4">
-        <div className="text-pump-green">
-          {/* bubble icon */}
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-            <path
-              d="M21 12a8 8 0 0 1-8 8H7l-4 3v-7a8 8 0 1 1 18-4Z"
-              stroke="currentColor"
-              strokeWidth="1.6"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </div>
-        <div className="text-2xl font-bold text-white">
-          Discussion <span className="text-white/80">({count})</span>
-        </div>
+  useEffect(() => {
+    onCountChange?.(count);
+  }, [count, onCountChange]);
 
-        <div className="ml-auto">
+  const bottomComposer = embedded && composerAtBottom;
+
+  const composer = (
+    <div className="flex items-start gap-4">
+      <Bubble
+        addr={userAddress}
+        avatarUrl={userAddress ? profilesMap[userAddress]?.avatar_url ?? null : null}
+      />
+
+      <div className="flex-1">
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value.slice(0, 500))}
+          placeholder={connected ? "Share your thoughts on this market..." : "Connect your wallet to comment..."}
+          disabled={!connected}
+          className={`w-full rounded-xl border border-gray-700 bg-black/20
+                       px-4 py-3 text-white outline-none placeholder:text-gray-500 resize-none
+                       focus:border-gray-500 ${
+                         bottomComposer ? "min-h-[56px] max-h-[110px]" : embedded ? "min-h-[88px]" : "min-h-[120px]"
+                       }`}
+          maxLength={500}
+        />
+
+        <div className="mt-3 flex items-center justify-between">
+          <div className="text-xs text-gray-500">{text.length}/500 characters</div>
+
           <button
-            onClick={() => void load()}
-            className="text-xs text-gray-400 hover:text-gray-200"
+            onClick={() => void postComment(null)}
+            disabled={!canPost}
+            className={`inline-flex items-center gap-2 px-5 py-2 rounded-lg font-semibold transition
+              ${
+                !canPost
+                  ? "bg-gray-800/40 text-gray-500 cursor-not-allowed border border-gray-800"
+                  : "bg-pump-green text-black hover:brightness-110"
+              }`}
           >
-            {loading ? "Loading…" : "Refresh"}
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M22 2 11 13"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
+              <path
+                d="M22 2 15 22 11 13 2 9 22 2Z"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinejoin="round"
+              />
+            </svg>
+            {posting ? "Posting…" : "Post"}
           </button>
         </div>
       </div>
+    </div>
+  );
 
-      {/* Composer (style screen) */}
-      <div className="flex items-start gap-4">
-        <Bubble addr={userAddress} />
+  const commentsFeed = (
+    <div className="space-y-6">
+      {roots.length === 0 ? (
+        <div className="text-sm text-gray-500">No comments yet.</div>
+      ) : (
+        roots.map((c) => {
+          const replies = childrenByParent.get(c.id) || [];
+          const isReplying = replyTo === c.id;
+          const commentAvatar = c.user_address ? profilesMap[c.user_address]?.avatar_url ?? null : null;
 
-        <div className="flex-1">
-          <textarea
-            value={text}
-            onChange={(e) => setText(e.target.value.slice(0, 500))}
-            placeholder={connected ? "Share your thoughts on this market..." : "Connect your wallet to comment..."}
-            disabled={!connected}
-            className="w-full min-h-[120px] rounded-xl border border-gray-700 bg-black/20
-                       px-4 py-3 text-white outline-none placeholder:text-gray-500 resize-none
-                       focus:border-gray-500"
-            maxLength={500}
-          />
+          return (
+            <div key={c.id}>
+              <div className="flex items-start gap-4">
+                <Bubble addr={c.user_address} avatarUrl={commentAvatar} />
 
-          <div className="mt-3 flex items-center justify-between">
-            <div className="text-xs text-gray-500">{text.length}/500 characters</div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-3">
+                    <div className="text-white font-semibold">{shortAddr(c.user_address)}</div>
+                    <div className="text-xs text-gray-500">{relTime(c.created_at)}</div>
+                  </div>
 
-            <button
-              onClick={() => void postComment(null)}
-              disabled={!canPost}
-              className={`inline-flex items-center gap-2 px-5 py-2 rounded-lg font-semibold transition
-                ${
-                  !canPost
-                    ? "bg-gray-800/40 text-gray-500 cursor-not-allowed border border-gray-800"
-                    : "bg-pump-green text-black hover:brightness-110"
-                }`}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                  <div className="mt-1 text-white/90 whitespace-pre-wrap break-words">
+                    {c.content || ""}
+                  </div>
+
+                  <div className="mt-2 flex items-center gap-6 text-sm">
+                    <button
+                      onClick={() => void likeComment(c.id)}
+                      className="inline-flex items-center gap-2 text-gray-300 hover:text-white"
+                      title="Like"
+                    >
+                      <IconLike />
+                      <span className="text-sm text-gray-300">{Number(c.likes || 0)}</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        if (!connected) return alert("Connect your wallet to reply.");
+                        setReplyTo((p) => (p === c.id ? null : c.id));
+                      }}
+                      className="inline-flex items-center gap-2 text-gray-400 hover:text-gray-200"
+                      title="Reply"
+                    >
+                      <IconReply />
+                      Reply
+                    </button>
+                  </div>
+
+                  {isReplying && (
+                    <div className="mt-4 pl-10">
+                      <div className="rounded-xl border border-gray-800 bg-black/20 p-3">
+                        <textarea
+                          value={replyText}
+                          onChange={(e) => setReplyText(e.target.value.slice(0, 500))}
+                          placeholder="Write a reply..."
+                          className="w-full min-h-[80px] bg-transparent text-white outline-none placeholder:text-gray-500 resize-none"
+                          maxLength={500}
+                        />
+                        <div className="mt-2 flex items-center justify-end gap-2">
+                          <button
+                            onClick={() => {
+                              setReplyTo(null);
+                              setReplyText("");
+                            }}
+                            className="px-3 py-2 rounded-lg text-xs border border-gray-800 text-gray-300 hover:border-gray-600"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={() => void postComment(c.id)}
+                            disabled={!canPost}
+                            className={`px-3 py-2 rounded-lg text-xs font-semibold transition ${
+                              !canPost
+                                ? "bg-gray-800/40 text-gray-500 border border-gray-800 cursor-not-allowed"
+                                : "bg-pump-green/20 text-pump-green border border-pump-green hover:bg-pump-green/25"
+                            }`}
+                          >
+                            {posting ? "Posting…" : "Reply"}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {replies.length > 0 && (
+                    <div className="mt-5 pl-10 space-y-4">
+                      {replies.map((r) => (
+                        <div key={r.id} className="flex items-start gap-3">
+                          <Bubble
+                            addr={r.user_address}
+                            avatarUrl={r.user_address ? profilesMap[r.user_address]?.avatar_url ?? null : null}
+                          />
+                          <div className="flex-1">
+                            <div className="flex items-center gap-3">
+                              <div className="text-white font-semibold text-sm">
+                                {shortAddr(r.user_address)}
+                              </div>
+                              <div className="text-xs text-gray-500">{relTime(r.created_at)}</div>
+                            </div>
+
+                            <div className="mt-1 text-white/85 whitespace-pre-wrap break-words">
+                              {r.content || ""}
+                            </div>
+
+                            <div className="mt-2">
+                              <button
+                                onClick={() => void likeComment(r.id)}
+                                className="inline-flex items-center gap-2 text-gray-300 hover:text-white"
+                                title="Like"
+                              >
+                                <IconLike />
+                                <span className="text-sm text-gray-300">
+                                  {Number(r.likes || 0)}
+                                </span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+
+  return (
+    <div className={embedded ? (bottomComposer ? "h-full min-h-0" : "") : "border-t border-gray-800 pt-8"}>
+      {!embedded && (
+        <>
+          {/* Header */}
+          <div className="flex items-center gap-2 mb-4">
+            <div className="text-pump-green">
+              {/* bubble icon */}
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
                 <path
-                  d="M22 2 11 13"
+                  d="M21 12a8 8 0 0 1-8 8H7l-4 3v-7a8 8 0 1 1 18-4Z"
                   stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                />
-                <path
-                  d="M22 2 15 22 11 13 2 9 22 2Z"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
+                  strokeWidth="1.6"
                   strokeLinejoin="round"
                 />
               </svg>
-              {posting ? "Posting…" : "Post"}
-            </button>
+            </div>
+            <div className="text-2xl font-bold text-white">
+              Discussion <span className="text-white/80">({count})</span>
+            </div>
+
+            <div className="ml-auto">
+              <button
+                onClick={() => void load()}
+                className="text-xs text-gray-400 hover:text-gray-200"
+              >
+                {loading ? "Loading…" : "Refresh"}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {bottomComposer ? (
+        <div className="h-full min-h-0 flex flex-col">
+          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+            {commentsFeed}
+          </div>
+          <div className="shrink-0 border-t border-gray-800 bg-[#0a0a0c] pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+8px)]">
+            {composer}
           </div>
         </div>
-      </div>
-
-      {/* Feed */}
-      <div className="mt-8 space-y-6">
-        {roots.length === 0 ? (
-          <div className="text-sm text-gray-500">No comments yet.</div>
-        ) : (
-          roots.map((c) => {
-            const replies = childrenByParent.get(c.id) || [];
-            const isReplying = replyTo === c.id;
-
-            return (
-              <div key={c.id}>
-                <div className="flex items-start gap-4">
-                  <Bubble addr={c.user_address} />
-
-                  <div className="flex-1">
-                    <div className="flex items-center gap-3">
-                      <div className="text-white font-semibold">{shortAddr(c.user_address)}</div>
-                      <div className="text-xs text-gray-500">{relTime(c.created_at)}</div>
-                    </div>
-
-                    <div className="mt-1 text-white/90 whitespace-pre-wrap break-words">
-                      {c.content || ""}
-                    </div>
-
-                    <div className="mt-2 flex items-center gap-6 text-sm">
-                      <button
-                        onClick={() => void likeComment(c.id)}
-                        className="inline-flex items-center gap-2 text-gray-300 hover:text-white"
-                        title="Like"
-                      >
-                        <IconLike />
-                        <span className="text-sm text-gray-300">{Number(c.likes || 0)}</span>
-                      </button>
-
-                      <button
-                        onClick={() => {
-                          if (!connected) return alert("Connect your wallet to reply.");
-                          setReplyTo((p) => (p === c.id ? null : c.id));
-                        }}
-                        className="inline-flex items-center gap-2 text-gray-400 hover:text-gray-200"
-                        title="Reply"
-                      >
-                        <IconReply />
-                        Reply
-                      </button>
-                    </div>
-
-                    {/* Reply composer (compact, comme avant) */}
-                    {isReplying && (
-                      <div className="mt-4 pl-10">
-                        <div className="rounded-xl border border-gray-800 bg-black/20 p-3">
-                          <textarea
-                            value={replyText}
-                            onChange={(e) => setReplyText(e.target.value.slice(0, 500))}
-                            placeholder="Write a reply..."
-                            className="w-full min-h-[80px] bg-transparent text-white outline-none placeholder:text-gray-500 resize-none"
-                            maxLength={500}
-                          />
-                          <div className="mt-2 flex items-center justify-end gap-2">
-                            <button
-                              onClick={() => {
-                                setReplyTo(null);
-                                setReplyText("");
-                              }}
-                              className="px-3 py-2 rounded-lg text-xs border border-gray-800 text-gray-300 hover:border-gray-600"
-                            >
-                              Cancel
-                            </button>
-                            <button
-                              onClick={() => void postComment(c.id)}
-                              disabled={!canPost}
-                              className={`px-3 py-2 rounded-lg text-xs font-semibold transition ${
-                                !canPost
-                                  ? "bg-gray-800/40 text-gray-500 border border-gray-800 cursor-not-allowed"
-                                  : "bg-pump-green/20 text-pump-green border border-pump-green hover:bg-pump-green/25"
-                              }`}
-                            >
-                              {posting ? "Posting…" : "Reply"}
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Replies list */}
-                    {replies.length > 0 && (
-                      <div className="mt-5 pl-10 space-y-4">
-                        {replies.map((r) => (
-                          <div key={r.id} className="flex items-start gap-3">
-                            <Bubble addr={r.user_address} />
-                            <div className="flex-1">
-                              <div className="flex items-center gap-3">
-                                <div className="text-white font-semibold text-sm">
-                                  {shortAddr(r.user_address)}
-                                </div>
-                                <div className="text-xs text-gray-500">{relTime(r.created_at)}</div>
-                              </div>
-
-                              <div className="mt-1 text-white/85 whitespace-pre-wrap break-words">
-                                {r.content || ""}
-                              </div>
-
-                              <div className="mt-2">
-                                <button
-                                  onClick={() => void likeComment(r.id)}
-                                  className="inline-flex items-center gap-2 text-gray-300 hover:text-white"
-                                  title="Like"
-                                >
-                                  <IconLike />
-                                  <span className="text-sm text-gray-300">
-                                    {Number(r.likes || 0)}
-                                  </span>
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            );
-          })
-        )}
-      </div>
+      ) : (
+        <>
+          {composer}
+          <div className="mt-8">{commentsFeed}</div>
+        </>
+      )}
     </div>
   );
 }

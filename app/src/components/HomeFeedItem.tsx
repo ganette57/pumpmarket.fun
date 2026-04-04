@@ -28,6 +28,7 @@ interface HomeFeedItemProps {
     avatar_url?: string | null;
   } | null;
   creatorAddress?: string | null;
+  withActionRail?: boolean;
   /** Called when user taps market title before navigating to full trade page. */
   onTitleTap?: () => void;
   /** Called when user taps an outcome button (index 0 or 1). If not provided, falls back to Link. */
@@ -41,6 +42,7 @@ export default function HomeFeedItem({
   finishedMatch = false,
   creatorProfile,
   creatorAddress,
+  withActionRail = false,
   onTitleTap,
   onOutcomeTap,
 }: HomeFeedItemProps) {
@@ -123,7 +125,11 @@ export default function HomeFeedItem({
       )}
 
       {/* ── Bottom overlay: market info + quick trade ── */}
-      <div className="absolute bottom-0 left-0 right-0 z-10 px-4 pb-28 md:pb-6">
+      <div
+        className={`absolute bottom-0 left-0 right-0 z-10 pb-[7.5rem] md:pb-6 ${
+          withActionRail ? "pl-4 pr-24" : "px-4"
+        }`}
+      >
         {/* Category badge */}
         <div className="mb-2">
           <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wide bg-white/15 backdrop-blur-sm border border-white/10 text-white/90">

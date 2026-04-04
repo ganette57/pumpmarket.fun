@@ -14,6 +14,8 @@ import type { SelectedCategory } from "@/components/CategoryFilters";
 import { SkeletonCard, SkeletonFeaturedCard } from "@/components/SkeletonCard";
 import HomeFeedItem from "@/components/HomeFeedItem";
 import FeedTradeSheet from "@/components/FeedTradeSheet";
+import HomeFeedActionRail from "@/components/HomeFeedActionRail";
+import HomeFeedCommentsSheet from "@/components/HomeFeedCommentsSheet";
 import { isSportSubcategory } from "@/utils/categories";
 import { getProfiles, type Profile } from "@/lib/profiles";
 import type { FlashMarket } from "@/lib/flashMarkets/types";
@@ -865,6 +867,36 @@ export default function Home() {
     }
   }, [loading, mobileFeedEntries]);
 
+  const [commentsSheetMarket, setCommentsSheetMarket] = useState<{
+    marketAddress: string;
+    question: string;
+  } | null>(null);
+  const [commentsCountByMarket, setCommentsCountByMarket] = useState<Record<string, number>>({});
+
+  const openCommentsSheet = useCallback((marketAddress: string, question: string) => {
+    if (!marketAddress) return;
+    setCommentsSheetMarket({ marketAddress, question });
+  }, []);
+
+  const closeCommentsSheet = useCallback(() => {
+    setCommentsSheetMarket(null);
+  }, []);
+
+  const handleCommentsCountChange = useCallback((marketAddress: string, count: number) => {
+    setCommentsCountByMarket((prev) => {
+      if (prev[marketAddress] === count) return prev;
+      return { ...prev, [marketAddress]: count };
+    });
+  }, []);
+
+  const railPositionStyle = useMemo(
+    () => ({
+      top: "calc(env(safe-area-inset-top, 0px) + 76px)",
+      bottom: "calc(env(safe-area-inset-bottom, 0px) + 178px)",
+    }),
+    []
+  );
+
   // ------- MOBILE TRADE SHEET STATE -------
   const [tradeSheetOpen, setTradeSheetOpen] = useState(false);
   const [tradeSheetMarket, setTradeSheetMarket] = useState<typeof prioritizedClassicFeedMarkets[number] | null>(null);
@@ -933,7 +965,7 @@ export default function Home() {
             </div>
 
             {/* Bottom overlay skeleton */}
-            <div className="absolute bottom-0 left-0 right-0 z-10 px-4 pb-28">
+            <div className="absolute bottom-0 left-0 right-0 z-10 px-4 pb-[7.5rem]">
               {/* Category badge */}
               <div className="mb-3">
                 <div className="h-6 w-20 rounded-full bg-white/10 animate-pulse" />
@@ -991,6 +1023,8 @@ export default function Home() {
               {mobileFeedEntries.map((entry, index) => {
                 const entryKey = mobileFeedEntryKey(entry);
                 if (entry.kind === "flash") {
+                  const marketAddress = String(entry.market.marketAddress || "").trim();
+                  const commentsCount = marketAddress ? commentsCountByMarket[marketAddress] ?? null : null;
                   return (
                     <div
                       key={entryKey}
@@ -998,23 +1032,53 @@ export default function Home() {
                       onClickCapture={() => saveFeedRestoreState(entryKey, index)}
                     >
                       <FlashMarketCard market={entry.market} variant="hero" className="h-full rounded-none border-0" />
+                      <div className="pointer-events-none absolute right-2 z-30 flex items-end" style={railPositionStyle}>
+                        <div className="pointer-events-auto">
+                          <HomeFeedActionRail
+                            marketAddress={marketAddress}
+                            marketDbId={entry.market.marketId || null}
+                            question={entry.market.question}
+                            creatorAddress={null}
+                            creatorProfile={null}
+                            commentsCount={commentsCount}
+                            onOpenComments={() => openCommentsSheet(marketAddress, entry.market.question)}
+                          />
+                        </div>
+                      </div>
                     </div>
                   );
                 }
 
                 const market = entry.market;
+                const creatorProfile = market.creator ? profilesMap[market.creator] ?? null : null;
+                const commentsCount = commentsCountByMarket[market.publicKey] ?? null;
                 return (
-                  <HomeFeedItem
-                    key={entryKey}
-                    market={market as any}
-                    liveSessionId={liveMap[market.publicKey] || null}
-                    liveMatch={isSportLiveInProgress(market)}
-                    finishedMatch={isSportFinishedByProvider(market)}
-                    creatorAddress={market.creator}
-                    creatorProfile={market.creator ? profilesMap[market.creator] ?? null : null}
-                    onTitleTap={() => saveFeedRestoreState(entryKey, index)}
-                    onOutcomeTap={(idx) => openTradeSheet(market, idx)}
-                  />
+                  <div key={entryKey} className="relative">
+                    <HomeFeedItem
+                      market={market as any}
+                      liveSessionId={liveMap[market.publicKey] || null}
+                      liveMatch={isSportLiveInProgress(market)}
+                      finishedMatch={isSportFinishedByProvider(market)}
+                      creatorAddress={market.creator}
+                      creatorProfile={creatorProfile}
+                      withActionRail
+                      onTitleTap={() => saveFeedRestoreState(entryKey, index)}
+                      onOutcomeTap={(idx) => openTradeSheet(market, idx)}
+                    />
+                    <div className="pointer-events-none absolute right-2 z-30 flex items-end" style={railPositionStyle}>
+                      <div className="pointer-events-auto">
+                        <HomeFeedActionRail
+                          marketAddress={market.publicKey}
+                          marketDbId={market.id || null}
+                          question={market.question}
+                          creatorAddress={market.creator}
+                          creatorProfile={creatorProfile}
+                          commentsCount={commentsCount}
+                          onOpenComments={() => openCommentsSheet(market.publicKey, market.question)}
+                        />
+                      </div>
+                    </div>
+                  </div>
                 );
               })}
             </div>
@@ -1040,6 +1104,19 @@ export default function Home() {
               }
               defaultOutcomeIndex={tradeSheetOutcome}
               onBuySuccess={handleFeedBuySuccess}
+            />
+
+            <HomeFeedCommentsSheet
+              open={!!commentsSheetMarket}
+              marketAddress={commentsSheetMarket?.marketAddress ?? null}
+              marketQuestion={commentsSheetMarket?.question ?? null}
+              initialCount={
+                commentsSheetMarket
+                  ? commentsCountByMarket[commentsSheetMarket.marketAddress] ?? null
+                  : null
+              }
+              onClose={closeCommentsSheet}
+              onCountChange={handleCommentsCountChange}
             />
           </div>
         )}
