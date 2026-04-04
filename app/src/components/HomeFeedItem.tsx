@@ -4,6 +4,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { Clock, TrendingUp } from "lucide-react";
 import { lamportsToSol } from "@/utils/solana";
+import { triggerHaptic } from "@/utils/haptics";
 
 interface HomeFeedItemProps {
   market: {
@@ -193,8 +194,11 @@ export default function HomeFeedItem({
           {/* Outcome 1 (GREEN) — same color as MarketCard */}
           <button
             type="button"
-            onClick={() => onOutcomeTap ? onOutcomeTap(0) : undefined}
-            className="flex-1 bg-[#00FF87] rounded-xl py-3 px-3 flex items-center justify-between active:scale-[0.97] transition-transform"
+            onClick={() => {
+              triggerHaptic("light");
+              if (onOutcomeTap) onOutcomeTap(0);
+            }}
+            className="flex-1 bg-[#00FF87] rounded-xl py-3 px-3 flex items-center justify-between active:scale-[0.965] transition-transform duration-150 ease-out"
           >
             <span className="text-[12px] uppercase text-black font-bold tracking-wide truncate max-w-[60%]">
               {outcomes[0].length > 12
@@ -209,8 +213,11 @@ export default function HomeFeedItem({
           {/* Outcome 2 (RED) — same color as MarketCard */}
           <button
             type="button"
-            onClick={() => onOutcomeTap ? onOutcomeTap(1) : undefined}
-            className="flex-1 bg-[#ff5c73] rounded-xl py-3 px-3 flex items-center justify-between active:scale-[0.97] transition-transform"
+            onClick={() => {
+              triggerHaptic("light");
+              if (onOutcomeTap) onOutcomeTap(1);
+            }}
+            className="flex-1 bg-[#ff5c73] rounded-xl py-3 px-3 flex items-center justify-between active:scale-[0.965] transition-transform duration-150 ease-out"
           >
             <span className="text-[12px] uppercase text-black font-bold tracking-wide truncate max-w-[60%]">
               {outcomes[1].length > 12

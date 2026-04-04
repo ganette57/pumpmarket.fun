@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Bookmark, Heart, MessageCircle, Share2 } from "lucide-react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { supabase } from "@/lib/supabaseClient";
+import { triggerHaptic } from "@/utils/haptics";
 
 type CreatorProfile = {
   display_name?: string | null;
@@ -37,6 +38,12 @@ function isLikeTableMissing(error: any): boolean {
   return code === "42p01" || msg.includes("relation") && msg.includes("does not exist");
 }
 
+function isLikeUniqueViolation(error: any): boolean {
+  const msg = String(error?.message || "").toLowerCase();
+  const code = String(error?.code || "").toLowerCase();
+  return code === "23505" || (msg.includes("duplicate key") && msg.includes("market_likes_unique"));
+}
+
 export default function HomeFeedActionRail({
   marketAddress,
   marketDbId = null,
@@ -54,6 +61,7 @@ export default function HomeFeedActionRail({
   const [busy, setBusy] = useState(false);
   const [bookmarkRowId, setBookmarkRowId] = useState<string | null>(null);
   const likeMarketIdRef = useRef<string | null>(null);
+  const likeInFlightRef = useRef(false);
   const userAddress = useMemo(() => publicKey?.toBase58() ?? null, [publicKey]);
   const bookmarked = !!bookmarkRowId;
 
@@ -127,11 +135,12 @@ export default function HomeFeedActionRail({
   }, [marketAddress, marketDbId, userAddress]);
 
   async function toggleLike() {
-    if (likeBusy) return;
+    if (likeBusy || likeInFlightRef.current) return;
     if (!userAddress) {
       alert("Connect your wallet");
       return;
     }
+    likeInFlightRef.current = true;
 
     const prevLiked = liked;
     const prevCount = likeCount;
@@ -154,8 +163,21 @@ export default function HomeFeedActionRail({
           .insert({ wallet_address: userAddress, market_id: marketId })
           .select("id")
           .single();
-        if (error) throw error;
-        setRemoteLikeRowId(data?.id ?? null);
+        if (error) {
+          if (!isLikeUniqueViolation(error)) throw error;
+
+          // Idempotent path: like already exists, keep liked=true and resync row/count.
+          const snap = await loadLikeSnapshot(marketId, userAddress);
+          if (snap.ok) {
+            setLiked(true);
+            setLikeCount(snap.count);
+            setRemoteLikeRowId(snap.rowId);
+          } else {
+            setLiked(true);
+          }
+        } else {
+          setRemoteLikeRowId(data?.id ?? null);
+        }
       } else {
         if (prevRowId) {
           const { error } = await supabase.from("market_likes").delete().eq("id", prevRowId);
@@ -177,6 +199,7 @@ export default function HomeFeedActionRail({
       alert(e?.message || "Like failed");
     } finally {
       setLikeBusy(false);
+      likeInFlightRef.current = false;
     }
   }
 
@@ -315,8 +338,8 @@ export default function HomeFeedActionRail({
     <div className="flex flex-col items-center gap-3">
       <div className="flex flex-col items-center gap-1.5">
         <div className="relative">
-          <div className="absolute -inset-0.5 rounded-full bg-gradient-to-br from-[#61ff9a] via-[#8ee6ff] to-[#ff7ab6] opacity-80" />
-          <div className="relative flex h-11 w-11 items-center justify-center overflow-hidden rounded-full border border-black/60 bg-black/60 text-white shadow-lg">
+          <div className="absolute -inset-[1px] rounded-full bg-gradient-to-br from-[#61ff9a] via-[#8ee6ff] to-[#ff7ab6] opacity-70" />
+          <div className="relative flex h-11 w-11 items-center justify-center overflow-hidden rounded-full border border-white/20 bg-black/50 text-white shadow-[0_10px_24px_rgba(0,0,0,0.42)] backdrop-blur-xl ring-1 ring-inset ring-white/10">
             {avatarUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={avatarUrl} alt={avatarLabel} className="h-full w-full object-cover" />
@@ -332,23 +355,33 @@ export default function HomeFeedActionRail({
 
       <button
         type="button"
-        onClick={() => void toggleLike()}
-        className="group flex flex-col items-center gap-1.5"
+        onClick={() => {
+          triggerHaptic("light");
+          void toggleLike();
+        }}
+        className="group flex flex-col items-center gap-1.5 transition-transform duration-150 ease-out active:scale-[0.95]"
         aria-label="Like market"
       >
-        <span className="flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-black/45 text-white shadow-lg backdrop-blur-md transition group-active:scale-95">
-          <Heart className={`h-5 w-5 ${liked ? "fill-[#ff4d6d] text-[#ff4d6d]" : "text-white"}`} />
+        <span className="flex h-11 w-11 items-center justify-center rounded-full border border-white/25 bg-black/40 text-white shadow-[0_10px_24px_rgba(0,0,0,0.42)] backdrop-blur-xl ring-1 ring-inset ring-white/10 transition-all duration-150 ease-out group-active:scale-[0.92]">
+          <Heart
+            className={`h-5 w-5 transition-all duration-200 ${
+              liked ? "scale-110 fill-[#ff4d6d] text-[#ff4d6d]" : "scale-100 text-white"
+            }`}
+          />
         </span>
         <span className="text-[11px] font-semibold leading-none text-white/90">{compactCount(likeCount)}</span>
       </button>
 
       <button
         type="button"
-        onClick={onOpenComments}
-        className="group flex flex-col items-center gap-1.5"
+        onClick={() => {
+          triggerHaptic("light");
+          onOpenComments();
+        }}
+        className="group flex flex-col items-center gap-1.5 transition-transform duration-150 ease-out active:scale-[0.95]"
         aria-label="Open comments"
       >
-        <span className="flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-black/45 text-white shadow-lg backdrop-blur-md transition group-active:scale-95">
+        <span className="flex h-11 w-11 items-center justify-center rounded-full border border-white/25 bg-black/40 text-white shadow-[0_10px_24px_rgba(0,0,0,0.42)] backdrop-blur-xl ring-1 ring-inset ring-white/10 transition-all duration-150 ease-out group-active:scale-[0.92]">
           <MessageCircle className="h-5 w-5 text-white" />
         </span>
         <span className="text-[11px] font-semibold leading-none text-white/90">
@@ -358,31 +391,33 @@ export default function HomeFeedActionRail({
 
       <button
         type="button"
-        onClick={() => void toggleBookmark()}
+        onClick={() => {
+          triggerHaptic("light");
+          void toggleBookmark();
+        }}
         disabled={busy}
-        className="group flex flex-col items-center gap-1.5"
+        className="group flex flex-col items-center gap-1.5 transition-transform duration-150 ease-out active:scale-[0.95]"
         aria-label={bookmarked ? "Remove bookmark" : "Bookmark market"}
       >
-        <span className={`flex h-11 w-11 items-center justify-center rounded-full border bg-black/45 shadow-lg backdrop-blur-md transition group-active:scale-95 ${
-          bookmarked ? "border-[#61ff9a]/80 text-[#61ff9a]" : "border-white/20 text-white"
+        <span className={`flex h-11 w-11 items-center justify-center rounded-full border bg-black/40 shadow-[0_10px_24px_rgba(0,0,0,0.42)] backdrop-blur-xl ring-1 ring-inset transition-all duration-150 ease-out group-active:scale-[0.92] ${
+          bookmarked ? "border-[#61ff9a]/80 text-[#61ff9a] ring-[#61ff9a]/20" : "border-white/25 text-white ring-white/10"
         }`}>
           <Bookmark className="h-5 w-5" fill={bookmarked ? "currentColor" : "none"} />
-        </span>
-        <span className={`text-[11px] font-semibold leading-none ${bookmarked ? "text-[#61ff9a]" : "text-white/90"}`}>
-          {bookmarked ? "Saved" : "Save"}
         </span>
       </button>
 
       <button
         type="button"
-        onClick={() => void share()}
-        className="group flex flex-col items-center gap-1.5"
+        onClick={() => {
+          triggerHaptic("light");
+          void share();
+        }}
+        className="group flex flex-col items-center gap-1.5 transition-transform duration-150 ease-out active:scale-[0.95]"
         aria-label="Share market"
       >
-        <span className="flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-black/45 text-white shadow-lg backdrop-blur-md transition group-active:scale-95">
+        <span className="flex h-11 w-11 items-center justify-center rounded-full border border-white/25 bg-black/40 text-white shadow-[0_10px_24px_rgba(0,0,0,0.42)] backdrop-blur-xl ring-1 ring-inset ring-white/10 transition-all duration-150 ease-out group-active:scale-[0.92]">
           <Share2 className="h-5 w-5 text-white" />
         </span>
-        <span className="text-[11px] font-semibold leading-none text-white/90">Share</span>
       </button>
     </div>
   );

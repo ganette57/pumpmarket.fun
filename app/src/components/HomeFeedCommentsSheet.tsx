@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { MessageCircle, X } from "lucide-react";
 import CommentsSection from "@/components/CommentsSection";
+import { triggerHaptic } from "@/utils/haptics";
 
 type HomeFeedCommentsSheetProps = {
   open: boolean;
@@ -70,13 +71,17 @@ export default function HomeFeedCommentsSheet({
   if (!open || !marketAddress) return null;
 
   const bottomOffset = 56 + keyboardInset;
+  const closeSheet = () => {
+    triggerHaptic("light");
+    onClose();
+  };
 
   return (
     <div className="fixed inset-0 z-[230]">
       <button
         className="absolute inset-x-0 top-0 bg-black/70"
         style={{ bottom: `${bottomOffset}px` }}
-        onClick={onClose}
+        onClick={closeSheet}
         aria-label="Close comments"
       />
 
@@ -99,7 +104,7 @@ export default function HomeFeedCommentsSheet({
             </div>
             <button
               type="button"
-              onClick={onClose}
+              onClick={closeSheet}
               className="flex h-8 w-8 items-center justify-center rounded-full border border-gray-700 bg-black/40 text-gray-200"
               aria-label="Close comments sheet"
             >
