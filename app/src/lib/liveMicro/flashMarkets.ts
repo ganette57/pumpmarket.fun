@@ -5,6 +5,7 @@ import { LIVE_MICRO_TYPE, setLinkedMarketImageUrlIfMissing } from "@/lib/liveMic
 import { FLASH_CRYPTO_GRADUATION_MICRO_TYPE, FLASH_CRYPTO_MICRO_TYPE } from "@/lib/flashCrypto/types";
 import { listFlashCryptoMarketsForExplorer } from "@/lib/flashCrypto/repository";
 import { getFlashCryptoMajorConfigBySymbol } from "@/lib/flashCrypto/majors";
+import { TRAFFIC_FLASH_MARKET_MODE } from "@/lib/traffic/types";
 import type { FlashMarket, FlashMarketKind, FlashMarketStatus } from "@/lib/flashMarkets/types";
 
 type LiveMicroDbRow = {
@@ -40,6 +41,21 @@ type MarketDbRow = {
   sport_event_id: string | null;
 };
 
+type TrafficFlashDbRow = {
+  id: string | null;
+  market_address: string;
+  question: string | null;
+  image_url: string | null;
+  total_volume: number | null;
+  created_at: string | null;
+  end_date: string | null;
+  resolution_status: string | null;
+  resolved: boolean | null;
+  cancelled: boolean | null;
+  is_blocked: boolean | null;
+  sport_meta: Record<string, unknown> | null;
+};
+
 function asObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return value as Record<string, unknown>;
@@ -63,6 +79,12 @@ function readPath(obj: unknown, path: Array<string | number>): unknown {
 function toFiniteNumber(value: unknown): number | null {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+}
+
+function toBool(value: unknown): boolean {
+  if (value === true) return true;
+  const text = String(value ?? "").trim().toLowerCase();
+  return text === "true" || text === "1" || text === "yes";
 }
 
 function toText(value: unknown): string | null {
@@ -224,6 +246,27 @@ function parseStatus(row: LiveMicroDbRow, market: MarketDbRow | null, nowMs: num
 
   // Window hasn't ended but engine isn't active — still pending / resolving.
   return "resolving";
+}
+
+function parseTrafficStatus(row: TrafficFlashDbRow, nowMs: number): FlashMarketStatus {
+  const status = String(row.resolution_status || "open").trim().toLowerCase();
+  if (toBool(row.cancelled) || status === "cancelled") return "cancelled";
+  if (toBool(row.resolved) || status === "proposed" || status === "finalized") return "finalized";
+
+  const meta = asObject(row.sport_meta);
+  const windowEndRaw =
+    firstText([
+      readPath(meta, ["window_end"]),
+      readPath(meta, ["windowEnd"]),
+      row.end_date,
+    ]) || "";
+  const windowEndMs = Date.parse(windowEndRaw);
+  const ended = Number.isFinite(windowEndMs) ? nowMs >= windowEndMs : false;
+  if (ended) return "finalized";
+
+  if (status !== "open") return "resolving";
+  if (toBool(row.is_blocked)) return "locked";
+  return "active";
 }
 
 function scoreFromPayload(payload: Record<string, unknown> | null): { home: number; away: number } | null {
@@ -773,6 +816,104 @@ async function loadCryptoFlashCandidates(maxRows: number): Promise<FlashMarket[]
   }
 }
 
+async function loadIrlFlashCandidates(maxRows: number): Promise<FlashMarket[]> {
+  const supabase = supabaseServer();
+  const fetchLimit = normalizeLimit(maxRows, 20, 500);
+  const nowMs = Date.now();
+  const { data, error } = await supabase
+    .from("markets")
+    .select(
+      [
+        "id",
+        "market_address",
+        "question",
+        "image_url",
+        "total_volume",
+        "created_at",
+        "end_date",
+        "resolution_status",
+        "resolved",
+        "cancelled",
+        "is_blocked",
+        "sport_meta",
+      ].join(","),
+    )
+    .eq("market_mode", TRAFFIC_FLASH_MARKET_MODE)
+    .order("created_at", { ascending: false })
+    .limit(fetchLimit);
+
+  if (error) throw new Error(`traffic flash markets fetch failed: ${error.message}`);
+
+  const out: FlashMarket[] = [];
+  for (const row of (data || []) as unknown as TrafficFlashDbRow[]) {
+    const marketAddress = String(row.market_address || "").trim();
+    if (!marketAddress) continue;
+
+    const meta = asObject(row.sport_meta);
+    const status = parseTrafficStatus(row, nowMs);
+    const windowEnd =
+      firstText([readPath(meta, ["window_end"]), readPath(meta, ["windowEnd"]), row.end_date]) || null;
+    const windowEndMs = Date.parse(String(windowEnd || ""));
+    const remainingSec =
+      (status === "active" || status === "locked") && Number.isFinite(windowEndMs)
+        ? Math.max(0, Math.ceil((windowEndMs - nowMs) / 1000))
+        : null;
+    const threshold = Math.max(0, Math.floor(Number(readPath(meta, ["threshold"])) || 0));
+    const currentCount = Math.max(
+      0,
+      Math.floor(
+        Number(
+          firstNumber([
+            readPath(meta, ["current_count"]),
+            readPath(meta, ["currentCount"]),
+            readPath(meta, ["start_count"]),
+          ]) || 0,
+        ),
+      ),
+    );
+    const cameraName =
+      firstText([readPath(meta, ["camera_name"]), readPath(meta, ["cameraName"]), readPath(meta, ["camera_id"])]) ||
+      "IRL traffic";
+    const roundId =
+      firstText([readPath(meta, ["round_id"]), readPath(meta, ["roundId"])]) || marketAddress;
+    const imageUrl = normalizeImageUrl(row.image_url);
+
+    out.push({
+      liveMicroId: `traffic:${roundId}`,
+      providerMatchId: roundId,
+      marketAddress,
+      marketId: row.id ?? null,
+      question:
+        String(row.question || "").trim() ||
+        `Will ${threshold > 0 ? threshold : "X"}+ vehicles cross in this window?`,
+      league: cameraName,
+      sport: "traffic",
+      providerImageUrl: imageUrl,
+      marketImageUrl: imageUrl,
+      heroImageUrl: imageUrl,
+      homeTeam: "Count",
+      awayTeam: "Target",
+      homeLogo: null,
+      awayLogo: null,
+      startScoreHome: 0,
+      startScoreAway: 0,
+      currentScoreHome: currentCount,
+      currentScoreAway: threshold,
+      minute: null,
+      windowEnd,
+      loopSequence: null,
+      loopPhase: null,
+      remainingSec,
+      status,
+      volume: Math.max(0, Math.floor(Number(row.total_volume || 0))),
+      createdAt: String(row.created_at || new Date(0).toISOString()),
+      kind: "irl",
+    });
+  }
+
+  return out;
+}
+
 /** Returns true if the flash market is still relevant for live UX display. */
 function isStillLiveUx(m: FlashMarket): boolean {
   // Always show active / locked — these are genuinely live right now.
@@ -795,11 +936,12 @@ function isStillLiveUx(m: FlashMarket): boolean {
 
 export async function getTopLiveFlashMarkets(limit = 6): Promise<FlashMarket[]> {
   const cap = normalizeLimit(limit, 6);
-  const [sportCandidates, cryptoCandidates] = await Promise.all([
+  const [sportCandidates, cryptoCandidates, irlCandidates] = await Promise.all([
     loadFlashCandidates(20),
     loadCryptoFlashCandidates(20),
+    loadIrlFlashCandidates(20),
   ]);
-  const candidates = [...sportCandidates, ...cryptoCandidates];
+  const candidates = [...sportCandidates, ...cryptoCandidates, ...irlCandidates];
   const scoped = dedupeByMatch(candidates, explorerComparator)
     .filter(isStillLiveUx)
     .sort(explorerComparator);
@@ -807,11 +949,12 @@ export async function getTopLiveFlashMarkets(limit = 6): Promise<FlashMarket[]> 
 }
 
 export async function getTopHomeLiveFlashMarket(kind: FlashMarketKind | "all" = "all"): Promise<FlashMarket | null> {
-  const [sportCandidates, cryptoCandidates] = await Promise.all([
+  const [sportCandidates, cryptoCandidates, irlCandidates] = await Promise.all([
     loadFlashCandidates(20),
     loadCryptoFlashCandidates(20),
+    loadIrlFlashCandidates(20),
   ]);
-  const candidates = [...sportCandidates, ...cryptoCandidates];
+  const candidates = [...sportCandidates, ...cryptoCandidates, ...irlCandidates];
   const deduped = dedupeByMatch(candidates, homeComparator)
     .filter((m) => kind === "all" || m.kind === kind)
     .filter(isStillLiveUx)
@@ -830,11 +973,12 @@ export async function getExplorerFlashMarkets(
 ): Promise<FlashMarket[]> {
   const cap = normalizeLimit(limit, 6, 200);
   const desiredRows = filter === "resolved" ? Math.max(cap, 200) : Math.max(cap, 20);
-  const [sportCandidates, cryptoCandidates] = await Promise.all([
+  const [sportCandidates, cryptoCandidates, irlCandidates] = await Promise.all([
     loadFlashCandidates(desiredRows),
     loadCryptoFlashCandidates(desiredRows),
+    loadIrlFlashCandidates(desiredRows),
   ]);
-  const candidates = [...sportCandidates, ...cryptoCandidates];
+  const candidates = [...sportCandidates, ...cryptoCandidates, ...irlCandidates];
   const allowed = filter === "resolved" ? RESOLVED_STATUSES : OPEN_STATUSES;
   const filtered = candidates
     .filter((m) => kind === "all" || m.kind === kind)

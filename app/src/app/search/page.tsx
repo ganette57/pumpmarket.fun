@@ -219,6 +219,7 @@ export default function SearchPage() {
   const [profilesMap, setProfilesMap] = useState<Record<string, Profile>>({});
   const [homeLiveFlashMarket, setHomeLiveFlashMarket] = useState<FlashMarket | null>(null);
   const [homeLiveCryptoFlashMarkets, setHomeLiveCryptoFlashMarkets] = useState<FlashMarket[]>([]);
+  const [homeLiveIrlFlashMarkets, setHomeLiveIrlFlashMarkets] = useState<FlashMarket[]>([]);
 
   // Filters
   const [selectedCategory, setSelectedCategory] = useState<SelectedCategory>("all");
@@ -253,6 +254,17 @@ export default function SearchPage() {
     } catch {}
   }, []);
 
+  const refreshIrlFlash = useCallback(async () => {
+    try {
+      const r = await fetch("/api/explorer/flash-markets?status=open&kind=irl&limit=12");
+      if (!r.ok) return;
+      const p = await r.json();
+      const now = Date.now();
+      const list = Array.isArray(p?.markets) ? (p.markets as FlashMarket[]) : [];
+      setHomeLiveIrlFlashMarkets(list.filter((m) => m?.kind === "irl" && m.status === "active" && now < Date.parse(String(m.windowEnd || ""))));
+    } catch {}
+  }, []);
+
   useEffect(() => {
     (async () => {
       try {
@@ -264,16 +276,19 @@ export default function SearchPage() {
         setResolvedClassicMarkets((json.resolvedMarketsClassic || []).map(mapRow));
         setLiveMap(json.liveMap || {});
         setHomeLiveFlashMarket(json.topLiveFlashMarket ?? json.homeLiveFlashMarket ?? null);
-        await refreshCryptoFlash();
+        await Promise.all([refreshCryptoFlash(), refreshIrlFlash()]);
       } catch {}
       setLoading(false);
     })();
-  }, [refreshCryptoFlash]);
+  }, [refreshCryptoFlash, refreshIrlFlash]);
 
   useEffect(() => {
-    const t = setInterval(() => void refreshCryptoFlash(), 10_000);
+    const t = setInterval(() => {
+      void refreshCryptoFlash();
+      void refreshIrlFlash();
+    }, 10_000);
     return () => clearInterval(t);
-  }, [refreshCryptoFlash]);
+  }, [refreshCryptoFlash, refreshIrlFlash]);
 
   // Profiles
   useEffect(() => {
@@ -344,10 +359,11 @@ export default function SearchPage() {
     const seen = new Set<string>();
     if (homeLiveFlashMarket) { const a = String(homeLiveFlashMarket.marketAddress || "").trim(); if (a && !seen.has(a)) { seen.add(a); flash.push({ kind: "flash", market: homeLiveFlashMarket }); } }
     for (const m of homeLiveCryptoFlashMarkets) { const a = String(m.marketAddress || "").trim(); if (a && !seen.has(a)) { seen.add(a); flash.push({ kind: "flash", market: m }); } }
+    for (const m of homeLiveIrlFlashMarkets) { const a = String(m.marketAddress || "").trim(); if (a && !seen.has(a)) { seen.add(a); flash.push({ kind: "flash", market: m }); } }
     const scoped = flash.slice(0, CAROUSEL_LIMIT);
     const base = featuredMarkets.slice(0, Math.max(0, CAROUSEL_LIMIT - scoped.length)).map((m) => ({ kind: "featured" as const, market: m }));
     return [...scoped, ...base];
-  }, [featuredMarkets, homeLiveCryptoFlashMarkets, homeLiveFlashMarket]);
+  }, [featuredMarkets, homeLiveCryptoFlashMarkets, homeLiveFlashMarket, homeLiveIrlFlashMarkets]);
 
   useEffect(() => { setCurrentFeaturedIndex(0); const el = mobileFeaturedRef.current; if (el) el.scrollLeft = 0; }, [carouselSlides.length]);
 

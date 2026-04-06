@@ -180,6 +180,9 @@ type ParsedProofPayload = {
   remainingToGraduateEnd: number | null;
   startScore: ScorePair | null;
   endScore: ScorePair | null;
+  trafficStartCount: number | null;
+  trafficEndCount: number | null;
+  trafficThreshold: number | null;
   payloadOutcome: "YES" | "NO" | null;
   onchainTxSig: string | null;
 };
@@ -229,6 +232,9 @@ function parseProofPayload(proofNote: string | null | undefined): ParsedProofPay
       remainingToGraduateEnd: null,
       startScore: null,
       endScore: null,
+      trafficStartCount: null,
+      trafficEndCount: null,
+      trafficThreshold: null,
       payloadOutcome: null,
       onchainTxSig: null,
     };
@@ -266,6 +272,9 @@ function parseProofPayload(proofNote: string | null | undefined): ParsedProofPay
       remainingToGraduateEnd: null,
       startScore: null,
       endScore: null,
+      trafficStartCount: null,
+      trafficEndCount: null,
+      trafficThreshold: null,
       payloadOutcome: null,
       onchainTxSig: null,
     };
@@ -329,9 +338,30 @@ function parseProofPayload(proofNote: string | null | undefined): ParsedProofPay
   );
   const startScore = parseScorePair(parsedJson.start_score) || parseScorePair(parsedJson.score_start);
   const endScore = parseScorePair(parsedJson.end_score) || parseScorePair(parsedJson.score_end);
-  const payloadOutcome = normalizeOutcomeCandidate(
+  const trafficStartCount = parseFiniteNumber(
+    firstText([parsedJson.start_count, parsedJson.startCount]) ??
+      parsedJson.start_count ??
+      parsedJson.startCount,
+  );
+  const trafficEndCount = parseFiniteNumber(
+    firstText([parsedJson.end_count, parsedJson.endCount, parsedJson.current_count, parsedJson.currentCount]) ??
+      parsedJson.end_count ??
+      parsedJson.endCount ??
+      parsedJson.current_count ??
+      parsedJson.currentCount,
+  );
+  const trafficThreshold = parseFiniteNumber(
+    firstText([parsedJson.threshold, parsedJson.target, parsedJson.target_count]) ??
+      parsedJson.threshold ??
+      parsedJson.target ??
+      parsedJson.target_count,
+  );
+  let payloadOutcome = normalizeOutcomeCandidate(
     firstText([parsedJson.outcome, parsedJson.proposed_outcome, parsedJson.outcome_proposed, parsedJson.winning_outcome]),
   );
+  if (!payloadOutcome && trafficEndCount != null && trafficThreshold != null) {
+    payloadOutcome = trafficEndCount >= trafficThreshold ? "YES" : "NO";
+  }
   const onchainTxSig = firstText([parsedJson.onchain_tx_sig, parsedJson.tx_sig, parsedJson.tx_signature, parsedJson.signature]);
 
   return {
@@ -355,6 +385,9 @@ function parseProofPayload(proofNote: string | null | undefined): ParsedProofPay
     remainingToGraduateEnd,
     startScore,
     endScore,
+    trafficStartCount,
+    trafficEndCount,
+    trafficThreshold,
     payloadOutcome,
     onchainTxSig,
   };
@@ -566,6 +599,15 @@ export default function ResolutionPanel(props: Props) {
     parsedProof.source,
     parsedProof.startPrice,
   ]);
+  const isTrafficProof = useMemo(() => {
+    if (isFlashCrypto) return false;
+    const source = String(parsedProof.source || "").toLowerCase();
+    return (
+      source.includes("traffic") ||
+      parsedProof.trafficEndCount != null ||
+      parsedProof.trafficThreshold != null
+    );
+  }, [isFlashCrypto, parsedProof.source, parsedProof.trafficEndCount, parsedProof.trafficThreshold]);
   const isGraduationProof = useMemo(() => {
     if (cryptoFlashType === "graduation") return true;
     if (parsedProof.progressStart != null || parsedProof.progressEnd != null || parsedProof.didGraduateEnd != null) return true;
@@ -589,19 +631,28 @@ export default function ResolutionPanel(props: Props) {
         if (parsedProof.startPrice == null || parsedProof.endPrice == null) return null;
         return parsedProof.endPrice > parsedProof.startPrice ? "YES" : "NO";
       }
+      if (isTrafficProof) {
+        if (parsedProof.trafficEndCount == null || parsedProof.trafficThreshold == null) return null;
+        return parsedProof.trafficEndCount >= parsedProof.trafficThreshold ? "YES" : "NO";
+      }
       return deriveOutcomeFromScoreDelta(parsedProof.startScore, parsedProof.endScore);
     },
     [
       isCryptoProof,
       isGraduationProof,
+      isTrafficProof,
       parsedProof.didGraduateEnd,
       parsedProof.endPrice,
       parsedProof.endScore,
       parsedProof.progressEnd,
       parsedProof.startPrice,
       parsedProof.startScore,
+      parsedProof.trafficEndCount,
+      parsedProof.trafficThreshold,
     ],
   );
+  const trafficStartScoreLabel = parsedProof.trafficStartCount == null ? "0" : String(Math.max(0, Math.floor(parsedProof.trafficStartCount)));
+  const trafficEndScoreLabel = parsedProof.trafficEndCount == null ? "—" : String(Math.max(0, Math.floor(parsedProof.trafficEndCount)));
   const displayedOutcome = derivedOutcome && parsedProof.payloadOutcome && derivedOutcome !== parsedProof.payloadOutcome
     ? derivedOutcome
     : parsedProof.payloadOutcome || derivedOutcome;
@@ -994,8 +1045,8 @@ export default function ResolutionPanel(props: Props) {
                   )
                 ) : (
                   <>
-                    <ProofRow label="Start score" value={scoreLabel(parsedProof.startScore) || "—"} />
-                    <ProofRow label="End score" value={scoreLabel(parsedProof.endScore) || "—"} />
+                    <ProofRow label="Start score" value={isTrafficProof ? trafficStartScoreLabel : scoreLabel(parsedProof.startScore) || "—"} />
+                    <ProofRow label="End score" value={isTrafficProof ? trafficEndScoreLabel : scoreLabel(parsedProof.endScore) || "—"} />
                     <ProofRow label="Outcome proposed" value={displayedOutcome || "—"} />
                     <ProofRow
                       label="On-chain tx sig"

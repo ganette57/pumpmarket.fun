@@ -18,6 +18,7 @@ function parseFilter(raw: string | null): "open" | "resolved" {
 function parseKind(raw: string | null): FlashMarketKind | "all" {
   if (raw === "sport") return "sport";
   if (raw === "crypto") return "crypto";
+  if (raw === "irl") return "irl";
   return "all";
 }
 

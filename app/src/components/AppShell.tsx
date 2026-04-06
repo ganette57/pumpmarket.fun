@@ -15,6 +15,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   // Only the /live feed page controls its own mobile header (MobileTabs);
   // /live/[id] detail pages still use MobileTopBar.
   const isLiveFeed = pathname === "/live";
+  // Live detail pages (/live/[id]) are immersive on mobile — no top bar
+  const isLiveDetail = pathname?.startsWith("/live/") && pathname !== "/live";
   // Home feed is fullscreen immersive — no mobile top bar, no padding
   const isHomeFeed = pathname === "/";
 
@@ -25,8 +27,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <Header />
       </div>
 
-      {/* Mobile header — hidden on /live, home feed, and /search (they have their own headers) */}
-      {!isLiveFeed && !isHomeFeed && !isSearchPage && (
+      {/* Mobile header — hidden on /live, /live/[id], home feed, and /search (they have their own headers) */}
+      {!isLiveFeed && !isLiveDetail && !isHomeFeed && !isSearchPage && (
         <div className="md:hidden">
           <MobileTopBar showSearch={!!isSearch} />
         </div>

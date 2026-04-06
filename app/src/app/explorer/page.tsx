@@ -55,6 +55,8 @@ export default function ExplorerPage() {
   const [sportsFlashLoading, setSportsFlashLoading] = useState(true);
   const [cryptoFlashMarkets, setCryptoFlashMarkets] = useState<FlashMarket[]>([]);
   const [cryptoFlashLoading, setCryptoFlashLoading] = useState(true);
+  const [irlFlashMarkets, setIrlFlashMarkets] = useState<FlashMarket[]>([]);
+  const [irlFlashLoading, setIrlFlashLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("open");
   const [cryptoStatusFilter, setCryptoStatusFilter] = useState<StatusFilter>("open");
   const [irlStatusFilter, setIrlStatusFilter] = useState<StatusFilter>("open");
@@ -67,6 +69,7 @@ export default function ExplorerPage() {
   const fetchFlashMarkets = useCallback(async (kind: FlashMarketKind, filter: StatusFilter) => {
     if (kind === "sport") setSportsFlashLoading(true);
     if (kind === "crypto") setCryptoFlashLoading(true);
+    if (kind === "irl") setIrlFlashLoading(true);
     try {
       const limit = filter === "resolved" ? 200 : 20;
       const res = await fetch(
@@ -78,13 +81,16 @@ export default function ExplorerPage() {
       const rows = (json?.markets as FlashMarket[]) || [];
       if (kind === "sport") setSportsFlashMarkets(rows);
       if (kind === "crypto") setCryptoFlashMarkets(rows);
+      if (kind === "irl") setIrlFlashMarkets(rows);
     } catch (error) {
       console.warn(`Flash ${kind} markets fetch failed:`, error);
       if (kind === "sport") setSportsFlashMarkets([]);
       if (kind === "crypto") setCryptoFlashMarkets([]);
+      if (kind === "irl") setIrlFlashMarkets([]);
     } finally {
       if (kind === "sport") setSportsFlashLoading(false);
       if (kind === "crypto") setCryptoFlashLoading(false);
+      if (kind === "irl") setIrlFlashLoading(false);
     }
   }, []);
 
@@ -95,6 +101,10 @@ export default function ExplorerPage() {
   useEffect(() => {
     void fetchFlashMarkets("crypto", cryptoStatusFilter);
   }, [cryptoStatusFilter, fetchFlashMarkets]);
+
+  useEffect(() => {
+    void fetchFlashMarkets("irl", irlStatusFilter);
+  }, [irlStatusFilter, fetchFlashMarkets]);
 
   const visibleFlashMarkets = useMemo(() => {
     if (statusFilter !== "resolved") return sportsFlashMarkets;
@@ -148,6 +158,18 @@ export default function ExplorerPage() {
     });
     return rows;
   }, [cryptoFlashMarkets]);
+
+  const visibleIrlFlashMarkets = useMemo(() => {
+    const rows = [...irlFlashMarkets];
+    rows.sort((a, b) => {
+      const ams = Date.parse(String(a.createdAt || ""));
+      const bms = Date.parse(String(b.createdAt || ""));
+      const safeA = Number.isFinite(ams) ? ams : 0;
+      const safeB = Number.isFinite(bms) ? bms : 0;
+      return safeB - safeA;
+    });
+    return rows;
+  }, [irlFlashMarkets]);
 
   const resolvedTotalPages = useMemo(() => {
     if (statusFilter !== "resolved") return 1;
@@ -406,18 +428,28 @@ export default function ExplorerPage() {
               />
             </div>
 
-            <PremiumFlashEmptyState
-              title={
-                irlStatusFilter === "resolved"
-                  ? "No resolved IRL flash markets right now"
-                  : "No live IRL flash session right now"
-              }
-              subtitle={
-                irlStatusFilter === "resolved"
-                  ? "Resolved IRL flash markets will appear here soon"
-                  : "IRL flash sessions start soon"
-              }
-            />
+            {irlFlashLoading ? (
+              <LoadingSpinner />
+            ) : visibleIrlFlashMarkets.length === 0 ? (
+              <PremiumFlashEmptyState
+                title={
+                  irlStatusFilter === "resolved"
+                    ? "No resolved IRL flash markets right now"
+                    : "No live IRL flash session right now"
+                }
+                subtitle={
+                  irlStatusFilter === "resolved"
+                    ? "Resolved IRL flash markets will appear here soon"
+                    : "IRL flash sessions start soon"
+                }
+              />
+            ) : (
+              <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+                {visibleIrlFlashMarkets.map((market) => (
+                  <FlashMarketCard key={market.liveMicroId} market={market} />
+                ))}
+              </div>
+            )}
           </section>
         </div>
 
@@ -584,19 +616,29 @@ export default function ExplorerPage() {
               />
             </div>
 
-            <PremiumFlashEmptyState
-              compact
-              title={
-                irlStatusFilter === "resolved"
-                  ? "No resolved IRL flash markets right now"
-                  : "No live IRL flash session right now"
-              }
-              subtitle={
-                irlStatusFilter === "resolved"
-                  ? "Resolved IRL flash markets will appear here soon"
-                  : "IRL flash sessions start soon"
-              }
-            />
+            {irlFlashLoading ? (
+              <LoadingSpinner />
+            ) : visibleIrlFlashMarkets.length === 0 ? (
+              <PremiumFlashEmptyState
+                compact
+                title={
+                  irlStatusFilter === "resolved"
+                    ? "No resolved IRL flash markets right now"
+                    : "No live IRL flash session right now"
+                }
+                subtitle={
+                  irlStatusFilter === "resolved"
+                    ? "Resolved IRL flash markets will appear here soon"
+                    : "IRL flash sessions start soon"
+                }
+              />
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                {visibleIrlFlashMarkets.map((market) => (
+                  <FlashMarketCard key={market.liveMicroId} market={market} />
+                ))}
+              </div>
+            )}
           </section>
         </div>
       </div>

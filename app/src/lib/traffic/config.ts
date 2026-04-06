@@ -11,6 +11,7 @@ const TRAFFIC_CAMERA_STREAMS = {
   cam3: "https://wink.njta.com/204/public/hls/WF05-24B0-46EE-2155-1A86_nj.m3u8",
   iowa: "https://iowadotsfs2.us-east-1.skyvdn.com/rtplive/dmtv05lb/playlist.m3u8",
   maryland: "https://strmr5.sha.maryland.gov/rtplive/0900adbd00ee00e30051fa36c4235c0a/playlist.m3u8",
+  las_vegas: "https://videos-3.earthcam.com/fecnetwork/42116.flv/chunklist_w554170088.m3u8",
 } as const;
 
 export const TRAFFIC_CAMERAS = [
@@ -77,6 +78,20 @@ export const TRAFFIC_CAMERAS = [
     streamUrl: TRAFFIC_LOCAL_VIDEO_ACTIVE
       ? TRAFFIC_DEBUG_LOCAL_FILE
       : TRAFFIC_CAMERA_STREAMS.maryland,
+    line: {
+      x1: 80,
+      y1: TRAFFIC_LOCAL_VIDEO_ACTIVE ? 900 : 860,
+      x2: 1200,
+      y2: TRAFFIC_LOCAL_VIDEO_ACTIVE ? 900 : 860,
+    },
+  },
+  {
+    id: "las_vegas",
+    name: "Las Vegas",
+    sourceType: TRAFFIC_LOCAL_VIDEO_ACTIVE ? "local_video" : "remote_stream",
+    streamUrl: TRAFFIC_LOCAL_VIDEO_ACTIVE
+      ? TRAFFIC_DEBUG_LOCAL_FILE
+      : TRAFFIC_CAMERA_STREAMS.las_vegas,
     line: {
       x1: 80,
       y1: TRAFFIC_LOCAL_VIDEO_ACTIVE ? 900 : 860,

@@ -1,6 +1,6 @@
 export type FlashMarketStatus = "active" | "locked" | "resolving" | "finalized" | "cancelled";
 
-export type FlashMarketKind = "sport" | "crypto";
+export type FlashMarketKind = "sport" | "crypto" | "irl";
 export type FlashCryptoVisualMode = "price" | "graduation";
 export type FlashCryptoSourceType = "pump_fun" | "major";
 

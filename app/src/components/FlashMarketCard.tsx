@@ -52,6 +52,16 @@ function statusContextLine(market: FlashMarket): string {
     if (market.status === "cancelled") return "Market cancelled";
     return "Resolving outcome";
   }
+  if (market.kind === "irl") {
+    const currentCount = Math.max(0, Math.floor(Number(market.currentScoreHome) || 0));
+    const threshold = Math.max(0, Math.floor(Number(market.currentScoreAway) || 0));
+    const targetReached = threshold > 0 && currentCount >= threshold;
+    if (market.status === "active") return "Market live now";
+    if (market.status === "locked") return targetReached ? "Target reached" : "Resolving";
+    if (market.status === "finalized") return targetReached ? "Target reached" : "Target missed";
+    if (market.status === "cancelled") return "Market cancelled";
+    return targetReached ? "Target reached" : "Resolving";
+  }
   if (market.status === "active") return "Market live now";
   if (market.status === "locked") return "Goal detected \u2014 resolving";
   if (market.status === "finalized") return "Market resolved";

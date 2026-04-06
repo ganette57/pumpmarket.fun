@@ -235,6 +235,307 @@ function toResolutionStatus(x: any): "open" | "proposed" | "finalized" | "cancel
   return "open";
 }
 
+function firstNonBlankText(values: unknown[]): string | null {
+  for (const value of values) {
+    const text = String(value ?? "").trim();
+    if (!text || text === "null" || text === "undefined") continue;
+    return text;
+  }
+  return null;
+}
+
+function normalizeProofValue(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value === "string") {
+    const text = value.trim();
+    return text ? text : null;
+  }
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return null;
+    }
+  }
+  const text = String(value).trim();
+  return text ? text : null;
+}
+
+function firstProofValue(values: unknown[]): string | null {
+  for (const value of values) {
+    const normalized = normalizeProofValue(value);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function toOutcomeIndex(value: unknown): number | null {
+  if (value == null) return null;
+  const num = Number(value);
+  if (Number.isFinite(num)) return Math.max(0, Math.floor(num));
+  const raw = String(value).trim().toUpperCase();
+  if (!raw) return null;
+  if (raw === "YES" || raw === "Y" || raw === "TRUE") return 0;
+  if (raw === "NO" || raw === "N" || raw === "FALSE") return 1;
+  return null;
+}
+
+function buildIrlProofNote(
+  baseNote: string | null,
+  params: {
+    windowStart: string | null;
+    windowEnd: string | null;
+    threshold: number | null;
+    finalCount: number | null;
+    outcome: "YES" | "NO" | null;
+    txSig: string | null;
+  },
+): string | null {
+  const parsed = parseJsonObjectFromText(baseNote);
+  const payload: Record<string, unknown> = parsed ? { ...parsed } : {};
+
+  if (!parsed && baseNote) payload.raw_note = baseNote;
+  if (!payload.source) payload.source = "traffic_flash_ui_fallback";
+
+  if (params.windowStart && !payload.window_start) payload.window_start = params.windowStart;
+  if (params.windowEnd && !payload.window_end) payload.window_end = params.windowEnd;
+  if (payload.start_score == null) payload.start_score = { home: 0, away: 0 };
+
+  if (params.finalCount != null) {
+    if (payload.end_score == null) payload.end_score = { home: params.finalCount, away: 0 };
+    if (payload.current_count == null) payload.current_count = params.finalCount;
+    if (payload.end_count == null) payload.end_count = params.finalCount;
+  }
+
+  if (params.threshold != null && payload.threshold == null) payload.threshold = params.threshold;
+
+  if (params.outcome) {
+    if (!payload.proposed_outcome) payload.proposed_outcome = params.outcome;
+    if (!payload.outcome) payload.outcome = params.outcome;
+  }
+
+  if (params.txSig && !payload.onchain_tx_sig) payload.onchain_tx_sig = params.txSig;
+
+  return Object.keys(payload).length > 0 ? JSON.stringify(payload) : baseNote;
+}
+
+function isIrlFlashMarket(marketModeValue: unknown, sportMetaValue: unknown): boolean {
+  const marketMode = String(marketModeValue ?? "").trim().toLowerCase();
+  if (marketMode === "flash_traffic") return true;
+  const meta = asObject(sportMetaValue);
+  const typeTag = String(meta.type ?? "").trim().toLowerCase();
+  const sourceTag = String(meta.source ?? "").trim().toLowerCase();
+  return typeTag === "flash_traffic" || sourceTag === "traffic";
+}
+
+function withIrlResolutionFallback(input: UiMarket, marketModeValue: unknown, sportMetaValue: unknown): UiMarket {
+  if (!isIrlFlashMarket(marketModeValue, sportMetaValue)) return input;
+
+  const meta = asObject(sportMetaValue);
+  const liveMicroMeta = asObject(meta.live_micro);
+  const statusFromMeta = firstNonBlankText([
+    meta.resolution_status,
+    meta.resolutionStatus,
+    liveMicroMeta.resolution_status,
+    liveMicroMeta.resolutionStatus,
+  ]);
+
+  const proposedOutcomeFromMeta = toOutcomeIndex(
+    firstNonBlankText([
+      meta.proposed_winning_outcome,
+      meta.proposedOutcome,
+      meta.proposed_outcome,
+      meta.auto_resolved_outcome,
+      liveMicroMeta.proposed_winning_outcome,
+      liveMicroMeta.proposed_outcome,
+    ]),
+  );
+  const winningOutcomeFromMeta = toOutcomeIndex(
+    firstNonBlankText([
+      meta.winning_outcome,
+      meta.winningOutcome,
+      meta.final_outcome,
+      meta.resolved_outcome,
+      liveMicroMeta.winning_outcome,
+      liveMicroMeta.final_outcome,
+      meta.auto_resolved_outcome,
+    ]),
+  );
+
+  const proposedAtFromMeta = firstNonBlankText([
+    meta.resolution_proposed_at,
+    meta.proposed_at,
+    meta.proposedAt,
+    meta.auto_resolved_at,
+    liveMicroMeta.resolution_proposed_at,
+  ]);
+  const contestDeadlineFromMeta = firstNonBlankText([
+    meta.contest_deadline,
+    meta.contestDeadline,
+    liveMicroMeta.contest_deadline,
+  ]);
+  const resolvedAtFromMeta = firstNonBlankText([
+    meta.resolved_at,
+    meta.resolvedAt,
+    meta.finalized_at,
+    meta.finalizedAt,
+    liveMicroMeta.resolved_at,
+  ]);
+  const windowStartFromMeta = firstNonBlankText([
+    meta.window_start,
+    meta.windowStart,
+    liveMicroMeta.window_start,
+    liveMicroMeta.windowStart,
+  ]);
+  const windowEndFromMeta = firstNonBlankText([
+    meta.window_end,
+    meta.windowEnd,
+    liveMicroMeta.window_end,
+    liveMicroMeta.windowEnd,
+    input.endTime,
+  ]);
+
+  const thresholdRaw = firstFiniteNumber([
+    readPath(meta, ["threshold"]),
+    readPath(meta, ["target"]),
+    readPath(meta, ["target_count"]),
+    readPath(liveMicroMeta, ["threshold"]),
+  ]);
+  const thresholdFromMeta = thresholdRaw == null ? null : Math.max(0, Math.floor(thresholdRaw));
+  const finalCountRaw = firstFiniteNumber([
+    readPath(meta, ["end_count"]),
+    readPath(meta, ["current_count"]),
+    readPath(meta, ["currentCount"]),
+    readPath(liveMicroMeta, ["end_count"]),
+    readPath(liveMicroMeta, ["current_count"]),
+    readPath(liveMicroMeta, ["currentCount"]),
+    readPath(meta, ["start_count"]),
+  ]);
+  const finalCountFromMeta = finalCountRaw == null ? null : Math.max(0, Math.floor(finalCountRaw));
+  const derivedOutcomeLabel =
+    finalCountFromMeta != null && thresholdFromMeta != null
+      ? finalCountFromMeta >= thresholdFromMeta
+        ? "YES"
+        : "NO"
+      : null;
+  const derivedOutcomeIndex = derivedOutcomeLabel == null ? null : derivedOutcomeLabel === "YES" ? 0 : 1;
+  const onchainTxSigFromMeta = firstNonBlankText([
+    meta.proposal_tx_sig,
+    meta.onchain_tx_sig,
+    meta.resolve_tx,
+    meta.finalize_tx_sig,
+  ]);
+
+  const proposedProofUrlFromMeta = firstNonBlankText([
+    meta.proposed_proof_url,
+    meta.proposedProofUrl,
+    liveMicroMeta.proposed_proof_url,
+  ]);
+  const proposedProofImageFromMeta = firstNonBlankText([
+    meta.proposed_proof_image,
+    meta.proposedProofImage,
+    liveMicroMeta.proposed_proof_image,
+  ]);
+  const proposedProofNoteFromMeta = firstProofValue([
+    meta.proposed_proof_note,
+    meta.proposedProofNote,
+    liveMicroMeta.proposed_proof_note,
+    meta.proof_note,
+    meta.proof,
+    meta.proof_payload,
+    meta.raw_proof,
+  ]);
+
+  const resolutionProofUrlFromMeta = firstNonBlankText([
+    meta.resolution_proof_url,
+    meta.resolutionProofUrl,
+    meta.final_proof_url,
+    liveMicroMeta.resolution_proof_url,
+  ]);
+  const resolutionProofImageFromMeta = firstNonBlankText([
+    meta.resolution_proof_image,
+    meta.resolutionProofImage,
+    meta.final_proof_image,
+    liveMicroMeta.resolution_proof_image,
+  ]);
+  const resolutionProofNoteFromMeta = firstProofValue([
+    meta.resolution_proof_note,
+    meta.resolutionProofNote,
+    meta.final_proof_note,
+    liveMicroMeta.resolution_proof_note,
+  ]);
+
+  const next: UiMarket = { ...input };
+
+  if ((next.resolutionStatus == null || next.resolutionStatus === "open") && statusFromMeta) {
+    next.resolutionStatus = toResolutionStatus(statusFromMeta);
+  }
+  const irlStatus = String(next.resolutionStatus || "open").trim().toLowerCase();
+  const windowEndMs = parseIsoUtc(windowEndFromMeta)?.getTime() ?? NaN;
+  const windowEnded = Number.isFinite(windowEndMs) && Date.now() >= windowEndMs;
+  const allowResolutionFallback =
+    next.resolved ||
+    irlStatus === "proposed" ||
+    irlStatus === "finalized" ||
+    irlStatus === "cancelled" ||
+    next.proposedAt != null ||
+    next.contestDeadline != null ||
+    windowEnded;
+
+  if (next.proposedOutcome == null) {
+    if (proposedOutcomeFromMeta != null) next.proposedOutcome = proposedOutcomeFromMeta;
+    else if (allowResolutionFallback && derivedOutcomeIndex != null) next.proposedOutcome = derivedOutcomeIndex;
+  }
+  if (next.proposedAt == null && proposedAtFromMeta) next.proposedAt = proposedAtFromMeta;
+  if (next.contestDeadline == null && contestDeadlineFromMeta) next.contestDeadline = contestDeadlineFromMeta;
+  if (allowResolutionFallback) {
+    if (!next.proposedProofUrl && proposedProofUrlFromMeta) next.proposedProofUrl = proposedProofUrlFromMeta;
+    if (!next.proposedProofImage && proposedProofImageFromMeta) next.proposedProofImage = proposedProofImageFromMeta;
+    if (!next.proposedProofNote && proposedProofNoteFromMeta) next.proposedProofNote = proposedProofNoteFromMeta;
+    next.proposedProofNote = buildIrlProofNote(next.proposedProofNote ?? null, {
+      windowStart: windowStartFromMeta,
+      windowEnd: windowEndFromMeta,
+      threshold: thresholdFromMeta,
+      finalCount: finalCountFromMeta,
+      outcome: derivedOutcomeLabel,
+      txSig: onchainTxSigFromMeta,
+    });
+  }
+
+  if (next.winningOutcome == null) {
+    if (winningOutcomeFromMeta != null) next.winningOutcome = winningOutcomeFromMeta;
+    else if (derivedOutcomeIndex != null && (next.resolved || next.resolutionStatus === "finalized")) {
+      next.winningOutcome = derivedOutcomeIndex;
+    }
+  }
+  if (next.resolvedAt == null && resolvedAtFromMeta) next.resolvedAt = resolvedAtFromMeta;
+  if (!next.resolutionProofUrl && resolutionProofUrlFromMeta) next.resolutionProofUrl = resolutionProofUrlFromMeta;
+  if (!next.resolutionProofImage && resolutionProofImageFromMeta) next.resolutionProofImage = resolutionProofImageFromMeta;
+  if (!next.resolutionProofNote && resolutionProofNoteFromMeta) next.resolutionProofNote = resolutionProofNoteFromMeta;
+
+  const isFinalLike = next.resolved || next.resolutionStatus === "finalized";
+  if (isFinalLike) {
+    if (next.winningOutcome == null && next.proposedOutcome != null) next.winningOutcome = next.proposedOutcome;
+    if (next.resolvedAt == null && next.proposedAt) next.resolvedAt = next.proposedAt;
+    if (!next.resolutionProofUrl && next.proposedProofUrl) next.resolutionProofUrl = next.proposedProofUrl;
+    if (!next.resolutionProofImage && next.proposedProofImage) next.resolutionProofImage = next.proposedProofImage;
+    if (!next.resolutionProofNote && next.proposedProofNote) next.resolutionProofNote = next.proposedProofNote;
+  }
+
+  if (isFinalLike) {
+    next.resolutionProofNote = buildIrlProofNote(next.resolutionProofNote ?? null, {
+      windowStart: windowStartFromMeta,
+      windowEnd: windowEndFromMeta,
+      threshold: thresholdFromMeta,
+      finalCount: finalCountFromMeta,
+      outcome: derivedOutcomeLabel,
+      txSig: onchainTxSigFromMeta,
+    });
+  }
+
+  return next;
+}
+
 function applyMarketDbPatch(prev: UiMarket, row: any, allowSupplyPatch = false): UiMarket {
   if (!row || typeof row !== "object") return prev;
   const has = (k: string) => Object.prototype.hasOwnProperty.call(row, k);
@@ -268,6 +569,8 @@ function applyMarketDbPatch(prev: UiMarket, row: any, allowSupplyPatch = false):
   if (has("sport_trading_state")) next.sportTradingState = row.sport_trading_state ?? null;
   if (has("start_time")) next.startTime = row.start_time ?? null;
   if (has("end_time")) next.endTime = row.end_time ?? null;
+  if (has("market_mode")) next.marketMode = row.market_mode ?? null;
+  if (has("sport_meta")) next.sportMeta = row.sport_meta ?? null;
 
   if (allowSupplyPatch) {
     const dbSupplies = toNumberArray(row.outcome_supplies);
@@ -289,7 +592,7 @@ function applyMarketDbPatch(prev: UiMarket, row: any, allowSupplyPatch = false):
     }
   }
 
-  return next;
+  return withIrlResolutionFallback(next, next.marketMode, next.sportMeta);
 }
 
 function formatMsToHhMm(ms: number) {
@@ -2050,7 +2353,13 @@ if (snap?.posAcc?.shares) {
   setPositionShares(null);
 }
 
-        setMarket(transformed);
+        setMarket(
+          withIrlResolutionFallback(
+            transformed,
+            (supabaseMarket as any).market_mode ?? null,
+            (supabaseMarket as any).sport_meta ?? null,
+          ),
+        );
       } finally {
         setLoading(false);
       }
@@ -2511,7 +2820,7 @@ if (snap?.posAcc?.shares) {
       "proposed_proof_url,proposed_proof_image,proposed_proof_note," +
       "resolved,resolved_at,winning_outcome,resolution_proof_url,resolution_proof_image,resolution_proof_note," +
       "is_blocked,blocked_reason,blocked_at,sport_trading_state,start_time,end_time," +
-      "outcome_supplies,yes_supply,no_supply";
+      "outcome_supplies,yes_supply,no_supply,market_mode,sport_meta";
 
     const applyPatch = (row: any) => {
       if (!row || cancelled) return;
@@ -4135,6 +4444,7 @@ useEffect(() => {
     trafficThreshold != null &&
     trafficCurrentCount != null &&
     trafficCurrentCount >= trafficThreshold;
+
   const microLoopSequence = isSoccerNextGoalMicro
     ? extractLoopSequence(market.description, market.sportMeta)
     : null;
@@ -4156,6 +4466,31 @@ useEffect(() => {
     !!market.proposedProofUrl ||
     !!market.proposedProofImage ||
     !!market.proposedProofNote;
+
+  // IRL immersive mode — top-level derived
+  const trafficIsLive =
+    isFlashTrafficMarket &&
+    !isResolvedOnChain &&
+    !isProposed &&
+    status !== "finalized" &&
+    status !== "cancelled" &&
+    (trafficRemainingSec == null ? !endedByTime : trafficRemainingSec > 0);
+  // Mobile immersive must stay active during live traffic window even if
+  // proposal-related fallback fields are already present in UI state.
+  const trafficIsLiveMobile =
+    isFlashTrafficMarket &&
+    !isResolvedOnChain &&
+    status !== "finalized" &&
+    status !== "cancelled" &&
+    (trafficRemainingSec == null ? !endedByTime : trafficRemainingSec > 0);
+  const trafficIsLiveUi = isMobile ? trafficIsLiveMobile : trafficIsLive;
+  const trafficTimerCritical = trafficRemainingSec != null && trafficRemainingSec <= 10;
+  const trafficTimerUrgent = trafficRemainingSec != null && !trafficTimerCritical && trafficRemainingSec <= 30;
+  const trafficTimerTone = trafficTimerCritical
+    ? "text-red-300 border-red-500/50 bg-red-500/15 animate-pulse"
+    : trafficTimerUrgent
+    ? "text-amber-200 border-amber-400/45 bg-amber-400/12"
+    : "text-pump-green border-pump-green/35 bg-pump-green/10";
 
   const showProposedBox = isProposed && !isResolvedOnChain;
   const showResolvedProofBox = isResolvedOnChain;
@@ -4478,7 +4813,7 @@ const ended = endedByTime;
   const shouldTruncate = fullDescription.length > 300;
 
   const openMobileTrade = (idx: number) => {
-    if (!isMobile) return;
+    if (!isMobile && !trafficIsLive) return;
     setMobileOutcomeIndex(Math.max(0, Math.min(idx, names.length - 1)));
     setMobileDefaultSide("buy"); // ✅ always open on BUY
     setMobileTradeOpen(true);
@@ -4501,17 +4836,149 @@ const ended = endedByTime;
         onClose={closeFlashResultModal}
       />
 
-      {/* 
+      {/* ═══ IRL TRAFFIC: Mobile immersive overlay — covers MobileTopBar ═══ */}
+      {isMobile && trafficIsLiveUi && (
+        <div className="fixed inset-x-0 top-0 bottom-14 z-[80] bg-black">
+          <div className="relative w-full h-full flex items-center justify-center">
+            {trafficDebugFrameSrc ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={trafficDebugFrameSrc}
+                alt="Traffic camera"
+                className="block w-full h-full object-cover"
+              />
+            ) : (
+              <div className="text-sm text-white/40 animate-pulse">Waiting for camera…</div>
+            )}
+
+            {/* Top overlay — LIVE badge + timer + title */}
+            <div className="absolute top-0 inset-x-0 z-10">
+              <div className="px-4 pt-3 pb-14 bg-gradient-to-b from-black/85 via-black/45 to-transparent">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-600/30 border border-red-500/40">
+                    <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                    <span className="text-[11px] font-bold text-red-400 tracking-wide">LIVE</span>
+                  </div>
+                  <div className={`rounded-xl border px-2.5 py-1 text-center ${trafficTimerTone}`}>
+                    <div className="text-[9px] uppercase tracking-[0.14em] text-white/70">Time Left</div>
+                    <div className="mt-0.5 text-base font-black tabular-nums leading-none tracking-[0.05em]">
+                      {trafficRemainingLabel}
+                    </div>
+                  </div>
+                </div>
+                <h2 className="text-white font-bold text-[17px] mt-3 leading-snug line-clamp-2 drop-shadow-[0_1px_4px_rgba(0,0,0,0.8)]">
+                  {market.question || "Traffic Market"}
+                </h2>
+              </div>
+            </div>
+
+            {/* Bottom overlay — count + threshold (above YES/NO bar) */}
+            <div className="absolute bottom-[70px] inset-x-0 z-10">
+              <div className="px-4 pb-3 pt-10 bg-gradient-to-t from-black/70 via-black/30 to-transparent">
+                <div className="flex items-center gap-2.5">
+                  {trafficCurrentCount != null && (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold backdrop-blur-sm bg-white/10 text-white/90 border border-white/15">
+                      <span className="opacity-60">Count</span>
+                      <span className="tabular-nums">{trafficCurrentCount}{trafficThreshold != null ? ` / ${trafficThreshold}` : ""}</span>
+                    </span>
+                  )}
+                  <span className="text-xs text-white/40 ml-auto">
+                    {formatVol(effectiveVol)} SOL vol
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ IRL TRAFFIC: Desktop immersive — fullscreen camera + YES/NO ═══ */}
+      {!isMobile && trafficIsLive ? (
+        <div className="h-full flex flex-col bg-black">
+          {/* Camera fills available space */}
+          <div className="flex-1 min-h-0 relative flex items-center justify-center">
+            {trafficDebugFrameSrc ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={trafficDebugFrameSrc}
+                alt="Traffic camera"
+                className="block w-full h-full object-cover"
+              />
+            ) : (
+              <div className="text-sm text-white/40 animate-pulse">Waiting for camera…</div>
+            )}
+
+            {/* Top overlay — LIVE badge + timer + title */}
+            <div className="absolute top-0 inset-x-0 z-10">
+              <div className="px-6 pt-5 pb-16 bg-gradient-to-b from-black/85 via-black/45 to-transparent">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-red-600/30 border border-red-500/40">
+                      <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                      <span className="text-xs font-bold text-red-400 tracking-wide">LIVE</span>
+                    </div>
+                    <h2 className="text-white font-bold text-xl leading-snug line-clamp-1 drop-shadow-[0_1px_4px_rgba(0,0,0,0.8)]">
+                      {market.question || "Traffic Market"}
+                    </h2>
+                  </div>
+                  <div className={`rounded-xl border px-3 py-1.5 text-center ${trafficTimerTone}`}>
+                    <div className="text-[9px] uppercase tracking-[0.14em] text-white/70">Time Left</div>
+                    <div className="mt-0.5 text-lg font-black tabular-nums leading-none tracking-[0.05em]">
+                      {trafficRemainingLabel}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Bottom overlay — count + threshold (above fixed YES/NO bar) */}
+            <div className="absolute bottom-[110px] inset-x-0 z-10">
+              <div className="px-6 pb-3 pt-10 bg-gradient-to-t from-black/70 via-black/30 to-transparent">
+                <div className="flex items-center gap-3">
+                  {trafficCurrentCount != null && (
+                    <span className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-base font-semibold backdrop-blur-sm bg-white/10 text-white/90 border border-white/15">
+                      <span className="opacity-60">Count</span>
+                      <span className="tabular-nums">{trafficCurrentCount}{trafficThreshold != null ? ` / ${trafficThreshold}` : ""}</span>
+                    </span>
+                  )}
+                  <span className="text-sm text-white/40 ml-auto">
+                    {formatVol(effectiveVol)} SOL vol
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Desktop YES/NO bar — fixed above live ticker */}
+          {isBinaryStyle && !marketClosed && (
+            <div className="fixed inset-x-0 bottom-10 z-[65] bg-pump-dark/95 backdrop-blur-md border-t border-white/[0.06] px-6 py-4 flex gap-4 justify-center">
+              <button
+                onClick={() => openMobileTrade(0)}
+                className="flex-1 max-w-xs py-4 rounded-xl bg-pump-green font-bold text-black text-lg active:scale-[0.97] transition"
+              >
+                Buy {names[0] || "Yes"} <span className="opacity-70 ml-1">{(percentages[0] ?? 0).toFixed(0)}¢</span>
+              </button>
+              <button
+                onClick={() => openMobileTrade(1)}
+                className="flex-1 max-w-xs py-4 rounded-xl bg-[#ff5c73] font-bold text-white text-lg active:scale-[0.97] transition"
+              >
+                Buy {names[1] || "No"} <span className="opacity-70 ml-1">{(100 - (percentages[0] ?? 0)).toFixed(0)}¢</span>
+              </button>
+            </div>
+          )}
+        </div>
+      ) : (
+      /*
         SCROLL CONTAINER - Un seul conteneur scrollable qui englobe tout.
         La colonne droite est sticky à l'intérieur.
-      */}
+      */
       <div
         ref={scrollContainerRef}
         className="h-full lg:overflow-y-auto"
       >
         <div className={`max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 lg:py-8 ${
-          isMobile && isFlashCryptoMarket && isBinaryStyle && !marketClosed ? "pb-24" : ""
-        }`}>
+          isMobile && (isFlashCryptoMarket || trafficIsLiveUi) && isBinaryStyle && !marketClosed ? "pb-24" : ""
+        } ${isMobile && trafficIsLiveUi ? "pt-0" : ""}`}>
           {/* Grid 2 colonnes */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 relative">
             
@@ -4519,8 +4986,8 @@ const ended = endedByTime;
                 LEFT COLUMN - Contenu qui scroll avec la page
                 ════════════════════════════════════════════════════════════ */}
             <div className="lg:col-span-2 space-y-6">
-              {/* Live session banner CTA */}
-              {activeLiveSession && (
+              {/* Live session banner CTA — hidden when IRL immersive (redundant) */}
+              {activeLiveSession && !trafficIsLiveUi && (
                 <Link
                   href={`/live/${activeLiveSession.id}`}
                   className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl border border-red-500/40 bg-red-500/10 hover:bg-red-500/20 transition group"
@@ -4625,24 +5092,69 @@ const ended = endedByTime;
                   </button>
               )}
 
-              {/* Flash Crypto Hero — rendered AFTER market card for flash crypto (see below) */}
-              {isFlashTrafficMarket && (() => {
-                const trafficIsLive =
-                  !isResolvedOnChain &&
-                  !isProposed &&
-                  status !== "finalized" &&
-                  status !== "cancelled" &&
-                  (trafficRemainingSec == null ? !endedByTime : trafficRemainingSec > 0);
-                const trafficTimerCritical = trafficRemainingSec != null && trafficRemainingSec <= 10;
-                const trafficTimerUrgent =
-                  trafficRemainingSec != null && !trafficTimerCritical && trafficRemainingSec <= 30;
-                const trafficTimerTone = trafficTimerCritical
-                  ? "text-red-300 border-red-500/50 bg-red-500/15 animate-pulse"
-                  : trafficTimerUrgent
-                  ? "text-amber-200 border-amber-400/45 bg-amber-400/12"
-                  : "text-pump-green border-pump-green/35 bg-pump-green/10";
+              {/* ── IRL Traffic: Immersive camera section ─────────── */}
+              {isFlashTrafficMarket && trafficIsLiveUi ? (
+                /* IMMERSIVE CAMERA — LIVE mode */
+                <div className={`relative overflow-hidden rounded-xl bg-black ${
+                  isMobile ? "-mx-4 -mt-6 rounded-none" : ""
+                }`}>
+                  {/* Camera frame — dominant height */}
+                  <div className={`relative w-full ${
+                    isMobile ? "h-[calc(100dvh-180px)]" : "aspect-video"
+                  } bg-black flex items-center justify-center`}>
+                    {trafficDebugFrameSrc ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={trafficDebugFrameSrc}
+                        alt="Traffic camera"
+                        className="block w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="text-sm text-white/40 animate-pulse">Waiting for camera…</div>
+                    )}
 
-                return (
+                    {/* Top overlay — LIVE badge + title + stats */}
+                    <div className="absolute top-0 inset-x-0 z-10">
+                      <div className={`${isMobile ? "px-4 pt-4 pb-14" : "px-5 pt-4 pb-12"} bg-gradient-to-b from-black/85 via-black/45 to-transparent`}>
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-600/30 border border-red-500/40">
+                            <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                            <span className="text-[11px] font-bold text-red-400 tracking-wide">LIVE</span>
+                          </div>
+                          <div className={`rounded-xl border px-2.5 py-1 text-center ${trafficTimerTone}`}>
+                            <div className="text-[9px] uppercase tracking-[0.14em] text-white/70">Time Left</div>
+                            <div className="mt-0.5 text-base sm:text-lg font-black tabular-nums leading-none tracking-[0.05em]">
+                              {trafficRemainingLabel}
+                            </div>
+                          </div>
+                        </div>
+                        <h2 className="text-white font-bold text-[17px] sm:text-lg mt-3 leading-snug line-clamp-2 drop-shadow-[0_1px_4px_rgba(0,0,0,0.8)]">
+                          {market.question || "Traffic Market"}
+                        </h2>
+                      </div>
+                    </div>
+
+                    {/* Bottom overlay — count + threshold */}
+                    <div className="absolute bottom-0 inset-x-0 z-10">
+                      <div className={`${isMobile ? "px-4 pb-4 pt-12" : "px-5 pb-4 pt-10"} bg-gradient-to-t from-black/80 via-black/40 to-transparent`}>
+                        <div className="flex items-center gap-2.5">
+                          {trafficCurrentCount != null && (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold backdrop-blur-sm bg-white/10 text-white/90 border border-white/15">
+                              <span className="opacity-60">Count</span>
+                              <span className="tabular-nums">{trafficCurrentCount}{trafficThreshold != null ? ` / ${trafficThreshold}` : ""}</span>
+                            </span>
+                          )}
+                          <span className="text-xs text-white/40 ml-auto">
+                            {formatVol(effectiveVol)} SOL vol
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : isFlashTrafficMarket ? (
+                /* NORMAL TRAFFIC — non-live fallback */
+                <>
                   <div className="rounded-xl border border-white/12 bg-[linear-gradient(135deg,rgba(20,24,32,0.82),rgba(12,15,20,0.88))] px-3.5 py-2.5 sm:px-4 sm:py-3 shadow-[0_12px_28px_rgba(0,0,0,0.28)]">
                     <div className="flex items-center justify-between gap-2.5">
                       <div className="min-w-0">
@@ -4651,12 +5163,6 @@ const ended = endedByTime;
                         </div>
                       </div>
                       <div className="flex shrink-0 items-center gap-2">
-                        {trafficIsLive && (
-                          <span className="inline-flex items-center gap-1 rounded-full border border-red-300/35 bg-red-400/12 px-2.5 py-1 text-[11px] font-semibold text-red-100">
-                            <span className="inline-block h-1.5 w-1.5 rounded-full bg-red-300 animate-pulse" />
-                            LIVE
-                          </span>
-                        )}
                         <div className={`rounded-xl border px-2.5 py-1 text-center ${trafficTimerTone}`}>
                           <div className="text-[9px] uppercase tracking-[0.14em] text-white/70">Time Left</div>
                           <div className="mt-0.5 text-base sm:text-lg font-black tabular-nums leading-none tracking-[0.05em]">
@@ -4666,35 +5172,35 @@ const ended = endedByTime;
                       </div>
                     </div>
                   </div>
-                );
-              })()}
-              {isFlashTrafficMarket && (
-                <div className="rounded-xl border border-white/10 bg-black/35 px-3 py-2">
-                  <div className="mt-1.5 flex h-[420px] items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-black/50 md:h-[520px]">
-                    {trafficDebugFrameSrc ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={trafficDebugFrameSrc}
-                        alt="Traffic debug frame"
-                        className="block h-full max-h-full w-full max-w-full object-contain"
-                      />
-                    ) : null}
-                    {!trafficDebugFrameSrc && trafficDebugFrameAvailable === false && (
-                      <div className="px-3 py-6 text-center text-xs text-white/70">
-                        No debug frame available yet
-                      </div>
-                    )}
+                  <div className="rounded-xl border border-white/10 bg-black/35 px-3 py-2">
+                    <div className="mt-1.5 flex h-[420px] items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-black/50 md:h-[520px]">
+                      {trafficDebugFrameSrc ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={trafficDebugFrameSrc}
+                          alt="Traffic debug frame"
+                          className="block h-full max-h-full w-full max-w-full object-contain"
+                        />
+                      ) : null}
+                      {!trafficDebugFrameSrc && trafficDebugFrameAvailable === false && (
+                        <div className="px-3 py-6 text-center text-xs text-white/70">
+                          No debug frame available yet
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              )}
+                </>
+              ) : null}
 
               {/* Market card */}
               <div className={`rounded-xl p-4 md:p-5 transition-all duration-200 ${
                 isFlashCryptoMarket
                   ? "bg-transparent border border-white/[0.06]"
+                  : isMobile && trafficIsLiveUi
+                  ? "bg-transparent border-0 px-0 pt-0"
                   : "bg-black border border-gray-800 hover:border-pump-green/60"
               }`}>
-                <div className="flex items-start gap-3">
+                <div className={`flex items-start gap-3 ${isMobile && trafficIsLiveUi ? "hidden" : ""}`}>
                   <div className={`flex-shrink-0 rounded-xl overflow-hidden bg-pump-dark ${
                     isFlashCryptoMarket ? "w-12 h-12 md:w-16 md:h-16" : "w-16 h-16 md:w-20 md:h-20"
                   }`}>
@@ -4797,7 +5303,9 @@ const ended = endedByTime;
                 {/* Crypto card summary removed — info is in FlashCryptoMiniChart / GraduationHero below */}
   
                 <div className={`flex items-center gap-4 text-sm text-gray-400 mt-3 pt-3 ${
-                  isFlashCryptoMarket ? "border-t border-white/[0.05] hidden md:flex" : "border-t border-gray-800"
+                  isFlashCryptoMarket ? "border-t border-white/[0.05] hidden md:flex"
+                  : isMobile && trafficIsLiveUi ? "hidden"
+                  : "border-t border-gray-800"
                 }`}>
                   <div>
                     <span className="text-xs text-gray-400">Vol</span>{" "}
@@ -5338,20 +5846,21 @@ const ended = endedByTime;
           </div>
         </div>
       </div>
-  
+      )}
+
       {/* Mobile drawer - FULLSCREEN from top to bottom nav (h-14 = 56px) */}
       {/* ✅ Don't open if blocked (marketClosed includes isBlocked) */}
-      {isMobile && mobileTradeOpen && !marketClosed && (
+      {(isMobile || trafficIsLive) && mobileTradeOpen && !marketClosed && (
         <div className="fixed inset-0 z-[200] pointer-events-none">
           {/* Backdrop: couvre tout l'écran sauf la bottom nav */}
           <button
-            className="absolute inset-x-0 top-0 bottom-14 bg-black/60 pointer-events-auto"
+            className={`absolute inset-x-0 top-0 ${isMobile ? "bottom-14" : "bottom-0"} bg-black/60 pointer-events-auto`}
             onClick={() => setMobileTradeOpen(false)}
             aria-label="Close overlay"
           />
 
           {/* Drawer: du haut de l'écran jusqu'à la bottom nav, sans coins arrondis */}
-          <div className="absolute inset-x-0 top-0 bottom-14 pointer-events-auto">
+          <div className={`absolute inset-x-0 top-0 ${isMobile ? "bottom-14" : "bottom-0"} pointer-events-auto`}>
             <div className="h-full border-b border-gray-800 bg-pump-dark shadow-2xl overflow-hidden">
               <TradingPanel
                 mode="drawer"
@@ -5384,6 +5893,26 @@ const ended = endedByTime;
 
       {/* Flash crypto mobile fixed bottom trade bar */}
       {isMobile && isFlashCryptoMarket && isBinaryStyle && !marketClosed && !mobileTradeOpen && (
+        <div className="fixed inset-x-0 bottom-14 z-[150] pointer-events-auto">
+          <div className="bg-pump-dark/95 backdrop-blur-md border-t border-white/[0.06] px-4 py-3 flex gap-3">
+            <button
+              onClick={() => openMobileTrade(0)}
+              className="flex-1 py-3.5 rounded-xl bg-pump-green font-bold text-black text-base active:scale-[0.97] transition"
+            >
+              Buy {names[0] || "Yes"} <span className="opacity-70 ml-1">{(percentages[0] ?? 0).toFixed(0)}¢</span>
+            </button>
+            <button
+              onClick={() => openMobileTrade(1)}
+              className="flex-1 py-3.5 rounded-xl bg-[#ff5c73] font-bold text-white text-base active:scale-[0.97] transition"
+            >
+              Buy {names[1] || "No"} <span className="opacity-70 ml-1">{(100 - (percentages[0] ?? 0)).toFixed(0)}¢</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* IRL Traffic mobile fixed bottom trade bar */}
+      {isMobile && trafficIsLiveUi && isBinaryStyle && !marketClosed && !mobileTradeOpen && (
         <div className="fixed inset-x-0 bottom-14 z-[150] pointer-events-auto">
           <div className="bg-pump-dark/95 backdrop-blur-md border-t border-white/[0.06] px-4 py-3 flex gap-3">
             <button

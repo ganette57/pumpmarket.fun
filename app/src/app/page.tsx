@@ -339,6 +339,7 @@ export default function Home() {
   const [currentFeaturedIndex, setCurrentFeaturedIndex] = useState(0);
   const [homeLiveFlashMarket, setHomeLiveFlashMarket] = useState<FlashMarket | null>(null);
   const [homeLiveCryptoFlashMarkets, setHomeLiveCryptoFlashMarkets] = useState<FlashMarket[]>([]);
+  const [homeLiveIrlFlashMarkets, setHomeLiveIrlFlashMarkets] = useState<FlashMarket[]>([]);
   const [displayedCount, setDisplayedCount] = useState(12);
   const router = useRouter();
   const sp = useSearchParams();
@@ -387,6 +388,25 @@ export default function Home() {
     }
   }, []);
 
+  const refreshHomeLiveIrlFlashMarkets = useCallback(async () => {
+    try {
+      const response = await fetch("/api/explorer/flash-markets?status=open&kind=irl&limit=12");
+      if (!response.ok) return;
+      const payload = await response.json();
+      const nowMs = Date.now();
+      const incoming = Array.isArray(payload?.markets) ? (payload.markets as FlashMarket[]) : [];
+      const filtered = incoming.filter((market) => {
+        if (!market || market.kind !== "irl") return false;
+        if (market.status !== "active") return false;
+        const windowEndMs = Date.parse(String(market.windowEnd || ""));
+        return Number.isFinite(windowEndMs) && nowMs < windowEndMs;
+      });
+      setHomeLiveIrlFlashMarkets(filtered);
+    } catch {
+      // Keep existing list on transient network failures.
+    }
+  }, []);
+
   const loadMarkets = useCallback(async () => {
     setLoading(true);
     try {
@@ -420,7 +440,7 @@ export default function Home() {
 
       setLiveMap(liveMapData);
       setHomeLiveFlashMarket(topHomeLiveFlash);
-      await refreshHomeLiveCryptoFlashMarkets();
+      await Promise.all([refreshHomeLiveCryptoFlashMarkets(), refreshHomeLiveIrlFlashMarkets()]);
 
       setFeaturedClassicMarkets((featuredData as any[]).map(mapHomeRowToMarket));
       setOpenClassicMarkets((openClassicData as any[]).map(mapHomeRowToMarket));
@@ -441,10 +461,11 @@ export default function Home() {
       setResolvedClassicMarkets([]);
       setHomeLiveFlashMarket(null);
       setHomeLiveCryptoFlashMarkets([]);
+      setHomeLiveIrlFlashMarkets([]);
     } finally {
       setLoading(false);
     }
-  }, [refreshHomeLiveCryptoFlashMarkets]);
+  }, [refreshHomeLiveCryptoFlashMarkets, refreshHomeLiveIrlFlashMarkets]);
 
   // ------- LOAD MARKETS FROM SERVER API (cached) -------
   useEffect(() => {
@@ -470,9 +491,10 @@ export default function Home() {
   useEffect(() => {
     const timer = window.setInterval(() => {
       void refreshHomeLiveCryptoFlashMarkets();
+      void refreshHomeLiveIrlFlashMarkets();
     }, 10_000);
     return () => window.clearInterval(timer);
-  }, [refreshHomeLiveCryptoFlashMarkets]);
+  }, [refreshHomeLiveCryptoFlashMarkets, refreshHomeLiveIrlFlashMarkets]);
 
   // Batch-fetch creator profiles when markets change
   useEffect(() => {
@@ -617,11 +639,18 @@ export default function Home() {
       flashSlides.push({ kind: "flash", market });
     }
 
+    for (const market of homeLiveIrlFlashMarkets) {
+      const addr = String(market.marketAddress || "").trim();
+      if (!addr || seenFlashAddresses.has(addr)) continue;
+      seenFlashAddresses.add(addr);
+      flashSlides.push({ kind: "flash", market });
+    }
+
     const scopedFlashSlides = flashSlides.slice(0, CAROUSEL_LIMIT);
     const baseSlides = featuredMarkets.slice(0, Math.max(0, CAROUSEL_LIMIT - scopedFlashSlides.length));
     const mappedBase = baseSlides.map((market) => ({ kind: "featured" as const, market }));
     return [...scopedFlashSlides, ...mappedBase];
-  }, [featuredMarkets, homeLiveCryptoFlashMarkets, homeLiveFlashMarket]);
+  }, [featuredMarkets, homeLiveCryptoFlashMarkets, homeLiveFlashMarket, homeLiveIrlFlashMarkets]);
 
   // reset index when list changes
   useEffect(() => {
@@ -749,8 +778,9 @@ export default function Home() {
 
     includeIfActive(homeLiveFlashMarket);
     for (const market of homeLiveCryptoFlashMarkets) includeIfActive(market);
+    for (const market of homeLiveIrlFlashMarkets) includeIfActive(market);
     return out;
-  }, [homeLiveCryptoFlashMarkets, homeLiveFlashMarket]);
+  }, [homeLiveCryptoFlashMarkets, homeLiveFlashMarket, homeLiveIrlFlashMarkets]);
 
   // ------- Classic feed markets: live first, then remaining open -------
   const prioritizedClassicFeedMarkets = useMemo(() => {

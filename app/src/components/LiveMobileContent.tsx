@@ -23,7 +23,7 @@ export function formatVol(volLamports: number) {
 
 /* ── StreamPlayer ────────────────────────────────────────────────── */
 
-export function StreamPlayer({ url }: { url: string }) {
+export function StreamPlayer({ url, className }: { url: string; className?: string }) {
   const embedUrl = useMemo(() => {
     const ytMatch = url.match(
       /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/live\/)([\w-]+)/
@@ -44,7 +44,7 @@ export function StreamPlayer({ url }: { url: string }) {
   }, [url]);
 
   return (
-    <div className="relative w-full aspect-video bg-black rounded-xl overflow-hidden">
+    <div className={className ?? "relative w-full aspect-video bg-black rounded-xl overflow-hidden"}>
       <iframe
         src={embedUrl}
         className="absolute inset-0 w-full h-full"
