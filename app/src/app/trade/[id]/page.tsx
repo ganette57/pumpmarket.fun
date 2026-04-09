@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
+import { createPortal } from "react-dom";
 
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
@@ -4183,7 +4184,10 @@ useEffect(() => {
       marketMode === "flash_crypto" ||
       typeTag === "flash_crypto_price" ||
       typeTag === "flash_crypto_graduation";
-    if (!isFlashCrypto) return null;
+    const isFlashTraffic =
+      marketMode === "flash_traffic" ||
+      typeTag === "flash_traffic";
+    if (!isFlashCrypto && !isFlashTraffic) return null;
 
     const windowEndMs = (() => {
       const raw = [
@@ -4230,6 +4234,25 @@ useEffect(() => {
       }
     }
 
+    if (winningIndex == null && isFlashTraffic) {
+      const threshold = firstFiniteNumber([
+        sportMeta.threshold,
+        sportMeta.target,
+        sportMeta.target_count,
+      ]);
+      const finalCount = firstFiniteNumber([
+        trafficLiveCount,
+        sportMeta.end_count,
+        sportMeta.current_count,
+        sportMeta.currentCount,
+        sportMeta.start_count,
+      ]);
+      if (threshold != null && threshold > 0 && finalCount != null) {
+        winningIndex = finalCount >= threshold ? 0 : 1;
+        rawVersion = `traffic-count:${Math.floor(finalCount)}:${Math.floor(threshold)}`;
+      }
+    }
+
     if (winningIndex == null) return null;
 
     const winningShares = Math.max(0, Number(normalizedShares[winningIndex] || 0));
@@ -4247,7 +4270,7 @@ useEffect(() => {
       secondaryText,
       resolutionStamp: `${Math.floor(windowEndMs)}:${winningIndex}:${rawVersion}`,
     };
-  }, [market, derived, userSharesForUi, nowMs, flashRawOutcomeHint]);
+  }, [market, derived, userSharesForUi, nowMs, flashRawOutcomeHint, trafficLiveCount]);
 
   useEffect(() => {
     if (!connected || !publicKey || !market || !flashResultCandidate) return;
@@ -4819,6 +4842,17 @@ const ended = endedByTime;
     setMobileTradeOpen(true);
   };
 
+  const flashResultModalNode = (
+    <FlashMarketResultModal
+      open={flashResultModalOpen && !!flashResultPayload}
+      result={flashResultPayload?.state ?? "lose"}
+      outcomeLabel={flashResultPayload?.outcomeLabel ?? null}
+      winningShares={flashResultPayload?.winningShares ?? null}
+      secondaryText={flashResultPayload?.secondaryText ?? null}
+      onClose={closeFlashResultModal}
+    />
+  );
+
   return (
     <>
       {/* Trade Progress Modal */}
@@ -4827,14 +4861,14 @@ const ended = endedByTime;
         result={tradeResult}
         onClose={closeTradeModal}
       />
-      <FlashMarketResultModal
-        open={flashResultModalOpen && !!flashResultPayload}
-        result={flashResultPayload?.state ?? "lose"}
-        outcomeLabel={flashResultPayload?.outcomeLabel ?? null}
-        winningShares={flashResultPayload?.winningShares ?? null}
-        secondaryText={flashResultPayload?.secondaryText ?? null}
-        onClose={closeFlashResultModal}
-      />
+      {isMobile
+        ? typeof document !== "undefined"
+          ? createPortal(
+              <div className="relative z-[9999]">{flashResultModalNode}</div>,
+              document.body,
+            )
+          : null
+        : flashResultModalNode}
 
       {/* ═══ IRL TRAFFIC: Mobile immersive overlay — covers MobileTopBar ═══ */}
       {isMobile && trafficIsLiveUi && (
