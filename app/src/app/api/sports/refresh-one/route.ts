@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServer";
 import { getProvider } from "@/lib/sportsProvider";
+import { fetchLiveScore } from "@/lib/sportsProviders/theSportsDbProvider";
 import {
   isAvailable as isApiSportsAvailable,
   fetchEvent,
@@ -47,9 +48,28 @@ export async function POST(req: Request) {
 
     if (isAdmin && ["scheduled", "live"].includes(event.status)) {
       let change: { status: string; score: Record<string, unknown>; raw?: Record<string, unknown> | null; end_time?: string | null } | null = null;
+      const hasRealProviderEventId =
+        !!event.provider_event_id &&
+        !event.provider_event_id.startsWith("mock_") &&
+        !event.provider_event_id.startsWith("manual_");
 
-      // Try API-Sports first if available and event has a real provider_event_id
-      if (isApiSportsAvailable() && event.provider_event_id && !event.provider_event_id.startsWith("mock_") && !event.provider_event_id.startsWith("manual_")) {
+      if (hasRealProviderEventId && event.sport === "basketball") {
+        const tsdbResult = await fetchLiveScore(event.provider_event_id);
+        const score: Record<string, unknown> = {};
+        if (tsdbResult.home_score != null) score.home = tsdbResult.home_score;
+        if (tsdbResult.away_score != null) score.away = tsdbResult.away_score;
+        if (tsdbResult.minute != null) score.minute = tsdbResult.minute;
+
+        change = {
+          status: tsdbResult.status !== "unknown" ? tsdbResult.status : event.status,
+          score: isNonEmptyObject(score) ? score : event.score || {},
+          raw: (tsdbResult.raw as Record<string, unknown>) || undefined,
+          end_time: event.end_time || null,
+        };
+      }
+
+      // For non-NBA sports, keep current API-Sports behavior.
+      if (!change && hasRealProviderEventId && isApiSportsAvailable()) {
         const apiResult = await fetchEvent(event.provider_event_id, event.sport);
         if (apiResult) {
           change = {
@@ -121,4 +141,8 @@ export async function POST(req: Request) {
     console.error("sports/refresh-one crash:", e);
     return NextResponse.json({ error: e?.message || "Unknown error" }, { status: 500 });
   }
+}
+
+function isNonEmptyObject(x: unknown): x is Record<string, unknown> {
+  return !!x && typeof x === "object" && !Array.isArray(x) && Object.keys(x).length > 0;
 }

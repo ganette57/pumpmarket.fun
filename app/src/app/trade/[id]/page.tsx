@@ -2495,15 +2495,16 @@ if (snap?.posAcc?.shares) {
     ]);
 
     // Poll /api/sports/live for sport-linked markets with adaptive interval + stale handling.
-    // Basketball/NBA auto-routes to API-NBA via the sport param; others use TheSportsDB.
+    // NBA and other sports read from TheSportsDB on the server route.
     useEffect(() => {
       const meta = market?.sportMeta as any;
       const provider = String(meta?.provider || "");
       const providerEventId = String(meta?.provider_event_id || "");
       const metaSport = String(meta?.sport || "").toLowerCase();
       const isNba = metaSport === "basketball" || metaSport === "nba";
-      // Accept thesportsdb provider, or NBA markets (they auto-route on the server)
-      if ((!isNba && provider !== "thesportsdb") || !providerEventId || market?.marketMode !== "sport") {
+      const isTheSportsDb = provider === "thesportsdb" || provider === "the-sports-db";
+      // Keep backward compatibility for older NBA rows missing provider metadata.
+      if ((!isNba && !isTheSportsDb) || !providerEventId || market?.marketMode !== "sport") {
         setLiveScore(null);
         setLiveScorePolling(false);
         setLiveScoreFailures(0);
@@ -2518,7 +2519,7 @@ if (snap?.posAcc?.shares) {
 
       setLiveScoreFailures(0);
 
-      // Build URL: for NBA, pass sport= so the API auto-routes to API-NBA
+      // For legacy NBA rows without provider metadata, sport= keeps server routing deterministic.
       const liveUrl = isNba
         ? `/api/sports/live?sport=basketball&event_id=${encodeURIComponent(providerEventId)}`
         : `/api/sports/live?provider=thesportsdb&event_id=${encodeURIComponent(providerEventId)}`;
