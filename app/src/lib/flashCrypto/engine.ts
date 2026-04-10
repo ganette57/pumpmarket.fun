@@ -112,7 +112,6 @@ export type StartCampaignInput = {
   majorPair?: string | null;
   durationMinutes: FlashCryptoDurationMinutes;
   totalMarkets: number;
-  launchIntervalMinutes?: number;
 };
 
 export type StartCampaignResult = {
@@ -146,7 +145,6 @@ export async function startFlashCryptoCampaign(input: StartCampaignInput): Promi
   const durationMinutes = normalizeDuration(mode, Number(input.durationMinutes));
 
   const totalMarkets = Math.max(1, Math.min(100, Math.floor(input.totalMarkets || 1)));
-  const launchIntervalMinutes = Math.max(1, Math.min(60, Math.floor(input.launchIntervalMinutes ?? durationMinutes)));
 
   const id = generateId();
   const nowMs = Date.now();
@@ -189,7 +187,6 @@ export async function startFlashCryptoCampaign(input: StartCampaignInput): Promi
     majorSymbol: campaignMajorSymbol,
     majorPair: campaignMajorPair,
     durationMinutes,
-    launchIntervalMinutes,
     totalMarkets,
     launchedCount: 0,
     nextLaunchAt: nowMs,
@@ -215,7 +212,7 @@ export async function startFlashCryptoCampaign(input: StartCampaignInput): Promi
   try {
     firstMarket = await createFlashCryptoMarket(campaign);
     campaign.launchedCount++;
-    campaign.nextLaunchAt = nowMs + launchIntervalMinutes * 60_000;
+    advanceNextLaunchAt(campaign, firstMarket.windowEnd);
     campaign.marketIds.push(firstMarket.marketAddress);
     log("first market created", {
       campaignId: id,
@@ -264,6 +261,33 @@ export type CreateFlashCryptoMarketResult = {
   didGraduateStart?: boolean | null;
 };
 
+type ScheduledWindow = {
+  windowStartMs: number;
+  windowEndMs: number;
+  windowStartIso: string;
+  windowEndIso: string;
+};
+
+function getScheduledWindow(campaign: FlashCryptoCampaign): ScheduledWindow {
+  const windowStartMs = Math.floor(campaign.nextLaunchAt);
+  const windowEndMs = windowStartMs + campaign.durationMinutes * 60_000;
+  return {
+    windowStartMs,
+    windowEndMs,
+    windowStartIso: new Date(windowStartMs).toISOString(),
+    windowEndIso: new Date(windowEndMs).toISOString(),
+  };
+}
+
+function advanceNextLaunchAt(campaign: FlashCryptoCampaign, windowEndIso: string): void {
+  const next = Date.parse(windowEndIso);
+  if (Number.isFinite(next)) {
+    campaign.nextLaunchAt = next;
+    return;
+  }
+  campaign.nextLaunchAt += campaign.durationMinutes * 60_000;
+}
+
 async function cleanupOrphanMarket(marketAddress: string, error: unknown) {
   log("live_micro_markets insert failed, cleaning up orphan market", {
     marketAddress,
@@ -279,6 +303,7 @@ async function cleanupOrphanMarket(marketAddress: string, error: unknown) {
 
 export async function createFlashCryptoPriceMarket(
   campaign: FlashCryptoCampaign,
+  scheduledWindow: ScheduledWindow,
 ): Promise<CreateFlashCryptoMarketResult> {
   assertLiveMicroGuards({ requireOperator: true });
 
@@ -296,9 +321,9 @@ export async function createFlashCryptoPriceMarket(
   const majorPair = String(token.majorPair || campaign.majorPair || "").trim().toUpperCase() || null;
   const durationLabel = campaign.durationMinutes === 1 ? "1 minute" : `${campaign.durationMinutes} minutes`;
 
-  const windowStartIso = new Date().toISOString();
-  const windowEndMs = Date.now() + campaign.durationMinutes * 60_000;
-  const windowEndIso = new Date(windowEndMs).toISOString();
+  const windowStartIso = scheduledWindow.windowStartIso;
+  const windowEndMs = scheduledWindow.windowEndMs;
+  const windowEndIso = scheduledWindow.windowEndIso;
   const resolutionTimeSec = Math.floor(windowEndMs / 1000);
 
   const createResult = await createBinaryMarketOnchain({
@@ -388,6 +413,7 @@ export async function createFlashCryptoPriceMarket(
 
 export async function createFlashCryptoGraduationMarket(
   campaign: FlashCryptoCampaign,
+  scheduledWindow: ScheduledWindow,
 ): Promise<CreateFlashCryptoMarketResult> {
   assertLiveMicroGuards({ requireOperator: true });
 
@@ -401,9 +427,9 @@ export async function createFlashCryptoGraduationMarket(
   const tokenName = String(token.name || campaign.tokenName || tokenSymbol).trim();
   const tokenImageUri = token.imageUri || campaign.tokenImageUri || null;
 
-  const windowStartIso = new Date().toISOString();
-  const windowEndMs = Date.now() + campaign.durationMinutes * 60_000;
-  const windowEndIso = new Date(windowEndMs).toISOString();
+  const windowStartIso = scheduledWindow.windowStartIso;
+  const windowEndMs = scheduledWindow.windowEndMs;
+  const windowEndIso = scheduledWindow.windowEndIso;
   const resolutionTimeSec = Math.floor(windowEndMs / 1000);
 
   const createResult = await createBinaryMarketOnchain({
@@ -487,10 +513,11 @@ export async function createFlashCryptoGraduationMarket(
 }
 
 async function createFlashCryptoMarket(campaign: FlashCryptoCampaign): Promise<CreateFlashCryptoMarketResult> {
+  const scheduledWindow = getScheduledWindow(campaign);
   if (campaign.mode === "graduation") {
-    return createFlashCryptoGraduationMarket(campaign);
+    return createFlashCryptoGraduationMarket(campaign, scheduledWindow);
   }
-  return createFlashCryptoPriceMarket(campaign);
+  return createFlashCryptoPriceMarket(campaign, scheduledWindow);
 }
 
 // ── Campaign Runner (called by auto-tick) ──
@@ -514,6 +541,8 @@ export async function tickFlashCryptoCampaigns(): Promise<{
       continue;
     }
 
+    if (Date.now() < campaign.nextLaunchAt) continue;
+
     try {
       const hasActive = await hasCampaignActiveMarket(campaign.id);
       if (hasActive) continue;
@@ -526,6 +555,7 @@ export async function tickFlashCryptoCampaigns(): Promise<{
     try {
       const result = await createFlashCryptoMarket(campaign);
       campaign.launchedCount++;
+      advanceNextLaunchAt(campaign, result.windowEnd);
       campaign.marketIds.push(result.marketAddress);
       campaign.lastError = null;
       marketsCreated++;

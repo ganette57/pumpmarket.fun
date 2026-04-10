@@ -26,7 +26,6 @@ type Campaign = {
   majorSymbol?: string | null;
   majorPair?: string | null;
   durationMinutes: number;
-  launchIntervalMinutes: number;
   totalMarkets: number;
   launchedCount: number;
   startedAt: string;
@@ -151,7 +150,6 @@ export default function AdminFlashCryptoPanel() {
   const [majorSymbol, setMajorSymbol] = useState<FlashCryptoMajorSymbol>("BTC");
   const [duration, setDuration] = useState<number>(5);
   const [totalMarkets, setTotalMarkets] = useState(10);
-  const [launchInterval, setLaunchInterval] = useState(5);
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
 
@@ -206,13 +204,11 @@ export default function AdminFlashCryptoPanel() {
     if (mode === "graduation") {
       if (!GRADUATION_DURATION_OPTIONS.includes(duration as any)) {
         setDuration(10);
-        setLaunchInterval(10);
       }
       return;
     }
     if (!PRICE_DURATION_OPTIONS.includes(duration as any)) {
       setDuration(5);
-      setLaunchInterval(5);
     }
   }, [duration, mode]);
 
@@ -265,7 +261,6 @@ export default function AdminFlashCryptoPanel() {
         major_pair: isMajorPrice ? selectedMajor?.pair || null : null,
         duration_minutes: duration,
         total_markets: totalMarkets,
-        launch_interval_minutes: launchInterval,
       });
       if (res.ok) {
         setNotice({
@@ -330,7 +325,6 @@ export default function AdminFlashCryptoPanel() {
             onClick={() => {
               setMode("price");
               setDuration(5);
-              setLaunchInterval(5);
             }}
             className={`rounded-lg border px-3 py-2 text-sm font-semibold transition ${
               mode === "price"
@@ -345,7 +339,6 @@ export default function AdminFlashCryptoPanel() {
             onClick={() => {
               setMode("graduation");
               setDuration(10);
-              setLaunchInterval(10);
             }}
             className={`rounded-lg border px-3 py-2 text-sm font-semibold transition ${
               mode === "graduation"
@@ -423,7 +416,7 @@ export default function AdminFlashCryptoPanel() {
           </div>
         )}
 
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="block text-xs text-gray-400 mb-1">Duration (min)</label>
             <select
@@ -431,7 +424,6 @@ export default function AdminFlashCryptoPanel() {
               onChange={(e) => {
                 const v = Number(e.target.value);
                 setDuration(v);
-                setLaunchInterval(v);
               }}
               className="w-full px-3 py-2 rounded-lg bg-pump-dark border border-white/10 text-white text-sm focus:outline-none focus:ring-1 focus:ring-pump-green"
             >
@@ -455,17 +447,6 @@ export default function AdminFlashCryptoPanel() {
               max={100}
               value={totalMarkets}
               onChange={(e) => setTotalMarkets(Math.max(1, Math.min(100, Number(e.target.value) || 1)))}
-              className="w-full px-3 py-2 rounded-lg bg-pump-dark border border-white/10 text-white text-sm focus:outline-none focus:ring-1 focus:ring-pump-green"
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">Interval (min)</label>
-            <input
-              type="number"
-              min={1}
-              max={60}
-              value={launchInterval}
-              onChange={(e) => setLaunchInterval(Math.max(1, Math.min(60, Number(e.target.value) || 1)))}
               className="w-full px-3 py-2 rounded-lg bg-pump-dark border border-white/10 text-white text-sm focus:outline-none focus:ring-1 focus:ring-pump-green"
             />
           </div>
@@ -572,10 +553,9 @@ export default function AdminFlashCryptoPanel() {
                     </button>
                   )}
                 </div>
-                <div className="grid grid-cols-4 gap-2 text-xs text-gray-400">
+                <div className="grid grid-cols-3 gap-2 text-xs text-gray-400">
                   <div>Duration: <span className="text-white">{c.durationMinutes === 60 ? "1h" : `${c.durationMinutes}m`}</span></div>
                   <div>Markets: <span className="text-white">{c.launchedCount}/{c.totalMarkets}</span></div>
-                  <div>Interval: <span className="text-white">{c.launchIntervalMinutes}m</span></div>
                   <div>Started: <span className="text-white">{new Date(c.startedAt).toLocaleTimeString()}</span></div>
                 </div>
                 {c.lastError && (

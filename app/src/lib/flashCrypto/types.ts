@@ -17,7 +17,6 @@ export type FlashCryptoCampaign = {
   majorSymbol?: string | null;
   majorPair?: string | null;
   durationMinutes: FlashCryptoDurationMinutes;
-  launchIntervalMinutes: number;
   totalMarkets: number;
   launchedCount: number;
   nextLaunchAt: number; // ms epoch
