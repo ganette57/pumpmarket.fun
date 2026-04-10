@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServer";
+import { fetchLiveScore } from "@/lib/sportsProviders/theSportsDbProvider";
 
 // Optional: keep API-Sports enrichment if still wired in your repo.
 // If you no longer use it, you can remove these imports + the enrichment block.
@@ -107,27 +108,44 @@ export async function POST(req: Request) {
     // If no provider_event_id, make a stable manual id (still unique)
     const provider_event_id = provider_event_id_in || `manual_${Date.now()}`;
 
-    // Optional enrichment (only if provider_event_id seems real and API-Sports is available)
+    // Optional enrichment (only when provider_event_id looks real)
     let enriched: Enriched = null;
 
-    const canEnrich =
+    const hasRealProviderEventId =
       !!provider_event_id_in &&
       !provider_event_id_in.startsWith("mock_") &&
-      !provider_event_id_in.startsWith("manual_") &&
-      isApiSportsAvailable();
+      !provider_event_id_in.startsWith("manual_");
 
-    if (canEnrich) {
+    if (hasRealProviderEventId) {
       try {
-        const apiResult = await fetchEvent(provider_event_id_in!, sport);
-        if (apiResult) {
+        // NBA/basketball uses TheSportsDB as canonical provider for create/live consistency.
+        if (sport === "basketball") {
+          const tsdbResult = await fetchLiveScore(provider_event_id_in!);
+          const score: Record<string, unknown> = {};
+          if (tsdbResult.home_score != null) score.home = tsdbResult.home_score;
+          if (tsdbResult.away_score != null) score.away = tsdbResult.away_score;
+          if (tsdbResult.minute != null) score.minute = tsdbResult.minute;
+
           enriched = {
-            status: apiResult.status,
-            score: isNonEmptyObject(apiResult.score) ? apiResult.score : {},
-            raw: apiResult.raw ?? null,
-            league: apiResult.league || league_in,
-            start_time: apiResult.start_time || start_time_in,
-            end_time: apiResult.end_time || end_time_in,
+            status: tsdbResult.status !== "unknown" ? tsdbResult.status : undefined,
+            score: isNonEmptyObject(score) ? score : {},
+            raw: (tsdbResult.raw as Record<string, unknown>) || undefined,
+            league: tsdbResult.league || league_in,
+            start_time: tsdbResult.start_time || start_time_in,
+            end_time: end_time_in,
           };
+        } else if (isApiSportsAvailable()) {
+          const apiResult = await fetchEvent(provider_event_id_in!, sport);
+          if (apiResult) {
+            enriched = {
+              status: apiResult.status,
+              score: isNonEmptyObject(apiResult.score) ? apiResult.score : {},
+              raw: apiResult.raw ?? null,
+              league: apiResult.league || league_in,
+              start_time: apiResult.start_time || start_time_in,
+              end_time: apiResult.end_time || end_time_in,
+            };
+          }
         }
       } catch (e: any) {
         console.error("create-event enrichment error (continuing with basic data):", e?.message);

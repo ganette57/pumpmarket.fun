@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
+
+const MOBILE_HOME_RETAP_EVENT = "home-feed:retap";
 
 function Icon({
   children,
@@ -37,20 +39,14 @@ function Item({
 
 export default function MobileNav() {
   const pathname = usePathname();
-  const router = useRouter();
 
   const isActive = (p: string) => pathname === p || pathname?.startsWith(p + "/");
 
   const handleHomeTap = (e: React.MouseEvent) => {
-    // If we're already on home, tap again => scroll top + refresh (feed-style)
+    // Retap on home tab: notify home feed to scroll-to-top + refresh.
     if (isActive("/")) {
       e.preventDefault();
-      window.scrollTo({ top: 0, behavior: "smooth" });
-
-      // small delay to let scroll start, then refresh
-      setTimeout(() => {
-        router.refresh();
-      }, 250);
+      window.dispatchEvent(new Event(MOBILE_HOME_RETAP_EVENT));
     }
   };
 

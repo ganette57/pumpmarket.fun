@@ -246,6 +246,11 @@ function timeSince(dateStr: string): string {
   return `${Math.floor(s / 86400)}d`;
 }
 
+function fmtMmSs(totalSec: number): string {
+  const safe = Math.max(0, Math.floor(totalSec));
+  return `${String(Math.floor(safe / 60)).padStart(2, "0")}:${String(safe % 60).padStart(2, "0")}`;
+}
+
 /* ── BUY toasts (bottom-up) ─────────────────────────────────────────── */
 
 function BuyToasts({ toasts }: { toasts: (RecentTrade & { _key: number })[] }) {
@@ -300,6 +305,12 @@ export default function LiveViewerPage() {
 
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
   const [showBuyHint, setShowBuyHint] = useState(false);
+  const [defaultOutcomeIndex, setDefaultOutcomeIndex] = useState(0);
+
+  // IRL immersive — traffic count + timer
+  const [sportMeta, setSportMeta] = useState<any>(null);
+  const [trafficCount, setTrafficCount] = useState<number | null>(null);
+  const [nowMs, setNowMs] = useState(Date.now());
 
   // Live Activity + toasts
   const [recentTrades, setRecentTrades] = useState<RecentTrade[]>([]);
@@ -458,6 +469,7 @@ export default function LiveViewerPage() {
       }
 
       setMarket(transformed);
+      setSportMeta((dbMarket as any).sport_meta ?? null);
     } catch (e) {
       console.error("loadMarket error:", e);
     }
@@ -501,6 +513,62 @@ export default function LiveViewerPage() {
 
   const marketClosed = market?.resolved || market?.isBlocked || sessionLocked
     || market?.resolutionStatus === "proposed";
+
+  /* ── Immersive mode (LIVE only) ───────────────────────────────── */
+
+  const isLiveImmersive = session?.status === "live" || session?.status === "locked";
+
+  const trafficMeta = useMemo(() => {
+    if (!sportMeta || sportMeta?.type !== "flash_traffic") return null;
+    return sportMeta as {
+      round_id?: string; threshold?: number;
+      window_end?: string; current_count?: number;
+      camera_name?: string;
+    };
+  }, [sportMeta]);
+
+  // Clock tick for countdown (only during immersive)
+  useEffect(() => {
+    if (!isLiveImmersive) return;
+    const iv = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(iv);
+  }, [isLiveImmersive]);
+
+  // Traffic count polling (display only)
+  useEffect(() => {
+    if (!isLiveImmersive || !trafficMeta?.round_id || !market?.publicKey) return;
+    if (trafficMeta.current_count != null && trafficCount == null) {
+      setTrafficCount(trafficMeta.current_count);
+    }
+    const poll = async () => {
+      try {
+        const res = await fetch(
+          `/api/traffic/live?roundId=${encodeURIComponent(trafficMeta.round_id!)}&marketAddress=${encodeURIComponent(market!.publicKey)}`
+        );
+        if (res.ok) {
+          const d = await res.json();
+          if (typeof d.currentCount === "number") setTrafficCount(d.currentCount);
+        }
+      } catch { /* display-only, silent fail */ }
+    };
+    poll();
+    const iv = setInterval(poll, 500);
+    return () => clearInterval(iv);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLiveImmersive, trafficMeta?.round_id, market?.publicKey]);
+
+  // Countdown label
+  const countdownLabel = useMemo(() => {
+    const endStr = trafficMeta?.window_end
+      ?? (market?.resolutionTime ? new Date(market.resolutionTime * 1000).toISOString() : null);
+    if (!endStr) return null;
+    const endMs = new Date(endStr).getTime();
+    if (!Number.isFinite(endMs)) return null;
+    const rem = Math.max(0, Math.ceil((endMs - nowMs) / 1000));
+    return fmtMmSs(rem);
+  }, [trafficMeta?.window_end, market?.resolutionTime, nowMs]);
+
+  const threshold = trafficMeta?.threshold ?? null;
 
   /* ── Trade handler ─────────────────────────────────────────────── */
 
@@ -705,20 +773,143 @@ export default function LiveViewerPage() {
     );
   }
 
+  /* ── Immersive overlay data pill ─────────────────────────────── */
+
+  const overlayStats = useMemo(() => {
+    const pills: { label: string; value: string; accent?: boolean }[] = [];
+    if (countdownLabel) pills.push({ label: "⏱", value: countdownLabel, accent: true });
+    if (trafficCount != null && threshold != null) {
+      pills.push({ label: "Count", value: `${trafficCount} / ${threshold}` });
+    } else if (trafficCount != null) {
+      pills.push({ label: "Count", value: `${trafficCount}` });
+    }
+    return pills;
+  }, [countdownLabel, trafficCount, threshold]);
+
   return (
     <>
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 lg:py-6">
-        {/* Back link */}
-        <Link href="/live" className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-white mb-4 transition">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
-            <path d="M15 18l-6-6 6-6" />
-          </svg>
-          Back to live
-        </Link>
+      {/* ═══════════════════════════════════════════════════════════
+          MOBILE
+          ═══════════════════════════════════════════════════════════ */}
+      {isMobile ? (
+        isLiveImmersive ? (
+          /* ── MOBILE LIVE IMMERSIVE ──────────────────────────────── */
+          <div className="fixed inset-0 bottom-14 z-[40] bg-black flex flex-col">
+            {/* Camera — fills all available space */}
+            <div className="flex-1 relative min-h-0 bg-black">
+              {session.stream_url ? (
+                <StreamPlayer
+                  url={session.stream_url}
+                  className="relative w-full h-full bg-black overflow-hidden"
+                />
+              ) : (
+                <div className="w-full h-full bg-[radial-gradient(circle_at_top,rgba(109,255,164,0.12),transparent_42%),linear-gradient(180deg,#020304_0%,#04070c_100%)]" />
+              )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 relative">
-          {/* ── LEFT COLUMN ────────────────────────────────────── */}
-          <div className="lg:col-span-2 space-y-4">
+              {/* ── Top overlay: back + LIVE + question + stats ───── */}
+              <div className="absolute top-0 inset-x-0 z-10 pointer-events-auto">
+                <div className="px-4 pt-3 pb-14 bg-gradient-to-b from-black/85 via-black/50 to-transparent">
+                  {/* Row 1: back + LIVE badge */}
+                  <div className="flex items-center justify-between">
+                    <Link
+                      href="/live"
+                      className="flex items-center gap-1 text-sm text-white/60 active:text-white transition"
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
+                        <path d="M15 18l-6-6 6-6" />
+                      </svg>
+                      Back
+                    </Link>
+                    {session.status === "live" ? (
+                      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-600/30 border border-red-500/40">
+                        <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                        <span className="text-[11px] font-bold text-red-400 tracking-wide">LIVE</span>
+                      </div>
+                    ) : (
+                      <StatusBanner status={session.status} />
+                    )}
+                  </div>
+
+                  {/* Row 2: question / title */}
+                  <h1 className="text-white font-bold text-[17px] mt-3 leading-snug line-clamp-2 drop-shadow-[0_1px_4px_rgba(0,0,0,0.8)]">
+                    {market?.question || session.title}
+                  </h1>
+
+                  {/* Row 3: count + timer pills */}
+                  {overlayStats.length > 0 && (
+                    <div className="flex items-center gap-2 mt-2.5">
+                      {overlayStats.map((s, i) => (
+                        <span
+                          key={i}
+                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold backdrop-blur-sm ${
+                            s.accent
+                              ? "bg-white/15 text-white border border-white/20"
+                              : "bg-white/10 text-white/80 border border-white/10"
+                          }`}
+                        >
+                          <span className="opacity-70">{s.label}</span>
+                          <span className="tabular-nums">{s.value}</span>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Host controls overlay */}
+              {isHost && (
+                <div className="absolute bottom-2 inset-x-2 z-10">
+                  <HostControls session={session} onStatusChange={handleStatusChange} error={statusError} />
+                </div>
+              )}
+            </div>
+
+            {/* ── Bottom action bar: YES / NO ─────────────────────── */}
+            {market && derived && !sessionLocked ? (
+              <div className="shrink-0 bg-pump-dark/95 backdrop-blur-md border-t border-white/[0.06] px-4 py-3">
+                <div className="flex gap-3">
+                  {derived.names.slice(0, 2).map((name, idx) => {
+                    const pct = (derived.percentages[idx] ?? 0).toFixed(0);
+                    const isYes = idx === 0;
+                    return (
+                      <button
+                        key={idx}
+                        onClick={() => {
+                          setDefaultOutcomeIndex(idx);
+                          setMobileSheetOpen(true);
+                        }}
+                        className={`flex-1 py-3.5 rounded-xl font-bold text-base active:scale-[0.97] transition ${
+                          isYes
+                            ? "bg-pump-green text-black"
+                            : "bg-[#ff5c73] text-white"
+                        }`}
+                      >
+                        Buy {name} <span className="opacity-70 ml-1">{pct}¢</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : sessionLocked ? (
+              <div className="shrink-0 bg-pump-dark/95 border-t border-white/[0.06] px-4 py-3 text-center">
+                <p className="text-sm text-gray-500">Trading is locked</p>
+              </div>
+            ) : (
+              <div className="shrink-0 bg-pump-dark/95 border-t border-white/[0.06] px-4 py-3 text-center">
+                <p className="text-sm text-gray-500 animate-pulse">Loading market...</p>
+              </div>
+            )}
+          </div>
+        ) : (
+          /* ── MOBILE NORMAL (scheduled / non-live) ───────────────── */
+          <div className="px-4 py-4 pb-20 space-y-4">
+            <Link href="/live" className="inline-flex items-center gap-1.5 text-sm text-gray-400 hover:text-white transition">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
+                <path d="M15 18l-6-6 6-6" />
+              </svg>
+              Back to live
+            </Link>
+
             <LiveMobileContent
               streamUrl={session.stream_url}
               title={session.title}
@@ -736,63 +927,240 @@ export default function LiveViewerPage() {
                 percentages: derived.percentages,
               } : null}
               sessionLocked={sessionLocked}
-              onOutcomeTap={() => {
-                if (isMobile && !sessionLocked) setMobileSheetOpen(true);
+              onOutcomeTap={(idx) => {
+                if (!sessionLocked) {
+                  setDefaultOutcomeIndex(idx);
+                  setMobileSheetOpen(true);
+                }
               }}
             />
 
-            {/* Host controls */}
             {isHost && (
               <HostControls session={session} onStatusChange={handleStatusChange} error={statusError} />
             )}
-
-            {/* Comments */}
-            {market && (
-              <div className="mt-2 pb-8">
-                <CommentsSection marketId={market.publicKey} />
-              </div>
-            )}
           </div>
+        )
+      ) : (
+        /* ═══════════════════════════════════════════════════════════
+           DESKTOP
+           ═══════════════════════════════════════════════════════════ */
+        isLiveImmersive ? (
+          /* ── DESKTOP LIVE IMMERSIVE ─────────────────────────────── */
+          <div className="max-w-[1440px] mx-auto px-6 lg:px-8 py-4">
+            <Link
+              href="/live"
+              className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-white mb-4 transition"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
+                <path d="M15 18l-6-6 6-6" />
+              </svg>
+              Back to live
+            </Link>
 
-          {/* ── RIGHT COLUMN (sticky trading panel) ────────────── */}
-          <div className="lg:col-span-1">
-            <div className="lg:sticky lg:top-6 space-y-4 pb-8">
-              {market && derived && !isMobile && (
-                <TradingPanel
-                  mode="desktop"
-                  market={{
-                    resolved: market.resolved,
-                    marketType: market.marketType,
-                    outcomeNames: derived.names,
-                    outcomeSupplies: derived.supplies,
-                    bLamports: market.bLamports,
-                    yesSupply: derived.names.length >= 2 ? derived.supplies[0] || 0 : market.yesSupply || 0,
-                    noSupply: derived.names.length >= 2 ? derived.supplies[1] || 0 : market.noSupply || 0,
-                  }}
-                  connected={connected}
-                  submitting={submitting}
-                  onTrade={(s, idx, side, cost) => void handleTrade(s, idx, side, cost)}
-                  marketBalanceLamports={marketBalanceLamports}
-                  userHoldings={userSharesForUi}
-                  marketClosed={!!marketClosed}
-                />
-              )}
+            <div className="grid grid-cols-3 gap-5">
+              {/* ── LEFT — immersive camera with overlay ────────── */}
+              <div className="col-span-2 space-y-4">
+                <div className="relative rounded-xl overflow-hidden bg-black">
+                  {/* Stream */}
+                  {session.stream_url ? (
+                    <StreamPlayer url={session.stream_url} />
+                  ) : (
+                    <div className="relative w-full aspect-video bg-black">
+                      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(109,255,164,0.2),transparent_42%),linear-gradient(180deg,#020304_0%,#04070c_100%)]" />
+                    </div>
+                  )}
 
-              {/* Session locked info */}
-              {sessionLocked && (
-                <div className="card-pump p-4 text-center">
-                  <p className="text-sm text-gray-400">
-                    Trading is {session.status === "locked" ? "locked" : "disabled"} for this session.
-                  </p>
+                  {/* ── Camera overlay: top ────────────────────── */}
+                  <div className="absolute top-0 inset-x-0 z-10">
+                    <div className="px-5 pt-4 pb-10 bg-gradient-to-b from-black/70 via-black/30 to-transparent">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0 flex-1">
+                          {session.status === "live" && (
+                            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-600/30 border border-red-500/40 mb-2">
+                              <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                              <span className="text-[11px] font-bold text-red-400 tracking-wide">LIVE</span>
+                            </div>
+                          )}
+                          <h1 className="text-white font-bold text-xl leading-tight line-clamp-2 drop-shadow-[0_1px_4px_rgba(0,0,0,0.8)]">
+                            {market?.question || session.title}
+                          </h1>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ── Camera overlay: bottom — stats ─────────── */}
+                  {overlayStats.length > 0 && (
+                    <div className="absolute bottom-0 inset-x-0 z-10">
+                      <div className="px-5 pb-4 pt-10 bg-gradient-to-t from-black/70 via-black/30 to-transparent">
+                        <div className="flex items-center gap-2.5">
+                          {overlayStats.map((s, i) => (
+                            <span
+                              key={i}
+                              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold backdrop-blur-sm ${
+                                s.accent
+                                  ? "bg-white/15 text-white border border-white/25"
+                                  : "bg-white/10 text-white/80 border border-white/15"
+                              }`}
+                            >
+                              <span className="opacity-60">{s.label}</span>
+                              <span className="tabular-nums">{s.value}</span>
+                            </span>
+                          ))}
+                          {market && (
+                            <span className="text-xs text-white/40 ml-auto">
+                              {formatVol(market.totalVolume)} SOL vol
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
 
-              {/* Live Activity */}
-              <LiveActivity trades={recentTrades} />
+                {/* Host controls */}
+                {isHost && (
+                  <HostControls session={session} onStatusChange={handleStatusChange} error={statusError} />
+                )}
+
+                {/* Comments (compact in immersive) */}
+                {market && (
+                  <div className="pb-8">
+                    <CommentsSection marketId={market.publicKey} />
+                  </div>
+                )}
+              </div>
+
+              {/* ── RIGHT — trading panel ─────────────────────── */}
+              <div className="col-span-1">
+                <div className="sticky top-6 space-y-4 pb-8">
+                  {market && derived && (
+                    <TradingPanel
+                      mode="desktop"
+                      market={{
+                        resolved: market.resolved,
+                        marketType: market.marketType,
+                        outcomeNames: derived.names,
+                        outcomeSupplies: derived.supplies,
+                        bLamports: market.bLamports,
+                        yesSupply: derived.names.length >= 2 ? derived.supplies[0] || 0 : market.yesSupply || 0,
+                        noSupply: derived.names.length >= 2 ? derived.supplies[1] || 0 : market.noSupply || 0,
+                      }}
+                      connected={connected}
+                      submitting={submitting}
+                      onTrade={(s, idx, side, cost) => void handleTrade(s, idx, side, cost)}
+                      marketBalanceLamports={marketBalanceLamports}
+                      userHoldings={userSharesForUi}
+                      marketClosed={!!marketClosed}
+                    />
+                  )}
+
+                  {sessionLocked && (
+                    <div className="rounded-xl border border-gray-800/40 bg-pump-dark/30 p-4 text-center">
+                      <p className="text-sm text-gray-400">
+                        Trading is {session.status === "locked" ? "locked" : "disabled"}.
+                      </p>
+                    </div>
+                  )}
+
+                  <LiveActivity trades={recentTrades} />
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-      </div>
+        ) : (
+          /* ── DESKTOP NORMAL (scheduled / non-live) ──────────────── */
+          <div className="max-w-7xl mx-auto px-6 lg:px-8 py-6">
+            <Link
+              href="/live"
+              className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-white mb-5 transition"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
+                <path d="M15 18l-6-6 6-6" />
+              </svg>
+              Back to live
+            </Link>
+
+            <div className="grid grid-cols-3 gap-6">
+              <div className="col-span-2 space-y-5">
+                {session.stream_url ? (
+                  <StreamPlayer url={session.stream_url} />
+                ) : (
+                  <div className="relative w-full aspect-video bg-black rounded-xl overflow-hidden">
+                    <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(109,255,164,0.2),transparent_42%),linear-gradient(180deg,#020304_0%,#04070c_100%)]" />
+                  </div>
+                )}
+
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <h1 className="text-2xl font-bold text-white leading-tight">{session.title}</h1>
+                    <div className="flex items-center gap-3 mt-1.5">
+                      <p className="text-xs text-gray-500">
+                        Host: {session.host_wallet.slice(0, 6)}...{session.host_wallet.slice(-4)}
+                      </p>
+                      {market && (
+                        <p className="text-xs text-gray-500">{formatVol(market.totalVolume)} SOL vol</p>
+                      )}
+                    </div>
+                  </div>
+                  <StatusBanner status={session.status} />
+                </div>
+
+                {market && market.question !== session.title && (
+                  <div className="rounded-xl border border-gray-800/40 bg-pump-dark/30 px-5 py-4">
+                    <p className="text-base text-white font-medium">{market.question}</p>
+                  </div>
+                )}
+
+                {isHost && (
+                  <HostControls session={session} onStatusChange={handleStatusChange} error={statusError} />
+                )}
+
+                {market && (
+                  <div className="mt-2 pb-8">
+                    <CommentsSection marketId={market.publicKey} />
+                  </div>
+                )}
+              </div>
+
+              <div className="col-span-1">
+                <div className="sticky top-6 space-y-4 pb-8">
+                  {market && derived && (
+                    <TradingPanel
+                      mode="desktop"
+                      market={{
+                        resolved: market.resolved,
+                        marketType: market.marketType,
+                        outcomeNames: derived.names,
+                        outcomeSupplies: derived.supplies,
+                        bLamports: market.bLamports,
+                        yesSupply: derived.names.length >= 2 ? derived.supplies[0] || 0 : market.yesSupply || 0,
+                        noSupply: derived.names.length >= 2 ? derived.supplies[1] || 0 : market.noSupply || 0,
+                      }}
+                      connected={connected}
+                      submitting={submitting}
+                      onTrade={(s, idx, side, cost) => void handleTrade(s, idx, side, cost)}
+                      marketBalanceLamports={marketBalanceLamports}
+                      userHoldings={userSharesForUi}
+                      marketClosed={!!marketClosed}
+                    />
+                  )}
+
+                  {sessionLocked && (
+                    <div className="rounded-xl border border-gray-800/40 bg-pump-dark/30 p-4 text-center">
+                      <p className="text-sm text-gray-400">
+                        Trading is {session.status === "locked" ? "locked" : "disabled"} for this session.
+                      </p>
+                    </div>
+                  )}
+
+                  <LiveActivity trades={recentTrades} />
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      )}
 
       {/* Mobile bottom sheet */}
       {isMobile && market && derived && (
@@ -804,38 +1172,12 @@ export default function LiveViewerPage() {
           submitting={submitting}
           onTrade={handleTrade}
           sessionLocked={sessionLocked}
+          defaultOutcomeIndex={defaultOutcomeIndex}
+          keepNavbar
         />
       )}
 
-      {/* Mobile FAB to open buy sheet */}
-      {isMobile && market && !sessionLocked && !mobileSheetOpen && (
-        <div className="fixed bottom-16 right-4 z-[100] flex flex-col items-center gap-1.5">
-          {/* One-time hint */}
-          {showBuyHint && (
-            <span className="px-2.5 py-1 rounded-lg bg-white text-black text-xs font-semibold shadow-lg animate-fadeIn whitespace-nowrap">
-              Tap to buy
-            </span>
-          )}
-          <button
-            onClick={() => {
-              setMobileSheetOpen(true);
-              if (showBuyHint) {
-                setShowBuyHint(false);
-                try { localStorage.setItem("funmarket_live_buy_hint_v1", "1"); } catch {}
-              }
-            }}
-            className="w-14 h-14 rounded-full bg-pump-green text-black shadow-lg flex items-center justify-center hover:bg-[#74ffb8] transition active:scale-95"
-            aria-label="Trade"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-6 h-6">
-              <path d="M12 5v14" />
-              <path d="M5 12h14" />
-            </svg>
-          </button>
-        </div>
-      )}
-
-      {/* BUY toasts — slide up from bottom-left */}
+      {/* BUY toasts */}
       <BuyToasts toasts={buyToasts} />
     </>
   );

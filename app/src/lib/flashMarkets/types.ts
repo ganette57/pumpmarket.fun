@@ -1,6 +1,6 @@
 export type FlashMarketStatus = "active" | "locked" | "resolving" | "finalized" | "cancelled";
 
-export type FlashMarketKind = "sport" | "crypto";
+export type FlashMarketKind = "sport" | "crypto" | "irl";
 export type FlashCryptoVisualMode = "price" | "graduation";
 export type FlashCryptoSourceType = "pump_fun" | "major";
 
@@ -24,8 +24,10 @@ export type FlashMarket = {
   currentScoreHome: number;
   currentScoreAway: number;
   minute: number | null;
-  windowStart: string | null;
+  windowStart?: string | null;
   windowEnd: string | null;
+  startTime?: string | null;
+  endTime?: string | null;
   loopSequence: number | null;
   loopPhase: string | null;
   remainingSec: number | null;

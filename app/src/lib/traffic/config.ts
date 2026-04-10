@@ -3,21 +3,100 @@ const TRAFFIC_DEBUG_LOCAL_FILE =
 const TRAFFIC_DEBUG_LOCAL_FIRST =
   process.env.TRAFFIC_CAMERA_DEBUG_USE_LOCAL_FILE === "1" ||
   process.env.TRAFFIC_VISION_DEBUG_USE_LOCAL_FILE === "1";
-const TRAFFIC_PRIMARY_STREAM =
-  process.env.TRAFFIC_CAMERA_NYC_1_STREAM_URL || process.env.TRAFFIC_VISION_DEFAULT_STREAM_URL || "";
+const TRAFFIC_LOCAL_VIDEO_ACTIVE = TRAFFIC_DEBUG_LOCAL_FIRST;
+
+const TRAFFIC_CAMERA_STREAMS = {
+  cam1: "https://wink.njta.com/203/public/hls/WF05-24AF-4D42-C307-AA51_nj.m3u8",
+  cam2: "https://wink.njta.com/203/public/hls/WF05-24AF-4D24-2558-F999_nj.m3u8",
+  cam3: "https://wink.njta.com/204/public/hls/WF05-24B0-46EE-2155-1A86_nj.m3u8",
+  iowa: "https://iowadotsfs2.us-east-1.skyvdn.com/rtplive/dmtv05lb/playlist.m3u8",
+  maryland: "https://strmr5.sha.maryland.gov/rtplive/0900adbd00ee00e30051fa36c4235c0a/playlist.m3u8",
+  las_vegas: "https://videos-3.earthcam.com/fecnetwork/42116.flv/chunklist_w554170088.m3u8",
+} as const;
 
 export const TRAFFIC_CAMERAS = [
   {
-    id: "nyc-1",
-    name: "NYC Midtown",
-    streamUrl: TRAFFIC_DEBUG_LOCAL_FIRST
+    id: "cam1",
+    name: "Highway Cam 1",
+    sourceType: TRAFFIC_LOCAL_VIDEO_ACTIVE ? "local_video" : "remote_stream",
+    streamUrl: TRAFFIC_LOCAL_VIDEO_ACTIVE
       ? TRAFFIC_DEBUG_LOCAL_FILE
-      : TRAFFIC_PRIMARY_STREAM || TRAFFIC_DEBUG_LOCAL_FILE,
+      : TRAFFIC_CAMERA_STREAMS.cam1,
     line: {
-      x1: 220,
-      y1: 420,
-      x2: 980,
-      y2: 420,
+      x1: 80,
+      y1: TRAFFIC_LOCAL_VIDEO_ACTIVE ? 900 : 860,
+      x2: 1200,
+      y2: TRAFFIC_LOCAL_VIDEO_ACTIVE ? 900 : 860,
+    },
+  },
+  {
+    id: "cam2",
+    name: "Highway Cam 2",
+    sourceType: TRAFFIC_LOCAL_VIDEO_ACTIVE ? "local_video" : "remote_stream",
+    streamUrl: TRAFFIC_LOCAL_VIDEO_ACTIVE
+      ? TRAFFIC_DEBUG_LOCAL_FILE
+      : TRAFFIC_CAMERA_STREAMS.cam2,
+    line: {
+      x1: 80,
+      y1: TRAFFIC_LOCAL_VIDEO_ACTIVE ? 900 : 860,
+      x2: 1200,
+      y2: TRAFFIC_LOCAL_VIDEO_ACTIVE ? 900 : 860,
+    },
+  },
+  {
+    id: "cam3",
+    name: "Highway Cam 3",
+    sourceType: TRAFFIC_LOCAL_VIDEO_ACTIVE ? "local_video" : "remote_stream",
+    streamUrl: TRAFFIC_LOCAL_VIDEO_ACTIVE
+      ? TRAFFIC_DEBUG_LOCAL_FILE
+      : TRAFFIC_CAMERA_STREAMS.cam3,
+    line: {
+      x1: 80,
+      y1: TRAFFIC_LOCAL_VIDEO_ACTIVE ? 900 : 860,
+      x2: 1200,
+      y2: TRAFFIC_LOCAL_VIDEO_ACTIVE ? 900 : 860,
+    },
+  },
+  {
+    id: "iowa",
+    name: "Iowa Traffic Cam",
+    sourceType: TRAFFIC_LOCAL_VIDEO_ACTIVE ? "local_video" : "remote_stream",
+    streamUrl: TRAFFIC_LOCAL_VIDEO_ACTIVE
+      ? TRAFFIC_DEBUG_LOCAL_FILE
+      : TRAFFIC_CAMERA_STREAMS.iowa,
+    line: {
+      x1: 80,
+      y1: TRAFFIC_LOCAL_VIDEO_ACTIVE ? 900 : 860,
+      x2: 1200,
+      y2: TRAFFIC_LOCAL_VIDEO_ACTIVE ? 900 : 860,
+    },
+  },
+  {
+    id: "maryland",
+    name: "Maryland Traffic Cam",
+    sourceType: TRAFFIC_LOCAL_VIDEO_ACTIVE ? "local_video" : "remote_stream",
+    streamUrl: TRAFFIC_LOCAL_VIDEO_ACTIVE
+      ? TRAFFIC_DEBUG_LOCAL_FILE
+      : TRAFFIC_CAMERA_STREAMS.maryland,
+    line: {
+      x1: 80,
+      y1: TRAFFIC_LOCAL_VIDEO_ACTIVE ? 900 : 860,
+      x2: 1200,
+      y2: TRAFFIC_LOCAL_VIDEO_ACTIVE ? 900 : 860,
+    },
+  },
+  {
+    id: "las_vegas",
+    name: "Las Vegas",
+    sourceType: TRAFFIC_LOCAL_VIDEO_ACTIVE ? "local_video" : "remote_stream",
+    streamUrl: TRAFFIC_LOCAL_VIDEO_ACTIVE
+      ? TRAFFIC_DEBUG_LOCAL_FILE
+      : TRAFFIC_CAMERA_STREAMS.las_vegas,
+    line: {
+      x1: 80,
+      y1: TRAFFIC_LOCAL_VIDEO_ACTIVE ? 900 : 860,
+      x2: 1200,
+      y2: TRAFFIC_LOCAL_VIDEO_ACTIVE ? 900 : 860,
     },
   },
 ] as const;

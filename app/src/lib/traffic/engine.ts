@@ -134,6 +134,8 @@ export async function startTrafficFlash(input: StartTrafficFlashInput = {}): Pro
   });
   const countStart = await startTrafficCounter(roundId, {
     streamUrl: camera.streamUrl,
+    cameraId: camera.id,
+    sourceType: camera.sourceType,
     durationSec,
     line: camera.line,
     classes: ["car", "bus", "truck", "motorcycle"],
@@ -218,10 +220,15 @@ export async function tickTrafficFlashResolutions(): Promise<{
     const status = String(row.resolution_status || "").trim().toLowerCase();
     const terminal =
       row.resolved === true ||
-      status === "proposed" ||
       status === "finalized" ||
       status === "cancelled";
     if (!terminal) continue;
+    console.log("[traffic-flash:engine] stop check", {
+      roundId,
+      status,
+      resolved: row.resolved === true,
+      shouldStopWorker: terminal,
+    });
     await stopTrafficCounter(roundId, `market_status_${status || "terminal"}`);
   }
 

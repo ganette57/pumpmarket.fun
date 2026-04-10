@@ -40,9 +40,10 @@ type FlashCryptoMiniChartProps = {
 function formatPrice(price: number): string {
   if (price === 0) return "0";
   if (price < 0.000001) return price.toExponential(3);
-  if (price < 0.01) return price.toFixed(8);
-  if (price < 1) return price.toFixed(6);
-  return price.toFixed(4);
+  if (price < 0.01) return price.toFixed(6);
+  if (price < 1) return price.toFixed(4);
+  if (price < 100) return price.toFixed(2);
+  return price.toFixed(2);
 }
 
 function pctStr(start: number, current: number): string {
@@ -318,9 +319,11 @@ export default function FlashCryptoMiniChart({
     const container = chartContainerRef.current;
     if (!container) return;
 
+    const isSm = container.clientWidth >= 640;
+    const chartHeight = isSm ? 340 : 280;
     const chart = createChart(container, {
       width: Math.max(1, container.clientWidth),
-      height: 170,
+      height: chartHeight,
       layout: {
         background: { type: ColorType.Solid, color: "transparent" },
         textColor: "#8da2b7",
@@ -359,7 +362,8 @@ export default function FlashCryptoMiniChart({
 
     const resizeChart = () => {
       const width = Math.max(1, container.clientWidth);
-      chart.applyOptions({ width, height: 170 });
+      const h = width >= 640 ? 340 : 280;
+      chart.applyOptions({ width, height: h });
     };
 
     resizeChart();
@@ -429,77 +433,55 @@ export default function FlashCryptoMiniChart({
 
   return (
     <div
-      className={`rounded-2xl border border-white/12 bg-[radial-gradient(circle_at_18%_0%,rgba(34,197,94,0.12),transparent_38%),linear-gradient(145deg,rgba(2,6,10,0.98),rgba(6,11,15,0.98))] p-4 sm:p-5 ${className}`}
+      className={`rounded-2xl border border-white/[0.06] bg-[linear-gradient(145deg,rgba(2,6,10,0.96),rgba(6,11,15,0.96))] ${className}`}
     >
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
-          <div className="flex items-center gap-3">
-            {tokenImageUri ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={tokenImageUri} alt="" className="h-10 w-10 rounded-full border border-white/20 object-cover shadow-lg" />
-            ) : (
-              <div className="h-10 w-10 rounded-full border border-white/15 bg-white/5" />
-            )}
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-lg sm:text-xl font-black text-white tracking-wide truncate">${symbolText}</span>
-                <span className="rounded-full border border-sky-400/35 bg-sky-400/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-sky-200">
-                  Crypto
+      {/* ── Prices + timer row ── */}
+      <div className="px-4 pt-3 sm:px-5 sm:pt-4">
+        <div className="flex items-end justify-between gap-3">
+          {/* Prices: start + current */}
+          <div className="flex items-baseline gap-6 min-w-0">
+            <div>
+              <div className="text-[10px] text-gray-500 uppercase tracking-wider">Price to beat</div>
+              <div className="text-xl sm:text-2xl font-semibold text-gray-300 tabular-nums">
+                {formatPrice(priceStart)}
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-gray-500 uppercase tracking-wider">
+                  {isEnded ? "Final" : "Now"}
                 </span>
-                {durationMinutes ? (
-                  <span className="rounded-full border border-white/15 bg-white/5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-200">
-                    {durationMinutes}m flash
-                  </span>
-                ) : null}
+                <span className={`text-xs font-semibold tabular-nums ${trend === "up" ? "text-pump-green" : trend === "down" ? "text-red-300" : "text-gray-400"}`}>
+                  {changeText}
+                </span>
               </div>
-              <div className="text-xs text-gray-400 truncate">{nameText}</div>
+              <div className={`text-3xl sm:text-4xl font-bold tabular-nums leading-tight ${trend === "up" ? "text-pump-green" : trend === "down" ? "text-red-300" : "text-white"}`}>
+                {nowPriceForDisplay == null ? "..." : formatPrice(nowPriceForDisplay)}
+              </div>
             </div>
           </div>
 
-          <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-2">
-            <div className="rounded-xl border border-white/12 bg-black/25 px-3 py-2.5">
-              <div className="text-[10px] uppercase tracking-[0.12em] text-gray-500">Start</div>
-              <div className="mt-1 text-sm font-mono font-semibold text-white">{formatPrice(priceStart)}</div>
+          {/* Timer pill — hidden on mobile (shown in card header instead) */}
+          <div className={`shrink-0 rounded-xl border px-3 py-1.5 text-center hidden sm:block ${countdownTone}`}>
+            <div className="text-xl sm:text-2xl font-black tabular-nums leading-none">{countdownLabel}</div>
+            <div className="mt-0.5 text-[8px] uppercase tracking-[0.1em] text-white/45">
+              {isEnded ? "Ended" : countdownCritical ? "Final" : countdownUrgent ? "Closing" : "Left"}
             </div>
-            <div className="rounded-xl border border-white/12 bg-black/25 px-3 py-2.5">
-              <div className="text-[10px] uppercase tracking-[0.12em] text-gray-500">{isEnded ? "Final" : "Current"}</div>
-              <div className={`mt-1 text-sm font-mono font-semibold ${trend === "up" ? "text-pump-green" : trend === "down" ? "text-red-300" : "text-white"}`}>
-                {nowPriceForDisplay == null ? "Loading..." : formatPrice(nowPriceForDisplay)}
-              </div>
-            </div>
-            <div className="rounded-xl border border-white/12 bg-black/25 px-3 py-2.5">
-              <div className="text-[10px] uppercase tracking-[0.12em] text-gray-500">Change</div>
-              <div className={`mt-1 text-sm font-semibold ${trend === "up" ? "text-pump-green" : trend === "down" ? "text-red-300" : "text-gray-200"}`}>
-                {changeText}
-              </div>
-            </div>
-            <div className={`rounded-xl border px-3 py-2.5 ${trendTone}`}>
-              <div className="text-[10px] uppercase tracking-[0.12em] text-white/65">{isEnded ? "Final signal" : "Signal"}</div>
-              <div className="mt-1 text-sm font-bold">{trendLabel}</div>
-            </div>
-          </div>
-        </div>
-
-        <div className={`rounded-2xl border px-4 py-3 sm:min-w-[150px] text-center ${countdownTone}`}>
-          <div className="text-[10px] uppercase tracking-[0.18em] text-white/70">Time Left</div>
-          <div className="mt-1 text-3xl font-black tabular-nums leading-none">{countdownLabel}</div>
-          <div className="mt-1 text-[11px] text-white/80">
-            {isEnded ? "Window ended" : countdownCritical ? "Final seconds" : countdownUrgent ? "Closing fast" : "Window active"}
           </div>
         </div>
       </div>
 
-      <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-3">
-        <div ref={chartContainerRef} className="h-[170px] w-full overflow-hidden" />
+      {/* ── Chart — full-width, dominant ── */}
+      <div className="mt-1">
+        <div ref={chartContainerRef} className="h-[280px] sm:h-[340px] w-full overflow-hidden" />
       </div>
 
-      <div className="mt-3 text-[11px]">
-        <div className="text-gray-500">
-          Rule: <span className="text-gray-300">YES wins if final price &gt; start price.</span>
-        </div>
+      {/* ── Rule ── */}
+      <div className="px-4 pb-2 sm:px-5 sm:pb-3 text-[10px] text-gray-600">
+        Rule: <span className="text-gray-400">YES wins if final price &gt; start price.</span>
       </div>
 
-      {error && <div className="mt-2 text-[10px] text-red-400">{error}</div>}
+      {error && <div className="px-4 pb-3 text-[10px] text-red-400">{error}</div>}
     </div>
   );
 }

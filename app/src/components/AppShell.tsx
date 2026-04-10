@@ -8,11 +8,17 @@ import SiteFooter from "@/components/SiteFooter";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const isSearch = pathname?.startsWith("/search") || pathname?.startsWith("/explorer");
+  const isSearch = pathname?.startsWith("/explorer");
+  // /search has its own mobile header (back button + search input)
+  const isSearchPage = pathname?.startsWith("/search");
   const isTrade = pathname?.startsWith("/trade/");
   // Only the /live feed page controls its own mobile header (MobileTabs);
   // /live/[id] detail pages still use MobileTopBar.
   const isLiveFeed = pathname === "/live";
+  // Live detail pages (/live/[id]) are immersive on mobile — no top bar
+  const isLiveDetail = pathname?.startsWith("/live/") && pathname !== "/live";
+  // Home feed is fullscreen immersive — no mobile top bar, no padding
+  const isHomeFeed = pathname === "/";
 
   return (
     <div className={isTrade ? "md:h-screen md:flex md:flex-col md:overflow-hidden" : ""}>
@@ -21,8 +27,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <Header />
       </div>
 
-      {/* Mobile header — hidden on /live pages (live page has its own tabs) */}
-      {!isLiveFeed && (
+      {/* Mobile header — hidden on /live, /live/[id], home feed, and /search (they have their own headers) */}
+      {!isLiveFeed && !isLiveDetail && !isHomeFeed && !isSearchPage && (
         <div className="md:hidden">
           <MobileTopBar showSearch={!!isSearch} />
         </div>
@@ -31,7 +37,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       {/* Main content */}
       <main
         className={
-          isTrade
+          isHomeFeed
+            ? "h-[100dvh] overflow-hidden md:h-auto md:overflow-visible md:min-h-screen md:pb-0"
+            : isTrade
             ? "flex-1 min-h-0 overflow-hidden pb-32 md:pb-0"
             : isLiveFeed
             ? "h-[calc(100dvh-3.5rem)] overflow-hidden md:h-auto md:overflow-visible md:min-h-screen md:pb-0"

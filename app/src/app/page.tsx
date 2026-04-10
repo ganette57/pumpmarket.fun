@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { ChevronLeft, ChevronRight, ChevronDown } from "lucide-react";
+import { ChevronLeft, ChevronRight, ChevronDown, Search } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import MarketCard from "@/components/MarketCard";
 import FeaturedMarketCardFull from "@/components/FeaturedMarketCardFull";
@@ -12,6 +12,10 @@ import FlashMarketCard from "@/components/FlashMarketCard";
 import CategoryFilters from "@/components/CategoryFilters";
 import type { SelectedCategory } from "@/components/CategoryFilters";
 import { SkeletonCard, SkeletonFeaturedCard } from "@/components/SkeletonCard";
+import HomeFeedItem from "@/components/HomeFeedItem";
+import FeedTradeSheet from "@/components/FeedTradeSheet";
+import HomeFeedActionRail from "@/components/HomeFeedActionRail";
+import HomeFeedCommentsSheet from "@/components/HomeFeedCommentsSheet";
 import { isSportSubcategory } from "@/utils/categories";
 import { getProfiles, type Profile } from "@/lib/profiles";
 import type { FlashMarket } from "@/lib/flashMarkets/types";
@@ -77,34 +81,16 @@ type FeaturedCarouselMarket = {
 type HomeCarouselSlide =
   | { kind: "flash"; market: FlashMarket }
   | { kind: "featured"; market: FeaturedCarouselMarket };
+type MobileFeedEntry =
+  | { kind: "classic"; market: Market }
+  | { kind: "flash"; market: FlashMarket };
 
 type MarketStatusFilter = "all" | "open" | "resolved" | "ending_soon" | "top_volume";
 const CAROUSEL_LIMIT = 5;
-const FLASH_HOME_POLL_MS = 5_000;
+const MOBILE_HOME_RETAP_EVENT = "home-feed:retap";
+const MOBILE_FEED_RESTORE_KEY = "home-feed:restore:v1";
 
 const DEBUG_SPORT_OPEN_FILTER = false;
-
-function isActiveFlashMarket(market: FlashMarket, nowMs = Date.now()): boolean {
-  if (!market || market.status !== "active") return false;
-  const windowEndMs = Date.parse(String(market.windowEnd || ""));
-  return Number.isFinite(windowEndMs) && nowMs < windowEndMs;
-}
-
-function sameFlashMarketList(a: FlashMarket[], b: FlashMarket[]): boolean {
-  if (a === b) return true;
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    const left = a[i];
-    const right = b[i];
-    if (!left || !right) return false;
-    if (left.liveMicroId !== right.liveMicroId) return false;
-    if (left.marketAddress !== right.marketAddress) return false;
-    if (left.status !== right.status) return false;
-    if (String(left.windowEnd || "") !== String(right.windowEnd || "")) return false;
-    if (String(left.createdAt || "") !== String(right.createdAt || "")) return false;
-  }
-  return true;
-}
 
 function normalizeCategoryId(raw: unknown): string {
   const s = String(raw || "")
@@ -219,6 +205,13 @@ function homeSportDurationMs(sport: string | null | undefined): number {
   if (s === "soccer" || s === "football") return 120 * 60_000;
   if (s === "basketball" || s === "nba") return 150 * 60_000;
   return NaN;
+}
+
+function mobileFeedEntryKey(entry: MobileFeedEntry): string {
+  if (entry.kind === "classic") return `classic:${entry.market.publicKey}`;
+  const addr = String(entry.market.marketAddress || "").trim();
+  if (addr) return `flash:${addr}`;
+  return `flash-live:${entry.market.liveMicroId}`;
 }
 
 function mapHomeRowToMarket(row: any): Market {
@@ -346,6 +339,7 @@ export default function Home() {
   const [currentFeaturedIndex, setCurrentFeaturedIndex] = useState(0);
   const [homeLiveFlashMarket, setHomeLiveFlashMarket] = useState<FlashMarket | null>(null);
   const [homeLiveCryptoFlashMarkets, setHomeLiveCryptoFlashMarkets] = useState<FlashMarket[]>([]);
+  const [homeLiveIrlFlashMarkets, setHomeLiveIrlFlashMarkets] = useState<FlashMarket[]>([]);
   const [displayedCount, setDisplayedCount] = useState(12);
   const router = useRouter();
   const sp = useSearchParams();
@@ -357,6 +351,7 @@ export default function Home() {
   const [profilesMap, setProfilesMap] = useState<Record<string, Profile>>({});
 
   const observerTarget = useRef<HTMLDivElement>(null);
+  const mobileFeedRef = useRef<HTMLDivElement | null>(null);
 
   // ✅ used only on mobile to detect which slide is centered
   const mobileFeaturedRef = useRef<HTMLDivElement | null>(null);
@@ -374,34 +369,45 @@ export default function Home() {
     return out;
   }, [openClassicMarkets, resolvedClassicMarkets, featuredClassicMarkets]);
 
-  // ------- LOAD MARKETS FROM SERVER API (cached) -------
-  useEffect(() => {
-    void loadMarkets();
-  }, []);
-
   const refreshHomeLiveCryptoFlashMarkets = useCallback(async () => {
     try {
-      const response = await fetch("/api/explorer/flash-markets?status=open&kind=crypto&limit=12", {
-        cache: "no-store",
-      });
+      const response = await fetch("/api/explorer/flash-markets?status=open&kind=crypto&limit=12");
       if (!response.ok) return;
       const payload = await response.json();
       const nowMs = Date.now();
       const incoming = Array.isArray(payload?.markets) ? (payload.markets as FlashMarket[]) : [];
-      const filtered = incoming.filter((market) => market?.kind === "crypto" && isActiveFlashMarket(market, nowMs));
-
-      setHomeLiveCryptoFlashMarkets((prev) => (sameFlashMarketList(prev, filtered) ? prev : filtered));
-      setHomeLiveFlashMarket((prev) => {
-        if (!prev || prev.kind !== "crypto") return prev;
-        if (isActiveFlashMarket(prev, nowMs) && filtered.some((m) => m.liveMicroId === prev.liveMicroId)) return prev;
-        return filtered[0] ?? null;
+      const filtered = incoming.filter((market) => {
+        if (!market || market.kind !== "crypto") return false;
+        if (market.status !== "active") return false;
+        const windowEndMs = Date.parse(String(market.windowEnd || ""));
+        return Number.isFinite(windowEndMs) && nowMs < windowEndMs;
       });
+      setHomeLiveCryptoFlashMarkets(filtered);
     } catch {
       // Keep existing list on transient network failures.
     }
   }, []);
 
-  async function loadMarkets() {
+  const refreshHomeLiveIrlFlashMarkets = useCallback(async () => {
+    try {
+      const response = await fetch("/api/explorer/flash-markets?status=open&kind=irl&limit=12");
+      if (!response.ok) return;
+      const payload = await response.json();
+      const nowMs = Date.now();
+      const incoming = Array.isArray(payload?.markets) ? (payload.markets as FlashMarket[]) : [];
+      const filtered = incoming.filter((market) => {
+        if (!market || market.kind !== "irl") return false;
+        if (market.status !== "active") return false;
+        const windowEndMs = Date.parse(String(market.windowEnd || ""));
+        return Number.isFinite(windowEndMs) && nowMs < windowEndMs;
+      });
+      setHomeLiveIrlFlashMarkets(filtered);
+    } catch {
+      // Keep existing list on transient network failures.
+    }
+  }, []);
+
+  const loadMarkets = useCallback(async () => {
     setLoading(true);
     try {
       const reqStart = performance.now();
@@ -434,7 +440,7 @@ export default function Home() {
 
       setLiveMap(liveMapData);
       setHomeLiveFlashMarket(topHomeLiveFlash);
-      await refreshHomeLiveCryptoFlashMarkets();
+      await Promise.all([refreshHomeLiveCryptoFlashMarkets(), refreshHomeLiveIrlFlashMarkets()]);
 
       setFeaturedClassicMarkets((featuredData as any[]).map(mapHomeRowToMarket));
       setOpenClassicMarkets((openClassicData as any[]).map(mapHomeRowToMarket));
@@ -455,31 +461,40 @@ export default function Home() {
       setResolvedClassicMarkets([]);
       setHomeLiveFlashMarket(null);
       setHomeLiveCryptoFlashMarkets([]);
+      setHomeLiveIrlFlashMarkets([]);
     } finally {
       setLoading(false);
     }
-  }
+  }, [refreshHomeLiveCryptoFlashMarkets, refreshHomeLiveIrlFlashMarkets]);
+
+  // ------- LOAD MARKETS FROM SERVER API (cached) -------
+  useEffect(() => {
+    void loadMarkets();
+  }, [loadMarkets]);
 
   useEffect(() => {
-    const tick = () => {
-      if (document.visibilityState !== "visible") return;
-      void refreshHomeLiveCryptoFlashMarkets();
-    };
-
-    const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        void refreshHomeLiveCryptoFlashMarkets();
+    const handleHomeRetap = () => {
+      const el = mobileFeedRef.current;
+      if (el) {
+        el.scrollTo({ top: 0, behavior: "smooth" });
+      } else {
+        window.scrollTo({ top: 0, behavior: "smooth" });
       }
+      sessionStorage.removeItem(MOBILE_FEED_RESTORE_KEY);
+      void loadMarkets();
     };
 
-    const timer = window.setInterval(tick, FLASH_HOME_POLL_MS);
-    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener(MOBILE_HOME_RETAP_EVENT, handleHomeRetap);
+    return () => window.removeEventListener(MOBILE_HOME_RETAP_EVENT, handleHomeRetap);
+  }, [loadMarkets]);
 
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-    };
-  }, [refreshHomeLiveCryptoFlashMarkets]);
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void refreshHomeLiveCryptoFlashMarkets();
+      void refreshHomeLiveIrlFlashMarkets();
+    }, 10_000);
+    return () => window.clearInterval(timer);
+  }, [refreshHomeLiveCryptoFlashMarkets, refreshHomeLiveIrlFlashMarkets]);
 
   // Batch-fetch creator profiles when markets change
   useEffect(() => {
@@ -624,11 +639,18 @@ export default function Home() {
       flashSlides.push({ kind: "flash", market });
     }
 
+    for (const market of homeLiveIrlFlashMarkets) {
+      const addr = String(market.marketAddress || "").trim();
+      if (!addr || seenFlashAddresses.has(addr)) continue;
+      seenFlashAddresses.add(addr);
+      flashSlides.push({ kind: "flash", market });
+    }
+
     const scopedFlashSlides = flashSlides.slice(0, CAROUSEL_LIMIT);
     const baseSlides = featuredMarkets.slice(0, Math.max(0, CAROUSEL_LIMIT - scopedFlashSlides.length));
     const mappedBase = baseSlides.map((market) => ({ kind: "featured" as const, market }));
     return [...scopedFlashSlides, ...mappedBase];
-  }, [featuredMarkets, homeLiveCryptoFlashMarkets, homeLiveFlashMarket]);
+  }, [featuredMarkets, homeLiveCryptoFlashMarkets, homeLiveFlashMarket, homeLiveIrlFlashMarkets]);
 
   // reset index when list changes
   useEffect(() => {
@@ -739,237 +761,579 @@ export default function Home() {
     }
   };
 
+  const activeFlashFeedMarkets = useMemo(() => {
+    const nowMs = Date.now();
+    const out: FlashMarket[] = [];
+    const seen = new Set<string>();
+    const includeIfActive = (market: FlashMarket | null | undefined) => {
+      if (!market || market.status !== "active") return;
+      const addr = String(market.marketAddress || "").trim();
+      const dedupeKey = addr || `liveMicro:${market.liveMicroId}`;
+      if (seen.has(dedupeKey)) return;
+      const windowEndMs = Date.parse(String(market.windowEnd || ""));
+      if (Number.isFinite(windowEndMs) && nowMs >= windowEndMs) return;
+      seen.add(dedupeKey);
+      out.push(market);
+    };
+
+    includeIfActive(homeLiveFlashMarket);
+    for (const market of homeLiveCryptoFlashMarkets) includeIfActive(market);
+    for (const market of homeLiveIrlFlashMarkets) includeIfActive(market);
+    return out;
+  }, [homeLiveCryptoFlashMarkets, homeLiveFlashMarket, homeLiveIrlFlashMarkets]);
+
+  // ------- Classic feed markets: live first, then remaining open -------
+  const prioritizedClassicFeedMarkets = useMemo(() => {
+    const merged = [...openClassicMarkets];
+    const seen = new Set(merged.map((m) => m.publicKey));
+    for (const m of featuredClassicMarkets) {
+      if (!seen.has(m.publicKey)) {
+        seen.add(m.publicKey);
+        merged.push(m);
+      }
+    }
+
+    // Keep volume sort inside live/rest buckets.
+    return merged
+      .filter((m) => !m.resolved && !m.cancelled && !m.isBlocked)
+      .sort((a, b) => {
+        const aLive = isSportLiveInProgress(a) || !!liveMap[a.publicKey];
+        const bLive = isSportLiveInProgress(b) || !!liveMap[b.publicKey];
+        if (aLive !== bLive) return aLive ? -1 : 1;
+        return (b.totalVolume || 0) - (a.totalVolume || 0);
+      });
+  }, [featuredClassicMarkets, liveMap, openClassicMarkets]);
+
+  // ------- Mobile feed: live classic, then live flash, then remaining open -------
+  const mobileFeedEntries = useMemo<MobileFeedEntry[]>(() => {
+    const liveClassic: MobileFeedEntry[] = [];
+    const remainingClassic: MobileFeedEntry[] = [];
+
+    for (const market of prioritizedClassicFeedMarkets) {
+      const isLive = isSportLiveInProgress(market) || !!liveMap[market.publicKey];
+      if (isLive) liveClassic.push({ kind: "classic", market });
+      else remainingClassic.push({ kind: "classic", market });
+    }
+
+    const liveFlash: MobileFeedEntry[] = activeFlashFeedMarkets.map((market) => ({ kind: "flash", market }));
+    return [...liveClassic, ...liveFlash, ...remainingClassic];
+  }, [activeFlashFeedMarkets, liveMap, prioritizedClassicFeedMarkets]);
+
+  const saveFeedRestoreState = useCallback(
+    (entryKey?: string, index?: number) => {
+      const el = mobileFeedRef.current;
+      if (!el) return;
+      const safeHeight = Math.max(el.clientHeight, 1);
+      const fallbackIndex = Math.max(0, Math.round(el.scrollTop / safeHeight));
+      const parsedIndex =
+        typeof index === "number" && Number.isFinite(index) ? index : fallbackIndex;
+      const nextIndex = Math.max(0, Math.floor(parsedIndex));
+      const nextEntryKey = entryKey || (mobileFeedEntries[nextIndex] ? mobileFeedEntryKey(mobileFeedEntries[nextIndex]!) : null);
+      const payload = {
+        marketKey: nextEntryKey,
+        index: nextIndex,
+        scrollTop: el.scrollTop,
+        at: Date.now(),
+        pending: true,
+      };
+      sessionStorage.setItem(MOBILE_FEED_RESTORE_KEY, JSON.stringify(payload));
+    },
+    [mobileFeedEntries]
+  );
+
+  useEffect(() => {
+    if (loading || mobileFeedEntries.length === 0) return;
+
+    const raw = sessionStorage.getItem(MOBILE_FEED_RESTORE_KEY);
+    if (!raw) return;
+
+    try {
+      const parsed = JSON.parse(raw) as {
+        marketKey?: string | null;
+        index?: number;
+        scrollTop?: number;
+        at?: number;
+        pending?: boolean;
+      };
+      if (!parsed?.pending) return;
+
+      const savedAt = Number(parsed.at || 0);
+      if (!Number.isFinite(savedAt) || Date.now() - savedAt > 30 * 60_000) {
+        sessionStorage.removeItem(MOBILE_FEED_RESTORE_KEY);
+        return;
+      }
+
+      const el = mobileFeedRef.current;
+      if (!el) return;
+
+      let targetIndex = Number.isFinite(parsed.index) ? Number(parsed.index) : 0;
+      const savedKey = String(parsed.marketKey || "").trim();
+      if (savedKey) {
+        const foundIndex = mobileFeedEntries.findIndex((entry) => mobileFeedEntryKey(entry) === savedKey);
+        if (foundIndex >= 0) targetIndex = foundIndex;
+      }
+      targetIndex = Math.max(0, Math.min(mobileFeedEntries.length - 1, targetIndex));
+
+      const safeHeight = Math.max(el.clientHeight, 1);
+      const targetTop = Number.isFinite(parsed.scrollTop) && Number(parsed.scrollTop) >= 0
+        ? Number(parsed.scrollTop)
+        : targetIndex * safeHeight;
+
+      requestAnimationFrame(() => {
+        el.scrollTo({ top: targetTop, behavior: "auto" });
+      });
+
+      sessionStorage.setItem(
+        MOBILE_FEED_RESTORE_KEY,
+        JSON.stringify({
+          ...parsed,
+          index: targetIndex,
+          scrollTop: targetTop,
+          pending: false,
+        })
+      );
+    } catch {
+      sessionStorage.removeItem(MOBILE_FEED_RESTORE_KEY);
+    }
+  }, [loading, mobileFeedEntries]);
+
+  const [commentsSheetMarket, setCommentsSheetMarket] = useState<{
+    marketAddress: string;
+    question: string;
+  } | null>(null);
+  const [commentsCountByMarket, setCommentsCountByMarket] = useState<Record<string, number>>({});
+
+  const openCommentsSheet = useCallback((marketAddress: string, question: string) => {
+    if (!marketAddress) return;
+    setCommentsSheetMarket({ marketAddress, question });
+  }, []);
+
+  const closeCommentsSheet = useCallback(() => {
+    setCommentsSheetMarket(null);
+  }, []);
+
+  const handleCommentsCountChange = useCallback((marketAddress: string, count: number) => {
+    setCommentsCountByMarket((prev) => {
+      if (prev[marketAddress] === count) return prev;
+      return { ...prev, [marketAddress]: count };
+    });
+  }, []);
+
+  const railPositionStyle = useMemo(
+    () => ({
+      top: "calc(env(safe-area-inset-top, 0px) + 76px)",
+      bottom: "calc(env(safe-area-inset-bottom, 0px) + 178px)",
+    }),
+    []
+  );
+
+  // ------- MOBILE TRADE SHEET STATE -------
+  const [tradeSheetOpen, setTradeSheetOpen] = useState(false);
+  const [tradeSheetMarket, setTradeSheetMarket] = useState<typeof prioritizedClassicFeedMarkets[number] | null>(null);
+  const [tradeSheetOutcome, setTradeSheetOutcome] = useState(0);
+
+  const openTradeSheet = useCallback(
+    (market: typeof prioritizedClassicFeedMarkets[number], outcomeIndex: number) => {
+      setTradeSheetMarket(market);
+      setTradeSheetOutcome(outcomeIndex);
+      setTradeSheetOpen(true);
+    },
+    []
+  );
+
+  /** After a successful buy, update the local market supplies so the feed reflects the new state */
+  const handleFeedBuySuccess = useCallback(
+    (outcomeIndex: number, deltaShares: number) => {
+      if (!tradeSheetMarket) return;
+      const pk = tradeSheetMarket.publicKey;
+
+      const updateMarketList = (list: Market[]) =>
+        list.map((m) => {
+          if (m.publicKey !== pk) return m;
+          const updated = { ...m };
+          if (updated.outcomeSupplies && updated.outcomeSupplies.length > outcomeIndex) {
+            updated.outcomeSupplies = [...updated.outcomeSupplies];
+            updated.outcomeSupplies[outcomeIndex] += deltaShares;
+          }
+          if (outcomeIndex === 0) updated.yesSupply = (updated.yesSupply || 0) + deltaShares;
+          if (outcomeIndex === 1) updated.noSupply = (updated.noSupply || 0) + deltaShares;
+          return updated;
+        });
+
+      setOpenClassicMarkets(updateMarketList);
+      setFeaturedClassicMarkets(updateMarketList);
+    },
+    [tradeSheetMarket]
+  );
+
   // ------- RENDER -------
   return (
     <>
-  
+      {/* ═══════════════════════════════════════════════════════════════
+          MOBILE FEED — fullscreen TikTok-like vertical snap scroll
+          Only visible below md breakpoint
+          ═══════════════════════════════════════════════════════════════ */}
+      <div className="md:hidden">
+        {loading ? (
+          <div className="h-[100dvh] w-full bg-black relative overflow-hidden">
+            {/* Shimmer background placeholder */}
+            <div className="absolute inset-0 bg-gradient-to-br from-[#0a1a10] via-[#0a0a0a] to-[#0d0d1a]" />
+            <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-black/60" />
 
-      {/* Category Filters - sticky */}
-      <div className="border-b border-gray-800 bg-pump-dark/50 sticky top-16 z-30">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <CategoryFilters selectedCategory={selectedCategory} onSelectCategory={setSelectedCategory} />
-        </div>
-      </div>
-
-      {/* Featured Carousel */}
-      <div className="py-6 bg-gradient-to-b from-pump-dark to-transparent">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center space-x-2">
-              <h2 className="text-2xl md:text-3xl font-bold text-white">Top markets</h2>
-              <p className="text-gray-400 text-sm hidden md:block">Trending predictions with high volume</p>
+            {/* Top bar skeleton */}
+            <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-4 pt-[env(safe-area-inset-top,12px)] h-16">
+              <div className="flex items-center gap-2">
+                <div className="h-10 w-10 rounded-full bg-white/10 animate-pulse" />
+                <div className="h-4 w-20 rounded bg-white/10 animate-pulse" />
+              </div>
+              <div className="h-9 w-9 rounded-full bg-white/10 animate-pulse" />
             </div>
 
-            {/* Desktop arrows only */}
-            <div className="hidden md:flex gap-2">
-              <button
-                type="button"
-                onClick={handlePrevFeatured}
-                disabled={!carouselSlides.length}
-                className="p-2 bg-black/70 hover:bg-black border border-white/20 hover:border-white/40 rounded-lg transition disabled:opacity-40"
-                aria-label="Previous featured market"
-              >
-                <ChevronLeft className="w-5 h-5 text-white" />
-              </button>
-              <button
-                type="button"
-                onClick={handleNextFeatured}
-                disabled={!carouselSlides.length}
-                className="p-2 bg-black/70 hover:bg-black border border-white/20 hover:border-white/40 rounded-lg transition disabled:opacity-40"
-                aria-label="Next featured market"
-              >
-                <ChevronRight className="w-5 h-5 text-white" />
-              </button>
+            {/* LIVE badge skeleton */}
+            <div className="absolute top-20 left-4 z-10">
+              <div className="h-7 w-16 rounded-full bg-white/8 animate-pulse" />
+            </div>
+
+            {/* Bottom overlay skeleton */}
+            <div className="absolute bottom-0 left-0 right-0 z-10 px-4 pb-[7.5rem]">
+              {/* Category badge */}
+              <div className="mb-3">
+                <div className="h-6 w-20 rounded-full bg-white/10 animate-pulse" />
+              </div>
+              {/* Title lines */}
+              <div className="h-6 w-[85%] rounded bg-white/10 animate-pulse mb-2" />
+              <div className="h-6 w-[60%] rounded bg-white/10 animate-pulse mb-3" />
+              {/* Sub info row */}
+              <div className="flex items-center gap-3 mb-4">
+                <div className="h-4 w-4 rounded-full bg-white/10 animate-pulse" />
+                <div className="h-3 w-16 rounded bg-white/10 animate-pulse" />
+                <div className="h-3 w-16 rounded bg-white/10 animate-pulse" />
+                <div className="h-3 w-14 rounded bg-white/10 animate-pulse" />
+              </div>
+              {/* Outcome buttons skeleton */}
+              <div className="flex gap-2">
+                <div className="flex-1 h-14 rounded-xl bg-[#00FF87]/15 animate-pulse" />
+                <div className="flex-1 h-14 rounded-xl bg-[#ff5c73]/15 animate-pulse" />
+              </div>
             </div>
           </div>
-
-          {loading ? (
-            <SkeletonFeaturedCard />
-          ) : carouselSlides.length > 0 ? (
-            <div className="relative">
-              {/* DESKTOP: slider - NO extra border wrapper */}
-              <div className="hidden md:block relative overflow-hidden min-h-[400px]">
-                <div
-                  className="flex transition-transform duration-500 ease-out h-[400px]"
-                  style={{ transform: `translateX(-${currentFeaturedIndex * 100}%)` }}
-                >
-                  {carouselSlides.map((slide) => (
-                    <div
-                      key={slide.kind === "flash" ? `flash-${slide.market.liveMicroId}` : `featured-${slide.market.id}`}
-                      className="w-full flex-shrink-0 h-[400px]"
-                    >
-                      {slide.kind === "flash" ? (
-                        <FlashMarketCard market={slide.market} variant="hero" className="h-full" />
-                      ) : (
-                        <FeaturedMarketCardFull
-                          market={slide.market}
-                          liveSessionId={liveMap[slide.market.id] || null}
-                          creatorProfile={slide.market.creator ? profilesMap[slide.market.creator] ?? null : null}
-                        />
-                      )}
-                    </div>
-                  ))}
-                </div>
-
-                {/* dots - outside the cards */}
-                {carouselSlides.length > 1 && (
-                  <div className="flex justify-center gap-2 mt-4">
-                    {carouselSlides.map((_, index) => (
-                      <button
-                        key={index}
-                        type="button"
-                        onClick={() => setCurrentFeaturedIndex(index)}
-                        className={`h-2 rounded-full transition-all duration-300 ${
-                          index === currentFeaturedIndex ? "w-8 bg-white" : "w-2 bg-white/30"
-                        }`}
-                        aria-label={`Go to featured market ${index + 1}`}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* MOBILE: swipe (simple scroll-snap) */}
-              <div className="md:hidden">
-                <div
-                  ref={mobileFeaturedRef}
-                  onScroll={onMobileScroll}
-                  className={[
-                    "flex gap-4 overflow-x-auto pb-3",
-                    "snap-x snap-mandatory",
-                    "[-ms-overflow-style:none] [scrollbar-width:none]",
-                    "[&::-webkit-scrollbar]:hidden",
-                  ].join(" ")}
-                >
-                  {carouselSlides.map((slide) => (
-                    <div
-                      key={slide.kind === "flash" ? `flash-mobile-${slide.market.liveMicroId}` : `featured-mobile-${slide.market.id}`}
-                      className="min-w-[92%] snap-center h-[520px]"
-                    >
-                      {slide.kind === "flash" ? (
-                        <FlashMarketCard market={slide.market} variant="hero" className="h-[520px]" />
-                      ) : (
-                        <FeaturedMarketCardFull
-                          market={slide.market}
-                          liveSessionId={liveMap[slide.market.id] || null}
-                          creatorProfile={slide.market.creator ? profilesMap[slide.market.creator] ?? null : null}
-                        />
-                      )}
-                    </div>
-                  ))}
-                </div>
-
-                {/* dots */}
-                {carouselSlides.length > 1 && (
-                  <div className="flex justify-center gap-2 mt-2">
-                    {carouselSlides.map((_, index) => (
-                      <button
-                        key={index}
-                        type="button"
-                        onClick={() => scrollMobileTo(index)}
-                        className={`h-2 rounded-full transition-all duration-300 ${
-                          index === currentFeaturedIndex ? "w-8 bg-white" : "w-2 bg-white/30"
-                        }`}
-                        aria-label={`Go to featured market ${index + 1}`}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="text-center py-20 text-gray-400">
-              <p>No featured markets available</p>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Markets Grid */}
-      <div className="py-8 pb-24">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between mb-6 gap-3">
-            <div>
-              <h3 className="text-xl font-bold text-white">{getSectionTitle()}</h3>
-              <p className="text-sm text-gray-500">
-                {statusFiltered.length} market{statusFiltered.length !== 1 ? "s" : ""}
-                {statusFilter === "ending_soon" && " ending within 48h"}
-                {statusFilter === "top_volume" && " sorted by volume"}
-              </p>
-            </div>
-
-            <StatusFilterDropdown value={statusFilter} onChange={setStatusFilter} />
+        ) : mobileFeedEntries.length === 0 ? (
+          <div className="h-[100dvh] flex flex-col items-center justify-center bg-black text-gray-400 gap-4">
+            <p className="text-xl">No markets yet</p>
+            <Link href="/create" className="px-6 py-3 bg-pump-green text-black font-bold rounded-xl">
+              Create one
+            </Link>
           </div>
-
-          {loading ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 auto-rows-fr">
-              {Array.from({ length: 8 }).map((_, i) => (
-                <SkeletonCard key={i} />
-              ))}
-            </div>
-          ) : displayedMarkets.length === 0 ? (
-            <div className="text-center py-20">
-              <div className="text-6xl mb-4">
-                {statusFilter === "ending_soon" ? "⏰" : statusFilter === "top_volume" ? "📊" : "🤷"}
+        ) : (
+          <div className="relative bg-black">
+            {/* Fixed overlay: branding + Search icon */}
+            <div className="fixed top-0 left-0 right-0 z-[60] pointer-events-none">
+              <div className="flex items-center justify-between px-4 pt-[env(safe-area-inset-top,12px)] h-16">
+                <Link href="/" className="pointer-events-auto flex items-center gap-1">
+                  <img src="/logo4.png" alt="FunMarket" className="h-10 w-10 object-contain" />
+                  <span className="font-semibold text-white text-sm drop-shadow-lg">FunMarket</span>
+                </Link>
+                <Link
+                  href="/search"
+                  className="pointer-events-auto h-9 w-9 flex items-center justify-center rounded-full bg-black/40 backdrop-blur-sm border border-white/15"
+                  aria-label="Search markets"
+                >
+                  <Search className="w-[18px] h-[18px] text-white/90" />
+                </Link>
               </div>
-              <p className="text-gray-400 text-xl mb-4">
-                {statusFilter === "ending_soon"
-                  ? "No markets ending soon"
-                  : statusFilter === "top_volume"
-                  ? "No active markets with volume"
-                  : "No markets found"}
-              </p>
-              <Link href="/create">
-                <button className="btn-pump">Create the first one!</button>
-              </Link>
             </div>
-          ) : (
-            <>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 auto-rows-fr">
-                {displayedMarkets.map((market, index) => (
-                  <motion.div
-                    key={market.publicKey}
-                    initial={{ opacity: 0, y: 40 }}
-                    whileInView={{ opacity: 1, y: 0 }}
-                    viewport={{ once: true, margin: "-50px" }}
-                    transition={{ duration: 0.35, delay: index * 0.03 }}
-                    className="h-full"
-                  >
-                    <MarketCard
+
+            {/* Feed container */}
+            <div
+              ref={mobileFeedRef}
+              className="h-[100dvh] overflow-y-auto snap-y snap-mandatory"
+              style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
+            >
+              <style>{`.md\\:hidden div::-webkit-scrollbar { display: none; }`}</style>
+              {mobileFeedEntries.map((entry, index) => {
+                const entryKey = mobileFeedEntryKey(entry);
+                if (entry.kind === "flash") {
+                  const marketAddress = String(entry.market.marketAddress || "").trim();
+                  const commentsCount = marketAddress ? commentsCountByMarket[marketAddress] ?? null : null;
+                  return (
+                    <div
+                      key={entryKey}
+                      className="relative h-[100dvh] w-full snap-start snap-always flex-shrink-0 overflow-hidden bg-black"
+                      onClickCapture={() => saveFeedRestoreState(entryKey, index)}
+                    >
+                      <FlashMarketCard market={entry.market} variant="hero" className="h-full rounded-none border-0" />
+                      <div className="pointer-events-none absolute right-2 z-30 flex items-end" style={railPositionStyle}>
+                        <div className="pointer-events-auto">
+                          <HomeFeedActionRail
+                            marketAddress={marketAddress}
+                            marketDbId={entry.market.marketId || null}
+                            question={entry.market.question}
+                            creatorAddress={null}
+                            creatorProfile={null}
+                            commentsCount={commentsCount}
+                            onOpenComments={() => openCommentsSheet(marketAddress, entry.market.question)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }
+
+                const market = entry.market;
+                const creatorProfile = market.creator ? profilesMap[market.creator] ?? null : null;
+                const commentsCount = commentsCountByMarket[market.publicKey] ?? null;
+                return (
+                  <div key={entryKey} className="relative">
+                    <HomeFeedItem
                       market={market as any}
                       liveSessionId={liveMap[market.publicKey] || null}
                       liveMatch={isSportLiveInProgress(market)}
                       finishedMatch={isSportFinishedByProvider(market)}
                       creatorAddress={market.creator}
-                      creatorProfile={market.creator ? profilesMap[market.creator] ?? null : null}
+                      creatorProfile={creatorProfile}
+                      withActionRail
+                      onTitleTap={() => saveFeedRestoreState(entryKey, index)}
+                      onOutcomeTap={(idx) => openTradeSheet(market, idx)}
                     />
-                  </motion.div>
-                ))}
+                    <div className="pointer-events-none absolute right-2 z-30 flex items-end" style={railPositionStyle}>
+                      <div className="pointer-events-auto">
+                        <HomeFeedActionRail
+                          marketAddress={market.publicKey}
+                          marketDbId={market.id || null}
+                          question={market.question}
+                          creatorAddress={market.creator}
+                          creatorProfile={creatorProfile}
+                          commentsCount={commentsCount}
+                          onOpenComments={() => openCommentsSheet(market.publicKey, market.question)}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Quick trade bottom sheet */}
+            <FeedTradeSheet
+              open={tradeSheetOpen}
+              onClose={() => setTradeSheetOpen(false)}
+              market={
+                tradeSheetMarket
+                  ? {
+                      publicKey: tradeSheetMarket.publicKey,
+                      dbId: tradeSheetMarket.id,
+                      question: tradeSheetMarket.question,
+                      creator: tradeSheetMarket.creator,
+                      marketType: tradeSheetMarket.marketType,
+                      outcomeNames: tradeSheetMarket.outcomeNames,
+                      outcomeSupplies: tradeSheetMarket.outcomeSupplies,
+                      yesSupply: tradeSheetMarket.yesSupply,
+                      noSupply: tradeSheetMarket.noSupply,
+                    }
+                  : null
+              }
+              defaultOutcomeIndex={tradeSheetOutcome}
+              onBuySuccess={handleFeedBuySuccess}
+            />
+
+            <HomeFeedCommentsSheet
+              open={!!commentsSheetMarket}
+              marketAddress={commentsSheetMarket?.marketAddress ?? null}
+              marketQuestion={commentsSheetMarket?.question ?? null}
+              initialCount={
+                commentsSheetMarket
+                  ? commentsCountByMarket[commentsSheetMarket.marketAddress] ?? null
+                  : null
+              }
+              onClose={closeCommentsSheet}
+              onCountChange={handleCommentsCountChange}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════════
+          DESKTOP HOME — original home layout (filters, carousel, grid)
+          Only visible at md breakpoint and above
+          ═══════════════════════════════════════════════════════════════ */}
+      <div className="hidden md:block">
+        {/* Category Filters - sticky */}
+        <div className="border-b border-gray-800 bg-pump-dark/50 sticky top-16 z-30">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <CategoryFilters selectedCategory={selectedCategory} onSelectCategory={setSelectedCategory} />
+          </div>
+        </div>
+
+        {/* Featured Carousel */}
+        <div className="py-6 bg-gradient-to-b from-pump-dark to-transparent">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center space-x-2">
+                <h2 className="text-2xl md:text-3xl font-bold text-white">Top markets</h2>
+                <p className="text-gray-400 text-sm hidden md:block">Trending predictions with high volume</p>
               </div>
 
-              {displayedCount < statusFiltered.length && (
-                <div ref={observerTarget} className="text-center py-12">
-                  {loadingMore ? (
-                    <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-pump-green" />
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={loadMore}
-                      className="px-8 py-3 bg-pump-gray hover:bg-pump-dark border border-gray-700 hover:border-pump-green rounded-lg text-white font-semibold transition"
-                    >
-                      Load More Markets
-                    </button>
+              {/* Desktop arrows */}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handlePrevFeatured}
+                  disabled={!carouselSlides.length}
+                  className="p-2 bg-black/70 hover:bg-black border border-white/20 hover:border-white/40 rounded-lg transition disabled:opacity-40"
+                  aria-label="Previous featured market"
+                >
+                  <ChevronLeft className="w-5 h-5 text-white" />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleNextFeatured}
+                  disabled={!carouselSlides.length}
+                  className="p-2 bg-black/70 hover:bg-black border border-white/20 hover:border-white/40 rounded-lg transition disabled:opacity-40"
+                  aria-label="Next featured market"
+                >
+                  <ChevronRight className="w-5 h-5 text-white" />
+                </button>
+              </div>
+            </div>
+
+            {loading ? (
+              <SkeletonFeaturedCard />
+            ) : carouselSlides.length > 0 ? (
+              <div className="relative">
+                <div className="relative overflow-hidden min-h-[400px]">
+                  <div
+                    className="flex transition-transform duration-500 ease-out h-[400px]"
+                    style={{ transform: `translateX(-${currentFeaturedIndex * 100}%)` }}
+                  >
+                    {carouselSlides.map((slide) => (
+                      <div
+                        key={slide.kind === "flash" ? `flash-${slide.market.liveMicroId}` : `featured-${slide.market.id}`}
+                        className="w-full flex-shrink-0 h-[400px]"
+                      >
+                        {slide.kind === "flash" ? (
+                          <FlashMarketCard market={slide.market} variant="hero" className="h-full" />
+                        ) : (
+                          <FeaturedMarketCardFull
+                            market={slide.market}
+                            liveSessionId={liveMap[slide.market.id] || null}
+                            creatorProfile={slide.market.creator ? profilesMap[slide.market.creator] ?? null : null}
+                          />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  {carouselSlides.length > 1 && (
+                    <div className="flex justify-center gap-2 mt-4">
+                      {carouselSlides.map((_, index) => (
+                        <button
+                          key={index}
+                          type="button"
+                          onClick={() => setCurrentFeaturedIndex(index)}
+                          className={`h-2 rounded-full transition-all duration-300 ${
+                            index === currentFeaturedIndex ? "w-8 bg-white" : "w-2 bg-white/30"
+                          }`}
+                          aria-label={`Go to featured market ${index + 1}`}
+                        />
+                      ))}
+                    </div>
                   )}
                 </div>
-              )}
+              </div>
+            ) : (
+              <div className="text-center py-20 text-gray-400">
+                <p>No featured markets available</p>
+              </div>
+            )}
+          </div>
+        </div>
 
-              {displayedCount >= statusFiltered.length && statusFiltered.length > 12 && (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-center py-8 text-gray-500 text-sm">
-                  You&apos;ve reached the end 🎉
-                </motion.div>
-              )}
-            </>
-          )}
+        {/* Markets Grid */}
+        <div className="py-8 pb-24">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex items-center justify-between mb-6 gap-3">
+              <div>
+                <h3 className="text-xl font-bold text-white">{getSectionTitle()}</h3>
+                <p className="text-sm text-gray-500">
+                  {statusFiltered.length} market{statusFiltered.length !== 1 ? "s" : ""}
+                  {statusFilter === "ending_soon" && " ending within 48h"}
+                  {statusFilter === "top_volume" && " sorted by volume"}
+                </p>
+              </div>
+
+              <StatusFilterDropdown value={statusFilter} onChange={setStatusFilter} />
+            </div>
+
+            {loading ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 auto-rows-fr">
+                {Array.from({ length: 8 }).map((_, i) => (
+                  <SkeletonCard key={i} />
+                ))}
+              </div>
+            ) : displayedMarkets.length === 0 ? (
+              <div className="text-center py-20">
+                <div className="text-6xl mb-4">
+                  {statusFilter === "ending_soon" ? "⏰" : statusFilter === "top_volume" ? "📊" : "🤷"}
+                </div>
+                <p className="text-gray-400 text-xl mb-4">
+                  {statusFilter === "ending_soon"
+                    ? "No markets ending soon"
+                    : statusFilter === "top_volume"
+                    ? "No active markets with volume"
+                    : "No markets found"}
+                </p>
+                <Link href="/create">
+                  <button className="btn-pump">Create the first one!</button>
+                </Link>
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 auto-rows-fr">
+                  {displayedMarkets.map((market, index) => (
+                    <motion.div
+                      key={market.publicKey}
+                      initial={{ opacity: 0, y: 40 }}
+                      whileInView={{ opacity: 1, y: 0 }}
+                      viewport={{ once: true, margin: "-50px" }}
+                      transition={{ duration: 0.35, delay: index * 0.03 }}
+                      className="h-full"
+                    >
+                      <MarketCard
+                        market={market as any}
+                        liveSessionId={liveMap[market.publicKey] || null}
+                        liveMatch={isSportLiveInProgress(market)}
+                        finishedMatch={isSportFinishedByProvider(market)}
+                        creatorAddress={market.creator}
+                        creatorProfile={market.creator ? profilesMap[market.creator] ?? null : null}
+                      />
+                    </motion.div>
+                  ))}
+                </div>
+
+                {displayedCount < statusFiltered.length && (
+                  <div ref={observerTarget} className="text-center py-12">
+                    {loadingMore ? (
+                      <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-pump-green" />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={loadMore}
+                        className="px-8 py-3 bg-pump-gray hover:bg-pump-dark border border-gray-700 hover:border-pump-green rounded-lg text-white font-semibold transition"
+                      >
+                        Load More Markets
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {displayedCount >= statusFiltered.length && statusFiltered.length > 12 && (
+                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-center py-8 text-gray-500 text-sm">
+                    You&apos;ve reached the end 🎉
+                  </motion.div>
+                )}
+              </>
+            )}
+          </div>
         </div>
       </div>
     </>

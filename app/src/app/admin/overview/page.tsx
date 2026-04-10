@@ -47,9 +47,9 @@ type Overview = {
     disputes_open: number;
     disputes_total: number;
   };
-  actionable_markets: ActionableMarket[];
   operator_wallet?: string | null;
   operator_balance_sol?: number | null;
+  actionable_markets: ActionableMarket[];
 };
 
 type OnchainInfo = {
@@ -127,12 +127,6 @@ function formatDate(x?: string | null) {
     minute: "2-digit",
     second: "2-digit",
   });
-}
-
-function formatSolBalance(value: number | null | undefined): string {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return "—";
-  return n.toFixed(4);
 }
 
 function Pill({
@@ -301,7 +295,7 @@ export default function AdminOverviewPage() {
 
   // Reports count for badge
   const [pendingReportsCount, setPendingReportsCount] = useState(0);
-  const [walletCopied, setWalletCopied] = useState<"idle" | "done" | "error">("idle");
+  const [operatorCopied, setOperatorCopied] = useState(false);
 
   const resolvedSorted = useMemo(() => {
     const list = [...resolvedRows];
@@ -315,8 +309,8 @@ export default function AdminOverviewPage() {
 
   const markets = data?.actionable_markets || [];
   const k = data?.kpi;
-  const operatorWallet = String(data?.operator_wallet || "").trim() || null;
-  const operatorBalanceSol = data?.operator_balance_sol ?? null;
+  const operatorWallet = String(data?.operator_wallet || "");
+  const operatorBalanceSol = data?.operator_balance_sol;
 
   // Calculate platform fees (1% of total volume)
   const platformFeesSol = useMemo(() => {
@@ -329,15 +323,14 @@ export default function AdminOverviewPage() {
     return publicKey.equals(ADMIN_PUBKEY);
   }, [publicKey]);
 
-  const handleCopyOperatorWallet = useCallback(async () => {
+  const copyOperatorWallet = useCallback(async () => {
     if (!operatorWallet) return;
     try {
       await navigator.clipboard.writeText(operatorWallet);
-      setWalletCopied("done");
-      setTimeout(() => setWalletCopied("idle"), 1200);
+      setOperatorCopied(true);
+      window.setTimeout(() => setOperatorCopied(false), 1400);
     } catch {
-      setWalletCopied("error");
-      setTimeout(() => setWalletCopied("idle"), 1200);
+      setOperatorCopied(false);
     }
   }, [operatorWallet]);
 
@@ -1212,38 +1205,33 @@ export default function AdminOverviewPage() {
                 <div className="text-sm text-gray-400 mt-1">{sectionMeta[activeSection].description}</div>
               </div>
 
-              <div className="card-pump p-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
+              {operatorWallet ? (
+                <div className="card-pump p-4 flex items-start justify-between gap-4">
                   <div className="min-w-0">
                     <div className="text-xs text-gray-500 uppercase tracking-wide">Operator Wallet</div>
-                    <div className="mt-1 text-sm font-mono text-white break-all">
-                      {operatorWallet || "Unavailable"}
+                    <div className="mt-1 text-lg font-semibold text-white font-mono break-all">
+                      {operatorWallet}
                     </div>
-                    <div className="mt-1 text-xs text-gray-400">
-                      Balance: <span className="text-white font-semibold">{formatSolBalance(operatorBalanceSol)} SOL</span>
+                    <div className="mt-1 text-xl font-semibold text-white">
+                      Balance: {operatorBalanceSol == null ? "—" : `${operatorBalanceSol.toFixed(4)} SOL`}
                     </div>
-                    {operatorWallet && (
-                      <a
-                        href={solanaExplorerAddressUrl(operatorWallet)}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="mt-1 inline-block text-[11px] text-pump-green hover:underline"
-                      >
-                        View on Explorer ↗
-                      </a>
-                    )}
-                  </div>
-                  {operatorWallet && (
-                    <button
-                      type="button"
-                      onClick={() => void handleCopyOperatorWallet()}
-                      className="px-2.5 py-1.5 rounded-md border border-white/15 bg-white/5 text-gray-200 text-[11px] hover:bg-white/10 transition"
+                    <a
+                      href={solanaExplorerAddressUrl(operatorWallet)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-1 inline-block text-sm font-semibold text-pump-green hover:underline"
                     >
-                      {walletCopied === "done" ? "Copied" : walletCopied === "error" ? "Copy failed" : "Copy"}
-                    </button>
-                  )}
+                      View on Explorer ↗
+                    </a>
+                  </div>
+                  <button
+                    onClick={copyOperatorWallet}
+                    className="shrink-0 px-4 py-2 rounded-xl border border-white/20 bg-white/5 text-gray-200 text-sm font-medium hover:bg-white/10 transition"
+                  >
+                    {operatorCopied ? "Copied" : "Copy"}
+                  </button>
                 </div>
-              </div>
+              ) : null}
 
               {/* KPI Cards */}
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3 md:gap-4">

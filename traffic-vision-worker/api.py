@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Literal, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from counter import COCO_CLASS_NAME_TO_ID, ROUND_MANAGER, RoundSpec
@@ -18,6 +18,8 @@ class LinePayload(BaseModel):
 class StartRoundPayload(BaseModel):
     roundId: str = Field(min_length=1)
     streamUrl: str = Field(min_length=1)
+    cameraId: Optional[str] = None
+    sourceType: Literal["local_video", "remote_stream"] = "local_video"
     durationSec: int = Field(default=60, ge=1, le=3600)
     line: LinePayload
     classes: List[str] = Field(default_factory=lambda: ["car", "bus", "truck", "motorcycle"])
@@ -33,6 +35,17 @@ class RoundStatusResponse(BaseModel):
     sourceOpened: bool
     lastFrameAt: Optional[int] = None
     detectionsLastFrame: int = 0
+    frameWidth: Optional[int] = None
+    frameHeight: Optional[int] = None
+    countingLineX: Optional[int] = None
+    countingLineY: Optional[int] = None
+    lastCountedTrackId: Optional[int] = None
+    lastCrossingDirection: Optional[str] = None
+    lastDecisionTrackId: Optional[int] = None
+    lastDecisionReason: Optional[str] = None
+    lastDecisionCounted: Optional[bool] = None
+    lastTrackDeltaX: Optional[float] = None
+    lastTrackSamples: Optional[int] = None
 
 
 class StopRoundPayload(BaseModel):
@@ -62,6 +75,8 @@ def start_round(payload: StartRoundPayload) -> Dict[str, object]:
     spec = RoundSpec(
         round_id=payload.roundId.strip(),
         stream_url=payload.streamUrl.strip(),
+        camera_id=(payload.cameraId or "").strip() or None,
+        source_type=payload.sourceType,
         duration_sec=int(payload.durationSec),
         line={
             "x1": float(payload.line.x1),
@@ -82,6 +97,18 @@ def round_status(round_id: str) -> Dict[str, object]:
     if not status:
         raise HTTPException(status_code=404, detail="Round not found.")
     return status
+
+
+@app.get("/rounds/{round_id}/frame.jpg")
+def round_frame(round_id: str) -> Response:
+    frame_jpeg = ROUND_MANAGER.get_debug_frame_jpeg(round_id.strip())
+    if not frame_jpeg:
+        raise HTTPException(status_code=404, detail="No debug frame available yet.")
+    return Response(
+        content=frame_jpeg,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 @app.post("/rounds/{round_id}/stop", response_model=StopRoundResponse)

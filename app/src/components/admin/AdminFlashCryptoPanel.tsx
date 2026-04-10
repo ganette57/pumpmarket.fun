@@ -26,7 +26,6 @@ type Campaign = {
   majorSymbol?: string | null;
   majorPair?: string | null;
   durationMinutes: number;
-  launchIntervalMinutes: number;
   totalMarkets: number;
   launchedCount: number;
   startedAt: string;

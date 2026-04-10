@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { Connection, PublicKey } from "@solana/web3.js";
 import { isAdminRequest } from "@/lib/admin";
-import { getLiveMicroFlags, type SolanaCluster } from "@/lib/liveMicro/config";
+import { Connection, LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
+import { getLiveMicroFlags } from "@/lib/liveMicro/config";
 import { getOperatorPublicKeyBase58 } from "@/lib/liveMicro/operator";
 
 export const dynamic = "force-dynamic";
@@ -19,56 +19,25 @@ function env(name: string) {
   return v;
 }
 
+function optionalEnv(name: string): string {
+  return String(process.env[name] || "").trim();
+}
+
+function operatorRpcForCluster(cluster: string): string {
+  const direct = optionalEnv("LIVE_MICRO_RPC_URL") || optionalEnv("SOLANA_RPC");
+  if (direct) return direct;
+  if (cluster === "devnet") {
+    return optionalEnv("NEXT_PUBLIC_RPC_DEVNET") || optionalEnv("NEXT_PUBLIC_SOLANA_RPC") || optionalEnv("NEXT_PUBLIC_SOLANA_RPC_URL") || "https://api.devnet.solana.com";
+  }
+  if (cluster === "testnet") {
+    return optionalEnv("NEXT_PUBLIC_RPC_TESTNET") || "https://api.testnet.solana.com";
+  }
+  return optionalEnv("NEXT_PUBLIC_RPC_MAINNET") || "https://api.mainnet-beta.solana.com";
+}
+
 function toNumber(x: any) {
   const n = Number(x);
   return Number.isFinite(n) ? n : 0;
-}
-
-function rpcForCluster(cluster: SolanaCluster): string {
-  const direct = String(process.env.LIVE_MICRO_RPC_URL || process.env.SOLANA_RPC || "").trim();
-  if (direct) return direct;
-
-  if (cluster === "mainnet-beta") {
-    return String(process.env.NEXT_PUBLIC_RPC_MAINNET || "").trim() || "https://api.mainnet-beta.solana.com";
-  }
-  if (cluster === "testnet") {
-    return String(process.env.NEXT_PUBLIC_RPC_TESTNET || "").trim() || "https://api.testnet.solana.com";
-  }
-  return (
-    String(
-      process.env.NEXT_PUBLIC_RPC_DEVNET ||
-        process.env.NEXT_PUBLIC_SOLANA_RPC ||
-        process.env.NEXT_PUBLIC_SOLANA_RPC_URL ||
-        "",
-    ).trim() || "https://api.devnet.solana.com"
-  );
-}
-
-async function getOperatorWalletSnapshot(): Promise<{
-  operator_wallet: string | null;
-  operator_balance_sol: number | null;
-}> {
-  let operatorWallet = "";
-  try {
-    operatorWallet = getOperatorPublicKeyBase58();
-  } catch {
-    operatorWallet = "";
-  }
-  if (!operatorWallet) {
-    return { operator_wallet: null, operator_balance_sol: null };
-  }
-
-  try {
-    const flags = getLiveMicroFlags();
-    const connection = new Connection(rpcForCluster(flags.currentCluster), "confirmed");
-    const lamports = await connection.getBalance(new PublicKey(operatorWallet), "confirmed");
-    return {
-      operator_wallet: operatorWallet,
-      operator_balance_sol: Number((lamports / 1_000_000_000).toFixed(4)),
-    };
-  } catch {
-    return { operator_wallet: operatorWallet, operator_balance_sol: null };
-  }
 }
 
 type ActionableMarket = {
@@ -222,7 +191,21 @@ export async function GET(req: Request) {
       if (contestOpen && count > 0) disputes_open += count;
     }
 
-    const operatorSnapshot = await getOperatorWalletSnapshot();
+    let operator_wallet: string | null = null;
+    let operator_balance_sol: number | null = null;
+    try {
+      const wallet = getOperatorPublicKeyBase58();
+      if (wallet) {
+        operator_wallet = wallet;
+        const flags = getLiveMicroFlags();
+        const rpc = operatorRpcForCluster(flags.currentCluster);
+        const connection = new Connection(rpc, "confirmed");
+        const lamports = await connection.getBalance(new PublicKey(wallet), "confirmed");
+        operator_balance_sol = Number((lamports / LAMPORTS_PER_SOL).toFixed(4));
+      }
+    } catch {
+      // Keep overview responsive if operator env/rpc is unavailable.
+    }
 
     return NextResponse.json(
       {
@@ -239,9 +222,9 @@ export async function GET(req: Request) {
           disputes_open,
           disputes_total,
         },
+        operator_wallet,
+        operator_balance_sol,
         actionable_markets,
-        operator_wallet: operatorSnapshot.operator_wallet,
-        operator_balance_sol: operatorSnapshot.operator_balance_sol,
       },
       { headers: NO_STORE_HEADERS }
     );

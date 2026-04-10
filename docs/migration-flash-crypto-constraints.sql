@@ -24,3 +24,13 @@ ALTER TABLE public.live_micro_match_loops
 ALTER TABLE public.live_micro_match_loops
   ADD CONSTRAINT live_micro_match_loops_sport_check
   CHECK (sport IN ('soccer', 'crypto'));
+
+-- 4. Keep single-active uniqueness for soccer only.
+--    Flash crypto needs back-to-back insertion while previous rows may still be
+--    engine_status='active' until async resolution updates them.
+DROP INDEX IF EXISTS public.uq_live_micro_active_per_match;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_live_micro_active_per_match
+  ON public.live_micro_markets(provider_match_id, provider_name, micro_market_type)
+  WHERE engine_status = 'active'
+    AND micro_market_type = 'soccer_next_goal_5m';

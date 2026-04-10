@@ -24,7 +24,6 @@ import {
 import {
   createFlashCryptoGraduationLiveMicroRow,
   createFlashCryptoLiveMicroRow,
-  findActiveFlashCryptoMicroByTokenAndType,
   hasCampaignActiveMarket,
   listActiveFlashCryptoMicros,
   listRecentFlashCryptoTokenUsage,
@@ -49,7 +48,6 @@ import type { LiveMicroRow } from "@/lib/liveMicro/repository";
 // ── In-memory campaign store (like sports auto-tick) ──
 
 const CAMPAIGNS_KEY = Symbol.for("FUNMARKET_FLASH_CRYPTO_CAMPAIGNS");
-const FLASH_CRYPTO_CHAIN_COOLDOWN_MS = 5_000;
 
 function getCampaignStore(): Map<string, FlashCryptoCampaign> {
   const host = (typeof process !== "undefined" ? process : globalThis) as any;
@@ -69,30 +67,6 @@ function log(msg: string, payload?: Record<string, unknown>) {
     return;
   }
   console.log(`[flash-crypto] ${msg}`);
-}
-
-function computeNextLaunchAtFromWindowEnd(windowEndIso: string | null | undefined): number {
-  const endMs = Date.parse(String(windowEndIso || ""));
-  if (Number.isFinite(endMs)) return endMs + FLASH_CRYPTO_CHAIN_COOLDOWN_MS;
-  return Date.now() + FLASH_CRYPTO_CHAIN_COOLDOWN_MS;
-}
-
-function scheduleNextMarketFromWindowEnd(params: {
-  campaign: FlashCryptoCampaign;
-  windowEndIso: string | null | undefined;
-}) {
-  const nextLaunchAt = computeNextLaunchAtFromWindowEnd(params.windowEndIso);
-  params.campaign.nextLaunchAt = nextLaunchAt;
-  log("cooldown after finish = 5s", {
-    campaignId: params.campaign.id,
-    mode: params.campaign.mode,
-    cooldownSeconds: 5,
-  });
-  log(`next market scheduled = ${new Date(nextLaunchAt).toISOString()}`, {
-    campaignId: params.campaign.id,
-    mode: params.campaign.mode,
-    previousWindowEnd: params.windowEndIso || null,
-  });
 }
 
 function asObject(value: unknown): Record<string, unknown> {
@@ -138,7 +112,6 @@ export type StartCampaignInput = {
   majorPair?: string | null;
   durationMinutes: FlashCryptoDurationMinutes;
   totalMarkets: number;
-  launchIntervalMinutes?: number;
 };
 
 export type StartCampaignResult = {
@@ -172,10 +145,10 @@ export async function startFlashCryptoCampaign(input: StartCampaignInput): Promi
   const durationMinutes = normalizeDuration(mode, Number(input.durationMinutes));
 
   const totalMarkets = Math.max(1, Math.min(100, Math.floor(input.totalMarkets || 1)));
-  const launchIntervalMinutes = Math.max(1, Math.min(60, Math.floor(input.launchIntervalMinutes ?? durationMinutes)));
 
   const id = generateId();
   const nowMs = Date.now();
+
   const token = mode === "graduation"
     ? await (async () => {
         const grad = await getFlashCryptoGraduationSnapshot(tokenMint);
@@ -214,7 +187,6 @@ export async function startFlashCryptoCampaign(input: StartCampaignInput): Promi
     majorSymbol: campaignMajorSymbol,
     majorPair: campaignMajorPair,
     durationMinutes,
-    launchIntervalMinutes,
     totalMarkets,
     launchedCount: 0,
     nextLaunchAt: nowMs,
@@ -239,31 +211,14 @@ export async function startFlashCryptoCampaign(input: StartCampaignInput): Promi
   let firstMarket: CreateFlashCryptoMarketResult | null = null;
   try {
     firstMarket = await createFlashCryptoMarket(campaign);
-    if (firstMarket.reusedExisting) {
-      campaign.lastError = null;
-      scheduleNextMarketFromWindowEnd({
-        campaign,
-        windowEndIso: firstMarket.windowEnd,
-      });
-      log("first market skipped (already active)", {
-        campaignId: id,
-        mode,
-        tokenMint: campaign.tokenMint,
-        marketAddress: firstMarket.marketAddress || null,
-      });
-    } else {
-      campaign.launchedCount++;
-      campaign.marketIds.push(firstMarket.marketAddress);
-      scheduleNextMarketFromWindowEnd({
-        campaign,
-        windowEndIso: firstMarket.windowEnd,
-      });
-      log("first market created", {
-        campaignId: id,
-        mode,
-        marketAddress: firstMarket.marketAddress,
-      });
-    }
+    campaign.launchedCount++;
+    advanceNextLaunchAt(campaign, firstMarket.windowEnd);
+    campaign.marketIds.push(firstMarket.marketAddress);
+    log("first market created", {
+      campaignId: id,
+      mode,
+      marketAddress: firstMarket.marketAddress,
+    });
   } catch (e: any) {
     campaign.lastError = String(e?.message || e || "Failed to create first market");
     log("first market failed", { campaignId: id, mode, error: campaign.lastError });
@@ -304,40 +259,33 @@ export type CreateFlashCryptoMarketResult = {
   priceStart?: number | null;
   progressStart?: number | null;
   didGraduateStart?: boolean | null;
-  reusedExisting?: boolean;
 };
 
-function numOrNull(value: unknown): number | null {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-}
+type ScheduledWindow = {
+  windowStartMs: number;
+  windowEndMs: number;
+  windowStartIso: string;
+  windowEndIso: string;
+};
 
-function boolOrNull(value: unknown): boolean | null {
-  if (value === true || value === false) return value;
-  return null;
-}
-
-function buildResultFromExistingActive(row: LiveMicroRow, mode: FlashCryptoMode): CreateFlashCryptoMarketResult {
-  const payload = asObject(row.provider_payload_start);
+function getScheduledWindow(campaign: FlashCryptoCampaign): ScheduledWindow {
+  const windowStartMs = Math.floor(campaign.nextLaunchAt);
+  const windowEndMs = windowStartMs + campaign.durationMinutes * 60_000;
   return {
-    liveMicroId: row.id,
-    marketAddress: String(row.linked_market_address || ""),
-    marketId: row.linked_market_id,
-    createTxSig: "",
-    windowStart: row.window_start,
-    windowEnd: row.window_end,
-    priceStart: mode === "price" ? numOrNull(payload.price_start) : null,
-    progressStart: mode === "graduation" ? numOrNull(payload.progress_start) : null,
-    didGraduateStart: mode === "graduation" ? boolOrNull(payload.did_graduate_start) : null,
-    reusedExisting: true,
+    windowStartMs,
+    windowEndMs,
+    windowStartIso: new Date(windowStartMs).toISOString(),
+    windowEndIso: new Date(windowEndMs).toISOString(),
   };
 }
 
-function isDuplicateKeyError(error: unknown): boolean {
-  const text = String((error as any)?.message || error || "").toLowerCase();
-  return text.includes("duplicate key value")
-    || text.includes("uq_live_micro_active_per_match")
-    || text.includes("23505");
+function advanceNextLaunchAt(campaign: FlashCryptoCampaign, windowEndIso: string): void {
+  const next = Date.parse(windowEndIso);
+  if (Number.isFinite(next)) {
+    campaign.nextLaunchAt = next;
+    return;
+  }
+  campaign.nextLaunchAt += campaign.durationMinutes * 60_000;
 }
 
 async function cleanupOrphanMarket(marketAddress: string, error: unknown) {
@@ -355,6 +303,7 @@ async function cleanupOrphanMarket(marketAddress: string, error: unknown) {
 
 export async function createFlashCryptoPriceMarket(
   campaign: FlashCryptoCampaign,
+  scheduledWindow: ScheduledWindow,
 ): Promise<CreateFlashCryptoMarketResult> {
   assertLiveMicroGuards({ requireOperator: true });
 
@@ -372,23 +321,9 @@ export async function createFlashCryptoPriceMarket(
   const majorPair = String(token.majorPair || campaign.majorPair || "").trim().toUpperCase() || null;
   const durationLabel = campaign.durationMinutes === 1 ? "1 minute" : `${campaign.durationMinutes} minutes`;
 
-  const existingActive = await findActiveFlashCryptoMicroByTokenAndType({
-    tokenMint: token.mint,
-    microType: FLASH_CRYPTO_MICRO_TYPE,
-  });
-  if (existingActive) {
-    log("skip create (already active)", {
-      tokenMint: token.mint,
-      mode: "price",
-      liveMicroId: existingActive.id,
-      marketAddress: existingActive.linked_market_address,
-    });
-    return buildResultFromExistingActive(existingActive, "price");
-  }
-
-  const windowStartIso = new Date().toISOString();
-  const windowEndMs = Date.now() + campaign.durationMinutes * 60_000;
-  const windowEndIso = new Date(windowEndMs).toISOString();
+  const windowStartIso = scheduledWindow.windowStartIso;
+  const windowEndMs = scheduledWindow.windowEndMs;
+  const windowEndIso = scheduledWindow.windowEndIso;
   const resolutionTimeSec = Math.floor(windowEndMs / 1000);
 
   const createResult = await createBinaryMarketOnchain({
@@ -436,24 +371,6 @@ export async function createFlashCryptoPriceMarket(
     campaignId: campaign.id,
   });
 
-  const existingBeforeInsert = await findActiveFlashCryptoMicroByTokenAndType({
-    tokenMint: token.mint,
-    microType: FLASH_CRYPTO_MICRO_TYPE,
-  });
-  if (existingBeforeInsert) {
-    log("skip create (already active)", {
-      tokenMint: token.mint,
-      mode: "price",
-      liveMicroId: existingBeforeInsert.id,
-      marketAddress: existingBeforeInsert.linked_market_address,
-    });
-    await cleanupOrphanMarket(
-      marketRow.marketAddress,
-      new Error(`active market already exists for token=${token.mint} type=${FLASH_CRYPTO_MICRO_TYPE}`),
-    );
-    return buildResultFromExistingActive(existingBeforeInsert, "price");
-  }
-
   let row: LiveMicroRow;
   try {
     row = await createFlashCryptoLiveMicroRow({
@@ -476,17 +393,6 @@ export async function createFlashCryptoPriceMarket(
       createdByOperatorWallet: operatorWallet,
     });
   } catch (lmErr: any) {
-    if (isDuplicateKeyError(lmErr)) {
-      log("duplicate prevented (race)", { tokenMint: token.mint, mode: "price" });
-      const existingAfterDuplicate = await findActiveFlashCryptoMicroByTokenAndType({
-        tokenMint: token.mint,
-        microType: FLASH_CRYPTO_MICRO_TYPE,
-      });
-      if (existingAfterDuplicate) {
-        await cleanupOrphanMarket(marketRow.marketAddress, lmErr);
-        return buildResultFromExistingActive(existingAfterDuplicate, "price");
-      }
-    }
     await cleanupOrphanMarket(marketRow.marketAddress, lmErr);
     throw new Error(
       `live_micro_markets insert failed: ${String(lmErr?.message || lmErr)}. ` +
@@ -507,6 +413,7 @@ export async function createFlashCryptoPriceMarket(
 
 export async function createFlashCryptoGraduationMarket(
   campaign: FlashCryptoCampaign,
+  scheduledWindow: ScheduledWindow,
 ): Promise<CreateFlashCryptoMarketResult> {
   assertLiveMicroGuards({ requireOperator: true });
 
@@ -520,23 +427,9 @@ export async function createFlashCryptoGraduationMarket(
   const tokenName = String(token.name || campaign.tokenName || tokenSymbol).trim();
   const tokenImageUri = token.imageUri || campaign.tokenImageUri || null;
 
-  const existingActive = await findActiveFlashCryptoMicroByTokenAndType({
-    tokenMint: token.mint,
-    microType: FLASH_CRYPTO_GRADUATION_MICRO_TYPE,
-  });
-  if (existingActive) {
-    log("skip create (already active)", {
-      tokenMint: token.mint,
-      mode: "graduation",
-      liveMicroId: existingActive.id,
-      marketAddress: existingActive.linked_market_address,
-    });
-    return buildResultFromExistingActive(existingActive, "graduation");
-  }
-
-  const windowStartIso = new Date().toISOString();
-  const windowEndMs = Date.now() + campaign.durationMinutes * 60_000;
-  const windowEndIso = new Date(windowEndMs).toISOString();
+  const windowStartIso = scheduledWindow.windowStartIso;
+  const windowEndMs = scheduledWindow.windowEndMs;
+  const windowEndIso = scheduledWindow.windowEndIso;
   const resolutionTimeSec = Math.floor(windowEndMs / 1000);
 
   const createResult = await createBinaryMarketOnchain({
@@ -579,24 +472,6 @@ export async function createFlashCryptoGraduationMarket(
     campaignId: campaign.id,
   });
 
-  const existingBeforeInsert = await findActiveFlashCryptoMicroByTokenAndType({
-    tokenMint: token.mint,
-    microType: FLASH_CRYPTO_GRADUATION_MICRO_TYPE,
-  });
-  if (existingBeforeInsert) {
-    log("skip create (already active)", {
-      tokenMint: token.mint,
-      mode: "graduation",
-      liveMicroId: existingBeforeInsert.id,
-      marketAddress: existingBeforeInsert.linked_market_address,
-    });
-    await cleanupOrphanMarket(
-      marketRow.marketAddress,
-      new Error(`active market already exists for token=${token.mint} type=${FLASH_CRYPTO_GRADUATION_MICRO_TYPE}`),
-    );
-    return buildResultFromExistingActive(existingBeforeInsert, "graduation");
-  }
-
   let row: LiveMicroRow;
   try {
     row = await createFlashCryptoGraduationLiveMicroRow({
@@ -618,17 +493,6 @@ export async function createFlashCryptoGraduationMarket(
       createdByOperatorWallet: operatorWallet,
     });
   } catch (lmErr: any) {
-    if (isDuplicateKeyError(lmErr)) {
-      log("duplicate prevented (race)", { tokenMint: token.mint, mode: "graduation" });
-      const existingAfterDuplicate = await findActiveFlashCryptoMicroByTokenAndType({
-        tokenMint: token.mint,
-        microType: FLASH_CRYPTO_GRADUATION_MICRO_TYPE,
-      });
-      if (existingAfterDuplicate) {
-        await cleanupOrphanMarket(marketRow.marketAddress, lmErr);
-        return buildResultFromExistingActive(existingAfterDuplicate, "graduation");
-      }
-    }
     await cleanupOrphanMarket(marketRow.marketAddress, lmErr);
     throw new Error(
       `live_micro_markets insert failed: ${String(lmErr?.message || lmErr)}. ` +
@@ -649,10 +513,11 @@ export async function createFlashCryptoGraduationMarket(
 }
 
 async function createFlashCryptoMarket(campaign: FlashCryptoCampaign): Promise<CreateFlashCryptoMarketResult> {
+  const scheduledWindow = getScheduledWindow(campaign);
   if (campaign.mode === "graduation") {
-    return createFlashCryptoGraduationMarket(campaign);
+    return createFlashCryptoGraduationMarket(campaign, scheduledWindow);
   }
-  return createFlashCryptoPriceMarket(campaign);
+  return createFlashCryptoPriceMarket(campaign, scheduledWindow);
 }
 
 // ── Campaign Runner (called by auto-tick) ──
@@ -663,7 +528,6 @@ export async function tickFlashCryptoCampaigns(): Promise<{
   errors: string[];
 }> {
   const store = getCampaignStore();
-  const nowMs = Date.now();
   let campaignsProcessed = 0;
   let marketsCreated = 0;
   const errors: string[] = [];
@@ -677,61 +541,24 @@ export async function tickFlashCryptoCampaigns(): Promise<{
       continue;
     }
 
-    if (nowMs < campaign.nextLaunchAt) continue;
-    log(`next start reached = ${new Date(campaign.nextLaunchAt).toISOString()}`, {
-      campaignId: campaign.id,
-      mode: campaign.mode,
-      now: new Date(nowMs).toISOString(),
-    });
+    if (Date.now() < campaign.nextLaunchAt) continue;
 
-    let hasActive = false;
     try {
-      hasActive = await hasCampaignActiveMarket(campaign.id);
+      const hasActive = await hasCampaignActiveMarket(campaign.id);
       if (hasActive) continue;
     } catch {
       continue;
-    }
-
-    if (campaign.launchedCount > 0) {
-      log("previous market no longer active", {
-        campaignId: campaign.id,
-        mode: campaign.mode,
-      });
     }
 
     campaignsProcessed++;
 
     try {
       const result = await createFlashCryptoMarket(campaign);
-      if (result.reusedExisting) {
-        campaign.lastError = null;
-        scheduleNextMarketFromWindowEnd({
-          campaign,
-          windowEndIso: result.windowEnd,
-        });
-        log("campaign market skipped (already active)", {
-          campaignId: campaign.id,
-          mode: campaign.mode,
-          tokenMint: campaign.tokenMint,
-          marketAddress: result.marketAddress || null,
-        });
-        continue;
-      }
       campaign.launchedCount++;
+      advanceNextLaunchAt(campaign, result.windowEnd);
       campaign.marketIds.push(result.marketAddress);
       campaign.lastError = null;
       marketsCreated++;
-      scheduleNextMarketFromWindowEnd({
-        campaign,
-        windowEndIso: result.windowEnd,
-      });
-      log("next market created", {
-        campaignId: campaign.id,
-        mode: campaign.mode,
-        marketAddress: result.marketAddress,
-        windowStart: result.windowStart,
-        windowEnd: result.windowEnd,
-      });
       log("campaign market created", {
         campaignId: campaign.id,
         mode: campaign.mode,

@@ -85,7 +85,6 @@ export async function POST(req: Request) {
           : ([1, 3, 5].includes(durationRaw) ? (durationRaw as 1 | 3 | 5) : 5);
 
       const totalMarkets = Math.max(1, Math.min(100, Math.floor(Number(body.total_markets || body.totalMarkets || 10))));
-      const launchInterval = Math.max(1, Math.min(60, Math.floor(Number(body.launch_interval_minutes || body.launchIntervalMinutes || duration))));
 
       const result = await startFlashCryptoCampaign({
         tokenMint,
@@ -95,7 +94,6 @@ export async function POST(req: Request) {
         majorPair: majorSelection?.pair || null,
         durationMinutes: duration,
         totalMarkets,
-        launchIntervalMinutes: launchInterval,
       });
 
       return NextResponse.json({
