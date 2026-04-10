@@ -42,7 +42,43 @@ function marketTopPct(m: Market): number {
 
 type StatusFilter = "open" | "resolved";
 type ResolvedSort = "newest" | "oldest" | "match";
+type ChronoSort = "newest" | "oldest";
+type CryptoSourceFilter = "all" | "pump_fun" | "major";
+type CryptoTokenQuickFilter = "all" | "btc" | "sol" | "eth" | "bnb";
 const RESOLVED_PAGE_SIZE = 28;
+
+function createInitialResolvedPages(): Record<FlashMarketKind, number> {
+  return {
+    sport: 1,
+    crypto: 1,
+    irl: 1,
+  };
+}
+
+function createdAtMs(market: FlashMarket): number {
+  const parsed = Date.parse(String(market.createdAt || ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function sortByCreatedAtDesc(rows: FlashMarket[]): FlashMarket[] {
+  const next = [...rows];
+  next.sort((a, b) => createdAtMs(b) - createdAtMs(a));
+  return next;
+}
+
+function clampPage(page: number, totalPages: number): number {
+  return Math.min(Math.max(1, page), Math.max(1, totalPages));
+}
+
+function sliceForPage(rows: FlashMarket[], page: number, totalPages: number): FlashMarket[] {
+  const safePage = clampPage(page, totalPages);
+  const start = (safePage - 1) * RESOLVED_PAGE_SIZE;
+  return rows.slice(start, start + RESOLVED_PAGE_SIZE);
+}
+
+function normalizeText(input: string | null | undefined): string {
+  return String(input || "").trim().toLowerCase();
+}
 
 export default function ExplorerPage() {
   const searchParams = useSearchParams();
@@ -58,11 +94,19 @@ export default function ExplorerPage() {
   const [irlFlashMarkets, setIrlFlashMarkets] = useState<FlashMarket[]>([]);
   const [irlFlashLoading, setIrlFlashLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("open");
-  const [cryptoStatusFilter, setCryptoStatusFilter] = useState<StatusFilter>("open");
-  const [irlStatusFilter, setIrlStatusFilter] = useState<StatusFilter>("open");
+  const [resolvedKind, setResolvedKind] = useState<FlashMarketKind>("sport");
   const [resolvedSearch, setResolvedSearch] = useState("");
   const [resolvedSort, setResolvedSort] = useState<ResolvedSort>("newest");
-  const [resolvedPage, setResolvedPage] = useState(1);
+  const [cryptoResolvedSearch, setCryptoResolvedSearch] = useState("");
+  const [cryptoResolvedSort, setCryptoResolvedSort] = useState<ChronoSort>("newest");
+  const [cryptoResolvedSource, setCryptoResolvedSource] = useState<CryptoSourceFilter>("all");
+  const [cryptoResolvedToken, setCryptoResolvedToken] = useState<CryptoTokenQuickFilter>("all");
+  const [irlResolvedSearch, setIrlResolvedSearch] = useState("");
+  const [irlResolvedSort, setIrlResolvedSort] = useState<ChronoSort>("newest");
+  const [irlResolvedCamera, setIrlResolvedCamera] = useState("all");
+  const [resolvedPageByKind, setResolvedPageByKind] = useState<Record<FlashMarketKind, number>>(
+    createInitialResolvedPages(),
+  );
   const desktopResolvedGridTopRef = useRef<HTMLDivElement | null>(null);
   const mobileResolvedGridTopRef = useRef<HTMLDivElement | null>(null);
 
@@ -95,42 +139,33 @@ export default function ExplorerPage() {
   }, []);
 
   useEffect(() => {
-    void fetchFlashMarkets("sport", statusFilter);
+    void Promise.all([
+      fetchFlashMarkets("sport", statusFilter),
+      fetchFlashMarkets("crypto", statusFilter),
+      fetchFlashMarkets("irl", statusFilter),
+    ]);
   }, [statusFilter, fetchFlashMarkets]);
 
-  useEffect(() => {
-    void fetchFlashMarkets("crypto", cryptoStatusFilter);
-  }, [cryptoStatusFilter, fetchFlashMarkets]);
-
-  useEffect(() => {
-    void fetchFlashMarkets("irl", irlStatusFilter);
-  }, [irlStatusFilter, fetchFlashMarkets]);
-
-  const visibleFlashMarkets = useMemo(() => {
+  const visibleSportsFlashMarkets = useMemo(() => {
     if (statusFilter !== "resolved") return sportsFlashMarkets;
-    const q = resolvedSearch.trim().toLowerCase();
-    const filtered = q
+    const normalizedQuery = resolvedSearch.trim().toLowerCase();
+    const filtered = normalizedQuery
       ? sportsFlashMarkets.filter((m) => {
           const match = `${m.homeTeam} vs ${m.awayTeam}`.toLowerCase();
           const question = String(m.question || "").toLowerCase();
           const windowLabel = m.loopSequence != null ? `window #${m.loopSequence}` : "";
           return (
-            match.includes(q) ||
-            question.includes(q) ||
-            String(m.homeTeam || "").toLowerCase().includes(q) ||
-            String(m.awayTeam || "").toLowerCase().includes(q) ||
-            windowLabel.includes(q)
+            match.includes(normalizedQuery) ||
+            question.includes(normalizedQuery) ||
+            String(m.homeTeam || "").toLowerCase().includes(normalizedQuery) ||
+            String(m.awayTeam || "").toLowerCase().includes(normalizedQuery) ||
+            windowLabel.includes(normalizedQuery)
           );
         })
       : [...sportsFlashMarkets];
 
-    const createdMs = (m: FlashMarket) => {
-      const t = Date.parse(String(m.createdAt || ""));
-      return Number.isFinite(t) ? t : 0;
-    };
-
     filtered.sort((a, b) => {
-      if (resolvedSort === "oldest") return createdMs(a) - createdMs(b);
+      if (resolvedSort === "oldest") return createdAtMs(a) - createdAtMs(b);
       if (resolvedSort === "match") {
         const matchA = `${a.homeTeam} vs ${a.awayTeam}`.toLowerCase();
         const matchB = `${b.homeTeam} vs ${b.awayTeam}`.toLowerCase();
@@ -139,58 +174,167 @@ export default function ExplorerPage() {
         const seqA = a.loopSequence ?? Number.MAX_SAFE_INTEGER;
         const seqB = b.loopSequence ?? Number.MAX_SAFE_INTEGER;
         if (seqA !== seqB) return seqA - seqB;
-        return createdMs(a) - createdMs(b);
+        return createdAtMs(a) - createdAtMs(b);
       }
-      return createdMs(b) - createdMs(a);
+      return createdAtMs(b) - createdAtMs(a);
     });
 
     return filtered;
   }, [sportsFlashMarkets, resolvedSearch, resolvedSort, statusFilter]);
 
   const visibleCryptoFlashMarkets = useMemo(() => {
-    const rows = [...cryptoFlashMarkets];
-    rows.sort((a, b) => {
-      const ams = Date.parse(String(a.createdAt || ""));
-      const bms = Date.parse(String(b.createdAt || ""));
-      const safeA = Number.isFinite(ams) ? ams : 0;
-      const safeB = Number.isFinite(bms) ? bms : 0;
-      return safeB - safeA;
+    const rows = sortByCreatedAtDesc(cryptoFlashMarkets);
+    if (statusFilter !== "resolved") return rows;
+
+    const normalizedQuery = normalizeText(cryptoResolvedSearch);
+    const bySearch = normalizedQuery
+      ? rows.filter((m) => {
+          const tokenSymbol = normalizeText(m.tokenSymbol);
+          const question = normalizeText(m.question);
+          const providerSource = normalizeText(m.providerSource || m.providerName);
+          const sourceType = normalizeText(m.cryptoSourceType);
+          return (
+            tokenSymbol.includes(normalizedQuery) ||
+            question.includes(normalizedQuery) ||
+            providerSource.includes(normalizedQuery) ||
+            sourceType.includes(normalizedQuery)
+          );
+        })
+      : rows;
+
+    const bySource =
+      cryptoResolvedSource === "all"
+        ? bySearch
+        : bySearch.filter((m) => normalizeText(m.cryptoSourceType) === cryptoResolvedSource);
+
+    const byToken =
+      cryptoResolvedToken === "all"
+        ? bySource
+        : bySource.filter((m) => normalizeText(m.tokenSymbol) === cryptoResolvedToken);
+
+    byToken.sort((a, b) => {
+      if (cryptoResolvedSort === "oldest") return createdAtMs(a) - createdAtMs(b);
+      return createdAtMs(b) - createdAtMs(a);
     });
-    return rows;
-  }, [cryptoFlashMarkets]);
+    return byToken;
+  }, [cryptoFlashMarkets, statusFilter, cryptoResolvedSearch, cryptoResolvedSort, cryptoResolvedSource, cryptoResolvedToken]);
 
   const visibleIrlFlashMarkets = useMemo(() => {
-    const rows = [...irlFlashMarkets];
-    rows.sort((a, b) => {
-      const ams = Date.parse(String(a.createdAt || ""));
-      const bms = Date.parse(String(b.createdAt || ""));
-      const safeA = Number.isFinite(ams) ? ams : 0;
-      const safeB = Number.isFinite(bms) ? bms : 0;
-      return safeB - safeA;
+    const rows = sortByCreatedAtDesc(irlFlashMarkets);
+    if (statusFilter !== "resolved") return rows;
+
+    const normalizedQuery = normalizeText(irlResolvedSearch);
+    const bySearch = normalizedQuery
+      ? rows.filter((m) => {
+          const cameraName = normalizeText(m.league || m.providerMatchId);
+          const question = normalizeText(m.question);
+          return cameraName.includes(normalizedQuery) || question.includes(normalizedQuery);
+        })
+      : rows;
+
+    const byCamera =
+      irlResolvedCamera === "all"
+        ? bySearch
+        : bySearch.filter((m) => normalizeText(m.league || m.providerMatchId) === irlResolvedCamera);
+
+    byCamera.sort((a, b) => {
+      if (irlResolvedSort === "oldest") return createdAtMs(a) - createdAtMs(b);
+      return createdAtMs(b) - createdAtMs(a);
     });
-    return rows;
+    return byCamera;
+  }, [irlFlashMarkets, statusFilter, irlResolvedSearch, irlResolvedSort, irlResolvedCamera]);
+
+  const irlResolvedCameraOptions = useMemo(() => {
+    const unique = new Set<string>();
+    for (const market of irlFlashMarkets) {
+      const camera = normalizeText(market.league || market.providerMatchId);
+      if (camera) unique.add(camera);
+    }
+    return Array.from(unique).sort((a, b) => a.localeCompare(b));
   }, [irlFlashMarkets]);
 
-  const resolvedTotalPages = useMemo(() => {
-    if (statusFilter !== "resolved") return 1;
-    return Math.max(1, Math.ceil(visibleFlashMarkets.length / RESOLVED_PAGE_SIZE));
-  }, [statusFilter, visibleFlashMarkets.length]);
+  const resolvedTotalPagesByKind = useMemo(
+    () => ({
+      sport: Math.max(1, Math.ceil(visibleSportsFlashMarkets.length / RESOLVED_PAGE_SIZE)),
+      crypto: Math.max(1, Math.ceil(visibleCryptoFlashMarkets.length / RESOLVED_PAGE_SIZE)),
+      irl: Math.max(1, Math.ceil(visibleIrlFlashMarkets.length / RESOLVED_PAGE_SIZE)),
+    }),
+    [visibleSportsFlashMarkets.length, visibleCryptoFlashMarkets.length, visibleIrlFlashMarkets.length],
+  );
 
-  const pagedFlashMarkets = useMemo(() => {
-    if (statusFilter !== "resolved") return visibleFlashMarkets;
-    const safePage = Math.min(Math.max(1, resolvedPage), resolvedTotalPages);
-    const start = (safePage - 1) * RESOLVED_PAGE_SIZE;
-    return visibleFlashMarkets.slice(start, start + RESOLVED_PAGE_SIZE);
-  }, [statusFilter, visibleFlashMarkets, resolvedPage, resolvedTotalPages]);
+  const pagedSportsFlashMarkets = useMemo(
+    () =>
+      statusFilter === "resolved"
+        ? sliceForPage(visibleSportsFlashMarkets, resolvedPageByKind.sport, resolvedTotalPagesByKind.sport)
+        : visibleSportsFlashMarkets,
+    [statusFilter, visibleSportsFlashMarkets, resolvedPageByKind.sport, resolvedTotalPagesByKind.sport],
+  );
+
+  const pagedCryptoFlashMarkets = useMemo(
+    () =>
+      statusFilter === "resolved"
+        ? sliceForPage(visibleCryptoFlashMarkets, resolvedPageByKind.crypto, resolvedTotalPagesByKind.crypto)
+        : visibleCryptoFlashMarkets,
+    [statusFilter, visibleCryptoFlashMarkets, resolvedPageByKind.crypto, resolvedTotalPagesByKind.crypto],
+  );
+
+  const pagedIrlFlashMarkets = useMemo(
+    () =>
+      statusFilter === "resolved"
+        ? sliceForPage(visibleIrlFlashMarkets, resolvedPageByKind.irl, resolvedTotalPagesByKind.irl)
+        : visibleIrlFlashMarkets,
+    [statusFilter, visibleIrlFlashMarkets, resolvedPageByKind.irl, resolvedTotalPagesByKind.irl],
+  );
 
   useEffect(() => {
-    setResolvedPage(1);
-  }, [statusFilter, resolvedSearch, resolvedSort]);
+    setResolvedPageByKind(createInitialResolvedPages());
+  }, [statusFilter]);
 
   useEffect(() => {
-    if (statusFilter !== "resolved") return;
-    if (resolvedPage > resolvedTotalPages) setResolvedPage(1);
-  }, [statusFilter, resolvedPage, resolvedTotalPages]);
+    setResolvedPageByKind((prev) => ({ ...prev, sport: 1 }));
+  }, [resolvedSearch, resolvedSort]);
+
+  useEffect(() => {
+    setResolvedPageByKind((prev) => ({ ...prev, crypto: 1 }));
+  }, [cryptoResolvedSearch, cryptoResolvedSort, cryptoResolvedSource, cryptoResolvedToken]);
+
+  useEffect(() => {
+    setResolvedPageByKind((prev) => ({ ...prev, irl: 1 }));
+  }, [irlResolvedSearch, irlResolvedSort, irlResolvedCamera]);
+
+  useEffect(() => {
+    setResolvedPageByKind((prev) => {
+      const next = {
+        sport: clampPage(prev.sport, resolvedTotalPagesByKind.sport),
+        crypto: clampPage(prev.crypto, resolvedTotalPagesByKind.crypto),
+        irl: clampPage(prev.irl, resolvedTotalPagesByKind.irl),
+      };
+      if (next.sport === prev.sport && next.crypto === prev.crypto && next.irl === prev.irl) {
+        return prev;
+      }
+      return next;
+    });
+  }, [resolvedTotalPagesByKind.sport, resolvedTotalPagesByKind.crypto, resolvedTotalPagesByKind.irl]);
+
+  const activeResolvedMarkets = useMemo(() => {
+    if (resolvedKind === "sport") return pagedSportsFlashMarkets;
+    if (resolvedKind === "crypto") return pagedCryptoFlashMarkets;
+    return pagedIrlFlashMarkets;
+  }, [resolvedKind, pagedSportsFlashMarkets, pagedCryptoFlashMarkets, pagedIrlFlashMarkets]);
+
+  const activeResolvedLoading = useMemo(() => {
+    if (resolvedKind === "sport") return sportsFlashLoading;
+    if (resolvedKind === "crypto") return cryptoFlashLoading;
+    return irlFlashLoading;
+  }, [resolvedKind, sportsFlashLoading, cryptoFlashLoading, irlFlashLoading]);
+
+  const activeResolvedTotalPages = resolvedTotalPagesByKind[resolvedKind];
+  const activeResolvedPage = clampPage(resolvedPageByKind[resolvedKind], activeResolvedTotalPages);
+
+  const openResolvedFrom = useCallback((kind: FlashMarketKind) => {
+    setResolvedKind(kind);
+    setStatusFilter("resolved");
+  }, []);
 
   const scrollToResolvedGridTop = useCallback(() => {
     if (typeof window !== "undefined" && window.matchMedia("(min-width: 768px)").matches) {
@@ -201,14 +345,20 @@ export default function ExplorerPage() {
   }, []);
 
   const goToPreviousResolvedPage = useCallback(() => {
-    setResolvedPage((p) => Math.max(1, p - 1));
+    setResolvedPageByKind((prev) => ({
+      ...prev,
+      [resolvedKind]: Math.max(1, prev[resolvedKind] - 1),
+    }));
     requestAnimationFrame(scrollToResolvedGridTop);
-  }, [scrollToResolvedGridTop]);
+  }, [resolvedKind, scrollToResolvedGridTop]);
 
   const goToNextResolvedPage = useCallback(() => {
-    setResolvedPage((p) => Math.min(resolvedTotalPages, p + 1));
+    setResolvedPageByKind((prev) => ({
+      ...prev,
+      [resolvedKind]: Math.min(activeResolvedTotalPages, prev[resolvedKind] + 1),
+    }));
     requestAnimationFrame(scrollToResolvedGridTop);
-  }, [resolvedTotalPages, scrollToResolvedGridTop]);
+  }, [resolvedKind, activeResolvedTotalPages, scrollToResolvedGridTop]);
 
   useEffect(() => {
     if (!q) {
@@ -241,6 +391,26 @@ export default function ExplorerPage() {
   }
 
   const isSearchMode = q.length > 0;
+  const resolvedDesktopTitle =
+    resolvedKind === "sport"
+      ? "⚽ Flash Markets — Sports"
+      : resolvedKind === "crypto"
+        ? "⚡ Flash Markets — Crypto"
+        : "📍 Flash Markets — IRL";
+  const resolvedMobileTitle =
+    resolvedKind === "sport" ? "Sports Resolved" : resolvedKind === "crypto" ? "Crypto Resolved" : "IRL Resolved";
+  const resolvedEmptyTitle =
+    resolvedKind === "sport"
+      ? "No resolved sports flash markets right now"
+      : resolvedKind === "crypto"
+        ? "No resolved crypto flash markets right now"
+        : "No resolved IRL flash markets right now";
+  const resolvedEmptySubtitle =
+    resolvedKind === "sport"
+      ? "Next sports flash session soon"
+      : resolvedKind === "crypto"
+        ? "Resolved crypto flash markets will appear here soon"
+        : "Resolved IRL flash markets will appear here soon";
 
   return (
     <div className="min-h-screen bg-black pb-20">
@@ -268,378 +438,575 @@ export default function ExplorerPage() {
           </section>
         )}
 
-        {/* Desktop-only flash system layout */}
+        {/* Desktop flash layout */}
         <div className="hidden md:block space-y-10">
-          <section>
-            <div className="mb-4 flex items-end justify-between gap-3">
-              <div>
-                <h2 className="text-2xl font-bold text-white">⚽ Flash Markets — Sports</h2>
-                <p className="text-sm text-gray-400">Live quick markets, updated for instant decisions.</p>
-              </div>
-            </div>
-
-            <div className="mb-4 flex items-center gap-2">
-              <FilterPill
-                label="Open"
-                active={statusFilter === "open"}
-                onClick={() => setStatusFilter("open")}
-              />
-              <FilterPill
-                label="Resolved"
-                active={statusFilter === "resolved"}
-                onClick={() => setStatusFilter("resolved")}
-              />
-            </div>
-
-            {statusFilter === "resolved" && (
-              <div className="mb-4 flex items-center gap-2">
-                <input
-                  type="text"
-                  value={resolvedSearch}
-                  onChange={(e) => setResolvedSearch(e.target.value)}
-                  placeholder="Search by match, team, question, window..."
-                  className="w-full max-w-[360px] rounded-lg border border-white/20 bg-white/95 px-3 py-2 text-sm text-black focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
-                />
-                <select
-                  value={resolvedSort}
-                  onChange={(e) => setResolvedSort(e.target.value as ResolvedSort)}
-                  className="w-[220px] rounded-lg border border-white/15 bg-[#111827] px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
-                >
-                  <option value="newest">Newest first</option>
-                  <option value="oldest">Oldest first</option>
-                  <option value="match">Group by match</option>
-                </select>
-              </div>
-            )}
-
-            {sportsFlashLoading ? (
-              <LoadingSpinner />
-            ) : visibleFlashMarkets.length === 0 ? (
-              <PremiumFlashEmptyState
-                title={
-                  statusFilter === "resolved"
-                    ? "No resolved sports flash markets right now"
-                    : "No live sports flash session right now"
-                }
-                subtitle={
-                  statusFilter === "resolved"
-                    ? "Next sports flash session soon"
-                    : "Check back in a few minutes"
-                }
-              />
-            ) : (
-              <>
-                <div ref={desktopResolvedGridTopRef} />
-                <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-                  {pagedFlashMarkets.map((market) => (
-                    <FlashMarketCard key={market.liveMicroId} market={market} />
-                  ))}
+          {statusFilter === "open" ? (
+            <>
+              <section>
+                <div className="mb-4 flex items-end justify-between gap-3">
+                  <div>
+                    <h2 className="text-2xl font-bold text-white">⚽ Flash Markets — Sports</h2>
+                    <p className="text-sm text-gray-400">Live quick markets, updated for instant decisions.</p>
+                  </div>
                 </div>
-                {statusFilter === "resolved" && (
+
+                <div className="mb-4 flex items-center gap-2">
+                  <FilterPill
+                    label="Open"
+                    active
+                    onClick={() => setStatusFilter("open")}
+                  />
+                  <FilterPill
+                    label="Resolved"
+                    active={false}
+                    onClick={() => openResolvedFrom("sport")}
+                  />
+                </div>
+
+                {sportsFlashLoading ? (
+                  <LoadingSpinner />
+                ) : visibleSportsFlashMarkets.length === 0 ? (
+                  <PremiumFlashEmptyState
+                    title="No live sports flash session right now"
+                    subtitle="Check back in a few minutes"
+                  />
+                ) : (
+                  <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+                    {visibleSportsFlashMarkets.map((market) => (
+                      <FlashMarketCard key={market.liveMicroId} market={market} />
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section>
+                <div className="mb-4 flex items-end justify-between gap-3">
+                  <div>
+                    <h2 className="text-2xl font-bold text-white">⚡ Flash Markets — Crypto</h2>
+                    <p className="text-sm text-gray-400">Fast crypto flash sessions, tuned for live momentum.</p>
+                  </div>
+                </div>
+
+                <div className="mb-4 flex items-center gap-2">
+                  <FilterPill
+                    label="Open"
+                    active
+                    onClick={() => setStatusFilter("open")}
+                  />
+                  <FilterPill
+                    label="Resolved"
+                    active={false}
+                    onClick={() => openResolvedFrom("crypto")}
+                  />
+                </div>
+
+                {cryptoFlashLoading ? (
+                  <LoadingSpinner />
+                ) : visibleCryptoFlashMarkets.length === 0 ? (
+                  <PremiumFlashEmptyState
+                    title="No live crypto flash session right now"
+                    subtitle="Crypto flash sessions start soon"
+                  />
+                ) : (
+                  <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+                    {visibleCryptoFlashMarkets.map((market) => (
+                      <FlashMarketCard key={market.liveMicroId} market={market} />
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section>
+                <div className="mb-4 flex items-end justify-between gap-3">
+                  <div>
+                    <h2 className="text-2xl font-bold text-white">📍 Flash Markets — IRL</h2>
+                    <p className="text-sm text-gray-400">Real-world flash windows, ready for quick market action.</p>
+                  </div>
+                </div>
+
+                <div className="mb-4 flex items-center gap-2">
+                  <FilterPill
+                    label="Open"
+                    active
+                    onClick={() => setStatusFilter("open")}
+                  />
+                  <FilterPill
+                    label="Resolved"
+                    active={false}
+                    onClick={() => openResolvedFrom("irl")}
+                  />
+                </div>
+
+                {irlFlashLoading ? (
+                  <LoadingSpinner />
+                ) : visibleIrlFlashMarkets.length === 0 ? (
+                  <PremiumFlashEmptyState
+                    title="No live IRL flash session right now"
+                    subtitle="IRL flash sessions start soon"
+                  />
+                ) : (
+                  <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+                    {visibleIrlFlashMarkets.map((market) => (
+                      <FlashMarketCard key={market.liveMicroId} market={market} />
+                    ))}
+                  </div>
+                )}
+              </section>
+            </>
+          ) : (
+            <section>
+              <div className="mb-4 flex items-end justify-between gap-3">
+                <div>
+                  <h2 className="text-2xl font-bold text-white">{resolvedDesktopTitle}</h2>
+                  <p className="text-sm text-gray-400">Browse resolved flash markets by stream without long scrolling.</p>
+                </div>
+              </div>
+
+              <div className="mb-4 flex items-center gap-2">
+                <FilterPill
+                  label="Open"
+                  active={false}
+                  onClick={() => setStatusFilter("open")}
+                />
+                <FilterPill
+                  label="Resolved"
+                  active
+                  onClick={() => setStatusFilter("resolved")}
+                />
+              </div>
+
+              <div className="mb-4 flex flex-wrap items-center gap-2">
+                <FilterPill
+                  label="Sports"
+                  active={resolvedKind === "sport"}
+                  onClick={() => setResolvedKind("sport")}
+                />
+                <FilterPill
+                  label="Crypto"
+                  active={resolvedKind === "crypto"}
+                  onClick={() => setResolvedKind("crypto")}
+                />
+                <FilterPill
+                  label="IRL"
+                  active={resolvedKind === "irl"}
+                  onClick={() => setResolvedKind("irl")}
+                />
+              </div>
+
+              {resolvedKind === "sport" && (
+                <div className="mb-4 flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={resolvedSearch}
+                    onChange={(e) => setResolvedSearch(e.target.value)}
+                    placeholder="Search by match, team, question, window..."
+                    className="w-full max-w-[360px] rounded-lg border border-white/20 bg-white/95 px-3 py-2 text-sm text-black focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
+                  />
+                  <select
+                    value={resolvedSort}
+                    onChange={(e) => setResolvedSort(e.target.value as ResolvedSort)}
+                    className="w-[220px] rounded-lg border border-white/15 bg-[#111827] px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
+                  >
+                    <option value="newest">Newest first</option>
+                    <option value="oldest">Oldest first</option>
+                    <option value="match">Group by match</option>
+                  </select>
+                </div>
+              )}
+              {resolvedKind === "crypto" && (
+                <div className="mb-4 space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <FilterPill label="All" active={cryptoResolvedToken === "all"} onClick={() => setCryptoResolvedToken("all")} />
+                    <FilterPill label="BTC" active={cryptoResolvedToken === "btc"} onClick={() => setCryptoResolvedToken("btc")} />
+                    <FilterPill label="SOL" active={cryptoResolvedToken === "sol"} onClick={() => setCryptoResolvedToken("sol")} />
+                    <FilterPill label="ETH" active={cryptoResolvedToken === "eth"} onClick={() => setCryptoResolvedToken("eth")} />
+                    <FilterPill label="BNB" active={cryptoResolvedToken === "bnb"} onClick={() => setCryptoResolvedToken("bnb")} />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={cryptoResolvedSearch}
+                      onChange={(e) => setCryptoResolvedSearch(e.target.value)}
+                      placeholder="Search token, question, source..."
+                      className="w-full max-w-[320px] rounded-lg border border-white/20 bg-white/95 px-3 py-2 text-sm text-black focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
+                    />
+                    <select
+                      value={cryptoResolvedSort}
+                      onChange={(e) => setCryptoResolvedSort(e.target.value as ChronoSort)}
+                      className="w-[180px] rounded-lg border border-white/15 bg-[#111827] px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
+                    >
+                      <option value="newest">Newest first</option>
+                      <option value="oldest">Oldest first</option>
+                    </select>
+                    <select
+                      value={cryptoResolvedSource}
+                      onChange={(e) => setCryptoResolvedSource(e.target.value as CryptoSourceFilter)}
+                      className="w-[160px] rounded-lg border border-white/15 bg-[#111827] px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
+                    >
+                      <option value="all">All sources</option>
+                      <option value="pump_fun">Pump.fun</option>
+                      <option value="major">Majors</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+              {resolvedKind === "irl" && (
+                <div className="mb-4 flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={irlResolvedSearch}
+                    onChange={(e) => setIrlResolvedSearch(e.target.value)}
+                    placeholder="Search camera or question..."
+                    className="w-full max-w-[320px] rounded-lg border border-white/20 bg-white/95 px-3 py-2 text-sm text-black focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
+                  />
+                  <select
+                    value={irlResolvedSort}
+                    onChange={(e) => setIrlResolvedSort(e.target.value as ChronoSort)}
+                    className="w-[180px] rounded-lg border border-white/15 bg-[#111827] px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
+                  >
+                    <option value="newest">Newest first</option>
+                    <option value="oldest">Oldest first</option>
+                  </select>
+                  <select
+                    value={irlResolvedCamera}
+                    onChange={(e) => setIrlResolvedCamera(e.target.value)}
+                    className="w-[220px] rounded-lg border border-white/15 bg-[#111827] px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
+                  >
+                    <option value="all">All cameras</option>
+                    {irlResolvedCameraOptions.map((camera) => (
+                      <option key={camera} value={camera}>
+                        {camera}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {activeResolvedLoading ? (
+                <LoadingSpinner />
+              ) : activeResolvedMarkets.length === 0 ? (
+                <PremiumFlashEmptyState title={resolvedEmptyTitle} subtitle={resolvedEmptySubtitle} />
+              ) : (
+                <>
+                  <div ref={desktopResolvedGridTopRef} />
+                  <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+                    {activeResolvedMarkets.map((market) => (
+                      <FlashMarketCard key={market.liveMicroId} market={market} />
+                    ))}
+                  </div>
                   <div className="mt-5 flex items-center justify-center gap-3">
                     <button
                       type="button"
                       onClick={goToPreviousResolvedPage}
-                      disabled={resolvedPage <= 1}
+                      disabled={activeResolvedPage <= 1}
                       className="rounded-lg border border-white/15 px-3 py-1.5 text-sm font-medium text-white transition hover:border-white/30 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       Previous
                     </button>
                     <span className="tabular-nums text-sm text-gray-300">
-                      Page {Math.min(resolvedPage, resolvedTotalPages)} / {resolvedTotalPages}
+                      Page {activeResolvedPage} / {activeResolvedTotalPages}
                     </span>
                     <button
                       type="button"
                       onClick={goToNextResolvedPage}
-                      disabled={resolvedPage >= resolvedTotalPages}
+                      disabled={activeResolvedPage >= activeResolvedTotalPages}
                       className="rounded-lg border border-white/15 px-3 py-1.5 text-sm font-medium text-white transition hover:border-white/30 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       Next
                     </button>
                   </div>
-                )}
-              </>
-            )}
-          </section>
-
-          <section>
-            <div className="mb-4 flex items-end justify-between gap-3">
-              <div>
-                <h2 className="text-2xl font-bold text-white">⚡ Flash Markets — Crypto</h2>
-                <p className="text-sm text-gray-400">Fast crypto flash sessions, tuned for live momentum.</p>
-              </div>
-            </div>
-
-            <div className="mb-4 flex items-center gap-2">
-              <FilterPill
-                label="Open"
-                active={cryptoStatusFilter === "open"}
-                onClick={() => setCryptoStatusFilter("open")}
-              />
-              <FilterPill
-                label="Resolved"
-                active={cryptoStatusFilter === "resolved"}
-                onClick={() => setCryptoStatusFilter("resolved")}
-              />
-            </div>
-
-            {cryptoFlashLoading ? (
-              <LoadingSpinner />
-            ) : visibleCryptoFlashMarkets.length === 0 ? (
-              <PremiumFlashEmptyState
-                title={
-                  cryptoStatusFilter === "resolved"
-                    ? "No resolved crypto flash markets right now"
-                    : "No live crypto flash session right now"
-                }
-                subtitle={
-                  cryptoStatusFilter === "resolved"
-                    ? "Resolved crypto flash markets will appear here soon"
-                    : "Crypto flash sessions start soon"
-                }
-              />
-            ) : (
-              <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-                {visibleCryptoFlashMarkets.map((market) => (
-                  <FlashMarketCard key={market.liveMicroId} market={market} />
-                ))}
-              </div>
-            )}
-          </section>
-
-          <section>
-            <div className="mb-4 flex items-end justify-between gap-3">
-              <div>
-                <h2 className="text-2xl font-bold text-white">📍 Flash Markets — IRL</h2>
-                <p className="text-sm text-gray-400">Real-world flash windows, ready for quick market action.</p>
-              </div>
-            </div>
-
-            <div className="mb-4 flex items-center gap-2">
-              <FilterPill
-                label="Open"
-                active={irlStatusFilter === "open"}
-                onClick={() => setIrlStatusFilter("open")}
-              />
-              <FilterPill
-                label="Resolved"
-                active={irlStatusFilter === "resolved"}
-                onClick={() => setIrlStatusFilter("resolved")}
-              />
-            </div>
-
-            {irlFlashLoading ? (
-              <LoadingSpinner />
-            ) : visibleIrlFlashMarkets.length === 0 ? (
-              <PremiumFlashEmptyState
-                title={
-                  irlStatusFilter === "resolved"
-                    ? "No resolved IRL flash markets right now"
-                    : "No live IRL flash session right now"
-                }
-                subtitle={
-                  irlStatusFilter === "resolved"
-                    ? "Resolved IRL flash markets will appear here soon"
-                    : "IRL flash sessions start soon"
-                }
-              />
-            ) : (
-              <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-                {visibleIrlFlashMarkets.map((market) => (
-                  <FlashMarketCard key={market.liveMicroId} market={market} />
-                ))}
-              </div>
-            )}
-          </section>
+                </>
+              )}
+            </section>
+          )}
         </div>
 
-        {/* Mobile flash sections */}
+        {/* Mobile flash layout */}
         <div className="space-y-8 md:hidden">
-          <section>
-            <div className="flex items-end justify-between gap-3 mb-4">
-              <div>
-                <h2 className="text-xl font-bold text-white">⚽ Flash Markets — Sports</h2>
-                <p className="mt-1 text-sm text-gray-400">Live quick markets, updated for instant decisions.</p>
-              </div>
-            </div>
-
-            {/* ── Filter pills ── */}
-            <div className="mb-4 flex items-center gap-2">
-              <FilterPill
-                label="Open"
-                active={statusFilter === "open"}
-                onClick={() => setStatusFilter("open")}
-              />
-              <FilterPill
-                label="Resolved"
-                active={statusFilter === "resolved"}
-                onClick={() => setStatusFilter("resolved")}
-              />
-            </div>
-
-            {statusFilter === "resolved" && (
-              <div className="mb-4 flex flex-col gap-2">
-                <input
-                  type="text"
-                  value={resolvedSearch}
-                  onChange={(e) => setResolvedSearch(e.target.value)}
-                  placeholder="Search by match, team, question, window..."
-                  className="w-full rounded-lg border border-white/20 bg-white/95 px-3 py-2 text-sm text-black focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
-                />
-                <select
-                  value={resolvedSort}
-                  onChange={(e) => setResolvedSort(e.target.value as ResolvedSort)}
-                  className="w-full rounded-lg border border-white/15 bg-[#111827] px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
-                >
-                  <option value="newest">Newest first</option>
-                  <option value="oldest">Oldest first</option>
-                  <option value="match">Group by match</option>
-                </select>
-              </div>
-            )}
-
-            {sportsFlashLoading ? (
-              <LoadingSpinner />
-            ) : visibleFlashMarkets.length === 0 ? (
-              <PremiumFlashEmptyState
-                compact
-                title={
-                  statusFilter === "resolved"
-                    ? "No resolved sports flash markets right now"
-                    : "No live sports flash session right now"
-                }
-                subtitle={
-                  statusFilter === "resolved"
-                    ? "Next sports flash session soon"
-                    : "Check back in a few minutes"
-                }
-              />
-            ) : (
-              <>
-                <div ref={mobileResolvedGridTopRef} />
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                  {pagedFlashMarkets.map((market) => (
-                    <FlashMarketCard key={market.liveMicroId} market={market} />
-                  ))}
+          {statusFilter === "open" ? (
+            <>
+              <section>
+                <div className="mb-4 flex items-end justify-between gap-3">
+                  <div>
+                    <h2 className="text-xl font-bold text-white">⚽ Flash Markets — Sports</h2>
+                    <p className="mt-1 text-sm text-gray-400">Live quick markets, updated for instant decisions.</p>
+                  </div>
                 </div>
-                {statusFilter === "resolved" && (
+
+                <div className="mb-4 flex items-center gap-2">
+                  <FilterPill
+                    label="Open"
+                    active
+                    onClick={() => setStatusFilter("open")}
+                  />
+                  <FilterPill
+                    label="Resolved"
+                    active={false}
+                    onClick={() => openResolvedFrom("sport")}
+                  />
+                </div>
+
+                {sportsFlashLoading ? (
+                  <LoadingSpinner />
+                ) : visibleSportsFlashMarkets.length === 0 ? (
+                  <PremiumFlashEmptyState
+                    compact
+                    title="No live sports flash session right now"
+                    subtitle="Check back in a few minutes"
+                  />
+                ) : (
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+                    {visibleSportsFlashMarkets.map((market) => (
+                      <FlashMarketCard key={market.liveMicroId} market={market} />
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section>
+                <div className="mb-4 flex items-end justify-between gap-3">
+                  <div>
+                    <h2 className="text-xl font-bold text-white">⚡ Flash Markets — Crypto</h2>
+                    <p className="mt-1 text-sm text-gray-400">Fast crypto flash sessions, tuned for live momentum.</p>
+                  </div>
+                </div>
+
+                <div className="mb-4 flex items-center gap-2">
+                  <FilterPill
+                    label="Open"
+                    active
+                    onClick={() => setStatusFilter("open")}
+                  />
+                  <FilterPill
+                    label="Resolved"
+                    active={false}
+                    onClick={() => openResolvedFrom("crypto")}
+                  />
+                </div>
+
+                {cryptoFlashLoading ? (
+                  <LoadingSpinner />
+                ) : visibleCryptoFlashMarkets.length === 0 ? (
+                  <PremiumFlashEmptyState
+                    compact
+                    title="No live crypto flash session right now"
+                    subtitle="Crypto flash sessions start soon"
+                  />
+                ) : (
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+                    {visibleCryptoFlashMarkets.map((market) => (
+                      <FlashMarketCard key={market.liveMicroId} market={market} />
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section>
+                <div className="mb-4 flex items-end justify-between gap-3">
+                  <div>
+                    <h2 className="text-xl font-bold text-white">📍 Flash Markets — IRL</h2>
+                    <p className="mt-1 text-sm text-gray-400">Real-world flash windows, ready for quick market action.</p>
+                  </div>
+                </div>
+
+                <div className="mb-4 flex items-center gap-2">
+                  <FilterPill
+                    label="Open"
+                    active
+                    onClick={() => setStatusFilter("open")}
+                  />
+                  <FilterPill
+                    label="Resolved"
+                    active={false}
+                    onClick={() => openResolvedFrom("irl")}
+                  />
+                </div>
+
+                {irlFlashLoading ? (
+                  <LoadingSpinner />
+                ) : visibleIrlFlashMarkets.length === 0 ? (
+                  <PremiumFlashEmptyState
+                    compact
+                    title="No live IRL flash session right now"
+                    subtitle="IRL flash sessions start soon"
+                  />
+                ) : (
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+                    {visibleIrlFlashMarkets.map((market) => (
+                      <FlashMarketCard key={market.liveMicroId} market={market} />
+                    ))}
+                  </div>
+                )}
+              </section>
+            </>
+          ) : (
+            <section>
+              <div className="mb-4 flex items-end justify-between gap-3">
+                <div>
+                  <h2 className="text-xl font-bold text-white">Flash Markets — {resolvedMobileTitle}</h2>
+                  <p className="mt-1 text-sm text-gray-400">One resolved stream at a time for faster mobile browsing.</p>
+                </div>
+              </div>
+
+              <div className="mb-4 flex items-center gap-2">
+                <FilterPill
+                  label="Open"
+                  active={false}
+                  onClick={() => setStatusFilter("open")}
+                />
+                <FilterPill
+                  label="Resolved"
+                  active
+                  onClick={() => setStatusFilter("resolved")}
+                />
+              </div>
+
+              <div className="mb-4 flex items-center gap-2 overflow-x-auto pb-1">
+                <FilterPill
+                  label="Sports"
+                  active={resolvedKind === "sport"}
+                  onClick={() => setResolvedKind("sport")}
+                />
+                <FilterPill
+                  label="Crypto"
+                  active={resolvedKind === "crypto"}
+                  onClick={() => setResolvedKind("crypto")}
+                />
+                <FilterPill
+                  label="IRL"
+                  active={resolvedKind === "irl"}
+                  onClick={() => setResolvedKind("irl")}
+                />
+              </div>
+
+              {resolvedKind === "sport" && (
+                <div className="mb-4 flex flex-col gap-2">
+                  <input
+                    type="text"
+                    value={resolvedSearch}
+                    onChange={(e) => setResolvedSearch(e.target.value)}
+                    placeholder="Search by match, team, question, window..."
+                    className="w-full rounded-lg border border-white/20 bg-white/95 px-3 py-2 text-sm text-black focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
+                  />
+                  <select
+                    value={resolvedSort}
+                    onChange={(e) => setResolvedSort(e.target.value as ResolvedSort)}
+                    className="w-full rounded-lg border border-white/15 bg-[#111827] px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
+                  >
+                    <option value="newest">Newest first</option>
+                    <option value="oldest">Oldest first</option>
+                    <option value="match">Group by match</option>
+                  </select>
+                </div>
+              )}
+              {resolvedKind === "crypto" && (
+                <div className="mb-4 flex flex-col gap-2">
+                  <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                    <FilterPill label="All" active={cryptoResolvedToken === "all"} onClick={() => setCryptoResolvedToken("all")} />
+                    <FilterPill label="BTC" active={cryptoResolvedToken === "btc"} onClick={() => setCryptoResolvedToken("btc")} />
+                    <FilterPill label="SOL" active={cryptoResolvedToken === "sol"} onClick={() => setCryptoResolvedToken("sol")} />
+                    <FilterPill label="ETH" active={cryptoResolvedToken === "eth"} onClick={() => setCryptoResolvedToken("eth")} />
+                    <FilterPill label="BNB" active={cryptoResolvedToken === "bnb"} onClick={() => setCryptoResolvedToken("bnb")} />
+                  </div>
+                  <input
+                    type="text"
+                    value={cryptoResolvedSearch}
+                    onChange={(e) => setCryptoResolvedSearch(e.target.value)}
+                    placeholder="Search token, question, source..."
+                    className="w-full rounded-lg border border-white/20 bg-white/95 px-3 py-2 text-sm text-black focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
+                  />
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <select
+                      value={cryptoResolvedSort}
+                      onChange={(e) => setCryptoResolvedSort(e.target.value as ChronoSort)}
+                      className="w-full rounded-lg border border-white/15 bg-[#111827] px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
+                    >
+                      <option value="newest">Newest first</option>
+                      <option value="oldest">Oldest first</option>
+                    </select>
+                    <select
+                      value={cryptoResolvedSource}
+                      onChange={(e) => setCryptoResolvedSource(e.target.value as CryptoSourceFilter)}
+                      className="w-full rounded-lg border border-white/15 bg-[#111827] px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
+                    >
+                      <option value="all">All sources</option>
+                      <option value="pump_fun">Pump.fun</option>
+                      <option value="major">Majors</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+              {resolvedKind === "irl" && (
+                <div className="mb-4 flex flex-col gap-2">
+                  <input
+                    type="text"
+                    value={irlResolvedSearch}
+                    onChange={(e) => setIrlResolvedSearch(e.target.value)}
+                    placeholder="Search camera or question..."
+                    className="w-full rounded-lg border border-white/20 bg-white/95 px-3 py-2 text-sm text-black focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
+                  />
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <select
+                      value={irlResolvedSort}
+                      onChange={(e) => setIrlResolvedSort(e.target.value as ChronoSort)}
+                      className="w-full rounded-lg border border-white/15 bg-[#111827] px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
+                    >
+                      <option value="newest">Newest first</option>
+                      <option value="oldest">Oldest first</option>
+                    </select>
+                    <select
+                      value={irlResolvedCamera}
+                      onChange={(e) => setIrlResolvedCamera(e.target.value)}
+                      className="w-full rounded-lg border border-white/15 bg-[#111827] px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#61ff9a]"
+                    >
+                      <option value="all">All cameras</option>
+                      {irlResolvedCameraOptions.map((camera) => (
+                        <option key={camera} value={camera}>
+                          {camera}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              {activeResolvedLoading ? (
+                <LoadingSpinner />
+              ) : activeResolvedMarkets.length === 0 ? (
+                <PremiumFlashEmptyState compact title={resolvedEmptyTitle} subtitle={resolvedEmptySubtitle} />
+              ) : (
+                <>
+                  <div ref={mobileResolvedGridTopRef} />
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+                    {activeResolvedMarkets.map((market) => (
+                      <FlashMarketCard key={market.liveMicroId} market={market} />
+                    ))}
+                  </div>
                   <div className="mt-5 flex items-center justify-center gap-3">
                     <button
                       type="button"
                       onClick={goToPreviousResolvedPage}
-                      disabled={resolvedPage <= 1}
-                      className="px-3 py-1.5 rounded-lg text-sm font-medium border border-white/15 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:border-white/30 transition"
+                      disabled={activeResolvedPage <= 1}
+                      className="rounded-lg border border-white/15 px-3 py-1.5 text-sm font-medium text-white transition hover:border-white/30 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       Previous
                     </button>
-                    <span className="text-sm text-gray-300 tabular-nums">
-                      Page {Math.min(resolvedPage, resolvedTotalPages)} / {resolvedTotalPages}
+                    <span className="tabular-nums text-sm text-gray-300">
+                      Page {activeResolvedPage} / {activeResolvedTotalPages}
                     </span>
                     <button
                       type="button"
                       onClick={goToNextResolvedPage}
-                      disabled={resolvedPage >= resolvedTotalPages}
-                      className="px-3 py-1.5 rounded-lg text-sm font-medium border border-white/15 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:border-white/30 transition"
+                      disabled={activeResolvedPage >= activeResolvedTotalPages}
+                      className="rounded-lg border border-white/15 px-3 py-1.5 text-sm font-medium text-white transition hover:border-white/30 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       Next
                     </button>
                   </div>
-                )}
-              </>
-            )}
-          </section>
-
-          <section>
-            <div className="mb-4 flex items-end justify-between gap-3">
-              <div>
-                <h2 className="text-xl font-bold text-white">⚡ Flash Markets — Crypto</h2>
-                <p className="mt-1 text-sm text-gray-400">Fast crypto flash sessions, tuned for live momentum.</p>
-              </div>
-            </div>
-
-            <div className="mb-4 flex items-center gap-2">
-              <FilterPill
-                label="Open"
-                active={cryptoStatusFilter === "open"}
-                onClick={() => setCryptoStatusFilter("open")}
-              />
-              <FilterPill
-                label="Resolved"
-                active={cryptoStatusFilter === "resolved"}
-                onClick={() => setCryptoStatusFilter("resolved")}
-              />
-            </div>
-
-            {cryptoFlashLoading ? (
-              <LoadingSpinner />
-            ) : visibleCryptoFlashMarkets.length === 0 ? (
-              <PremiumFlashEmptyState
-                compact
-                title={
-                  cryptoStatusFilter === "resolved"
-                    ? "No resolved crypto flash markets right now"
-                    : "No live crypto flash session right now"
-                }
-                subtitle={
-                  cryptoStatusFilter === "resolved"
-                    ? "Resolved crypto flash markets will appear here soon"
-                    : "Crypto flash sessions start soon"
-                }
-              />
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                {visibleCryptoFlashMarkets.map((market) => (
-                  <FlashMarketCard key={market.liveMicroId} market={market} />
-                ))}
-              </div>
-            )}
-          </section>
-
-          <section>
-            <div className="mb-4 flex items-end justify-between gap-3">
-              <div>
-                <h2 className="text-xl font-bold text-white">📍 Flash Markets — IRL</h2>
-                <p className="mt-1 text-sm text-gray-400">Real-world flash windows, ready for quick market action.</p>
-              </div>
-            </div>
-
-            <div className="mb-4 flex items-center gap-2">
-              <FilterPill
-                label="Open"
-                active={irlStatusFilter === "open"}
-                onClick={() => setIrlStatusFilter("open")}
-              />
-              <FilterPill
-                label="Resolved"
-                active={irlStatusFilter === "resolved"}
-                onClick={() => setIrlStatusFilter("resolved")}
-              />
-            </div>
-
-            {irlFlashLoading ? (
-              <LoadingSpinner />
-            ) : visibleIrlFlashMarkets.length === 0 ? (
-              <PremiumFlashEmptyState
-                compact
-                title={
-                  irlStatusFilter === "resolved"
-                    ? "No resolved IRL flash markets right now"
-                    : "No live IRL flash session right now"
-                }
-                subtitle={
-                  irlStatusFilter === "resolved"
-                    ? "Resolved IRL flash markets will appear here soon"
-                    : "IRL flash sessions start soon"
-                }
-              />
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                {visibleIrlFlashMarkets.map((market) => (
-                  <FlashMarketCard key={market.liveMicroId} market={market} />
-                ))}
-              </div>
-            )}
-          </section>
+                </>
+              )}
+            </section>
+          )}
         </div>
       </div>
     </div>
