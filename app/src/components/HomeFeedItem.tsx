@@ -64,6 +64,12 @@ export default function HomeFeedItem({
       ? market.imageUrl
       : undefined;
 
+  // Detect badge/logo/crest images that look bad when stretched full-screen
+  const isBadgeLikeImage = safeImageUrl
+    ? /\/(badge|logo|emblem|crest)\//i.test(safeImageUrl) ||
+      /\.(svg|ico)(\?|$)/i.test(safeImageUrl)
+    : false;
+
   // outcomes
   const outcomes =
     market.outcomeNames && market.outcomeNames.length >= 2
@@ -89,22 +95,26 @@ export default function HomeFeedItem({
     >
       {/* ── Background image ── */}
       {safeImageUrl ? (
-        <Image
-          src={safeImageUrl}
-          alt={market.question}
-          fill
-          className="object-cover"
-          sizes="100vw"
-          priority
-        />
+        <div className="absolute inset-x-0 top-0 h-[55%] md:h-full overflow-hidden">
+          <Image
+            src={safeImageUrl}
+            alt={market.question}
+            fill
+            className={
+              isBadgeLikeImage
+                ? "object-contain p-6"
+                : "object-cover object-[center_30%]"
+            }
+            sizes="100vw"
+            priority
+          />
+          {/* Darken image edges + fade to black at bottom */}
+          <div className="absolute inset-0 bg-gradient-to-t from-black via-black/25 to-black/40 md:from-black/90 md:via-black/30 md:to-black/50" />
+        </div>
       ) : (
         /* gradient fallback when no image */
         <div className="absolute inset-0 bg-gradient-to-br from-[#0a1a10] via-[#0a0a0a] to-[#0d0d1a]" />
       )}
-
-      {/* ── Vignette / gradient overlays for readability ── */}
-      <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-black/60" />
-      <div className="absolute inset-0 bg-gradient-to-b from-black/50 via-transparent to-transparent h-32" />
 
       {/* ── LIVE badge ── */}
       {showLiveBadge && (
