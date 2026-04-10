@@ -90,6 +90,14 @@ function formatProgressPct(value: number | null | undefined): string {
   return `${Math.max(0, Math.min(100, n)).toFixed(1)}%`;
 }
 
+function formatHm(iso: string | null | undefined): string | null {
+  const raw = String(iso || "").trim();
+  if (!raw) return null;
+  const ms = Date.parse(raw);
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
 function graduationStatus(progress: number, didGraduate: boolean): string {
   if (didGraduate) return "Graduated";
   if (progress >= 85) return "Near graduation";
@@ -257,6 +265,16 @@ export default function FlashMarketCard({ market, variant = "explorer", classNam
 
   const tone = borderTone(market.status);
   const isResolved = market.status === "finalized" || market.status === "cancelled";
+  const nonCryptoResolvedStartHm = formatHm(market.windowStart || market.startTime || null);
+  const nonCryptoResolvedEndHm = formatHm(market.windowEnd || market.endTime || null);
+  const nonCryptoResolvedWindowLabel =
+    market.kind !== "crypto" && market.status === "finalized" && nonCryptoResolvedStartHm && nonCryptoResolvedEndHm
+      ? `Start: ${nonCryptoResolvedStartHm} \u00b7 End: ${nonCryptoResolvedEndHm}`
+      : market.kind !== "crypto" && market.status === "finalized" && nonCryptoResolvedStartHm
+      ? `Start: ${nonCryptoResolvedStartHm}`
+      : market.kind !== "crypto" && market.status === "finalized" && nonCryptoResolvedEndHm
+      ? `End: ${nonCryptoResolvedEndHm}`
+      : null;
 
   useEffect(() => {
     setLiveRemainingSec(
@@ -288,6 +306,16 @@ export default function FlashMarketCard({ market, variant = "explorer", classNam
     const ticker = `$${tokenSymbol}`;
     const durationMinutes = Math.max(1, Number(market.durationMinutes) || 3);
     const headerThumb = tokenImg || imageUrl;
+    const resolvedStartHm = formatHm(market.windowStart || market.startTime || null);
+    const resolvedEndHm = formatHm(market.windowEnd || market.endTime || null);
+    const resolvedWindowLabel =
+      isResolved && resolvedStartHm && resolvedEndHm
+        ? `Start: ${resolvedStartHm} \u00b7 End: ${resolvedEndHm}`
+        : isResolved && resolvedStartHm
+        ? `Start: ${resolvedStartHm}`
+        : isResolved && resolvedEndHm
+        ? `End: ${resolvedEndHm}`
+        : null;
     const progressNow = Math.max(
       0,
       Math.min(
@@ -488,7 +516,7 @@ export default function FlashMarketCard({ market, variant = "explorer", classNam
                   <>
                     <div className="text-sm font-semibold text-cyan-200">{formatProgressPct(progressNow)}</div>
                     <span className={`text-xs font-semibold ${didGraduate ? "text-pump-green" : contextColor(market.status)}`}>
-                      {graduationState}
+                      {resolvedWindowLabel || graduationState}
                     </span>
                   </>
                 ) : (
@@ -496,7 +524,9 @@ export default function FlashMarketCard({ market, variant = "explorer", classNam
                     <div className="text-sm font-mono text-white/80">
                       {formatCryptoPrice(market.priceStart)}
                     </div>
-                    <span className={`text-xs font-semibold ${contextColor(market.status)}`}>{contextLine}</span>
+                    <span className={`text-xs font-semibold ${contextColor(market.status)}`}>
+                      {resolvedWindowLabel || contextLine}
+                    </span>
                   </>
                 )}
               </div>
@@ -743,13 +773,15 @@ export default function FlashMarketCard({ market, variant = "explorer", classNam
             )}
           </div>
 
-          <div className="mt-3 border-t border-white/10 pt-3">
-            <div className="flex items-end justify-between gap-3">
-              <div className="text-3xl font-black tabular-nums text-white">
-                {market.currentScoreHome}&ndash;{market.currentScoreAway}
+            <div className="mt-3 border-t border-white/10 pt-3">
+              <div className="flex items-end justify-between gap-3">
+                <div className="text-3xl font-black tabular-nums text-white">
+                  {market.currentScoreHome}&ndash;{market.currentScoreAway}
+                </div>
+                <span className={`text-xs font-semibold ${contextColor(market.status)}`}>
+                  {nonCryptoResolvedWindowLabel || contextLine}
+                </span>
               </div>
-              <span className={`text-xs font-semibold ${contextColor(market.status)}`}>{contextLine}</span>
-            </div>
             <div className="mt-1 text-[11px] text-white/60">
               {timer ? (
                 <span>{timer} left</span>

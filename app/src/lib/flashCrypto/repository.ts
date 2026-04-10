@@ -582,6 +582,8 @@ export async function listFlashCryptoMarketsForExplorer(maxRows: number): Promis
     image_url: string | null;
     created_at: string | null;
     is_blocked: boolean | null;
+    start_time: string | null;
+    end_time: string | null;
   } | null;
 }>> {
   const supabase = supabaseServer();
@@ -607,7 +609,7 @@ export async function listFlashCryptoMarketsForExplorer(maxRows: number): Promis
 
   const { data: marketRows, error: marketErr } = await supabase
     .from("markets")
-    .select("id,market_address,question,total_volume,resolution_status,sport_meta,image_url,created_at,is_blocked")
+    .select("id,market_address,question,total_volume,resolution_status,sport_meta,image_url,created_at,is_blocked,start_time,end_time")
     .in("market_address", addresses);
 
   if (marketErr) throw new Error(`flash_crypto markets fetch failed: ${marketErr.message}`);

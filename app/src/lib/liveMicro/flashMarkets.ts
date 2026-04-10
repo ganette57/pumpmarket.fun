@@ -13,6 +13,7 @@ type LiveMicroDbRow = {
   provider_match_id: string | null;
   linked_market_id: string | null;
   linked_market_address: string | null;
+  window_start: string | null;
   window_end: string | null;
   start_home_score: number | null;
   start_away_score: number | null;
@@ -39,6 +40,8 @@ type MarketDbRow = {
   is_blocked: boolean | null;
   sport_meta: Record<string, unknown> | null;
   sport_event_id: string | null;
+  start_time: string | null;
+  end_time: string | null;
 };
 
 type TrafficFlashDbRow = {
@@ -49,6 +52,8 @@ type TrafficFlashDbRow = {
   total_volume: number | null;
   created_at: string | null;
   end_date: string | null;
+  start_time: string | null;
+  end_time: string | null;
   resolution_status: string | null;
   resolved: boolean | null;
   cancelled: boolean | null;
@@ -488,6 +493,7 @@ async function loadFlashCandidates(maxRows: number): Promise<FlashMarket[]> {
         "provider_match_id",
         "linked_market_id",
         "linked_market_address",
+        "window_start",
         "window_end",
         "start_home_score",
         "start_away_score",
@@ -520,7 +526,7 @@ async function loadFlashCandidates(maxRows: number): Promise<FlashMarket[]> {
 
   const { data: marketRows, error: marketErr } = await supabase
     .from("markets")
-    .select("id,market_address,question,description,image_url,total_volume,created_at,resolution_status,is_blocked,sport_meta,sport_event_id")
+    .select("id,market_address,question,description,image_url,total_volume,created_at,resolution_status,is_blocked,sport_meta,sport_event_id,start_time,end_time")
     .in("market_address", addresses);
 
   if (marketErr) throw new Error(`markets fetch for flash list failed: ${marketErr.message}`);
@@ -584,13 +590,21 @@ async function loadFlashCandidates(maxRows: number): Promise<FlashMarket[]> {
     const currentScore = payloadCurrentScore || rowScore;
 
     const minute = minuteFromPayload(payloadStart, payloadEnd);
+    const sportMeta = market?.sport_meta || null;
+    const windowStart =
+      firstText([
+        row.window_start,
+        readPath(payloadStart, ["window_start"]),
+        readPath(sportMeta, ["window_start"]),
+        readPath(sportMeta, ["windowStart"]),
+        market?.start_time,
+      ]) || null;
     const windowEndMs = Date.parse(String(row.window_end || ""));
     const remainingSec =
       status === "active" && Number.isFinite(windowEndMs)
         ? Math.max(0, Math.ceil((windowEndMs - nowMs) / 1000))
         : null;
 
-    const sportMeta = market?.sport_meta || null;
     const question = market?.question || null;
     const loopSequence =
       loopSequenceFromPayload(payloadStart) ??
@@ -620,6 +634,20 @@ async function loadFlashCandidates(maxRows: number): Promise<FlashMarket[]> {
     }
     const league = leagueFromPayload(payloadStart, sportMeta);
     const sport = sportFromPayload(payloadStart, sportMeta);
+    const startTime =
+      firstText([
+        market?.start_time,
+        readPath(payloadStart, ["start_time"]),
+        readPath(sportMeta, ["start_time"]),
+        readPath(sportMeta, ["startTime"]),
+      ]) || null;
+    const endTime =
+      firstText([
+        market?.end_time,
+        readPath(payloadStart, ["end_time"]),
+        readPath(sportMeta, ["end_time"]),
+        readPath(sportMeta, ["endTime"]),
+      ]) || null;
 
     out.push({
       liveMicroId: row.id,
@@ -641,7 +669,10 @@ async function loadFlashCandidates(maxRows: number): Promise<FlashMarket[]> {
       currentScoreHome: currentScore.home,
       currentScoreAway: currentScore.away,
       minute,
+      windowStart,
       windowEnd: row.window_end,
+      startTime,
+      endTime,
       loopSequence,
       loopPhase,
       remainingSec,
@@ -751,6 +782,32 @@ async function loadCryptoFlashCandidates(maxRows: number): Promise<FlashMarket[]
       ]);
       const durationMinutes = Number(payloadStart.duration_minutes || meta.duration_minutes || 0);
       const durationLabel = durationMinutes === 1 ? "1 minute" : `${durationMinutes} minutes`;
+      const windowStart =
+        firstText([
+          row.window_start,
+          payloadStart.window_start,
+          meta.window_start,
+          market?.start_time,
+        ]) || null;
+      const windowEnd =
+        firstText([
+          row.window_end,
+          payloadStart.window_end,
+          meta.window_end,
+          market?.end_time,
+        ]) || null;
+      const startTime =
+        firstText([
+          market?.start_time,
+          payloadStart.start_time,
+          meta.start_time,
+        ]) || null;
+      const endTime =
+        firstText([
+          market?.end_time,
+          payloadStart.end_time,
+          meta.end_time,
+        ]) || null;
       const defaultQuestion =
         cryptoMode === "graduation"
           ? `Will $${tokenSymbol} graduate in ${durationMinutes === 60 ? "1 hour" : `${durationMinutes} minutes`}?`
@@ -778,7 +835,10 @@ async function loadCryptoFlashCandidates(maxRows: number): Promise<FlashMarket[]
         currentScoreHome: 0,
         currentScoreAway: 0,
         minute: null,
-        windowEnd: row.window_end,
+        windowStart,
+        windowEnd,
+        startTime,
+        endTime,
         loopSequence: null,
         loopPhase: null,
         remainingSec,
@@ -831,6 +891,8 @@ async function loadIrlFlashCandidates(maxRows: number): Promise<FlashMarket[]> {
         "total_volume",
         "created_at",
         "end_date",
+        "start_time",
+        "end_time",
         "resolution_status",
         "resolved",
         "cancelled",
@@ -851,8 +913,29 @@ async function loadIrlFlashCandidates(maxRows: number): Promise<FlashMarket[]> {
 
     const meta = asObject(row.sport_meta);
     const status = parseTrafficStatus(row, nowMs);
+    const windowStart =
+      firstText([
+        readPath(meta, ["window_start"]),
+        readPath(meta, ["windowStart"]),
+        readPath(meta, ["start_time"]),
+        readPath(meta, ["startTime"]),
+        row.start_time,
+      ]) || null;
     const windowEnd =
       firstText([readPath(meta, ["window_end"]), readPath(meta, ["windowEnd"]), row.end_date]) || null;
+    const startTime =
+      firstText([
+        row.start_time,
+        readPath(meta, ["start_time"]),
+        readPath(meta, ["startTime"]),
+      ]) || null;
+    const endTime =
+      firstText([
+        row.end_time,
+        readPath(meta, ["end_time"]),
+        readPath(meta, ["endTime"]),
+        row.end_date,
+      ]) || null;
     const windowEndMs = Date.parse(String(windowEnd || ""));
     const remainingSec =
       (status === "active" || status === "locked") && Number.isFinite(windowEndMs)
@@ -900,7 +983,10 @@ async function loadIrlFlashCandidates(maxRows: number): Promise<FlashMarket[]> {
       currentScoreHome: currentCount,
       currentScoreAway: threshold,
       minute: null,
+      windowStart,
       windowEnd,
+      startTime,
+      endTime,
       loopSequence: null,
       loopPhase: null,
       remainingSec,
