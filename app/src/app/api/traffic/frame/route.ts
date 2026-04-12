@@ -31,8 +31,8 @@ export async function GET(req: Request) {
     return new NextResponse(image, {
       status: 200,
       headers: {
-        "Content-Type": workerRes.headers.get("content-type") || "image/jpeg",
-        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Content-Type": "image/jpeg",
+        "Cache-Control": "no-store",
       },
     });
   } catch (error: any) {
