@@ -3374,7 +3374,7 @@ useEffect(() => {
   };
 
   tick();
-  const iv = window.setInterval(() => tick(), 850);
+  const iv = window.setInterval(() => tick(), 500);
   return () => {
     cancelled = true;
     window.clearInterval(iv);
