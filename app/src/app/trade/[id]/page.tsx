@@ -26,6 +26,7 @@ import NbaWidgetDrawer from "@/components/NbaWidgetDrawer";
 import SoccerMatchDrawer from "@/components/SoccerMatchDrawer";
 import FlashCryptoMiniChart from "@/components/FlashCryptoMiniChart";
 import FlashCryptoGraduationHero from "@/components/FlashCryptoGraduationHero";
+import VideoPreviewModal from "@/components/VideoPreviewModal";
 
 import { supabase } from "@/lib/supabaseClient";
 import { buildOddsSeries, downsample } from "@/lib/marketHistory";
@@ -103,6 +104,10 @@ type UiMarket = {
   sportTradingState?: string | null;
   startTime?: string | null;
   endTime?: string | null;
+
+  // Feed video (optional short vertical video for the social feed)
+  feedVideoUrl?: string | null;
+  feedThumbnailUrl?: string | null;
 };
 
 type Derived = {
@@ -2112,6 +2117,8 @@ export default function TradePage() {
   // Creator profile
   const [creatorProfile, setCreatorProfile] = useState<Profile | null>(null);
 
+  const [feedVideoModalOpen, setFeedVideoModalOpen] = useState(false);
+
   // Trade modal state
   const [tradeStep, setTradeStep] = useState<TradeStep>("idle");
   const [tradeResult, setTradeResult] = useState<TradeResult>(null);
@@ -2339,6 +2346,10 @@ const trafficFrameProbeInFlightRef = useRef(false);
           sportTradingState: (supabaseMarket as any).sport_trading_state ?? null,
           startTime: (supabaseMarket as any).start_time ?? null,
           endTime: (supabaseMarket as any).end_time ?? null,
+
+          // Feed video (optional)
+          feedVideoUrl: (supabaseMarket as any).feed_video_url ?? null,
+          feedThumbnailUrl: (supabaseMarket as any).feed_thumbnail_url ?? null,
         };
   
 // --- On-chain snapshot merge (fast)
@@ -4871,6 +4882,14 @@ const ended = endedByTime;
         result={tradeResult}
         onClose={closeTradeModal}
       />
+
+      {/* Feed Video Preview Modal */}
+      <VideoPreviewModal
+        open={feedVideoModalOpen && !!market.feedVideoUrl}
+        videoUrl={market.feedVideoUrl || ""}
+        posterUrl={market.feedThumbnailUrl || market.imageUrl || null}
+        onClose={() => setFeedVideoModalOpen(false)}
+      />
       {isMobile
         ? typeof document !== "undefined"
           ? createPortal(
@@ -5245,23 +5264,58 @@ const ended = endedByTime;
                   : "bg-black border border-gray-800 hover:border-pump-green/60"
               }`}>
                 <div className={`flex items-start gap-3 ${isMobile && trafficIsLiveUi ? "hidden" : ""}`}>
-                  <div className={`flex-shrink-0 rounded-xl overflow-hidden bg-pump-dark ${
-                    isFlashCryptoMarket ? "w-12 h-12 md:w-16 md:h-16" : "w-16 h-16 md:w-20 md:h-20"
-                  }`}>
-                    {tradeCardThumbUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={tradeCardThumbUrl}
-                        alt={market.question}
-                        className="object-cover w-full h-full"
-                      />
+                  {(() => {
+                    const hasFeedVideo = !!market.feedVideoUrl;
+                    const thumbBoxClass = `relative flex-shrink-0 rounded-xl overflow-hidden bg-pump-dark ${
+                      isFlashCryptoMarket ? "w-12 h-12 md:w-16 md:h-16" : "w-16 h-16 md:w-20 md:h-20"
+                    }`;
+                    const inner = (
+                      <>
+                        {tradeCardThumbUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={tradeCardThumbUrl}
+                            alt={market.question}
+                            className="object-cover w-full h-full"
+                          />
+                        ) : (
+                          <CategoryImagePlaceholder
+                            category={market.category || "crypto"}
+                            className="w-full h-full scale-[0.4]"
+                          />
+                        )}
+                        {hasFeedVideo && (
+                          <span
+                            aria-hidden="true"
+                            className="pointer-events-none absolute inset-0 flex items-center justify-center"
+                          >
+                            <span className="flex items-center justify-center w-7 h-7 md:w-8 md:h-8 rounded-full bg-black/55 backdrop-blur-sm shadow-md">
+                              <svg
+                                viewBox="0 0 24 24"
+                                aria-hidden="true"
+                                className="w-3.5 h-3.5 md:w-4 md:h-4 text-white drop-shadow"
+                                fill="currentColor"
+                              >
+                                <path d="M8 5v14l11-7z" />
+                              </svg>
+                            </span>
+                          </span>
+                        )}
+                      </>
+                    );
+                    return hasFeedVideo ? (
+                      <button
+                        type="button"
+                        onClick={() => setFeedVideoModalOpen(true)}
+                        aria-label="Play feed video"
+                        className={`${thumbBoxClass} group cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-pump-green`}
+                      >
+                        {inner}
+                      </button>
                     ) : (
-                      <CategoryImagePlaceholder
-                        category={market.category || "crypto"}
-                        className="w-full h-full scale-[0.4]"
-                      />
-                    )}
-                  </div>
+                      <div className={thumbBoxClass}>{inner}</div>
+                    );
+                  })()}
   
                   <div className="flex-1 min-w-0">
                     <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-1 mb-2 min-w-0">

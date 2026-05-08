@@ -197,6 +197,8 @@ export async function getMarketByAddress(marketAddress: string): Promise<DbMarke
       "sport_event_id",
       "sport_meta",
       "sport_trading_state",
+      "feed_video_url",
+      "feed_thumbnail_url",
     ].join(","),
     "id,market_address,creator,question,description,category,image_url,total_volume,end_date,resolved,market_type,outcome_names,outcome_supplies,yes_supply,no_supply",
     "id,market_address,creator,question,total_volume,end_date,resolved",
