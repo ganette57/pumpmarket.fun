@@ -711,6 +711,7 @@ export default function CreateMarketPage() {
 
   const [feedVideoFile, setFeedVideoFile] = useState<File | null>(null);
   const [feedVideoPreview, setFeedVideoPreview] = useState<string>("");
+  const [feedVideoThumbnail, setFeedVideoThumbnail] = useState<Blob | null>(null);
 
   const [questionError, setQuestionError] = useState<string | null>(null);
   const [descriptionError, setDescriptionError] = useState<string | null>(null);
@@ -1178,17 +1179,47 @@ export default function CreateMarketPage() {
         uploadedFeedVideoUrl = videoPublicData.publicUrl;
       }
 
+      let uploadedFeedThumbnailUrl: string | undefined;
+      if (uploadedFeedVideoUrl && feedVideoThumbnail) {
+        try {
+          const thumbName = `${marketKeypair.publicKey.toBase58()}.jpg`;
+          const { error: thumbErr } = await supabase.storage
+            .from("market-feed-thumbnails")
+            .upload(thumbName, feedVideoThumbnail, {
+              contentType: "image/jpeg",
+              upsert: true,
+            });
+          if (!thumbErr) {
+            const { data: thumbPublic } = supabase.storage
+              .from("market-feed-thumbnails")
+              .getPublicUrl(thumbName);
+            if (thumbPublic?.publicUrl) {
+              uploadedFeedThumbnailUrl = thumbPublic.publicUrl;
+            }
+          } else {
+            console.warn("[create] feed thumbnail upload failed:", thumbErr.message);
+          }
+        } catch (thumbCatch) {
+          console.warn("[create] feed thumbnail upload threw:", thumbCatch);
+        }
+      }
+
+      // Fallback: if user did not upload a market image, use the video thumbnail
+      // so existing card/home/search renderers still get an image.
+      const effectiveImageUrl = persistedImageUrl || uploadedFeedThumbnailUrl;
+
       await indexMarket({
         market_address: marketKeypair.publicKey.toBase58(),
         question: question.slice(0, 200),
         description: fullDescription || undefined,
         category: category || "other",
-        image_url: persistedImageUrl,
+        image_url: effectiveImageUrl,
         end_date: effectiveEndDate.toISOString(),
         start_time: dbStartTimeIso,
         end_time: dbEndTimeIso,
         creator: publicKey.toBase58(),
         feed_video_url: uploadedFeedVideoUrl,
+        feed_thumbnail_url: uploadedFeedThumbnailUrl,
 
         market_type: onchainType,
         outcome_names: onchainNames,
@@ -1669,9 +1700,11 @@ export default function CreateMarketPage() {
           <FeedVideoUpload
             file={feedVideoFile}
             previewUrl={feedVideoPreview}
-            onChange={(f, url) => {
+            thumbnailBlob={feedVideoThumbnail}
+            onChange={(f, url, thumb) => {
               setFeedVideoFile(f);
               setFeedVideoPreview(url);
+              setFeedVideoThumbnail(thumb);
             }}
           />
         </div>

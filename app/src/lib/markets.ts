@@ -65,6 +65,7 @@ export type DbMarket = {
 
   // feed video (optional short vertical video for the social feed)
   feed_video_url?: string | null;
+  feed_thumbnail_url?: string | null;
 };
 
 export type RecordTxInput = {
@@ -413,6 +414,7 @@ export type IndexMarketInput = {
 
   // feed video (optional short vertical video for the social feed)
   feed_video_url?: string | null;
+  feed_thumbnail_url?: string | null;
 };
 
 export async function indexMarket(input: IndexMarketInput): Promise<void> {
@@ -456,6 +458,7 @@ export async function indexMarket(input: IndexMarketInput): Promise<void> {
 
   // Feed video (only included when present)
   if (input.feed_video_url) payload.feed_video_url = input.feed_video_url;
+  if (input.feed_thumbnail_url) payload.feed_thumbnail_url = input.feed_thumbnail_url;
 
   // Upsert by market_address (requires unique index on market_address)
   const { error } = await supabase

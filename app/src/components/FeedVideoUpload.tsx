@@ -1,20 +1,117 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Upload, X, Video } from "lucide-react";
+import { Upload, X, Video, Image as ImageIcon } from "lucide-react";
 
 export const FEED_VIDEO_MAX_DURATION_SEC = 8;
 export const FEED_VIDEO_MAX_SIZE_MB = 8;
 export const FEED_VIDEO_MAX_SIZE_BYTES = FEED_VIDEO_MAX_SIZE_MB * 1024 * 1024;
 
+const THUMBNAIL_MAX_DIMENSION = 720;
+
 interface FeedVideoUploadProps {
   file: File | null;
   previewUrl: string;
-  onChange: (file: File | null, previewUrl: string) => void;
+  thumbnailBlob: Blob | null;
+  onChange: (file: File | null, previewUrl: string, thumbnailBlob: Blob | null) => void;
 }
 
-export default function FeedVideoUpload({ file, previewUrl, onChange }: FeedVideoUploadProps) {
+async function generateThumbnail(file: File): Promise<{ blob: Blob; width: number; height: number } | null> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const video = document.createElement("video");
+    video.preload = "auto";
+    video.muted = true;
+    video.playsInline = true;
+    video.crossOrigin = "anonymous";
+
+    const cleanup = () => {
+      URL.revokeObjectURL(url);
+      video.removeAttribute("src");
+      try {
+        video.load();
+      } catch {
+        /* noop */
+      }
+    };
+
+    let settled = false;
+    const finish = (result: { blob: Blob; width: number; height: number } | null) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    };
+
+    const timeout = setTimeout(() => finish(null), 8000);
+
+    video.onloadedmetadata = () => {
+      const duration = Number.isFinite(video.duration) ? video.duration : 0;
+      if (!duration) {
+        clearTimeout(timeout);
+        return finish(null);
+      }
+      const target = Math.min(0.5, duration * 0.1);
+      try {
+        video.currentTime = Math.max(0, target);
+      } catch {
+        clearTimeout(timeout);
+        return finish(null);
+      }
+    };
+
+    video.onseeked = () => {
+      try {
+        const vw = video.videoWidth;
+        const vh = video.videoHeight;
+        if (!vw || !vh) {
+          clearTimeout(timeout);
+          return finish(null);
+        }
+        const scale = Math.min(1, THUMBNAIL_MAX_DIMENSION / Math.max(vw, vh));
+        const w = Math.max(1, Math.round(vw * scale));
+        const h = Math.max(1, Math.round(vh * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          clearTimeout(timeout);
+          return finish(null);
+        }
+        ctx.drawImage(video, 0, 0, w, h);
+        canvas.toBlob(
+          (blob) => {
+            clearTimeout(timeout);
+            if (!blob) return finish(null);
+            finish({ blob, width: w, height: h });
+          },
+          "image/jpeg",
+          0.85
+        );
+      } catch {
+        clearTimeout(timeout);
+        finish(null);
+      }
+    };
+
+    video.onerror = () => {
+      clearTimeout(timeout);
+      finish(null);
+    };
+
+    video.src = url;
+  });
+}
+
+export default function FeedVideoUpload({
+  file,
+  previewUrl,
+  thumbnailBlob,
+  onChange,
+}: FeedVideoUploadProps) {
   const [error, setError] = useState<string>("");
+  const [thumbnailing, setThumbnailing] = useState(false);
   const objectUrlRef = useRef<string>("");
 
   useEffect(() => {
@@ -69,7 +166,19 @@ export default function FeedVideoUpload({ file, previewUrl, onChange }: FeedVide
 
     if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
     objectUrlRef.current = url;
-    onChange(f, url);
+
+    onChange(f, url, null);
+
+    setThumbnailing(true);
+    let thumb: Blob | null = null;
+    try {
+      const result = await generateThumbnail(f);
+      thumb = result?.blob ?? null;
+    } catch {
+      thumb = null;
+    }
+    setThumbnailing(false);
+    onChange(f, url, thumb);
   };
 
   const handleRemove = () => {
@@ -78,7 +187,8 @@ export default function FeedVideoUpload({ file, previewUrl, onChange }: FeedVide
       objectUrlRef.current = "";
     }
     setError("");
-    onChange(null, "");
+    setThumbnailing(false);
+    onChange(null, "", null);
   };
 
   return (
@@ -140,6 +250,16 @@ export default function FeedVideoUpload({ file, previewUrl, onChange }: FeedVide
                   {(file.size / (1024 * 1024)).toFixed(2)} MB
                 </div>
               )}
+              <div className="mt-2 flex items-center gap-1.5 text-[11px]">
+                <ImageIcon className="w-3.5 h-3.5" />
+                {thumbnailing ? (
+                  <span className="text-gray-400">Generating thumbnail…</span>
+                ) : thumbnailBlob ? (
+                  <span className="text-pump-green">Thumbnail ready</span>
+                ) : (
+                  <span className="text-gray-500">No thumbnail</span>
+                )}
+              </div>
               <button
                 type="button"
                 onClick={handleRemove}
