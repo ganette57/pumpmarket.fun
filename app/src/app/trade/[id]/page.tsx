@@ -49,13 +49,6 @@ import Link from "next/link";
 import { getProfile, type Profile } from "@/lib/profiles";
 
 type SupabaseMarket = any;
-const TRAFFIC_CAMERA_IMAGE_STYLE = {
-  imageRendering: "auto",
-  transform: "translateZ(0)",
-  backfaceVisibility: "hidden",
-  willChange: "transform",
-  filter: "contrast(1.03) saturate(1.02)",
-} as const;
 
 type UiMarket = {
   dbId?: string;
@@ -4897,7 +4890,6 @@ const ended = endedByTime;
                 src={trafficDebugFrameSrc}
                 alt="Traffic camera"
                 className="block w-full h-full object-cover"
-                style={TRAFFIC_CAMERA_IMAGE_STYLE}
               />
             ) : (
               <div className="text-sm text-white/40 animate-pulse">Waiting for camera…</div>
@@ -4955,7 +4947,6 @@ const ended = endedByTime;
                 src={trafficDebugFrameSrc}
                 alt="Traffic camera"
                 className="block w-full h-full object-cover"
-                style={TRAFFIC_CAMERA_IMAGE_STYLE}
               />
             ) : (
               <div className="text-sm text-white/40 animate-pulse">Waiting for camera…</div>
@@ -5161,7 +5152,6 @@ const ended = endedByTime;
                         src={trafficDebugFrameSrc}
                         alt="Traffic camera"
                         className="block w-full h-full object-cover"
-                        style={TRAFFIC_CAMERA_IMAGE_STYLE}
                       />
                     ) : (
                       <div className="text-sm text-white/40 animate-pulse">Waiting for camera…</div>
@@ -5234,7 +5224,6 @@ const ended = endedByTime;
                           src={trafficDebugFrameSrc}
                           alt="Traffic debug frame"
                           className="block h-full w-full object-cover"
-                          style={TRAFFIC_CAMERA_IMAGE_STYLE}
                         />
                       ) : null}
                       {!trafficDebugFrameSrc && trafficDebugFrameAvailable === false && (
