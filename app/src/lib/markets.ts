@@ -62,6 +62,9 @@ export type DbMarket = {
   sport_event_id?: string | null;
   sport_meta?: Record<string, unknown> | null;
   sport_trading_state?: string | null;
+
+  // feed video (optional short vertical video for the social feed)
+  feed_video_url?: string | null;
 };
 
 export type RecordTxInput = {
@@ -407,6 +410,9 @@ export type IndexMarketInput = {
   market_mode?: string | null;
   sport_event_id?: string | null;
   sport_meta?: Record<string, unknown> | null;
+
+  // feed video (optional short vertical video for the social feed)
+  feed_video_url?: string | null;
 };
 
 export async function indexMarket(input: IndexMarketInput): Promise<void> {
@@ -447,6 +453,9 @@ export async function indexMarket(input: IndexMarketInput): Promise<void> {
   if (input.market_mode) payload.market_mode = input.market_mode;
   if (input.sport_event_id) payload.sport_event_id = input.sport_event_id;
   if (input.sport_meta) payload.sport_meta = input.sport_meta;
+
+  // Feed video (only included when present)
+  if (input.feed_video_url) payload.feed_video_url = input.feed_video_url;
 
   // Upsert by market_address (requires unique index on market_address)
   const { error } = await supabase

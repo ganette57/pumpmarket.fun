@@ -13,8 +13,8 @@ import Image from "next/image";
 import { validateMarketQuestion, validateMarketDescription } from "@/utils/bannedWords";
 import { CATEGORIES, SPORT_SUBCATEGORIES, isSportSubcategory } from "@/components/CategoryFilters";
 import type { CategoryId, SportSubcategoryId } from "@/components/CategoryFilters";
-import SocialLinksForm, { SocialLinks } from "@/components/SocialLinksForm";
 import CategoryImagePlaceholder from "@/components/CategoryImagePlaceholder";
+import FeedVideoUpload from "@/components/FeedVideoUpload";
 
 import { useProgram } from "@/hooks/useProgram";
 import { indexMarket } from "@/lib/markets";
@@ -709,7 +709,9 @@ export default function CreateMarketPage() {
     return d;
   });
 
-  const [socialLinks, setSocialLinks] = useState<SocialLinks>({});
+  const [feedVideoFile, setFeedVideoFile] = useState<File | null>(null);
+  const [feedVideoPreview, setFeedVideoPreview] = useState<string>("");
+
   const [questionError, setQuestionError] = useState<string | null>(null);
   const [descriptionError, setDescriptionError] = useState<string | null>(null);
 
@@ -1139,6 +1141,43 @@ export default function CreateMarketPage() {
         uploadedImageUrl ||
         (imagePreview && !imagePreview.startsWith("data:image/") ? imagePreview : undefined);
 
+      let uploadedFeedVideoUrl: string | undefined;
+      if (feedVideoFile) {
+        const mime = String(feedVideoFile.type || "video/mp4").toLowerCase();
+        const extFromMime =
+          mime === "video/quicktime"
+            ? "mov"
+            : mime === "video/webm"
+            ? "webm"
+            : mime === "video/x-msvideo"
+            ? "avi"
+            : "mp4";
+        const nameExt = feedVideoFile.name.split(".").pop()?.toLowerCase();
+        const ext = nameExt && /^[a-z0-9]{2,5}$/.test(nameExt) ? nameExt : extFromMime;
+        const fileName = `${marketKeypair.publicKey.toBase58()}.${ext}`;
+
+        const { error: videoUploadErr } = await supabase.storage
+          .from("market-feed-videos")
+          .upload(fileName, feedVideoFile, {
+            contentType: mime,
+            upsert: true,
+          });
+
+        if (videoUploadErr) {
+          throw new Error(`Video upload failed: ${videoUploadErr.message}`);
+        }
+
+        const { data: videoPublicData } = supabase.storage
+          .from("market-feed-videos")
+          .getPublicUrl(fileName);
+
+        if (!videoPublicData?.publicUrl) {
+          throw new Error("Video upload failed: missing public URL");
+        }
+
+        uploadedFeedVideoUrl = videoPublicData.publicUrl;
+      }
+
       await indexMarket({
         market_address: marketKeypair.publicKey.toBase58(),
         question: question.slice(0, 200),
@@ -1149,7 +1188,7 @@ export default function CreateMarketPage() {
         start_time: dbStartTimeIso,
         end_time: dbEndTimeIso,
         creator: publicKey.toBase58(),
-        social_links: socialLinks,
+        feed_video_url: uploadedFeedVideoUrl,
 
         market_type: onchainType,
         outcome_names: onchainNames,
@@ -1625,6 +1664,18 @@ export default function CreateMarketPage() {
           )}
         </div>
 
+        {/* Feed Video (Optional) */}
+        <div className="mb-6">
+          <FeedVideoUpload
+            file={feedVideoFile}
+            previewUrl={feedVideoPreview}
+            onChange={(f, url) => {
+              setFeedVideoFile(f);
+              setFeedVideoPreview(url);
+            }}
+          />
+        </div>
+
         {/* End Date / Match End Time */}
         <div className="mb-6">
           <label className="block text-white font-semibold mb-2">
@@ -1671,11 +1722,6 @@ export default function CreateMarketPage() {
               <p className="text-xs text-gray-500 mt-2">Live trading enabled. Trading auto-locks 2 minutes before end time.</p>
             </>
           )}
-        </div>
-
-        {/* Social */}
-        <div className="mb-6 pb-6 border-b border-gray-800">
-          <SocialLinksForm value={socialLinks} onChange={setSocialLinks} />
         </div>
 
         {/* Cancellation Policy Warning (Match only) */}
