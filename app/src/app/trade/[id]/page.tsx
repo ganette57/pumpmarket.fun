@@ -49,6 +49,13 @@ import Link from "next/link";
 import { getProfile, type Profile } from "@/lib/profiles";
 
 type SupabaseMarket = any;
+const TRAFFIC_CAMERA_IMAGE_STYLE = {
+  imageRendering: "auto",
+  transform: "translateZ(0)",
+  backfaceVisibility: "hidden",
+  willChange: "transform",
+  filter: "contrast(1.03) saturate(1.02)",
+} as const;
 
 type UiMarket = {
   dbId?: string;
@@ -4883,13 +4890,14 @@ const ended = endedByTime;
       {/* ═══ IRL TRAFFIC: Mobile immersive overlay — covers MobileTopBar ═══ */}
       {isMobile && trafficIsLiveUi && (
         <div className="fixed inset-x-0 top-0 bottom-14 z-[80] bg-black">
-          <div className="relative w-full h-full flex items-center justify-center">
+          <div className="relative w-full h-full overflow-hidden bg-black flex items-center justify-center">
             {trafficDebugFrameSrc ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={trafficDebugFrameSrc}
                 alt="Traffic camera"
                 className="block w-full h-full object-cover"
+                style={TRAFFIC_CAMERA_IMAGE_STYLE}
               />
             ) : (
               <div className="text-sm text-white/40 animate-pulse">Waiting for camera…</div>
@@ -4940,13 +4948,14 @@ const ended = endedByTime;
       {!isMobile && trafficIsLive ? (
         <div className="h-full flex flex-col bg-black">
           {/* Camera fills available space */}
-          <div className="flex-1 min-h-0 relative flex items-center justify-center">
+          <div className="flex-1 min-h-0 relative overflow-hidden bg-black flex items-center justify-center">
             {trafficDebugFrameSrc ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={trafficDebugFrameSrc}
                 alt="Traffic camera"
                 className="block w-full h-full object-cover"
+                style={TRAFFIC_CAMERA_IMAGE_STYLE}
               />
             ) : (
               <div className="text-sm text-white/40 animate-pulse">Waiting for camera…</div>
@@ -5145,13 +5154,14 @@ const ended = endedByTime;
                   {/* Camera frame — dominant height */}
                   <div className={`relative w-full ${
                     isMobile ? "h-[calc(100dvh-180px)]" : "aspect-video"
-                  } bg-black flex items-center justify-center`}>
+                  } overflow-hidden bg-black flex items-center justify-center`}>
                     {trafficDebugFrameSrc ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
                         src={trafficDebugFrameSrc}
                         alt="Traffic camera"
                         className="block w-full h-full object-cover"
+                        style={TRAFFIC_CAMERA_IMAGE_STYLE}
                       />
                     ) : (
                       <div className="text-sm text-white/40 animate-pulse">Waiting for camera…</div>
@@ -5217,13 +5227,14 @@ const ended = endedByTime;
                     </div>
                   </div>
                   <div className="rounded-xl border border-white/10 bg-black/35 px-3 py-2">
-                    <div className="mt-1.5 flex h-[420px] items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-black/50 md:h-[520px]">
+                    <div className="mt-1.5 flex h-[420px] items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-black md:h-[520px]">
                       {trafficDebugFrameSrc ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img
                           src={trafficDebugFrameSrc}
                           alt="Traffic debug frame"
-                          className="block h-full max-h-full w-full max-w-full object-contain"
+                          className="block h-full w-full object-cover"
+                          style={TRAFFIC_CAMERA_IMAGE_STYLE}
                         />
                       ) : null}
                       {!trafficDebugFrameSrc && trafficDebugFrameAvailable === false && (
