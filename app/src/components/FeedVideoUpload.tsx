@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Upload, X, Video, Image as ImageIcon } from "lucide-react";
 
-export const FEED_VIDEO_MAX_DURATION_SEC = 8;
 export const FEED_VIDEO_MAX_SIZE_MB = 8;
 export const FEED_VIDEO_MAX_SIZE_BYTES = FEED_VIDEO_MAX_SIZE_MB * 1024 * 1024;
 
@@ -158,12 +157,6 @@ export default function FeedVideoUpload({
       return;
     }
 
-    if (duration > FEED_VIDEO_MAX_DURATION_SEC + 0.5) {
-      URL.revokeObjectURL(url);
-      setError(`Video must be ${FEED_VIDEO_MAX_DURATION_SEC} seconds or shorter (got ${duration.toFixed(1)}s).`);
-      return;
-    }
-
     if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
     objectUrlRef.current = url;
 
@@ -205,7 +198,7 @@ export default function FeedVideoUpload({
                 <span className="font-semibold text-pump-green">Upload / Record video</span>
               </p>
               <p className="text-xs text-gray-500">
-                Max {FEED_VIDEO_MAX_DURATION_SEC} sec · Vertical recommended
+                Vertical video recommended
               </p>
             </div>
             <input

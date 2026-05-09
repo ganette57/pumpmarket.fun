@@ -5578,7 +5578,7 @@ const ended = endedByTime;
                   </div>
                 )}
 
-                {/* Outcomes */}
+                {/* Outcomes — unified FunMarket style: filled neon blocks (matches homepage cards + mobile feed) */}
                 {isBinaryStyle ? (
                   <div className={`mt-4 grid grid-cols-2 gap-3 ${
                     isFlashCryptoMarket && isMobile ? "mt-6" : ""
@@ -5586,37 +5586,32 @@ const ended = endedByTime;
                     {names.slice(0, 2).map((outcome, index) => {
                       const pct = (percentages[index] ?? 0).toFixed(1);
                       const isYes = index === 0;
-                      const flashMobile = isFlashCryptoMarket && isMobile;
 
                       return (
                         <button
                           key={index}
                           onClick={() => openMobileTrade(index)}
                           disabled={!isMobile || marketClosed}
-                          className={`text-left rounded-xl border transition ${
-                            isYes
-                              ? "border-pump-green/40"
-                              : "border-[#ff5c73]/40"
+                          className={`text-left rounded-xl px-4 py-3 md:px-5 md:py-4 transition-all shadow-sm ${
+                            isYes ? "bg-[#00FF87]" : "bg-[#ff5c73]"
                           } ${
-                            flashMobile
-                              ? `px-4 py-4 ${isYes ? "bg-pump-green/[0.06]" : "bg-[#ff5c73]/[0.06]"}`
-                              : "px-4 py-3 md:px-5 md:py-4 bg-black"
-                          } ${isMobile && !marketClosed ? "active:scale-[0.98]" : ""}`}
+                            isMobile && !marketClosed
+                              ? "active:scale-[0.98]"
+                              : !isMobile && !marketClosed
+                              ? "hover:brightness-110"
+                              : ""
+                          } ${marketClosed ? "opacity-70" : ""}`}
                         >
-                          <div className={`flex items-center justify-between ${flashMobile ? "mb-2" : "mb-1"}`}>
-                            <span className={`uppercase tracking-wide font-semibold ${
-                              flashMobile ? "text-[11px]" : "text-xs"
-                            } ${isYes ? "text-pump-green" : "text-[#ff5c73]"}`}>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="uppercase tracking-wide font-bold text-xs md:text-[13px] text-black truncate">
                               {outcome}
                             </span>
-                            <span className="hidden md:block text-[11px] text-gray-500">Supply: {supplies[index] || 0}</span>
+                            <span className="hidden md:block text-[11px] font-semibold text-black/55 tabular-nums">
+                              Supply: {supplies[index] || 0}
+                            </span>
                           </div>
 
-                          <div
-                            className={`font-bold tabular-nums ${
-                              flashMobile ? "text-3xl" : "text-2xl md:text-3xl"
-                            } ${isYes ? "text-pump-green" : "text-[#ff5c73]"}`}
-                          >
+                          <div className="font-bold tabular-nums text-2xl md:text-3xl text-black">
                             {pct}%
                           </div>
                         </button>
