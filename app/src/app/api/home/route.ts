@@ -138,7 +138,9 @@ export async function GET() {
       market_mode,
       sport_meta,
       creator,
-      social_links
+      social_links,
+      feed_video_url,
+      feed_thumbnail_url
     `;
 
     const [openRes, resolvedRes, proposedRes, liveRes, topLiveFlashMarket] = await Promise.all([

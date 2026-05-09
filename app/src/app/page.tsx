@@ -54,6 +54,9 @@ type Market = {
   resolutionStatus?: string | null;
   startTime?: string | null;
   endTime?: string | null;
+
+  feedVideoUrl?: string | null;
+  feedThumbnailUrl?: string | null;
 };
 
 type FeaturedCarouselMarket = {
@@ -265,6 +268,8 @@ function mapHomeRowToMarket(row: any): Market {
     resolutionStatus: row.resolution_status ?? "open",
     startTime: row.start_time ?? null,
     endTime: row.end_time ?? null,
+    feedVideoUrl: row.feed_video_url ?? null,
+    feedThumbnailUrl: row.feed_thumbnail_url ?? null,
   };
 }
 

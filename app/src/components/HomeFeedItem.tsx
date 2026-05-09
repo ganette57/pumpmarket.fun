@@ -5,6 +5,7 @@ import Image from "next/image";
 import { Clock, TrendingUp } from "lucide-react";
 import { lamportsToSol } from "@/utils/solana";
 import { triggerHaptic } from "@/utils/haptics";
+import MobileFeedVideoBackground from "@/components/MobileFeedVideoBackground";
 
 interface HomeFeedItemProps {
   market: {
@@ -13,6 +14,8 @@ interface HomeFeedItemProps {
     description?: string;
     category: string;
     imageUrl?: string | null;
+    feedVideoUrl?: string | null;
+    feedThumbnailUrl?: string | null;
     yesSupply: number;
     noSupply: number;
     outcomeNames?: string[];
@@ -64,6 +67,22 @@ export default function HomeFeedItem({
       ? market.imageUrl
       : undefined;
 
+  const safeFeedVideoUrl =
+    market.feedVideoUrl &&
+    market.feedVideoUrl !== "null" &&
+    market.feedVideoUrl !== "undefined" &&
+    market.feedVideoUrl.trim() !== ""
+      ? market.feedVideoUrl
+      : undefined;
+
+  const feedVideoPosterUrl =
+    (market.feedThumbnailUrl &&
+    market.feedThumbnailUrl !== "null" &&
+    market.feedThumbnailUrl !== "undefined" &&
+    market.feedThumbnailUrl.trim() !== ""
+      ? market.feedThumbnailUrl
+      : undefined) || safeImageUrl;
+
   // Detect badge/logo/crest images that look bad when stretched full-screen
   const isBadgeLikeImage = safeImageUrl
     ? /\/(badge|logo|emblem|crest)\//i.test(safeImageUrl) ||
@@ -93,8 +112,23 @@ export default function HomeFeedItem({
       className="relative h-[100dvh] w-full snap-start snap-always flex-shrink-0 overflow-hidden bg-black"
       data-feed-market={market.publicKey}
     >
-      {/* ── Background image ── */}
-      {safeImageUrl ? (
+      {/* ── Background media ── */}
+      {safeFeedVideoUrl ? (
+        <MobileFeedVideoBackground
+          videoUrl={safeFeedVideoUrl}
+          posterUrl={feedVideoPosterUrl || null}
+          alt={market.question}
+          /* Full-bleed background for video items so the lower half isn't black.
+             Existing overlays (header, action rail, badges, title, YES/NO, ticker, nav)
+             sit on top via their own absolute positions and z-indexes — unchanged. */
+          wrapperClassName="absolute inset-0 overflow-hidden"
+          mediaClassName="absolute inset-0 w-full h-full object-cover object-[center_30%]"
+          overlay={
+            <div className="absolute inset-0 bg-gradient-to-t from-black via-black/35 to-black/40 md:from-black/90 md:via-black/30 md:to-black/50 pointer-events-none" />
+          }
+          showMuteToggle
+        />
+      ) : safeImageUrl ? (
         <div className="absolute inset-x-0 top-0 h-[55%] md:h-full overflow-hidden">
           <Image
             src={safeImageUrl}
