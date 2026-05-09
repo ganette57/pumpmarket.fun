@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useWallet } from "@solana/wallet-adapter-react";
 
 const MOBILE_HOME_RETAP_EVENT = "home-feed:retap";
 
@@ -39,8 +40,16 @@ function Item({
 
 export default function MobileNav() {
   const pathname = usePathname();
+  const { connected, publicKey } = useWallet();
 
   const isActive = (p: string) => pathname === p || pathname?.startsWith(p + "/");
+
+  const profileHref =
+    connected && publicKey ? `/profile/${publicKey.toBase58()}` : "/dashboard";
+  const profileActive =
+    connected && publicKey
+      ? isActive(`/profile/${publicKey.toBase58()}`)
+      : isActive("/dashboard");
 
   const handleHomeTap = (e: React.MouseEvent) => {
     // Retap on home tab: notify home feed to scroll-to-top + refresh.
@@ -117,10 +126,10 @@ export default function MobileNav() {
           }
         />
 
-        {/* Dashboard / profile */}
+        {/* Public profile (falls back to /dashboard when not connected) */}
         <Item
-          href="/dashboard"
-          active={isActive("/dashboard")}
+          href={profileHref}
+          active={profileActive}
           icon={
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <circle cx="12" cy="8" r="4" />
