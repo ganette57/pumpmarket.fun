@@ -199,6 +199,15 @@ export default function Header() {
                   <div className="h-px bg-gray-700/50 my-1" />
 
                   {/* Connected-only */}
+                  {connected && publicKey && (
+                    <Link
+                      href={`/profile/${publicKey.toBase58()}`}
+                      className="block px-4 py-2 hover:bg-pump-dark"
+                      onClick={() => setMenuOpen(false)}
+                    >
+                      👤 Profile
+                    </Link>
+                  )}
                   {connected && (
                     <Link
                       href="/dashboard"
