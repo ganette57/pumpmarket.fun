@@ -4,8 +4,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { useWallet } from "@solana/wallet-adapter-react";
+import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { supabase } from "@/lib/supabaseClient";
-import { getProfile, type Profile } from "@/lib/profiles";
+import {
+  getProfile,
+  getFollowerCount,
+  isFollowing as isFollowingDb,
+  followProfile,
+  unfollowProfile,
+  type Profile,
+} from "@/lib/profiles";
 import { parseSupabaseEndDateToResolutionTime } from "@/lib/markets";
 import { lamportsToSol } from "@/utils/solana";
 import MarketCard from "@/components/MarketCard";
@@ -33,23 +41,24 @@ function shortAddr(addr: string) {
   return `${addr.slice(0, 4)}…${addr.slice(-4)}`;
 }
 
-function fakeFollowerCount(wallet: string) {
-  // deterministic pseudo-count based on wallet so the number is stable per user
-  let h = 0;
-  for (let i = 0; i < wallet.length; i++) h = (h * 31 + wallet.charCodeAt(i)) | 0;
-  return Math.abs(h % 980) + 12;
-}
-
 export default function PublicProfilePage() {
   const params = useParams<{ wallet: string }>();
   const wallet = String(params?.wallet || "").trim();
   const { publicKey, connected } = useWallet();
-  const isOwnProfile = !!(connected && publicKey && publicKey.toBase58() === wallet);
+  const { setVisible: setWalletModalVisible } = useWalletModal();
+  const viewerWallet = useMemo(
+    () => (connected && publicKey ? publicKey.toBase58() : null),
+    [connected, publicKey],
+  );
+  const isOwnProfile = !!(viewerWallet && viewerWallet === wallet);
 
   const [profile, setProfile] = useState<Profile | null>(null);
   const [markets, setMarkets] = useState<DbMarketRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [following, setFollowing] = useState(false);
+  const [followerCount, setFollowerCount] = useState(0);
+  const [followBusy, setFollowBusy] = useState(false);
+  const [followError, setFollowError] = useState<string | null>(null);
   const [editOpen, setEditOpen] = useState(false);
 
   useEffect(() => {
@@ -58,7 +67,7 @@ export default function PublicProfilePage() {
     setLoading(true);
 
     (async () => {
-      const [p, mkRes] = await Promise.all([
+      const [p, mkRes, count] = await Promise.all([
         getProfile(wallet),
         supabase
           .from("markets")
@@ -68,11 +77,13 @@ export default function PublicProfilePage() {
           .eq("creator", wallet)
           .order("created_at", { ascending: false })
           .limit(60),
+        getFollowerCount(wallet),
       ]);
 
       if (cancelled) return;
       setProfile(p);
       setMarkets(((mkRes.data as DbMarketRow[]) || []).filter((m) => !!m.market_address));
+      setFollowerCount(count);
       setLoading(false);
     })();
 
@@ -81,12 +92,25 @@ export default function PublicProfilePage() {
     };
   }, [wallet]);
 
+  // Resolve "is the viewer following this profile" whenever either side changes.
+  useEffect(() => {
+    if (!viewerWallet || !wallet || viewerWallet === wallet) {
+      setFollowing(false);
+      return;
+    }
+    let cancelled = false;
+    isFollowingDb(viewerWallet, wallet).then((v) => {
+      if (!cancelled) setFollowing(v);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [viewerWallet, wallet]);
+
   const totalVolumeSol = useMemo(() => {
     const sum = markets.reduce((acc, m) => acc + Number(m.total_volume || 0), 0);
     return lamportsToSol(sum);
   }, [markets]);
-
-  const followerCount = useMemo(() => fakeFollowerCount(wallet), [wallet]);
   const displayName =
     profile?.display_name && profile.display_name.trim().length > 0
       ? profile.display_name
@@ -147,7 +171,7 @@ export default function PublicProfilePage() {
               <Stat label="Followers" value={followerCount.toString()} />
             </div>
 
-            {/* Edit (own profile) or Follow (other profiles, UI-only) */}
+            {/* Edit (own profile) or Follow (other profiles, real DB) */}
             {isOwnProfile ? (
               <button
                 type="button"
@@ -158,28 +182,66 @@ export default function PublicProfilePage() {
                 Edit profile
               </button>
             ) : (
-              <button
-                type="button"
-                onClick={() => setFollowing((v) => !v)}
-                className={`mt-5 inline-flex items-center justify-center gap-2 h-10 px-6 rounded-full text-sm font-semibold transition w-full max-w-xs ${
-                  following
-                    ? "bg-transparent border border-pump-green text-pump-green hover:bg-pump-green/10"
-                    : "bg-pump-green text-black hover:bg-pump-green/90"
-                }`}
-                aria-pressed={following}
-              >
-                {following ? (
-                  <>
-                    <Check className="w-4 h-4" />
-                    Following
-                  </>
-                ) : (
-                  <>
-                    <UserPlus className="w-4 h-4" />
-                    Follow
-                  </>
+              <>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (followBusy) return;
+                    if (!viewerWallet) {
+                      setFollowError(null);
+                      setWalletModalVisible(true);
+                      return;
+                    }
+                    setFollowError(null);
+                    setFollowBusy(true);
+                    const prevFollowing = following;
+                    const prevCount = followerCount;
+                    const nextFollowing = !prevFollowing;
+                    setFollowing(nextFollowing);
+                    setFollowerCount((c) => Math.max(0, c + (nextFollowing ? 1 : -1)));
+                    try {
+                      if (nextFollowing) {
+                        await followProfile(viewerWallet, wallet);
+                      } else {
+                        await unfollowProfile(viewerWallet, wallet);
+                      }
+                    } catch (e: any) {
+                      setFollowing(prevFollowing);
+                      setFollowerCount(prevCount);
+                      setFollowError(e?.message || "Action failed.");
+                    } finally {
+                      setFollowBusy(false);
+                    }
+                  }}
+                  disabled={followBusy}
+                  className={`mt-5 inline-flex items-center justify-center gap-2 h-10 px-6 rounded-full text-sm font-semibold transition w-full max-w-xs disabled:opacity-60 ${
+                    following
+                      ? "bg-transparent border border-pump-green text-pump-green hover:bg-pump-green/10"
+                      : "bg-pump-green text-black hover:bg-pump-green/90"
+                  }`}
+                  aria-pressed={following}
+                >
+                  {following ? (
+                    <>
+                      <Check className="w-4 h-4" />
+                      {followBusy ? "Updating…" : "Following"}
+                    </>
+                  ) : (
+                    <>
+                      <UserPlus className="w-4 h-4" />
+                      {followBusy ? "Updating…" : "Follow"}
+                    </>
+                  )}
+                </button>
+                {!viewerWallet && (
+                  <p className="mt-2 text-[11px] text-gray-500">
+                    Connect wallet to follow.
+                  </p>
                 )}
-              </button>
+                {followError && (
+                  <p className="mt-2 text-[11px] text-red-400">{followError}</p>
+                )}
+              </>
             )}
           </div>
         </div>
