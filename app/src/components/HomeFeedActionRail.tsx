@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Bookmark, Heart, MessageCircle, Share2 } from "lucide-react";
 import { useWallet } from "@solana/wallet-adapter-react";
@@ -334,24 +335,34 @@ export default function HomeFeedActionRail({
     String(creatorProfile?.display_name || "").trim() ||
     (creatorAddress ? `${creatorAddress.slice(0, 4)}…${creatorAddress.slice(-4)}` : "Creator");
 
+  const creatorBlock = (
+    <div className="flex flex-col items-center gap-1.5">
+      <div className="relative">
+        <div className="absolute -inset-[1px] rounded-full bg-gradient-to-br from-[#61ff9a] via-[#8ee6ff] to-[#ff7ab6] opacity-70" />
+        <div className="relative flex h-11 w-11 items-center justify-center overflow-hidden rounded-full border border-white/20 bg-black/50 text-white shadow-[0_10px_24px_rgba(0,0,0,0.42)] backdrop-blur-xl ring-1 ring-inset ring-white/10">
+          {avatarUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={avatarUrl} alt={avatarLabel} className="h-full w-full object-cover" />
+          ) : (
+            <span className="text-xs font-bold uppercase">{shortAddr(creatorAddress)}</span>
+          )}
+        </div>
+      </div>
+      <span className="max-w-[58px] truncate text-[10px] font-semibold leading-none text-white/85">
+        {avatarLabel}
+      </span>
+    </div>
+  );
+
   return (
     <div className="flex flex-col items-center gap-3">
-      <div className="flex flex-col items-center gap-1.5">
-        <div className="relative">
-          <div className="absolute -inset-[1px] rounded-full bg-gradient-to-br from-[#61ff9a] via-[#8ee6ff] to-[#ff7ab6] opacity-70" />
-          <div className="relative flex h-11 w-11 items-center justify-center overflow-hidden rounded-full border border-white/20 bg-black/50 text-white shadow-[0_10px_24px_rgba(0,0,0,0.42)] backdrop-blur-xl ring-1 ring-inset ring-white/10">
-            {avatarUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={avatarUrl} alt={avatarLabel} className="h-full w-full object-cover" />
-            ) : (
-              <span className="text-xs font-bold uppercase">{shortAddr(creatorAddress)}</span>
-            )}
-          </div>
-        </div>
-        <span className="max-w-[58px] truncate text-[10px] font-semibold leading-none text-white/85">
-          {avatarLabel}
-        </span>
-      </div>
+      {creatorAddress ? (
+        <Link href={`/profile/${creatorAddress}`} aria-label="Open creator profile">
+          {creatorBlock}
+        </Link>
+      ) : (
+        creatorBlock
+      )}
 
       <button
         type="button"

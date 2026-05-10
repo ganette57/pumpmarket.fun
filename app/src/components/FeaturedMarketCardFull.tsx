@@ -136,7 +136,11 @@ export default function FeaturedMarketCardFull({ market, liveSessionId, creatorP
                   </h2>
                   
                   {market.creator && (
-                    <div className="flex items-center gap-2 mt-2">
+                    <Link
+                      href={`/profile/${market.creator}`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="flex items-center gap-2 mt-2 hover:text-white"
+                    >
                       {creatorProfile?.avatar_url ? (
                         <img src={creatorProfile.avatar_url} alt="" className="w-5 h-5 rounded-full object-cover flex-shrink-0" />
                       ) : (
@@ -144,7 +148,7 @@ export default function FeaturedMarketCardFull({ market, liveSessionId, creatorP
                       )}
                       <p className="text-sm text-gray-500">
                         by{' '}
-                        <span className="text-gray-300">
+                        <span className="text-gray-300 hover:text-pump-green">
                           {creatorProfile?.display_name
                             ? creatorProfile.display_name
                             : market.creator.length > 12
@@ -152,7 +156,7 @@ export default function FeaturedMarketCardFull({ market, liveSessionId, creatorP
                             : market.creator}
                         </span>
                       </p>
-                    </div>
+                    </Link>
                   )}
                 </div>
               </div>

@@ -197,26 +197,38 @@ export default function HomeFeedItem({
         {/* Sub info row */}
         <div className="flex items-center gap-3 text-[12px] text-white/70 mb-3">
           {/* creator */}
-          {(creatorProfile?.display_name || creatorAddress) && (
-            <div className="flex items-center gap-1 min-w-0 shrink">
-              {creatorProfile?.avatar_url ? (
-                <img
-                  src={creatorProfile.avatar_url}
-                  alt=""
-                  className="w-4 h-4 rounded-full object-cover flex-shrink-0"
-                />
-              ) : (
-                <div className="w-4 h-4 rounded-full bg-white/20 flex-shrink-0" />
-              )}
-              <span className="truncate max-w-[100px]">
-                {creatorProfile?.display_name
-                  ? creatorProfile.display_name
-                  : creatorAddress
-                  ? `${creatorAddress.slice(0, 4)}…${creatorAddress.slice(-4)}`
-                  : ""}
-              </span>
-            </div>
-          )}
+          {(creatorProfile?.display_name || creatorAddress) && (() => {
+            const inner = (
+              <>
+                {creatorProfile?.avatar_url ? (
+                  <img
+                    src={creatorProfile.avatar_url}
+                    alt=""
+                    className="w-4 h-4 rounded-full object-cover flex-shrink-0"
+                  />
+                ) : (
+                  <div className="w-4 h-4 rounded-full bg-white/20 flex-shrink-0" />
+                )}
+                <span className="truncate max-w-[100px]">
+                  {creatorProfile?.display_name
+                    ? creatorProfile.display_name
+                    : creatorAddress
+                    ? `${creatorAddress.slice(0, 4)}…${creatorAddress.slice(-4)}`
+                    : ""}
+                </span>
+              </>
+            );
+            return creatorAddress ? (
+              <Link
+                href={`/profile/${creatorAddress}`}
+                className="flex items-center gap-1 min-w-0 shrink hover:text-white"
+              >
+                {inner}
+              </Link>
+            ) : (
+              <div className="flex items-center gap-1 min-w-0 shrink">{inner}</div>
+            );
+          })()}
 
           {/* volume */}
           <div className="flex items-center gap-1 flex-shrink-0">

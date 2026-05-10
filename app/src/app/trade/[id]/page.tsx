@@ -5373,7 +5373,10 @@ const ended = endedByTime;
   
                     {/* Creator profile — hidden on mobile for flash crypto */}
                     {market.creator && (
-                      <div className={`flex items-center gap-2 mt-1 ${isFlashCryptoMarket ? "hidden md:flex" : ""}`}>
+                      <Link
+                        href={`/profile/${market.creator}`}
+                        className={`flex items-center gap-2 mt-1 hover:text-white ${isFlashCryptoMarket ? "hidden md:flex" : ""}`}
+                      >
                         {creatorProfile?.avatar_url ? (
                           <img src={creatorProfile.avatar_url} alt="" className="w-5 h-5 rounded-full object-cover flex-shrink-0" />
                         ) : (
@@ -5381,13 +5384,13 @@ const ended = endedByTime;
                         )}
                         <span className="text-sm text-gray-500">
                           by{" "}
-                          <span className="text-gray-300">
+                          <span className="text-gray-300 hover:text-pump-green">
                             {creatorProfile?.display_name
                               ? creatorProfile.display_name
                               : `${market.creator.slice(0, 4)}…${market.creator.slice(-4)}`}
                           </span>
                         </span>
-                      </div>
+                      </Link>
                     )}
 
                     {market.socialLinks && (

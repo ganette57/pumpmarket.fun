@@ -167,22 +167,35 @@ export default function MarketCard({ market, liveSessionId, liveMatch = false, f
           {/* FOOTER */}
           <div className="flex items-center justify-between text-[11px] text-gray-400 mt-3">
             {/* creator */}
-            {(creatorProfile?.display_name || creatorAddress) && (
-              <div className="flex items-center gap-1 min-w-0 shrink truncate">
-                {creatorProfile?.avatar_url ? (
-                  <img src={creatorProfile.avatar_url} alt="" className="w-4 h-4 rounded-full object-cover flex-shrink-0" />
-                ) : (
-                  <div className="w-4 h-4 rounded-full bg-gray-700 flex-shrink-0" />
-                )}
-                <span className="truncate">
-                  {creatorProfile?.display_name
-                    ? creatorProfile.display_name
-                    : creatorAddress
-                    ? `${creatorAddress.slice(0, 4)}…${creatorAddress.slice(-4)}`
-                    : ""}
-                </span>
-              </div>
-            )}
+            {(creatorProfile?.display_name || creatorAddress) && (() => {
+              const inner = (
+                <>
+                  {creatorProfile?.avatar_url ? (
+                    <img src={creatorProfile.avatar_url} alt="" className="w-4 h-4 rounded-full object-cover flex-shrink-0" />
+                  ) : (
+                    <div className="w-4 h-4 rounded-full bg-gray-700 flex-shrink-0" />
+                  )}
+                  <span className="truncate">
+                    {creatorProfile?.display_name
+                      ? creatorProfile.display_name
+                      : creatorAddress
+                      ? `${creatorAddress.slice(0, 4)}…${creatorAddress.slice(-4)}`
+                      : ""}
+                  </span>
+                </>
+              );
+              return creatorAddress ? (
+                <Link
+                  href={`/profile/${creatorAddress}`}
+                  onClick={(e) => e.stopPropagation()}
+                  className="flex items-center gap-1 min-w-0 shrink truncate hover:text-white"
+                >
+                  {inner}
+                </Link>
+              ) : (
+                <div className="flex items-center gap-1 min-w-0 shrink truncate">{inner}</div>
+              );
+            })()}
 
             {/* volume */}
             <div className="flex items-center gap-1 flex-shrink-0">
