@@ -9,6 +9,7 @@ import { supabase } from "@/lib/supabaseClient";
 import {
   getProfile,
   getFollowerCount,
+  getFollowingCount,
   isFollowing as isFollowingDb,
   followProfile,
   unfollowProfile,
@@ -18,6 +19,7 @@ import { parseSupabaseEndDateToResolutionTime } from "@/lib/markets";
 import { lamportsToSol } from "@/utils/solana";
 import MarketCard from "@/components/MarketCard";
 import EditProfileModal from "@/components/EditProfileModal";
+import FollowListModal from "@/components/FollowListModal";
 import { UserPlus, Check, Pencil } from "lucide-react";
 
 type DbMarketRow = {
@@ -57,9 +59,11 @@ export default function PublicProfilePage() {
   const [loading, setLoading] = useState(true);
   const [following, setFollowing] = useState(false);
   const [followerCount, setFollowerCount] = useState(0);
+  const [followingCount, setFollowingCount] = useState(0);
   const [followBusy, setFollowBusy] = useState(false);
   const [followError, setFollowError] = useState<string | null>(null);
   const [editOpen, setEditOpen] = useState(false);
+  const [listMode, setListMode] = useState<"followers" | "following" | null>(null);
 
   useEffect(() => {
     if (!wallet) return;
@@ -67,7 +71,7 @@ export default function PublicProfilePage() {
     setLoading(true);
 
     (async () => {
-      const [p, mkRes, count] = await Promise.all([
+      const [p, mkRes, fCount, gCount] = await Promise.all([
         getProfile(wallet),
         supabase
           .from("markets")
@@ -78,12 +82,14 @@ export default function PublicProfilePage() {
           .order("created_at", { ascending: false })
           .limit(60),
         getFollowerCount(wallet),
+        getFollowingCount(wallet),
       ]);
 
       if (cancelled) return;
       setProfile(p);
       setMarkets(((mkRes.data as DbMarketRow[]) || []).filter((m) => !!m.market_address));
-      setFollowerCount(count);
+      setFollowerCount(fCount);
+      setFollowingCount(gCount);
       setLoading(false);
     })();
 
@@ -161,14 +167,29 @@ export default function PublicProfilePage() {
                 : "Building markets on FunMarket. Predict the future, one outcome at a time."}
             </p>
 
-            {/* Stats row */}
-            <div className="mt-5 grid grid-cols-3 gap-2 w-full max-w-sm">
-              <Stat label="Markets" value={loading ? "—" : markets.length.toString()} />
-              <Stat
-                label="Volume"
-                value={loading ? "—" : `${totalVolumeSol.toFixed(2)} SOL`}
+            {/* Stats row — minimal: bold values, gray labels, thin dividers */}
+            <div className="mt-5 flex items-center justify-center gap-3 sm:gap-5 text-sm w-full max-w-md flex-wrap">
+              <StatInline
+                value={loading ? "—" : markets.length.toString()}
+                label="Markets"
               />
-              <Stat label="Followers" value={followerCount.toString()} />
+              <StatDivider />
+              <StatInline
+                value={loading ? "—" : `${totalVolumeSol.toFixed(2)} SOL`}
+                label="Volume"
+              />
+              <StatDivider />
+              <StatInline
+                value={followerCount.toString()}
+                label="Followers"
+                onClick={() => setListMode("followers")}
+              />
+              <StatDivider />
+              <StatInline
+                value={followingCount.toString()}
+                label="Following"
+                onClick={() => setListMode("following")}
+              />
             </div>
 
             {/* Edit (own profile) or Follow (other profiles, real DB) */}
@@ -269,6 +290,14 @@ export default function PublicProfilePage() {
         />
       )}
 
+      {/* Followers / Following list modal */}
+      <FollowListModal
+        open={listMode !== null}
+        onClose={() => setListMode(null)}
+        wallet={wallet}
+        mode={listMode ?? "followers"}
+      />
+
       {/* TABS / TITLE */}
       <section className="max-w-6xl mx-auto px-4 mt-8 md:mt-10">
         <div className="flex items-center justify-between border-b border-gray-800 pb-2 mb-4">
@@ -327,11 +356,43 @@ export default function PublicProfilePage() {
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function StatInline({
+  value,
+  label,
+  onClick,
+}: {
+  value: string;
+  label: string;
+  onClick?: () => void;
+}) {
+  const baseClasses =
+    "inline-flex items-baseline gap-1.5 leading-none whitespace-nowrap";
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className={`${baseClasses} group select-none -mx-1 px-1 py-0.5 rounded transition active:opacity-70`}
+      >
+        <span className="text-base font-bold text-white group-hover:text-pump-green transition-colors">
+          {value}
+        </span>
+        <span className="text-[11px] uppercase tracking-wide text-gray-400 group-hover:text-white transition-colors">
+          {label}
+        </span>
+      </button>
+    );
+  }
   return (
-    <div className="rounded-lg bg-gray-900/60 border border-gray-800 px-2 py-2">
-      <div className="text-[15px] md:text-base font-bold text-white truncate">{value}</div>
-      <div className="text-[10px] uppercase tracking-wide text-gray-500">{label}</div>
-    </div>
+    <span className={baseClasses}>
+      <span className="text-base font-bold text-white">{value}</span>
+      <span className="text-[11px] uppercase tracking-wide text-gray-500">
+        {label}
+      </span>
+    </span>
   );
+}
+
+function StatDivider() {
+  return <span aria-hidden className="h-4 w-px bg-gray-800" />;
 }

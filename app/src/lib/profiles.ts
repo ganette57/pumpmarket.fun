@@ -142,3 +142,53 @@ export async function unfollowProfile(
     .eq("following_wallet", followingWallet);
   if (error) throw error;
 }
+
+export type FollowEdge = {
+  wallet_address: string;
+  created_at: string | null;
+  profile: Profile | null;
+};
+
+async function fetchFollowEdges(
+  matchColumn: "following_wallet" | "follower_wallet",
+  walletColumn: "follower_wallet" | "following_wallet",
+  wallet: string,
+): Promise<FollowEdge[]> {
+  if (!wallet) return [];
+  const { data, error } = await supabase
+    .from("profile_follows")
+    .select(`${walletColumn}, created_at`)
+    .eq(matchColumn, wallet)
+    .order("created_at", { ascending: false })
+    .limit(200);
+  if (error) {
+    console.error("fetchFollowEdges error:", error);
+    return [];
+  }
+  const rows = (data || []) as Array<Record<string, any>>;
+  const wallets = rows
+    .map((r) => String(r[walletColumn] || ""))
+    .filter((w) => w.length > 0);
+  if (!wallets.length) return [];
+  const profiles = await getProfiles(wallets);
+  const map = new Map<string, Profile>();
+  for (const p of profiles) map.set(p.wallet_address, p);
+  return rows.map((r) => {
+    const w = String(r[walletColumn] || "");
+    return {
+      wallet_address: w,
+      created_at: (r.created_at as string) ?? null,
+      profile: map.get(w) ?? null,
+    };
+  });
+}
+
+/** Wallets that follow `wallet` (i.e. their `following_wallet === wallet`). */
+export async function getFollowers(wallet: string): Promise<FollowEdge[]> {
+  return fetchFollowEdges("following_wallet", "follower_wallet", wallet);
+}
+
+/** Wallets that `wallet` follows (i.e. their `follower_wallet === wallet`). */
+export async function getFollowing(wallet: string): Promise<FollowEdge[]> {
+  return fetchFollowEdges("follower_wallet", "following_wallet", wallet);
+}
