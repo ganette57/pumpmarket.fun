@@ -3,12 +3,14 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
+import { useWallet } from "@solana/wallet-adapter-react";
 import { supabase } from "@/lib/supabaseClient";
 import { getProfile, type Profile } from "@/lib/profiles";
 import { parseSupabaseEndDateToResolutionTime } from "@/lib/markets";
 import { lamportsToSol } from "@/utils/solana";
 import MarketCard from "@/components/MarketCard";
-import { UserPlus, Check } from "lucide-react";
+import EditProfileModal from "@/components/EditProfileModal";
+import { UserPlus, Check, Pencil } from "lucide-react";
 
 type DbMarketRow = {
   market_address: string;
@@ -41,11 +43,14 @@ function fakeFollowerCount(wallet: string) {
 export default function PublicProfilePage() {
   const params = useParams<{ wallet: string }>();
   const wallet = String(params?.wallet || "").trim();
+  const { publicKey, connected } = useWallet();
+  const isOwnProfile = !!(connected && publicKey && publicKey.toBase58() === wallet);
 
   const [profile, setProfile] = useState<Profile | null>(null);
   const [markets, setMarkets] = useState<DbMarketRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [following, setFollowing] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
 
   useEffect(() => {
     if (!wallet) return;
@@ -125,9 +130,11 @@ export default function PublicProfilePage() {
               {shortAddr(wallet)}
             </p>
 
-            {/* Bio placeholder */}
-            <p className="mt-3 max-w-md text-sm text-gray-300/90 leading-relaxed">
-              Building markets on FunMarket. Predict the future, one outcome at a time.
+            {/* Bio */}
+            <p className="mt-3 max-w-md text-sm text-gray-300/90 leading-relaxed whitespace-pre-line">
+              {profile?.bio && profile.bio.trim().length > 0
+                ? profile.bio
+                : "Building markets on FunMarket. Predict the future, one outcome at a time."}
             </p>
 
             {/* Stats row */}
@@ -140,32 +147,65 @@ export default function PublicProfilePage() {
               <Stat label="Followers" value={followerCount.toString()} />
             </div>
 
-            {/* Follow button (UI-only) */}
-            <button
-              type="button"
-              onClick={() => setFollowing((v) => !v)}
-              className={`mt-5 inline-flex items-center justify-center gap-2 h-10 px-6 rounded-full text-sm font-semibold transition w-full max-w-xs ${
-                following
-                  ? "bg-transparent border border-pump-green text-pump-green hover:bg-pump-green/10"
-                  : "bg-pump-green text-black hover:bg-pump-green/90"
-              }`}
-              aria-pressed={following}
-            >
-              {following ? (
-                <>
-                  <Check className="w-4 h-4" />
-                  Following
-                </>
-              ) : (
-                <>
-                  <UserPlus className="w-4 h-4" />
-                  Follow
-                </>
-              )}
-            </button>
+            {/* Edit (own profile) or Follow (other profiles, UI-only) */}
+            {isOwnProfile ? (
+              <button
+                type="button"
+                onClick={() => setEditOpen(true)}
+                className="mt-5 inline-flex items-center justify-center gap-2 h-10 px-6 rounded-full text-sm font-semibold transition w-full max-w-xs bg-transparent border border-pump-green text-pump-green hover:bg-pump-green/10"
+              >
+                <Pencil className="w-4 h-4" />
+                Edit profile
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setFollowing((v) => !v)}
+                className={`mt-5 inline-flex items-center justify-center gap-2 h-10 px-6 rounded-full text-sm font-semibold transition w-full max-w-xs ${
+                  following
+                    ? "bg-transparent border border-pump-green text-pump-green hover:bg-pump-green/10"
+                    : "bg-pump-green text-black hover:bg-pump-green/90"
+                }`}
+                aria-pressed={following}
+              >
+                {following ? (
+                  <>
+                    <Check className="w-4 h-4" />
+                    Following
+                  </>
+                ) : (
+                  <>
+                    <UserPlus className="w-4 h-4" />
+                    Follow
+                  </>
+                )}
+              </button>
+            )}
           </div>
         </div>
       </section>
+
+      {/* Edit modal — own profile only */}
+      {isOwnProfile && (
+        <EditProfileModal
+          open={editOpen}
+          onClose={() => setEditOpen(false)}
+          wallet={wallet}
+          initial={{
+            display_name: profile?.display_name ?? null,
+            bio: profile?.bio ?? null,
+            avatar_url: profile?.avatar_url ?? null,
+          }}
+          onSaved={(next) => {
+            setProfile((prev) => ({
+              wallet_address: prev?.wallet_address ?? wallet,
+              display_name: next.display_name,
+              bio: next.bio,
+              avatar_url: next.avatar_url,
+            }));
+          }}
+        />
+      )}
 
       {/* TABS / TITLE */}
       <section className="max-w-6xl mx-auto px-4 mt-8 md:mt-10">

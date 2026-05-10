@@ -5,6 +5,7 @@ export type Profile = {
   wallet_address: string;
   display_name: string | null;
   avatar_url: string | null;
+  bio: string | null;
 };
 
 export async function getProfile(
@@ -12,7 +13,7 @@ export async function getProfile(
 ): Promise<Profile | null> {
   const { data } = await supabase
     .from("profiles")
-    .select("wallet_address, display_name, avatar_url")
+    .select("wallet_address, display_name, avatar_url, bio")
     .eq("wallet_address", walletAddress)
     .single();
   return data as Profile | null;
@@ -25,14 +26,14 @@ export async function getProfiles(
   const unique = Array.from(new Set(walletAddresses));
   const { data } = await supabase
     .from("profiles")
-    .select("wallet_address, display_name, avatar_url")
+    .select("wallet_address, display_name, avatar_url, bio")
     .in("wallet_address", unique);
   return (data as Profile[]) || [];
 }
 
 export async function upsertProfile(
   walletAddress: string,
-  updates: { display_name?: string; avatar_url?: string }
+  updates: { display_name?: string | null; avatar_url?: string | null; bio?: string | null }
 ) {
   const { data, error } = await supabase.from("profiles").upsert({
     wallet_address: walletAddress,
