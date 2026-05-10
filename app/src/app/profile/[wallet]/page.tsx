@@ -20,6 +20,7 @@ import { lamportsToSol } from "@/utils/solana";
 import MarketCard from "@/components/MarketCard";
 import EditProfileModal from "@/components/EditProfileModal";
 import FollowListModal from "@/components/FollowListModal";
+import ActivityList from "@/components/ActivityList";
 import { UserPlus, Check, Pencil } from "lucide-react";
 
 type DbMarketRow = {
@@ -64,6 +65,13 @@ export default function PublicProfilePage() {
   const [followError, setFollowError] = useState<string | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [listMode, setListMode] = useState<"followers" | "following" | null>(null);
+  const [tab, setTab] = useState<"markets" | "activity">("markets");
+
+  // Default tab: own profile → Activity, other profile → Markets.
+  // Re-evaluates when isOwnProfile flips (e.g. wallet connects/disconnects).
+  useEffect(() => {
+    setTab(isOwnProfile ? "activity" : "markets");
+  }, [isOwnProfile]);
 
   useEffect(() => {
     if (!wallet) return;
@@ -298,58 +306,68 @@ export default function PublicProfilePage() {
         mode={listMode ?? "followers"}
       />
 
-      {/* TABS / TITLE */}
+      {/* TABS */}
       <section className="max-w-6xl mx-auto px-4 mt-8 md:mt-10">
-        <div className="flex items-center justify-between border-b border-gray-800 pb-2 mb-4">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-white">
-            Markets created
-          </h2>
-          <span className="text-xs text-gray-500">{markets.length}</span>
+        <div role="tablist" aria-label="Profile sections" className="flex items-center gap-6 border-b border-gray-800 mb-5">
+          <TabButton
+            label="Markets"
+            active={tab === "markets"}
+            onClick={() => setTab("markets")}
+          />
+          <TabButton
+            label="Activity"
+            active={tab === "activity"}
+            onClick={() => setTab("activity")}
+          />
         </div>
 
-        {loading ? (
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div
-                key={i}
-                className="h-[340px] rounded-xl border border-gray-800 bg-[#05070b] animate-pulse"
-              />
-            ))}
-          </div>
-        ) : markets.length === 0 ? (
-          <div className="py-14 text-center">
-            <p className="text-gray-400 text-sm">No markets created yet.</p>
-            <p className="text-gray-600 text-xs mt-1">
-              When this creator launches a market, it will appear here.
-            </p>
-          </div>
+        {tab === "markets" ? (
+          loading ? (
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="h-[340px] rounded-xl border border-gray-800 bg-[#05070b] animate-pulse"
+                />
+              ))}
+            </div>
+          ) : markets.length === 0 ? (
+            <div className="py-14 text-center">
+              <p className="text-gray-400 text-sm">No markets created yet.</p>
+              <p className="text-gray-600 text-xs mt-1">
+                When this creator launches a market, it will appear here.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4">
+              {markets.map((m) => (
+                <MarketCard
+                  key={m.market_address}
+                  market={{
+                    publicKey: m.market_address,
+                    question: m.question || "Untitled market",
+                    category: m.category || "other",
+                    imageUrl: m.image_url,
+                    yesSupply: Number(m.yes_supply || 0),
+                    noSupply: Number(m.no_supply || 0),
+                    outcomeNames: Array.isArray(m.outcome_names)
+                      ? (m.outcome_names as string[])
+                      : undefined,
+                    outcomeSupplies: Array.isArray(m.outcome_supplies)
+                      ? (m.outcome_supplies as number[]).map((x) => Number(x))
+                      : undefined,
+                    resolutionTime: parseSupabaseEndDateToResolutionTime(m.end_date),
+                    totalVolume: Number(m.total_volume || 0),
+                    resolved: !!m.resolved,
+                  }}
+                  creatorProfile={profile}
+                  creatorAddress={wallet}
+                />
+              ))}
+            </div>
+          )
         ) : (
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4">
-            {markets.map((m) => (
-              <MarketCard
-                key={m.market_address}
-                market={{
-                  publicKey: m.market_address,
-                  question: m.question || "Untitled market",
-                  category: m.category || "other",
-                  imageUrl: m.image_url,
-                  yesSupply: Number(m.yes_supply || 0),
-                  noSupply: Number(m.no_supply || 0),
-                  outcomeNames: Array.isArray(m.outcome_names)
-                    ? (m.outcome_names as string[])
-                    : undefined,
-                  outcomeSupplies: Array.isArray(m.outcome_supplies)
-                    ? (m.outcome_supplies as number[]).map((x) => Number(x))
-                    : undefined,
-                  resolutionTime: parseSupabaseEndDateToResolutionTime(m.end_date),
-                  totalVolume: Number(m.total_volume || 0),
-                  resolved: !!m.resolved,
-                }}
-                creatorProfile={profile}
-                creatorAddress={wallet}
-              />
-            ))}
-          </div>
+          <ActivityList wallet={wallet} />
         )}
       </section>
     </div>
@@ -395,4 +413,30 @@ function StatInline({
 
 function StatDivider() {
   return <span aria-hidden className="h-4 w-px bg-gray-800" />;
+}
+
+function TabButton({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={`relative -mb-px pb-2.5 text-sm font-semibold transition ${
+        active
+          ? "text-white border-b-2 border-pump-green"
+          : "text-gray-500 hover:text-gray-300 border-b-2 border-transparent"
+      }`}
+    >
+      {label}
+    </button>
+  );
 }
