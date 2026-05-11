@@ -5582,7 +5582,8 @@ const ended = endedByTime;
                 )}
 
                 {/* Outcomes — unified FunMarket style: filled neon blocks (matches homepage cards + mobile feed) */}
-                {isBinaryStyle ? (
+                {/* Hidden on mobile flash crypto: redundant with sticky bottom Buy YES / Buy NO bar */}
+                {!(isFlashCryptoMarket && isMobile) && (isBinaryStyle ? (
                   <div className={`mt-4 grid grid-cols-2 gap-3 ${
                     isFlashCryptoMarket && isMobile ? "mt-6" : ""
                   }`}>
@@ -5646,10 +5647,10 @@ const ended = endedByTime;
                       </button>
                     ))}
                   </div>
-                )}
-  
+                ))}
+
               </div>
-  
+
               {/* Odds history */}
               <div className="bg-black border border-gray-800 rounded-xl p-5 md:p-6">
   
