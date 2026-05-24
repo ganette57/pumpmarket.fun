@@ -664,6 +664,11 @@ export function MobileImmersiveSlide({
     return `${formatVol((market.totalVolume * pct) / 100)} SOL`;
   };
 
+  // Higher-percentage side — drives the Momentum strip placeholder label.
+  // Pure render computation (no state / effect / timer).
+  const momentumYes =
+    (derived?.percentages?.[0] ?? 0) >= (derived?.percentages?.[1] ?? 0);
+
   // Pin layout heights so the stream wrapper (absolute) and the structured
   // stack's top spacer (in-flow) line up exactly — the stream sits flush
   // under the top controls, no dead black space.
@@ -771,6 +776,26 @@ export function MobileImmersiveSlide({
               {hostSlot}
             </div>
           )}
+
+          {/* Top traders — floating placeholder pill. Rendered only when no
+              host controls occupy the top-right, so it never blocks them or
+              the feed's Go Live button. Purely visual. */}
+          {!hostSlot && (
+            <div className="absolute top-2 right-2 z-20 pointer-events-none">
+              <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-black/55 backdrop-blur-md border border-white/10 shadow-[0_2px_10px_rgba(0,0,0,0.5)]">
+                <div className="flex -space-x-1.5">
+                  <span className="w-4 h-4 rounded-full bg-gradient-to-br from-pump-green to-emerald-700 border border-black" />
+                  <span className="w-4 h-4 rounded-full bg-gradient-to-br from-[#ff5c73] to-rose-700 border border-black" />
+                </div>
+                <span className="text-[9px] font-bold tabular-nums text-white/85">
+                  +32
+                </span>
+                <span className="text-[8px] font-semibold uppercase tracking-[0.12em] text-white/45 whitespace-nowrap">
+                  Top traders
+                </span>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* LOWER SECTION — overlaps the video's last 24 px and fades to
@@ -779,7 +804,7 @@ export function MobileImmersiveSlide({
         <div className="relative -mt-6 z-20 flex-1 flex flex-col bg-gradient-to-b from-transparent via-black/85 to-black">
           {/* MARKET CARD — LIVE pill + total vol header, question,
               horizontal progress bar with VS bubble, per-side volume. */}
-          <div className="mx-3 rounded-2xl border border-white/[0.08] bg-black/85 backdrop-blur-xl px-4 pt-3 pb-3 shadow-[0_8px_32px_rgba(0,0,0,0.6)]">
+          <div className="mx-3 rounded-2xl border border-white/[0.08] bg-black/85 backdrop-blur-xl px-4 pt-3 pb-3 shadow-[0_8px_32px_rgba(0,0,0,0.6),inset_18px_0_44px_-32px_rgba(109,255,164,0.6),inset_-18px_0_44px_-32px_rgba(255,92,115,0.6)]">
             <div className="flex items-center justify-between mb-2">
               <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-pump-green/15 border border-pump-green/30">
                 <span className="w-1 h-1 rounded-full bg-pump-green shadow-[0_0_6px_rgba(109,255,164,0.8)]" />
@@ -787,11 +812,68 @@ export function MobileImmersiveSlide({
                   Live Market
                 </span>
               </div>
-              {volLabel && (
-                <span className="text-[10px] text-gray-500 font-medium tabular-nums tracking-wider uppercase">
-                  {volLabel} Vol
-                </span>
-              )}
+              <div className="flex items-center gap-2">
+                {volLabel && (
+                  <span className="text-[10px] text-gray-500 font-medium tabular-nums tracking-wider uppercase">
+                    {volLabel} Vol
+                  </span>
+                )}
+                <div className="flex items-center gap-1.5">
+                  {/* Analytics / stats — visual placeholder for now */}
+                  <button
+                    type="button"
+                    aria-label="Market stats"
+                    className="flex items-center justify-center w-7 h-7 rounded-full border border-white/10 bg-white/[0.04] text-white/70 active:scale-95 active:text-white transition"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="w-3.5 h-3.5"
+                    >
+                      <path d="M3 3v18h18" />
+                      <path d="M7 16v-4" />
+                      <path d="M12 16V8" />
+                      <path d="M17 16v-7" />
+                    </svg>
+                  </button>
+                  {/* Share — premium box-arrow glyph */}
+                  <button
+                    type="button"
+                    aria-label="Share market"
+                    onClick={() => {
+                      const pk = market?.publicKey;
+                      if (!pk || typeof window === "undefined") return;
+                      const url = `${window.location.origin}/trade/${pk}`;
+                      if (navigator.share) {
+                        navigator
+                          .share({ title: market?.question || session.title, url })
+                          .catch(() => {});
+                      } else {
+                        navigator.clipboard?.writeText(url).catch(() => {});
+                      }
+                    }}
+                    className="flex items-center justify-center w-7 h-7 rounded-full border border-white/10 bg-white/[0.04] text-white/70 active:scale-95 active:text-white transition"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="w-3.5 h-3.5"
+                    >
+                      <path d="M12 15V3" />
+                      <path d="M8 7l4-4 4 4" />
+                      <path d="M5 13v6a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-6" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
             </div>
 
             <h2 className="text-white font-bold text-[16px] leading-snug line-clamp-2 mb-2.5 drop-shadow-[0_1px_4px_rgba(0,0,0,0.7)]">
@@ -800,7 +882,9 @@ export function MobileImmersiveSlide({
 
             {derived ? (
               <>
-                {/* Continuous horizontal progress bar */}
+                {/* Continuous horizontal progress bar. Wrapper is non-clipping
+                    so the VS bubble can straddle the bar's lower edge. */}
+                <div className="relative">
                 <div className="relative flex rounded-xl overflow-hidden h-10 border border-white/[0.06]">
                   {derived.names.slice(0, 2).map((name, idx) => {
                     const pctNum = derived.percentages[idx] ?? 0;
@@ -843,9 +927,11 @@ export function MobileImmersiveSlide({
                       </div>
                     );
                   })}
-                  {/* VS bubble — absolutely centered on top of the split */}
-                  <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10 w-7 h-7 rounded-full bg-black border-2 border-white/25 flex items-center justify-center shadow-[0_2px_10px_rgba(0,0,0,0.6)]">
-                    <span className="text-[9px] font-black text-white tracking-[0.1em]">
+                </div>
+                  {/* VS bubble — centered between YES/NO, straddling the bar's
+                      lower edge with a clean premium glow. */}
+                  <div className="pointer-events-none absolute left-1/2 bottom-0 -translate-x-1/2 translate-y-1/2 z-10 w-7 h-7 rounded-full bg-gradient-to-b from-zinc-700 to-black border border-white/30 ring-2 ring-black flex items-center justify-center shadow-[0_2px_10px_rgba(0,0,0,0.7),0_0_14px_rgba(255,255,255,0.12)]">
+                    <span className="text-[9px] font-black text-white tracking-[0.12em]">
                       VS
                     </span>
                   </div>
@@ -868,11 +954,67 @@ export function MobileImmersiveSlide({
             )}
           </div>
 
-          {/* ACTION CARDS — compact HUD cards. Fixed h-28 (112 px) and
-              shrink-0; the rest of the lower section is reserved space. */}
-          <div className="px-3 pt-3 pb-3 shrink-0">
+          {/* HUD STRIPS — visual placeholders between the market card and the
+              action panels. Reserve the eventual Momentum and Up Next rows.
+              Pure presentational; no data or effects wired yet. */}
+          <div className="px-3 mt-3 space-y-2">
+            {/* Momentum / tension strip */}
+            <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-400/25 bg-gradient-to-r from-pump-green/10 via-amber-400/10 to-[#ff5c73]/10 px-3 py-1.5 shadow-[0_0_18px_-8px_rgba(252,211,77,0.6)]">
+              <span className="inline-flex items-center gap-1.5 min-w-0">
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${
+                    momentumYes
+                      ? "bg-pump-green shadow-[0_0_6px_rgba(109,255,164,0.8)]"
+                      : "bg-[#ff5c73] shadow-[0_0_6px_rgba(255,92,115,0.8)]"
+                  }`}
+                />
+                <span
+                  className={`text-[10px] font-bold uppercase tracking-wider whitespace-nowrap ${
+                    momentumYes ? "text-pump-green" : "text-[#ff5c73]"
+                  }`}
+                >
+                  Momentum: {momentumYes ? "YES" : "NO"}
+                </span>
+              </span>
+              <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-amber-300 drop-shadow-[0_0_6px_rgba(252,211,77,0.6)] whitespace-nowrap">
+                High Tension
+              </span>
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-red-500/15 border border-red-500/30 whitespace-nowrap">
+                <span className="text-[9px] font-bold uppercase tracking-wider text-red-300">
+                  Final
+                </span>
+                {countdown?.label && (
+                  <span className="text-[9px] font-bold tabular-nums text-red-200">
+                    {countdown.label}
+                  </span>
+                )}
+              </span>
+            </div>
+
+            {/* Up Next market strip */}
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-dashed border-white/10 bg-white/[0.03] px-3 py-2">
+              <div className="min-w-0">
+                <div className="text-[9px] font-bold uppercase tracking-[0.2em] text-white/40">
+                  Up Next (Preparing…)
+                </div>
+                <div className="text-[12px] font-semibold text-white/55 truncate">
+                  Next flash market coming soon
+                </div>
+              </div>
+              <span className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-pump-green/10 border border-pump-green/25 text-[9px] font-bold uppercase tracking-wider text-pump-green/80">
+                3 Min Market
+              </span>
+            </div>
+          </div>
+
+          {/* Flexible gap — pushes the action panels lower without dead space. */}
+          <div className="flex-[1.5] min-h-[10px]" aria-hidden />
+
+          {/* ACTION CARDS — compact HUD action panels. Fixed h-24 (96 px)
+              and shrink-0, anchored lower in the slide. */}
+          <div className="px-3 pb-3 shrink-0">
             {derived && !sessionLocked ? (
-              <div className="grid grid-cols-2 gap-3 h-28">
+              <div className="grid grid-cols-2 gap-3 h-24">
                 {derived.names.slice(0, 2).map((name, idx) => {
                   const pct = (derived.percentages[idx] ?? 0).toFixed(1);
                   const isYes = idx === 0;
@@ -880,7 +1022,7 @@ export function MobileImmersiveSlide({
                     <button
                       key={idx}
                       onClick={() => onOutcomeTap(idx)}
-                      className={`group relative h-full overflow-hidden rounded-2xl border backdrop-blur-xl px-3.5 py-2.5 active:scale-[0.97] transition-all duration-150 ${
+                      className={`group relative h-full overflow-hidden rounded-2xl border backdrop-blur-xl px-3.5 py-2 active:scale-[0.97] transition-all duration-150 ${
                         isYes
                           ? "bg-gradient-to-br from-pump-green/25 via-pump-green/10 to-pump-green/5 border-pump-green/50 shadow-[0_0_36px_-8px_rgba(109,255,164,0.45)]"
                           : "bg-gradient-to-br from-[#ff5c73]/25 via-[#ff5c73]/10 to-[#ff5c73]/5 border-[#ff5c73]/50 shadow-[0_0_36px_-8px_rgba(255,92,115,0.45)]"
@@ -900,7 +1042,7 @@ export function MobileImmersiveSlide({
                             isYes ? "text-pump-green" : "text-[#ff5c73]"
                           }`}
                           style={{
-                            fontSize: "clamp(32px, 9.5vw, 44px)",
+                            fontSize: "clamp(28px, 8.5vw, 38px)",
                             textShadow: isYes
                               ? "0 0 18px rgba(109,255,164,0.55)"
                               : "0 0 18px rgba(255,92,115,0.55)",
@@ -919,7 +1061,7 @@ export function MobileImmersiveSlide({
                       {/* Arrow chip — absolutely placed so it doesn't push
                           the typography */}
                       <div
-                        className={`absolute bottom-2 right-2 w-7 h-7 rounded-full flex items-center justify-center ${
+                        className={`absolute bottom-2 right-2 w-6 h-6 rounded-full flex items-center justify-center ${
                           isYes
                             ? "bg-pump-green shadow-[0_0_14px_rgba(109,255,164,0.55)]"
                             : "bg-[#ff5c73] shadow-[0_0_14px_rgba(255,92,115,0.55)]"
@@ -930,7 +1072,7 @@ export function MobileImmersiveSlide({
                           fill="none"
                           stroke="currentColor"
                           strokeWidth="3"
-                          className={`w-3.5 h-3.5 ${
+                          className={`w-3 h-3 ${
                             isYes ? "text-black" : "text-white"
                           }`}
                         >
@@ -955,8 +1097,8 @@ export function MobileImmersiveSlide({
             )}
           </div>
 
-          {/* Reserved zone — flex-1 trailing space for future Up Next /
-              activity strip. Intentionally empty for now. */}
+          {/* Trailing spacer — keeps the action panels off the bottom nav. */}
+          <div className="flex-1 min-h-[8px]" aria-hidden />
         </div>
       </div>
     </div>
