@@ -2,11 +2,12 @@
 // Used in both /live/[id] (detail) and /live (feed) to guarantee identical rendering.
 "use client";
 
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef, type ReactNode } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import CategoryImagePlaceholder from "@/components/CategoryImagePlaceholder";
 import { lamportsToSol } from "@/utils/solana";
+import type { LiveSession } from "@/lib/liveSessions";
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
 
@@ -442,5 +443,522 @@ export function LiveMobileContent({
         </div>
       )}
     </>
+  );
+}
+
+/* ── Giant immersive countdown overlay ─────────────────────────────── */
+
+type CountdownPhase = "normal" | "warning" | "panic";
+
+function fmtMmSs(totalSec: number): string {
+  const safe = Math.max(0, Math.floor(totalSec));
+  return `${String(Math.floor(safe / 60)).padStart(2, "0")}:${String(
+    safe % 60
+  ).padStart(2, "0")}`;
+}
+
+// Compact circular HUD — sports-broadcast style. Smaller diameter, thinner
+// ring, dark glass disc behind the time label. Phase tints both the ring
+// and the label; panic phase pulses; final 5 s scales up with intensified
+// glow. Position is set by the parent so the parent can place it on the
+// video region (not the whole slide).
+function CircularCountdownHUD({
+  label,
+  phase,
+  isFinal,
+  progress,
+}: {
+  label: string;
+  phase: CountdownPhase;
+  isFinal: boolean;
+  progress: number;
+}) {
+  const SIZE = 100;
+  const STROKE = 3.5;
+  const RADIUS = (SIZE - STROKE) / 2;
+  const CIRC = 2 * Math.PI * RADIUS;
+  const safeProgress = Math.max(0, Math.min(1, progress));
+
+  const ringStroke =
+    phase === "panic"
+      ? "#f87171"
+      : phase === "warning"
+      ? "#fcd34d"
+      : "#6dffa4";
+
+  const labelColor =
+    phase === "panic"
+      ? "text-red-400"
+      : phase === "warning"
+      ? "text-amber-300"
+      : "text-white";
+
+  const dropShadow =
+    phase === "panic"
+      ? isFinal
+        ? "drop-shadow(0 0 18px rgba(248,113,113,0.85))"
+        : "drop-shadow(0 0 12px rgba(248,113,113,0.7))"
+      : phase === "warning"
+      ? "drop-shadow(0 0 10px rgba(252,211,77,0.55))"
+      : "drop-shadow(0 0 6px rgba(109,255,164,0.4))";
+
+  const labelShadow =
+    phase === "panic"
+      ? "0 0 10px rgba(248,113,113,0.55)"
+      : phase === "warning"
+      ? "0 0 8px rgba(252,211,77,0.4)"
+      : "0 1px 4px rgba(0,0,0,0.7)";
+
+  return (
+    <div
+      className={`relative transition-all duration-500 ease-out ${
+        phase === "panic" ? "animate-pulse" : ""
+      }`}
+      style={{
+        width: "clamp(88px, 24vw, 116px)",
+        aspectRatio: "1 / 1",
+        filter: dropShadow,
+        transform: isFinal ? "scale(1.06)" : "scale(1)",
+      }}
+    >
+      {/* Glass disc — sits inside the ring for label readability */}
+      <div className="absolute inset-[5px] rounded-full bg-black/60 backdrop-blur-md ring-1 ring-white/5" />
+      <svg
+        className="relative"
+        width="100%"
+        height="100%"
+        viewBox={`0 0 ${SIZE} ${SIZE}`}
+        aria-hidden
+      >
+        <circle
+          cx={SIZE / 2}
+          cy={SIZE / 2}
+          r={RADIUS}
+          fill="none"
+          stroke="rgba(255,255,255,0.12)"
+          strokeWidth={STROKE}
+        />
+        <circle
+          cx={SIZE / 2}
+          cy={SIZE / 2}
+          r={RADIUS}
+          fill="none"
+          stroke={ringStroke}
+          strokeWidth={STROKE}
+          strokeDasharray={CIRC}
+          strokeDashoffset={CIRC * (1 - safeProgress)}
+          strokeLinecap="round"
+          transform={`rotate(-90 ${SIZE / 2} ${SIZE / 2})`}
+          style={{
+            transition: "stroke-dashoffset 1s linear, stroke 0.5s ease-out",
+          }}
+        />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <span className="text-[8px] text-white/55 uppercase tracking-[0.22em] font-semibold leading-none mb-0.5">
+          Time
+        </span>
+        <span
+          className={`font-black tabular-nums leading-none transition-colors duration-500 ${labelColor}`}
+          style={{
+            fontSize: "clamp(20px, 6.2vw, 28px)",
+            letterSpacing: "-0.02em",
+            textShadow: labelShadow,
+          }}
+        >
+          {label}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/* ── MobileImmersiveSlide ──────────────────────────────────────────── */
+// Shared full-bleed mobile immersive experience: persistent stream,
+// giant countdown overlay, title, YES/NO bottom action bar.
+// Used by /live/[id] (variant="deeplink") and /live (variant="feed").
+
+export type MobileImmersiveSlideMarket = {
+  question?: string;
+  resolutionTime?: number; // unix seconds
+  totalVolume?: number;
+  publicKey?: string;
+};
+
+export function MobileImmersiveSlide({
+  session,
+  market,
+  derived,
+  active,
+  sessionLocked,
+  onOutcomeTap,
+  endIsoOverride = null,
+  countText = null,
+  variant = "deeplink",
+  hostSlot,
+}: {
+  session: LiveSession;
+  market: MobileImmersiveSlideMarket | null;
+  derived: { names: string[]; percentages: number[] } | null;
+  active: boolean;
+  sessionLocked: boolean;
+  onOutcomeTap: (outcomeIndex: number) => void;
+  endIsoOverride?: string | null;
+  countText?: string | null;
+  variant?: "deeplink" | "feed";
+  hostSlot?: ReactNode;
+}) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  // Tracks the largest remaining-seconds value we've seen for this slide;
+  // used as the denominator for the circular HUD progress arc so it sweeps
+  // from full at session entry down to empty at lockout.
+  const peakRemSecRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!active) return;
+    setNowMs(Date.now());
+    const iv = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(iv);
+  }, [active]);
+
+  const countdown = useMemo(() => {
+    const endStr =
+      endIsoOverride ??
+      (market?.resolutionTime
+        ? new Date(market.resolutionTime * 1000).toISOString()
+        : null);
+    if (!endStr) return null;
+    const endMs = new Date(endStr).getTime();
+    if (!Number.isFinite(endMs)) return null;
+    const remSec = Math.max(0, Math.ceil((endMs - nowMs) / 1000));
+
+    if (peakRemSecRef.current == null || remSec > peakRemSecRef.current) {
+      peakRemSecRef.current = Math.max(remSec, 60);
+    }
+    const peak = peakRemSecRef.current || 60;
+    const progress = peak > 0 ? remSec / peak : 0;
+
+    const phase: CountdownPhase =
+      remSec <= 10 ? "panic" : remSec <= 30 ? "warning" : "normal";
+    return {
+      remSec,
+      label: fmtMmSs(remSec),
+      phase,
+      isFinal: remSec <= 5,
+      progress,
+    };
+  }, [endIsoOverride, market?.resolutionTime, nowMs]);
+
+  const isDeeplink = variant === "deeplink";
+
+  const volLabel =
+    market?.totalVolume && market.totalVolume > 0
+      ? `${formatVol(market.totalVolume)} SOL`
+      : null;
+
+  // Approximate per-side volume from share-percentage × total volume.
+  // Not a perfect mapping (volume is trade-flow, percentages are state)
+  // but it carries the right visual weight per side.
+  const perSideSol = (idx: number): string | null => {
+    if (!market?.totalVolume || market.totalVolume <= 0) return null;
+    const pct = derived?.percentages?.[idx] ?? 0;
+    return `${formatVol((market.totalVolume * pct) / 100)} SOL`;
+  };
+
+  // Pin layout heights so the stream wrapper (absolute) and the structured
+  // stack's top spacer (in-flow) line up exactly — the stream sits flush
+  // under the top controls, no dead black space.
+  const TOP_BAR_H = isDeeplink ? "h-10" : "h-14"; // 40 / 56 px
+  const STREAM_TOP = isDeeplink ? "top-10" : "top-14";
+
+  return (
+    <div className="relative h-full bg-black overflow-hidden">
+      {/* STREAM — slide-root[0]. Same React tree position as before; only
+          its bounding box shrinks from inset-0 to aspect-video. The 16:9
+          iframe now fills a 16:9 container exactly → no letterbox bars. */}
+      <div
+        className={`absolute inset-x-0 ${STREAM_TOP} aspect-video bg-black`}
+      >
+        {active && session.stream_url ? (
+          <StreamPlayer
+            url={session.stream_url}
+            className="absolute inset-0 w-full h-full bg-black"
+          />
+        ) : session.thumbnail_url ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={session.thumbnail_url}
+            alt={session.title}
+            className="absolute inset-0 w-full h-full object-cover opacity-80"
+          />
+        ) : (
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(109,255,164,0.12),transparent_42%),linear-gradient(180deg,#020304_0%,#04070c_100%)]" />
+        )}
+      </div>
+
+      {/* STRUCTURED STACK — slide-root[1]. Top bar (fixed height matching
+          the stream's top offset) + aspect-video overlay region for HUD
+          chips (transparent, the stream below shows through) + lower
+          section that overlaps the video bottom and fades to black. */}
+      <div className="relative h-full flex flex-col">
+        {/* Top bar — fixed height. Deeplink shows back link; feed reserves
+            space for the floating MobileTabs above. */}
+        <div
+          className={`shrink-0 ${TOP_BAR_H} ${
+            isDeeplink ? "px-4 flex items-center" : ""
+          }`}
+        >
+          {isDeeplink && (
+            <Link
+              href="/live"
+              className="inline-flex items-center gap-1 text-sm text-white/75 active:text-white transition"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                className="w-4 h-4"
+              >
+                <path d="M15 18l-6-6 6-6" />
+              </svg>
+              Back
+            </Link>
+          )}
+        </div>
+
+        {/* VIDEO OVERLAY REGION — transparent aspect-video band aligned
+            with the stream wrapper. Anchors the floating HUD elements. */}
+        <div className="shrink-0 relative w-full aspect-video">
+          {/* LIVE / status pill (top-left, broadcast-style) */}
+          <div className="absolute top-3 left-3 z-20 pointer-events-none">
+            {session.status === "live" ? (
+              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-600/40 border border-red-500/50 backdrop-blur-md">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                <span className="text-[10px] font-bold text-red-300 tracking-[0.15em]">
+                  LIVE
+                </span>
+              </div>
+            ) : (
+              <StatusBanner status={session.status} />
+            )}
+          </div>
+
+          {/* Count pill — for flash_traffic etc. Below LIVE pill. */}
+          {countText && (
+            <div className="absolute top-12 left-3 z-20 pointer-events-none">
+              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold bg-black/60 backdrop-blur-md text-white/85 border border-white/10">
+                <span className="opacity-70">Count</span>
+                <span className="tabular-nums">{countText}</span>
+              </span>
+            </div>
+          )}
+
+          {/* Compact circular timer — purely overlaid, never affects flow */}
+          {countdown && (
+            <div className="pointer-events-none absolute top-2 left-1/2 -translate-x-1/2 z-30">
+              <CircularCountdownHUD
+                label={countdown.label}
+                phase={countdown.phase}
+                isFinal={countdown.isFinal}
+                progress={countdown.progress}
+              />
+            </div>
+          )}
+
+          {/* Host controls (top-right) — floating HUD chip */}
+          {hostSlot && (
+            <div className="absolute top-2 right-2 z-30 pointer-events-auto">
+              {hostSlot}
+            </div>
+          )}
+        </div>
+
+        {/* LOWER SECTION — overlaps the video's last 24 px and fades to
+            fully opaque black underneath. flex-1 lets the trailing empty
+            zone host future Up Next / activity strip without layout work. */}
+        <div className="relative -mt-6 z-20 flex-1 flex flex-col bg-gradient-to-b from-transparent via-black/85 to-black">
+          {/* MARKET CARD — LIVE pill + total vol header, question,
+              horizontal progress bar with VS bubble, per-side volume. */}
+          <div className="mx-3 rounded-2xl border border-white/[0.08] bg-black/85 backdrop-blur-xl px-4 pt-3 pb-3 shadow-[0_8px_32px_rgba(0,0,0,0.6)]">
+            <div className="flex items-center justify-between mb-2">
+              <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-pump-green/15 border border-pump-green/30">
+                <span className="w-1 h-1 rounded-full bg-pump-green shadow-[0_0_6px_rgba(109,255,164,0.8)]" />
+                <span className="text-[9px] text-pump-green uppercase tracking-[0.18em] font-bold">
+                  Live Market
+                </span>
+              </div>
+              {volLabel && (
+                <span className="text-[10px] text-gray-500 font-medium tabular-nums tracking-wider uppercase">
+                  {volLabel} Vol
+                </span>
+              )}
+            </div>
+
+            <h2 className="text-white font-bold text-[16px] leading-snug line-clamp-2 mb-2.5 drop-shadow-[0_1px_4px_rgba(0,0,0,0.7)]">
+              {market?.question || session.title}
+            </h2>
+
+            {derived ? (
+              <>
+                {/* Continuous horizontal progress bar */}
+                <div className="relative flex rounded-xl overflow-hidden h-10 border border-white/[0.06]">
+                  {derived.names.slice(0, 2).map((name, idx) => {
+                    const pctNum = derived.percentages[idx] ?? 0;
+                    const pct = pctNum.toFixed(1);
+                    const isYes = idx === 0;
+                    return (
+                      <div
+                        key={idx}
+                        className={`relative flex items-center h-full overflow-hidden ${
+                          isYes
+                            ? "bg-pump-green pl-3 justify-start"
+                            : "bg-[#ff5c73] pr-3 justify-end"
+                        }`}
+                        style={{
+                          flexBasis: `${Math.max(0, Math.min(100, pctNum))}%`,
+                          minWidth: 0,
+                        }}
+                      >
+                        <span
+                          className={`text-[13px] font-bold whitespace-nowrap ${
+                            isYes ? "text-black" : "text-white"
+                          }`}
+                        >
+                          {isYes ? (
+                            <>
+                              {name}{" "}
+                              <span className="font-black tabular-nums">
+                                {pct}%
+                              </span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="font-black tabular-nums">
+                                {pct}%
+                              </span>{" "}
+                              {name}
+                            </>
+                          )}
+                        </span>
+                      </div>
+                    );
+                  })}
+                  {/* VS bubble — absolutely centered on top of the split */}
+                  <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10 w-7 h-7 rounded-full bg-black border-2 border-white/25 flex items-center justify-center shadow-[0_2px_10px_rgba(0,0,0,0.6)]">
+                    <span className="text-[9px] font-black text-white tracking-[0.1em]">
+                      VS
+                    </span>
+                  </div>
+                </div>
+
+                {/* Per-side approximate volume row */}
+                {volLabel && (
+                  <div className="flex items-center justify-between mt-2 px-1">
+                    <span className="text-[11px] text-pump-green/75 font-semibold tabular-nums">
+                      {perSideSol(0)}
+                    </span>
+                    <span className="text-[11px] text-[#ff5c73]/75 font-semibold tabular-nums">
+                      {perSideSol(1)}
+                    </span>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="h-10 rounded-xl bg-white/5 border border-white/10 animate-pulse" />
+            )}
+          </div>
+
+          {/* ACTION CARDS — compact HUD cards. Fixed h-28 (112 px) and
+              shrink-0; the rest of the lower section is reserved space. */}
+          <div className="px-3 pt-3 pb-3 shrink-0">
+            {derived && !sessionLocked ? (
+              <div className="grid grid-cols-2 gap-3 h-28">
+                {derived.names.slice(0, 2).map((name, idx) => {
+                  const pct = (derived.percentages[idx] ?? 0).toFixed(1);
+                  const isYes = idx === 0;
+                  return (
+                    <button
+                      key={idx}
+                      onClick={() => onOutcomeTap(idx)}
+                      className={`group relative h-full overflow-hidden rounded-2xl border backdrop-blur-xl px-3.5 py-2.5 active:scale-[0.97] transition-all duration-150 ${
+                        isYes
+                          ? "bg-gradient-to-br from-pump-green/25 via-pump-green/10 to-pump-green/5 border-pump-green/50 shadow-[0_0_36px_-8px_rgba(109,255,164,0.45)]"
+                          : "bg-gradient-to-br from-[#ff5c73]/25 via-[#ff5c73]/10 to-[#ff5c73]/5 border-[#ff5c73]/50 shadow-[0_0_36px_-8px_rgba(255,92,115,0.45)]"
+                      }`}
+                    >
+                      <div
+                        className="absolute inset-0 pointer-events-none"
+                        style={{
+                          background: isYes
+                            ? "radial-gradient(circle at 50% -20%, rgba(109,255,164,0.3), transparent 65%)"
+                            : "radial-gradient(circle at 50% -20%, rgba(255,92,115,0.3), transparent 65%)",
+                        }}
+                      />
+                      <div className="relative">
+                        <div
+                          className={`font-black tracking-tight leading-none ${
+                            isYes ? "text-pump-green" : "text-[#ff5c73]"
+                          }`}
+                          style={{
+                            fontSize: "clamp(32px, 9.5vw, 44px)",
+                            textShadow: isYes
+                              ? "0 0 18px rgba(109,255,164,0.55)"
+                              : "0 0 18px rgba(255,92,115,0.55)",
+                          }}
+                        >
+                          {name}
+                        </div>
+                        <div
+                          className={`text-sm font-bold tabular-nums mt-0.5 ${
+                            isYes ? "text-pump-green/85" : "text-[#ff5c73]/85"
+                          }`}
+                        >
+                          {pct}%
+                        </div>
+                      </div>
+                      {/* Arrow chip — absolutely placed so it doesn't push
+                          the typography */}
+                      <div
+                        className={`absolute bottom-2 right-2 w-7 h-7 rounded-full flex items-center justify-center ${
+                          isYes
+                            ? "bg-pump-green shadow-[0_0_14px_rgba(109,255,164,0.55)]"
+                            : "bg-[#ff5c73] shadow-[0_0_14px_rgba(255,92,115,0.55)]"
+                        }`}
+                      >
+                        <svg
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="3"
+                          className={`w-3.5 h-3.5 ${
+                            isYes ? "text-black" : "text-white"
+                          }`}
+                        >
+                          <path d="M12 19V5" />
+                          <path d="M5 12l7-7 7 7" />
+                        </svg>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : sessionLocked ? (
+              <div className="h-20 flex items-center justify-center rounded-2xl bg-white/[0.04] border border-white/10 backdrop-blur-md">
+                <p className="text-sm text-gray-400">Trading is locked</p>
+              </div>
+            ) : (
+              <div className="h-20 flex items-center justify-center rounded-2xl bg-white/[0.04] border border-white/10 backdrop-blur-md">
+                <p className="text-sm text-gray-500 animate-pulse">
+                  Loading market...
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Reserved zone — flex-1 trailing space for future Up Next /
+              activity strip. Intentionally empty for now. */}
+        </div>
+      </div>
+    </div>
   );
 }

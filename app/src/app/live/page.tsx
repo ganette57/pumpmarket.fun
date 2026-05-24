@@ -26,8 +26,8 @@ import {
 } from "@/utils/solana";
 import { sendSignedTx } from "@/lib/solanaSend";
 import {
-  LiveMobileContent,
   MobileBuySheet,
+  MobileImmersiveSlide,
 } from "@/components/LiveMobileContent";
 
 type DesktopTab = "live" | "feed";
@@ -50,7 +50,26 @@ type MobileMarketSnapshot = {
   noSupply: number;
   imageUrl?: string;
   category?: string;
+  /** Unix seconds — drives the immersive countdown overlay */
+  resolutionTime?: number;
 };
+
+function parseEndDateToSec(raw: any): number {
+  if (!raw) return 0;
+  if (raw instanceof Date) {
+    const t = raw.getTime();
+    return Number.isFinite(t) ? Math.floor(t / 1000) : 0;
+  }
+  const s = String(raw).trim();
+  let ms: number;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    ms = new Date(`${s}T23:59:59Z`).getTime();
+  } else {
+    const n = /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/.test(s) ? s.replace(" ", "T") : s;
+    ms = new Date(n).getTime();
+  }
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : 0;
+}
 
 function useIsMobile(bp = 1024) {
   const [m, setM] = useState(false);
@@ -316,40 +335,29 @@ function MobileLiveTradeSlide({
     session.status === "locked" || !!market?.resolved || !!market?.isBlocked;
 
   return (
-    <section className="relative h-full snap-start bg-[linear-gradient(180deg,#030507_0%,#060a12_100%)]">
-      <div className="h-full px-4 pt-24 pb-4 overflow-y-auto">
-        <div className="space-y-4">
-          <LiveMobileContent
-            streamUrl={session.stream_url}
-            title={session.title}
-            hostWallet={session.host_wallet}
-            status={session.status}
-            market={
-              market
-                ? {
-                    publicKey: market.publicKey,
-                    question: market.question,
-                    imageUrl: market.imageUrl,
-                    category: market.category,
-                    totalVolume: market.totalVolume,
-                  }
-                : null
-            }
-            derived={
-              market
-                ? {
-                    names: display.names,
-                    percentages: display.percentages,
-                  }
-                : null
-            }
-            sessionLocked={tradingLocked}
-            onOutcomeTap={(idx) => onOutcomeTap(session, idx)}
-            active={active}
-            thumbnailUrl={session.thumbnail_url || undefined}
-          />
-        </div>
-      </div>
+    <section className="relative h-full snap-start bg-black">
+      <MobileImmersiveSlide
+        session={session}
+        market={
+          market
+            ? {
+                question: market.question,
+                resolutionTime: market.resolutionTime,
+                totalVolume: market.totalVolume,
+                publicKey: market.publicKey,
+              }
+            : null
+        }
+        derived={
+          market
+            ? { names: display.names, percentages: display.percentages }
+            : null
+        }
+        active={active}
+        sessionLocked={tradingLocked}
+        onOutcomeTap={(idx) => onOutcomeTap(session, idx)}
+        variant="feed"
+      />
     </section>
   );
 }
@@ -478,6 +486,7 @@ export default function LivePage() {
           noSupply: Number(dbMarket.no_supply) || 0,
           imageUrl: (dbMarket as any).image_url || undefined,
           category: (dbMarket as any).category || undefined,
+          resolutionTime: parseEndDateToSec((dbMarket as any).end_date) || undefined,
         };
 
         setMobileMarketBySession((prev) => ({
@@ -750,17 +759,6 @@ export default function LivePage() {
     ]
   );
 
-  const activeSession = mobileActiveSessions[mobileLiveIndex] ?? null;
-  const activeMarket = activeSession
-    ? mobileMarketBySession[activeSession.id] ?? null
-    : null;
-  const activeDisplay = deriveOutcomeDisplay(activeMarket);
-  const activeSessionLocked = activeSession
-    ? activeSession.status === "locked" ||
-      !!activeMarket?.resolved ||
-      !!activeMarket?.isBlocked
-    : false;
-
   if (isMobile) {
     if (loading) {
       return (
@@ -882,32 +880,6 @@ export default function LivePage() {
                   </button>
                 ))}
               </div>
-            </div>
-          )}
-
-        {/* FAB — exact stable behavior */}
-        {mobileTab === "live" &&
-          activeSession &&
-          activeMarket &&
-          !activeSessionLocked &&
-          !mobileTradeOpen && (
-            <div className="absolute bottom-4 right-4 z-[100]">
-              <button
-                onClick={() => openQuickTrade(activeSession, 0)}
-                className="w-14 h-14 rounded-full bg-pump-green text-black shadow-lg flex items-center justify-center hover:bg-[#74ffb8] transition active:scale-95"
-                aria-label="Trade"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2.5"
-                  className="w-6 h-6"
-                >
-                  <path d="M12 5v14" />
-                  <path d="M5 12h14" />
-                </svg>
-              </button>
             </div>
           )}
 
