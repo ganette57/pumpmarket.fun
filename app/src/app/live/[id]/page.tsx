@@ -17,6 +17,7 @@ import {
   MobileBuySheet,
   formatVol,
   LiveMobileContent,
+  MobileImmersiveSlide,
 } from "@/components/LiveMobileContent";
 
 import { supabase } from "@/lib/supabaseClient";
@@ -281,6 +282,61 @@ function BuyToasts({ toasts }: { toasts: (RecentTrade & { _key: number })[] }) {
   );
 }
 
+/* ── Giant immersive countdown overlay ──────────────────────────────── */
+
+type CountdownPhase = "normal" | "warning" | "panic";
+
+function GiantCountdown({
+  label,
+  phase,
+  isFinal,
+}: {
+  label: string;
+  phase: CountdownPhase;
+  isFinal: boolean;
+}) {
+  const color =
+    phase === "panic"
+      ? "text-red-400"
+      : phase === "warning"
+      ? "text-amber-300"
+      : "text-white";
+
+  const glow =
+    phase === "panic"
+      ? isFinal
+        ? "0 0 48px rgba(248,113,113,0.85), 0 0 14px rgba(248,113,113,0.7)"
+        : "0 0 34px rgba(248,113,113,0.7), 0 0 10px rgba(248,113,113,0.55)"
+      : phase === "warning"
+      ? "0 0 28px rgba(252,211,77,0.55)"
+      : "0 0 22px rgba(255,255,255,0.22)";
+
+  const fontSize =
+    phase === "panic"
+      ? "clamp(72px, 18vw, 168px)"
+      : phase === "warning"
+      ? "clamp(64px, 16vw, 144px)"
+      : "clamp(56px, 14vw, 128px)";
+
+  return (
+    <div className="pointer-events-none absolute inset-x-0 top-[28%] sm:top-[22%] flex justify-center z-20">
+      <div
+        className={`select-none font-black tabular-nums leading-none transition-all duration-500 ease-out ${color} ${
+          phase === "panic" ? "animate-pulse" : ""
+        }`}
+        style={{
+          fontSize,
+          letterSpacing: "-0.04em",
+          textShadow: glow,
+          transform: isFinal ? "scale(1.08)" : "scale(1)",
+        }}
+      >
+        {label}
+      </div>
+    </div>
+  );
+}
+
 /* ══════════════════════════════════════════════════════════════════════
    MAIN PAGE
    ══════════════════════════════════════════════════════════════════════ */
@@ -509,7 +565,14 @@ export default function LiveViewerPage() {
     ? ["locked", "ended", "resolved", "cancelled"].includes(session.status)
     : false;
 
-  const isHost = publicKey && session?.host_wallet === publicKey.toBase58();
+  // Defensive: stable boolean. Guards against null wallet, missing
+  // host_wallet, and whitespace/casing drift in the stored value.
+  const isHost = useMemo(() => {
+    if (!publicKey) return false;
+    const hostWallet = (session?.host_wallet ?? "").trim();
+    if (!hostWallet) return false;
+    return hostWallet === publicKey.toBase58();
+  }, [publicKey, session?.host_wallet]);
 
   const marketClosed = market?.resolved || market?.isBlocked || sessionLocked
     || market?.resolutionStatus === "proposed";
@@ -557,15 +620,17 @@ export default function LiveViewerPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLiveImmersive, trafficMeta?.round_id, market?.publicKey]);
 
-  // Countdown label
-  const countdownLabel = useMemo(() => {
+  // Countdown — drives the giant immersive overlay
+  const countdown = useMemo(() => {
     const endStr = trafficMeta?.window_end
       ?? (market?.resolutionTime ? new Date(market.resolutionTime * 1000).toISOString() : null);
     if (!endStr) return null;
     const endMs = new Date(endStr).getTime();
     if (!Number.isFinite(endMs)) return null;
-    const rem = Math.max(0, Math.ceil((endMs - nowMs) / 1000));
-    return fmtMmSs(rem);
+    const remSec = Math.max(0, Math.ceil((endMs - nowMs) / 1000));
+    const phase: CountdownPhase =
+      remSec <= 10 ? "panic" : remSec <= 30 ? "warning" : "normal";
+    return { remSec, label: fmtMmSs(remSec), phase, isFinal: remSec <= 5 };
   }, [trafficMeta?.window_end, market?.resolutionTime, nowMs]);
 
   const threshold = trafficMeta?.threshold ?? null;
@@ -736,6 +801,19 @@ export default function LiveViewerPage() {
     }
   }
 
+  /* ── Immersive overlay data pill ─────────────────────────────── */
+  // NOTE: must stay above any early return — keeps hook order stable.
+
+  const overlayStats = useMemo(() => {
+    const pills: { label: string; value: string; accent?: boolean }[] = [];
+    if (trafficCount != null && threshold != null) {
+      pills.push({ label: "Count", value: `${trafficCount} / ${threshold}` });
+    } else if (trafficCount != null) {
+      pills.push({ label: "Count", value: `${trafficCount}` });
+    }
+    return pills;
+  }, [trafficCount, threshold]);
+
   /* ── Render ────────────────────────────────────────────────────── */
 
   if (loading) {
@@ -773,19 +851,6 @@ export default function LiveViewerPage() {
     );
   }
 
-  /* ── Immersive overlay data pill ─────────────────────────────── */
-
-  const overlayStats = useMemo(() => {
-    const pills: { label: string; value: string; accent?: boolean }[] = [];
-    if (countdownLabel) pills.push({ label: "⏱", value: countdownLabel, accent: true });
-    if (trafficCount != null && threshold != null) {
-      pills.push({ label: "Count", value: `${trafficCount} / ${threshold}` });
-    } else if (trafficCount != null) {
-      pills.push({ label: "Count", value: `${trafficCount}` });
-    }
-    return pills;
-  }, [countdownLabel, trafficCount, threshold]);
-
   return (
     <>
       {/* ═══════════════════════════════════════════════════════════
@@ -794,111 +859,49 @@ export default function LiveViewerPage() {
       {isMobile ? (
         isLiveImmersive ? (
           /* ── MOBILE LIVE IMMERSIVE ──────────────────────────────── */
-          <div className="fixed inset-0 bottom-14 z-[40] bg-black flex flex-col">
-            {/* Camera — fills all available space */}
-            <div className="flex-1 relative min-h-0 bg-black">
-              {session.stream_url ? (
-                <StreamPlayer
-                  url={session.stream_url}
-                  className="relative w-full h-full bg-black overflow-hidden"
-                />
-              ) : (
-                <div className="w-full h-full bg-[radial-gradient(circle_at_top,rgba(109,255,164,0.12),transparent_42%),linear-gradient(180deg,#020304_0%,#04070c_100%)]" />
-              )}
-
-              {/* ── Top overlay: back + LIVE + question + stats ───── */}
-              <div className="absolute top-0 inset-x-0 z-10 pointer-events-auto">
-                <div className="px-4 pt-3 pb-14 bg-gradient-to-b from-black/85 via-black/50 to-transparent">
-                  {/* Row 1: back + LIVE badge */}
-                  <div className="flex items-center justify-between">
-                    <Link
-                      href="/live"
-                      className="flex items-center gap-1 text-sm text-white/60 active:text-white transition"
-                    >
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
-                        <path d="M15 18l-6-6 6-6" />
-                      </svg>
-                      Back
-                    </Link>
-                    {session.status === "live" ? (
-                      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-600/30 border border-red-500/40">
-                        <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-                        <span className="text-[11px] font-bold text-red-400 tracking-wide">LIVE</span>
-                      </div>
-                    ) : (
-                      <StatusBanner status={session.status} />
-                    )}
-                  </div>
-
-                  {/* Row 2: question / title */}
-                  <h1 className="text-white font-bold text-[17px] mt-3 leading-snug line-clamp-2 drop-shadow-[0_1px_4px_rgba(0,0,0,0.8)]">
-                    {market?.question || session.title}
-                  </h1>
-
-                  {/* Row 3: count + timer pills */}
-                  {overlayStats.length > 0 && (
-                    <div className="flex items-center gap-2 mt-2.5">
-                      {overlayStats.map((s, i) => (
-                        <span
-                          key={i}
-                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold backdrop-blur-sm ${
-                            s.accent
-                              ? "bg-white/15 text-white border border-white/20"
-                              : "bg-white/10 text-white/80 border border-white/10"
-                          }`}
-                        >
-                          <span className="opacity-70">{s.label}</span>
-                          <span className="tabular-nums">{s.value}</span>
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Host controls overlay */}
-              {isHost && (
-                <div className="absolute bottom-2 inset-x-2 z-10">
-                  <HostControls session={session} onStatusChange={handleStatusChange} error={statusError} />
-                </div>
-              )}
-            </div>
-
-            {/* ── Bottom action bar: YES / NO ─────────────────────── */}
-            {market && derived && !sessionLocked ? (
-              <div className="shrink-0 bg-pump-dark/95 backdrop-blur-md border-t border-white/[0.06] px-4 py-3">
-                <div className="flex gap-3">
-                  {derived.names.slice(0, 2).map((name, idx) => {
-                    const pct = (derived.percentages[idx] ?? 0).toFixed(0);
-                    const isYes = idx === 0;
-                    return (
-                      <button
-                        key={idx}
-                        onClick={() => {
-                          setDefaultOutcomeIndex(idx);
-                          setMobileSheetOpen(true);
-                        }}
-                        className={`flex-1 py-3.5 rounded-xl font-bold text-base active:scale-[0.97] transition ${
-                          isYes
-                            ? "bg-pump-green text-black"
-                            : "bg-[#ff5c73] text-white"
-                        }`}
-                      >
-                        Buy {name} <span className="opacity-70 ml-1">{pct}¢</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : sessionLocked ? (
-              <div className="shrink-0 bg-pump-dark/95 border-t border-white/[0.06] px-4 py-3 text-center">
-                <p className="text-sm text-gray-500">Trading is locked</p>
-              </div>
-            ) : (
-              <div className="shrink-0 bg-pump-dark/95 border-t border-white/[0.06] px-4 py-3 text-center">
-                <p className="text-sm text-gray-500 animate-pulse">Loading market...</p>
-              </div>
-            )}
+          <div className="fixed inset-0 bottom-14 z-[40] bg-black">
+            <MobileImmersiveSlide
+              session={session}
+              market={
+                market
+                  ? {
+                      question: market.question,
+                      resolutionTime: market.resolutionTime,
+                      totalVolume: market.totalVolume,
+                      publicKey: market.publicKey,
+                    }
+                  : null
+              }
+              derived={
+                derived
+                  ? { names: derived.names, percentages: derived.percentages }
+                  : null
+              }
+              active={true}
+              sessionLocked={sessionLocked}
+              onOutcomeTap={(idx) => {
+                setDefaultOutcomeIndex(idx);
+                setMobileSheetOpen(true);
+              }}
+              endIsoOverride={trafficMeta?.window_end ?? null}
+              countText={
+                trafficCount != null && threshold != null
+                  ? `${trafficCount} / ${threshold}`
+                  : trafficCount != null
+                  ? `${trafficCount}`
+                  : null
+              }
+              variant="deeplink"
+              hostSlot={
+                isHost ? (
+                  <HostControls
+                    session={session}
+                    onStatusChange={handleStatusChange}
+                    error={statusError}
+                  />
+                ) : null
+              }
+            />
           </div>
         ) : (
           /* ── MOBILE NORMAL (scheduled / non-live) ───────────────── */
@@ -968,6 +971,15 @@ export default function LiveViewerPage() {
                     <div className="relative w-full aspect-video bg-black">
                       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(109,255,164,0.2),transparent_42%),linear-gradient(180deg,#020304_0%,#04070c_100%)]" />
                     </div>
+                  )}
+
+                  {/* ── Giant immersive countdown ─────────────── */}
+                  {countdown && (
+                    <GiantCountdown
+                      label={countdown.label}
+                      phase={countdown.phase}
+                      isFinal={countdown.isFinal}
+                    />
                   )}
 
                   {/* ── Camera overlay: top ────────────────────── */}
