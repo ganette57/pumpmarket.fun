@@ -1192,12 +1192,8 @@ export function MobileImmersiveSlide({
             </div>
           )}
 
-          {/* Host controls (top-right) — floating HUD chip */}
-          {hostSlot && (
-            <div className="absolute top-2 right-2 z-30 pointer-events-auto">
-              {hostSlot}
-            </div>
-          )}
+          {/* Host controls now render in the Up Next slot below (not over the
+              video) so the stream stays clean. The top-right stays free. */}
 
           {/* Top traders — floating placeholder pill. Rendered only when no
               host controls occupy the top-right, so it never blocks them or
@@ -1481,34 +1477,64 @@ export function MobileImmersiveSlide({
               </div>
             </div>
 
-            {/* Up Next market strip — reserved module: left status badge,
-                eyebrow + question, and a 3-min-market pill. */}
-            <div className="flex items-center gap-3 rounded-xl border border-dashed border-white/10 bg-white/[0.03] px-3 py-3">
-              <div className="shrink-0 w-10 h-10 rounded-full border-2 border-pump-green/35 flex items-center justify-center shadow-[0_0_14px_-4px_rgba(109,255,164,0.5)]">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="w-4 h-4 text-pump-green/80"
+            {hostSlot ? (
+              /* HOST CONTROL CARD (host only) — replaces the Up Next module.
+                 Reuses HostControls (Live / Locked / Ended / Resolved /
+                 Cancel) wired to the same handlers, with a compact round
+                 "Next Market" placeholder beside it. Viewers never see this. */
+              <div className="flex items-stretch gap-2">
+                <div className="min-w-0 flex-1">{hostSlot}</div>
+                <button
+                  type="button"
+                  disabled
+                  aria-label="Create next market (coming soon)"
+                  title="Next market — coming soon"
+                  className="shrink-0 self-center w-10 h-10 rounded-full flex items-center justify-center border border-pump-green/40 bg-pump-green/15 text-pump-green shadow-[0_0_18px_-8px_rgba(109,255,164,0.7)] opacity-90 cursor-not-allowed"
                 >
-                  <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" />
-                </svg>
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="w-4 h-4"
+                  >
+                    <path d="M12 5v14" />
+                    <path d="M5 12h14" />
+                  </svg>
+                </button>
               </div>
-              <div className="min-w-0 flex-1">
-                <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/45">
-                  Up Next (Preparing…)
+            ) : (
+              /* Up Next market strip (viewer) — reserved module: left status
+                 badge, eyebrow + question, and a 3-min-market pill. */
+              <div className="flex items-center gap-3 rounded-xl border border-dashed border-white/10 bg-white/[0.03] px-3 py-3">
+                <div className="shrink-0 w-10 h-10 rounded-full border-2 border-pump-green/35 flex items-center justify-center shadow-[0_0_14px_-4px_rgba(109,255,164,0.5)]">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="w-4 h-4 text-pump-green/80"
+                  >
+                    <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" />
+                  </svg>
                 </div>
-                <div className="text-[13px] font-semibold text-white/70 leading-snug line-clamp-2">
-                  Next flash market coming soon
+                <div className="min-w-0 flex-1">
+                  <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/45">
+                    Up Next (Preparing…)
+                  </div>
+                  <div className="text-[13px] font-semibold text-white/70 leading-snug line-clamp-2">
+                    Next flash market coming soon
+                  </div>
                 </div>
+                <span className="shrink-0 self-start inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-pump-green/10 border border-pump-green/25 text-[9px] font-bold uppercase tracking-wider text-pump-green/80">
+                  3 Min Market
+                </span>
               </div>
-              <span className="shrink-0 self-start inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-pump-green/10 border border-pump-green/25 text-[9px] font-bold uppercase tracking-wider text-pump-green/80">
-                3 Min Market
-              </span>
-            </div>
+            )}
           </div>
 
           {/* Flexible gap — pushes the action panels lower without dead space. */}

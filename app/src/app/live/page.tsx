@@ -1,7 +1,7 @@
 // src/app/live/page.tsx
 "use client";
 
-import { useEffect, useState, useCallback, useRef, useMemo, type UIEvent } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo, type UIEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
@@ -12,6 +12,7 @@ import {
   listLiveSessions,
   subscribeLiveSessionsList,
   type LiveSession,
+  type LiveSessionStatus,
 } from "@/lib/liveSessions";
 import { useProgram } from "@/hooks/useProgram";
 import {
@@ -29,6 +30,8 @@ import {
   MobileBuySheet,
   MobileImmersiveSlide,
 } from "@/components/LiveMobileContent";
+import LiveHostControls from "@/components/LiveHostControls";
+import bs58 from "bs58";
 
 type DesktopTab = "live" | "feed";
 type MobileTab = "live" | "feed";
@@ -324,11 +327,13 @@ function MobileLiveTradeSlide({
   market,
   active,
   onOutcomeTap,
+  hostSlot,
 }: {
   session: LiveSession;
   market: MobileMarketSnapshot | null;
   active: boolean;
   onOutcomeTap: (session: LiveSession, outcomeIndex: number) => void;
+  hostSlot?: ReactNode;
 }) {
   const display = deriveOutcomeDisplay(market);
   const tradingLocked =
@@ -357,13 +362,14 @@ function MobileLiveTradeSlide({
         sessionLocked={tradingLocked}
         onOutcomeTap={(idx) => onOutcomeTap(session, idx)}
         variant="feed"
+        hostSlot={hostSlot}
       />
     </section>
   );
 }
 
 export default function LivePage() {
-  const { publicKey, connected, signTransaction } = useWallet();
+  const { publicKey, connected, signTransaction, signMessage } = useWallet();
   const { connection } = useConnection();
   const program = useProgram();
   const { setVisible } = useWalletModal();
@@ -386,6 +392,7 @@ export default function LivePage() {
   >(null);
   const [mobileTradeOutcomeIndex, setMobileTradeOutcomeIndex] = useState(0);
   const [submittingTrade, setSubmittingTrade] = useState(false);
+  const [statusError, setStatusError] = useState<string | null>(null);
 
   const liveScrollerRef = useRef<HTMLDivElement | null>(null);
   const inFlightTradeRef = useRef(false);
@@ -398,6 +405,56 @@ export default function LivePage() {
     }
     router.push("/live/new");
   }, [publicKey, router, setVisible]);
+
+  // Host status change — same signed flow as /live/[id] (signMessage + POST to
+  // /api/live-sessions/[id]/status). No backend changes; updates local list.
+  const handleLiveStatusChange = useCallback(
+    async (session: LiveSession, newStatus: LiveSessionStatus) => {
+      if (!publicKey) return;
+      setStatusError(null);
+      if (!signMessage) {
+        setStatusError("Wallet does not support message signing");
+        return;
+      }
+      const ts = Date.now();
+      const message = `FUNMARKET_LIVE_STATUS|${session.id}|${newStatus}|${ts}`;
+      const messageBytes = new TextEncoder().encode(message);
+
+      let sigBytes: Uint8Array;
+      try {
+        sigBytes = await signMessage(messageBytes);
+      } catch (e: any) {
+        const msg = String(e?.message || "");
+        if (!msg.toLowerCase().includes("user rejected")) {
+          setStatusError("Failed to sign message");
+        }
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/live-sessions/${session.id}/status`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            wallet: publicKey.toBase58(),
+            signature: bs58.encode(sigBytes),
+            newStatus,
+            ts,
+          }),
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || `Server error ${res.status}`);
+        const updated = json.session as LiveSession;
+        setSessions((prev) =>
+          prev.map((s) => (s.id === updated.id ? updated : s))
+        );
+      } catch (e: any) {
+        console.error("Status change failed:", e);
+        setStatusError(String(e?.message || "Failed to update status"));
+      }
+    },
+    [publicKey, signMessage]
+  );
 
   const loadSessions = useCallback(async () => {
     setLoading(true);
@@ -825,6 +882,18 @@ export default function LivePage() {
                   market={mobileMarketBySession[session.id] || null}
                   active={index === mobileLiveIndex && !mobileTradeOpen}
                   onOutcomeTap={openQuickTrade}
+                  hostSlot={
+                    connected &&
+                    publicKey?.toBase58() === session.host_wallet ? (
+                      <LiveHostControls
+                        session={session}
+                        onStatusChange={(s) =>
+                          handleLiveStatusChange(session, s)
+                        }
+                        error={statusError}
+                      />
+                    ) : undefined
+                  }
                 />
               ))}
             </div>
