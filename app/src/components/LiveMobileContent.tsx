@@ -980,6 +980,103 @@ function LiveChatDrawer({
   );
 }
 
+// Resolve Market sheet — host-only. Pick the winning outcome and trigger the
+// existing propose/resolution flow (passed in via onResolve).
+function LiveResolveSheet({
+  open,
+  onClose,
+  question,
+  names,
+  onResolve,
+}: {
+  open: boolean;
+  onClose: () => void;
+  question?: string | null;
+  names: string[] | null;
+  onResolve: (outcomeIndex: number) => Promise<void> | void;
+}) {
+  const labels = useMemo(() => names?.slice(0, 2) ?? [], [names]);
+  const [selected, setSelected] = useState<number | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Reset selection whenever the sheet (re)opens.
+  useEffect(() => {
+    if (open) {
+      setSelected(null);
+      setError(null);
+      setSubmitting(false);
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  return (
+    <LiveBottomDrawer
+      open={open}
+      onClose={onClose}
+      title="Resolve Market"
+      subtitle={question}
+      closeLabel="Close resolve"
+    >
+      <p className="text-xs text-gray-400 mb-2">Select the winning outcome</p>
+      <div className="grid grid-cols-2 gap-3">
+        {labels.map((name, idx) => {
+          const isYes = idx === 0;
+          const active = selected === idx;
+          const accent = isYes ? "pump-green" : "[#ff5c73]";
+          return (
+            <button
+              key={idx}
+              type="button"
+              onClick={() => setSelected(idx)}
+              className={`rounded-2xl border px-3 py-4 text-center font-black text-lg transition ${
+                active
+                  ? isYes
+                    ? "border-pump-green bg-pump-green/15 text-pump-green shadow-[0_0_28px_-10px_rgba(109,255,164,0.7)]"
+                    : "border-[#ff5c73] bg-[#ff5c73]/15 text-[#ff5c73] shadow-[0_0_28px_-10px_rgba(255,92,115,0.7)]"
+                  : "border-white/10 bg-white/[0.03] text-gray-300"
+              }`}
+            >
+              {name}
+            </button>
+          );
+        })}
+      </div>
+
+      {error && (
+        <p className="mt-3 text-xs text-red-300 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2">
+          {error}
+        </p>
+      )}
+
+      <button
+        type="button"
+        disabled={selected == null || submitting}
+        onClick={async () => {
+          if (selected == null) return;
+          setSubmitting(true);
+          setError(null);
+          try {
+            await onResolve(selected);
+          } catch (e: any) {
+            setError(String(e?.message || "Resolve failed"));
+          } finally {
+            setSubmitting(false);
+          }
+        }}
+        className={`w-full mt-4 py-4 rounded-xl font-bold text-lg transition-all ${
+          selected == null || submitting
+            ? "bg-gray-700 text-gray-400 cursor-not-allowed"
+            : "bg-pump-green text-black hover:bg-[#74ffb8]"
+        }`}
+      >
+        {submitting ? "Resolving…" : "Resolve Winner"}
+      </button>
+    </LiveBottomDrawer>
+  );
+}
+
 /* ── MobileImmersiveSlide ──────────────────────────────────────────── */
 // Shared full-bleed mobile immersive experience: persistent stream,
 // giant countdown overlay, title, YES/NO bottom action bar.
@@ -1003,6 +1100,8 @@ export function MobileImmersiveSlide({
   countText = null,
   variant = "deeplink",
   hostSlot,
+  onResolve,
+  resolution,
 }: {
   session: LiveSession;
   market: MobileImmersiveSlideMarket | null;
@@ -1014,6 +1113,14 @@ export function MobileImmersiveSlide({
   countText?: string | null;
   variant?: "deeplink" | "feed";
   hostSlot?: ReactNode;
+  /** Host-only resolve handler (reuses the existing propose flow). */
+  onResolve?: (outcomeIndex: number) => Promise<void> | void;
+  /** Current market resolution state for the result panel. */
+  resolution?: {
+    resolved: boolean;
+    proposed: boolean;
+    outcomeIndex: number | null;
+  };
 }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
   // HUD drawers — local to the slide so toggling them never touches the
@@ -1021,6 +1128,7 @@ export function MobileImmersiveSlide({
   const [chartOpen, setChartOpen] = useState(false);
   const [activityOpen, setActivityOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const [resolveOpen, setResolveOpen] = useState(false);
   // Tracks the largest remaining-seconds value we've seen for this slide;
   // used as the denominator for the circular HUD progress arc so it sweeps
   // from full at session entry down to empty at lockout.
@@ -1064,6 +1172,22 @@ export function MobileImmersiveSlide({
   // rejects trades, so lock the action UI immediately (covers feed + deeplink).
   const expired = !!countdown && countdown.remSec <= 0;
   const locked = sessionLocked || expired;
+
+  // Host resolve gating: only the host, only after the timer expires, and only
+  // while the market is not yet resolved/proposed.
+  const isHost = !!hostSlot;
+  const settled = !!resolution?.resolved || !!resolution?.proposed;
+  const needsResolve = isHost && expired && !settled && !!onResolve;
+  const resolvedOutcomeLabel =
+    resolution?.outcomeIndex != null
+      ? derived?.names?.[resolution.outcomeIndex] ?? null
+      : null;
+
+  // Auto-open the resolve sheet once when the market first needs resolving.
+  // (Host can close it; it won't force-reopen — the inline button reopens it.)
+  useEffect(() => {
+    if (needsResolve) setResolveOpen(true);
+  }, [needsResolve]);
 
   const isDeeplink = variant === "deeplink";
 
@@ -1549,7 +1673,21 @@ export function MobileImmersiveSlide({
               shrink-0, anchored lower in the slide (slightly shorter to make
               room for the taller Up Next module). */}
           <div className="px-3 pb-3 shrink-0">
-            {derived && !locked ? (
+            {settled ? (
+              <div className="rounded-2xl border border-pump-green/30 bg-pump-green/[0.06] backdrop-blur-md px-4 py-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/45">
+                    {resolution?.resolved ? "Market resolved" : "Outcome proposed"}
+                  </div>
+                  <div className="text-lg font-black text-white truncate">
+                    {resolvedOutcomeLabel ? `${resolvedOutcomeLabel} wins` : "Resolved"}
+                  </div>
+                </div>
+                <span className="shrink-0 inline-flex items-center px-3 py-1 rounded-full bg-pump-green/20 border border-pump-green/40 text-pump-green text-[11px] font-bold uppercase tracking-wider">
+                  {resolution?.resolved ? "Final" : "Proposed"}
+                </span>
+              </div>
+            ) : derived && !locked ? (
               <div className="grid grid-cols-2 gap-3 h-[88px]">
                 {derived.names.slice(0, 2).map((name, idx) => {
                   const pct = (derived.percentages[idx] ?? 0).toFixed(1);
@@ -1620,6 +1758,26 @@ export function MobileImmersiveSlide({
                   );
                 })}
               </div>
+            ) : needsResolve ? (
+              <button
+                type="button"
+                onClick={() => setResolveOpen(true)}
+                className="w-full h-20 flex items-center justify-center gap-2 rounded-2xl border border-pump-green/50 bg-gradient-to-br from-pump-green/25 via-pump-green/10 to-pump-green/5 text-pump-green font-black text-base shadow-[0_0_36px_-8px_rgba(109,255,164,0.45)] active:scale-[0.98] transition"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="w-5 h-5"
+                >
+                  <path d="M9 11l3 3L22 4" />
+                  <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+                </svg>
+                Resolve Market
+              </button>
             ) : locked ? (
               <div className="h-20 flex items-center justify-center rounded-2xl bg-white/[0.04] border border-white/10 backdrop-blur-md">
                 <p className="text-sm text-gray-400">Trading is locked</p>
@@ -1661,6 +1819,18 @@ export function MobileImmersiveSlide({
         marketAddress={market?.publicKey ?? null}
         question={market?.question ?? session.title}
       />
+      {isHost && onResolve && (
+        <LiveResolveSheet
+          open={resolveOpen}
+          onClose={() => setResolveOpen(false)}
+          question={market?.question ?? session.title}
+          names={derived?.names ?? null}
+          onResolve={async (idx) => {
+            await onResolve(idx);
+            setResolveOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }

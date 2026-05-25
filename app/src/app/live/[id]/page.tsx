@@ -22,6 +22,7 @@ import {
 } from "@/components/LiveMobileContent";
 
 import { supabase } from "@/lib/supabaseClient";
+import { proposeLiveResolution } from "@/lib/liveResolve";
 import { getMarketByAddress, recordTransaction, applyTradeToMarketInSupabase } from "@/lib/markets";
 import {
   getLiveSession,
@@ -575,6 +576,23 @@ export default function LiveViewerPage() {
 
   const threshold = trafficMeta?.threshold ?? null;
 
+  /* ── Host resolve (reuses the existing propose flow) ────────────── */
+  async function handleResolveLive(outcomeIndex: number) {
+    if (!connected || !publicKey || !program || !signTransaction || !market) {
+      throw new Error("Wallet or market not ready");
+    }
+    if (!expiredByTime) throw new Error("Market has not ended yet");
+    await proposeLiveResolution({
+      program,
+      connection,
+      publicKey,
+      signTransaction,
+      marketAddress: market.publicKey,
+      outcomeIndex,
+    });
+    await loadMarket(market.publicKey);
+  }
+
   /* ── Trade handler ─────────────────────────────────────────────── */
 
   async function handleTrade(shares: number, outcomeIndex: number, side: "buy" | "sell", costSol?: number) {
@@ -841,6 +859,16 @@ export default function LiveViewerPage() {
                     error={statusError}
                   />
                 ) : null
+              }
+              onResolve={isHost ? handleResolveLive : undefined}
+              resolution={
+                market
+                  ? {
+                      resolved: !!market.resolved,
+                      proposed: market.resolutionStatus === "proposed",
+                      outcomeIndex: market.proposedOutcome ?? null,
+                    }
+                  : undefined
               }
             />
           </div>

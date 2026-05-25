@@ -31,6 +31,7 @@ import {
   MobileImmersiveSlide,
 } from "@/components/LiveMobileContent";
 import LiveHostControls from "@/components/LiveHostControls";
+import { proposeLiveResolution } from "@/lib/liveResolve";
 import bs58 from "bs58";
 
 type DesktopTab = "live" | "feed";
@@ -55,6 +56,9 @@ type MobileMarketSnapshot = {
   category?: string;
   /** Unix seconds — drives the immersive countdown overlay */
   resolutionTime?: number;
+  /** Resolution state — drives the result panel after a market settles */
+  resolutionStatus?: string;
+  proposedOutcome?: number | null;
 };
 
 function parseEndDateToSec(raw: any): number {
@@ -333,12 +337,14 @@ function MobileLiveTradeSlide({
   active,
   onOutcomeTap,
   hostSlot,
+  onResolve,
 }: {
   session: LiveSession;
   market: MobileMarketSnapshot | null;
   active: boolean;
   onOutcomeTap: (session: LiveSession, outcomeIndex: number) => void;
   hostSlot?: ReactNode;
+  onResolve?: (outcomeIndex: number) => Promise<void> | void;
 }) {
   const display = deriveOutcomeDisplay(market);
   const tradingLocked =
@@ -368,6 +374,16 @@ function MobileLiveTradeSlide({
         onOutcomeTap={(idx) => onOutcomeTap(session, idx)}
         variant="feed"
         hostSlot={hostSlot}
+        onResolve={onResolve}
+        resolution={
+          market
+            ? {
+                resolved: market.resolved,
+                proposed: market.resolutionStatus === "proposed",
+                outcomeIndex: market.proposedOutcome ?? null,
+              }
+            : undefined
+        }
       />
     </section>
   );
@@ -551,6 +567,8 @@ export default function LivePage() {
           imageUrl: (dbMarket as any).image_url || undefined,
           category: (dbMarket as any).category || undefined,
           resolutionTime: parseEndDateToSec((dbMarket as any).end_date) || undefined,
+          resolutionStatus: String((dbMarket as any).resolution_status || "open"),
+          proposedOutcome: (dbMarket as any).proposed_winning_outcome ?? null,
         };
 
         setMobileMarketBySession((prev) => ({
@@ -565,6 +583,43 @@ export default function LivePage() {
       }
     },
     []
+  );
+
+  // Host resolve (feed) — reuses the existing propose flow, then refreshes the
+  // session's market snapshot so the result panel shows immediately.
+  const handleLiveResolve = useCallback(
+    async (session: LiveSession, outcomeIndex: number) => {
+      if (!connected || !publicKey || !signTransaction || !program) {
+        throw new Error("Wallet not ready");
+      }
+      const snap = mobileMarketBySession[session.id];
+      const addr = snap?.publicKey || session.market_address;
+      if (!addr) throw new Error("No market linked to this session");
+      if (
+        snap?.resolutionTime != null &&
+        Date.now() < snap.resolutionTime * 1000
+      ) {
+        throw new Error("Market has not ended yet");
+      }
+      await proposeLiveResolution({
+        program,
+        connection,
+        publicKey,
+        signTransaction,
+        marketAddress: addr,
+        outcomeIndex,
+      });
+      await loadSessionMarketSnapshot(session);
+    },
+    [
+      connected,
+      publicKey,
+      signTransaction,
+      program,
+      connection,
+      mobileMarketBySession,
+      loadSessionMarketSnapshot,
+    ]
   );
 
   useEffect(() => {
@@ -941,6 +996,12 @@ export default function LivePage() {
                         error={statusError}
                       />
                     ) : undefined
+                  }
+                  onResolve={
+                    connected &&
+                    publicKey?.toBase58() === session.host_wallet
+                      ? (idx) => handleLiveResolve(session, idx)
+                      : undefined
                   }
                 />
               ))}
