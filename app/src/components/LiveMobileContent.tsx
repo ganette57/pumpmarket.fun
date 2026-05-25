@@ -12,6 +12,7 @@ import type { LiveSession } from "@/lib/liveSessions";
 import { supabase } from "@/lib/supabaseClient";
 import { getMarketByAddress } from "@/lib/markets";
 import { buildOddsSeries, downsample } from "@/lib/marketHistory";
+import CommentsSection from "@/components/CommentsSection";
 
 // Reuse the trade page's odds chart, lazy-loaded so recharts is only fetched
 // when a chart drawer actually opens (keeps it out of the swipe-critical
@@ -589,11 +590,111 @@ function CircularCountdownHUD({
   );
 }
 
-/* ── LiveChartDrawer ───────────────────────────────────────────────── */
-// Mobile bottom sheet that reuses the trade page's OddsHistoryChart (lazy)
-// fed with the live percentages already available in the slide. Rendered as
-// a sibling overlay of the slide, so opening it never remounts StreamPlayer.
+/* ── Live HUD bottom drawers ───────────────────────────────────────── */
+// Shared mobile bottom-sheet shell + the chart / activity / chat drawers.
+// All render as sibling overlays of the slide, so opening any of them never
+// reorders or remounts the StreamPlayer.
 
+function shortAddr(addr?: string | null): string {
+  const s = String(addr || "").trim();
+  if (!s) return "anon";
+  return s.length <= 10 ? s : `${s.slice(0, 4)}…${s.slice(-4)}`;
+}
+
+function relTime(iso?: string | null): string {
+  const t = iso ? new Date(iso).getTime() : NaN;
+  if (!Number.isFinite(t)) return "";
+  const sec = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m`;
+  const hr = Math.floor(min / 60);
+  return hr < 24 ? `${hr}h` : `${Math.floor(hr / 24)}d`;
+}
+
+// Generic bottom-sheet shell: backdrop, rounded-top dark panel, drag handle,
+// header (title + optional subtitle) and a close X. Body scroll is locked
+// while mounted (mirrors MobileBuySheet). Returns null when closed.
+function LiveBottomDrawer({
+  open,
+  onClose,
+  title,
+  subtitle,
+  closeLabel = "Close",
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  subtitle?: string | null;
+  closeLabel?: string;
+  children: ReactNode;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[200]">
+      {/* Backdrop */}
+      <button
+        type="button"
+        aria-label={closeLabel}
+        onClick={onClose}
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+      />
+
+      {/* Sheet */}
+      <div className="absolute bottom-0 inset-x-0 bg-pump-dark border-t border-gray-800 rounded-t-2xl p-4 pb-6 animate-slideUp">
+        <div className="w-10 h-1 rounded-full bg-gray-600 mx-auto mb-3" />
+
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <div className="min-w-0">
+            <h3 className="text-white font-bold text-base leading-tight">
+              {title}
+            </h3>
+            {subtitle && (
+              <p className="text-xs text-gray-400 line-clamp-1 mt-0.5">
+                {subtitle}
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            className="shrink-0 w-8 h-8 rounded-full bg-white/[0.06] border border-white/10 flex items-center justify-center text-white/70 active:scale-95 active:text-white transition"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="w-4 h-4"
+            >
+              <path d="M18 6L6 18" />
+              <path d="M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// Market Chart drawer — reuses the trade page's OddsHistoryChart (lazy) fed
+// with the same transaction-replay history pipeline as /trade/[id].
 function LiveChartDrawer({
   open,
   onClose,
@@ -613,24 +714,11 @@ function LiveChartDrawer({
   const chartPct = percentages?.slice(0, 2);
   const outcomesCount = chartNames.length;
 
-  // Historical odds series — same pipeline as /trade/[id]: replay the market's
-  // transactions into an odds curve. Loaded only when the drawer opens
-  // (one fetch per open — never polled).
+  // Historical odds series — loaded only when the drawer opens (one fetch per
+  // open — never polled).
   const [history, setHistory] = useState<{ t: number; pct: number[] }[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
-  // Lock background scroll while open — mirrors MobileBuySheet behaviour.
-  useEffect(() => {
-    if (!open) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = prev;
-    };
-  }, [open]);
-
-  // Resolve the Supabase market id from the on-chain address, then build the
-  // odds history exactly like the trade page does.
   useEffect(() => {
     if (!open || !marketAddress || outcomesCount <= 0) return;
     let cancelled = false;
@@ -672,75 +760,223 @@ function LiveChartDrawer({
   const hasData = outcomesCount > 0;
 
   return (
-    <div className="fixed inset-0 z-[200]">
-      {/* Backdrop */}
-      <button
-        type="button"
-        aria-label="Close chart"
-        onClick={onClose}
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-      />
-
-      {/* Sheet */}
-      <div className="absolute bottom-0 inset-x-0 bg-pump-dark border-t border-gray-800 rounded-t-2xl p-4 pb-6 animate-slideUp">
-        <div className="w-10 h-1 rounded-full bg-gray-600 mx-auto mb-3" />
-
-        <div className="flex items-start justify-between gap-3 mb-3">
-          <div className="min-w-0">
-            <h3 className="text-white font-bold text-base leading-tight">
-              Market Chart
-            </h3>
-            {question && (
-              <p className="text-xs text-gray-400 line-clamp-1 mt-0.5">
-                {question}
-              </p>
-            )}
-          </div>
-          <button
-            type="button"
-            aria-label="Close"
-            onClick={onClose}
-            className="shrink-0 w-8 h-8 rounded-full bg-white/[0.06] border border-white/10 flex items-center justify-center text-white/70 active:scale-95 active:text-white transition"
-          >
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="w-4 h-4"
-            >
-              <path d="M18 6L6 18" />
-              <path d="M6 6l12 12" />
-            </svg>
-          </button>
+    <LiveBottomDrawer
+      open={open}
+      onClose={onClose}
+      title="Market Chart"
+      subtitle={question}
+      closeLabel="Close chart"
+    >
+      {!hasData ? (
+        <div className="h-[260px] flex flex-col items-center justify-center text-center gap-1">
+          <p className="text-sm text-gray-400">No chart data yet</p>
+          <p className="text-xs text-gray-600">
+            Live odds will appear here once trading starts.
+          </p>
         </div>
+      ) : loadingHistory && history.length === 0 ? (
+        <div className="h-[260px] flex items-center justify-center">
+          <span className="w-6 h-6 rounded-full border-2 border-pump-green/40 border-t-pump-green animate-spin" />
+        </div>
+      ) : (
+        <div className="rounded-xl bg-black/40 border border-white/[0.06] p-2">
+          <LiveOddsChart
+            points={history}
+            outcomeNames={chartNames}
+            livePct={history.length ? chartPct : undefined}
+            liveEnabled
+            height={260}
+          />
+        </div>
+      )}
+    </LiveBottomDrawer>
+  );
+}
 
-        {!hasData ? (
-          <div className="h-[260px] flex flex-col items-center justify-center text-center gap-1">
-            <p className="text-sm text-gray-400">No chart data yet</p>
-            <p className="text-xs text-gray-600">
-              Live odds will appear here once trading starts.
-            </p>
-          </div>
-        ) : loadingHistory && history.length === 0 ? (
-          <div className="h-[260px] flex items-center justify-center">
-            <span className="w-6 h-6 rounded-full border-2 border-pump-green/40 border-t-pump-green animate-spin" />
-          </div>
-        ) : (
-          <div className="rounded-xl bg-black/40 border border-white/[0.06] p-2">
-            <LiveOddsChart
-              points={history}
-              outcomeNames={chartNames}
-              livePct={history.length ? chartPct : undefined}
-              liveEnabled
-              height={260}
-            />
-          </div>
-        )}
-      </div>
-    </div>
+type LiveActivityRow = {
+  created_at: string;
+  user_address: string | null;
+  is_buy: boolean | null;
+  is_yes: boolean | null;
+  outcome_index: number | null;
+  outcome_name: string | null;
+  shares: number | string | null;
+  cost: number | string | null;
+};
+
+// Live Activity drawer — recent trades for this market, fetched with the same
+// supabase helper the chart drawer already uses (one fetch per open).
+function LiveActivityDrawer({
+  open,
+  onClose,
+  marketAddress,
+  names,
+  question,
+}: {
+  open: boolean;
+  onClose: () => void;
+  marketAddress: string | null;
+  names: string[] | null;
+  question?: string | null;
+}) {
+  const [rows, setRows] = useState<LiveActivityRow[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open || !marketAddress) return;
+    let cancelled = false;
+    setLoading(true);
+    (async () => {
+      try {
+        const db = await getMarketByAddress(marketAddress);
+        const dbId = db?.id;
+        if (!dbId) {
+          if (!cancelled) setRows([]);
+          return;
+        }
+        const { data, error } = await supabase
+          .from("transactions")
+          .select(
+            "created_at,user_address,is_buy,is_yes,outcome_index,outcome_name,shares,cost"
+          )
+          .eq("market_id", dbId)
+          .order("created_at", { ascending: false })
+          .limit(30);
+        if (error) {
+          if (!cancelled) setRows([]);
+          return;
+        }
+        if (!cancelled) setRows(((data as any[]) || []) as LiveActivityRow[]);
+      } catch {
+        if (!cancelled) setRows([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, marketAddress]);
+
+  if (!open) return null;
+
+  return (
+    <LiveBottomDrawer
+      open={open}
+      onClose={onClose}
+      title="Live Activity"
+      subtitle={question}
+      closeLabel="Close activity"
+    >
+      {loading && rows.length === 0 ? (
+        <div className="h-[220px] flex items-center justify-center">
+          <span className="w-6 h-6 rounded-full border-2 border-pump-green/40 border-t-pump-green animate-spin" />
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="h-[200px] flex flex-col items-center justify-center text-center gap-1">
+          <p className="text-sm text-gray-400">Live activity will appear here</p>
+          <p className="text-xs text-gray-600">
+            Trades on this market will show up here.
+          </p>
+        </div>
+      ) : (
+        <div className="max-h-[320px] overflow-y-auto -mx-1 px-1 space-y-1.5">
+          {rows.map((r, i) => {
+            const idx =
+              typeof r.outcome_index === "number"
+                ? r.outcome_index
+                : r.is_yes === false
+                ? 1
+                : 0;
+            const isYes = idx === 0;
+            const label = r.outcome_name || names?.[idx] || (isYes ? "YES" : "NO");
+            const sol =
+              r.cost != null && Number.isFinite(Number(r.cost))
+                ? Number(r.cost)
+                : null;
+            const shares = Math.max(0, Math.floor(Number(r.shares || 0)));
+            const action = r.is_buy === false ? "sold" : "bought";
+            const trader = shortAddr(r.user_address);
+            const initials =
+              trader.replace(/[^a-zA-Z0-9]/g, "").slice(0, 2).toUpperCase() || "?";
+            const t = relTime(r.created_at);
+            return (
+              <div
+                key={i}
+                className="flex items-center gap-2.5 rounded-xl bg-white/[0.03] border border-white/[0.06] px-3 py-2"
+              >
+                <span
+                  className={`shrink-0 flex items-center justify-center w-7 h-7 rounded-full text-[9px] font-black ${
+                    isYes
+                      ? "bg-pump-green/20 text-pump-green"
+                      : "bg-[#ff5c73]/20 text-[#ff5c73]"
+                  }`}
+                >
+                  {initials}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[12px] text-white/85 truncate">
+                    <span className="font-semibold">{trader}</span>{" "}
+                    <span className="text-gray-400">{action}</span>{" "}
+                    <span
+                      className={`font-bold ${
+                        isYes ? "text-pump-green" : "text-[#ff5c73]"
+                      }`}
+                    >
+                      {label}
+                    </span>
+                  </p>
+                  {t && <p className="text-[10px] text-gray-600">{t} ago</p>}
+                </div>
+                <span className="shrink-0 text-[12px] font-bold tabular-nums text-white/85">
+                  {sol != null ? `${sol.toFixed(2)} SOL` : `${shares} sh`}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </LiveBottomDrawer>
+  );
+}
+
+// Live Chat drawer — reuses the same CommentsSection as desktop live/trade
+// (embedded, composer pinned to the bottom). It self-resolves its market id
+// and loads/posts comments; mounted only while the drawer is open.
+function LiveChatDrawer({
+  open,
+  onClose,
+  marketAddress,
+  question,
+}: {
+  open: boolean;
+  onClose: () => void;
+  marketAddress: string | null;
+  question?: string | null;
+}) {
+  if (!open) return null;
+
+  return (
+    <LiveBottomDrawer
+      open={open}
+      onClose={onClose}
+      title="Live Chat"
+      subtitle={question}
+      closeLabel="Close chat"
+    >
+      {marketAddress ? (
+        <div className="h-[60vh] min-h-0">
+          <CommentsSection marketId={marketAddress} embedded composerAtBottom />
+        </div>
+      ) : (
+        <div className="h-[180px] flex flex-col items-center justify-center text-center gap-1">
+          <p className="text-sm text-gray-400">Live chat unavailable</p>
+          <p className="text-xs text-gray-600">
+            No market is linked to this stream yet.
+          </p>
+        </div>
+      )}
+    </LiveBottomDrawer>
   );
 }
 
@@ -780,9 +1016,11 @@ export function MobileImmersiveSlide({
   hostSlot?: ReactNode;
 }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
-  // Market Chart drawer — local to the slide so toggling it never touches the
+  // HUD drawers — local to the slide so toggling them never touches the
   // StreamPlayer subtree (which stays the first slide-root child).
   const [chartOpen, setChartOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
   // Tracks the largest remaining-seconds value we've seen for this slide;
   // used as the denominator for the circular HUD progress arc so it sweeps
   // from full at session entry down to empty at lockout.
@@ -1028,12 +1266,12 @@ export function MobileImmersiveSlide({
                       <path d="M17 16v-7" />
                     </svg>
                   </button>
-                  {/* Activity — inactive placeholder (future drawer) */}
+                  {/* Activity — opens the Live Activity drawer */}
                   <button
                     type="button"
-                    disabled
-                    aria-label="Activity (coming soon)"
-                    className="flex items-center justify-center w-7 h-7 rounded-full border border-white/10 bg-white/[0.04] text-white/30 cursor-not-allowed"
+                    aria-label="Open live activity"
+                    onClick={() => setActivityOpen(true)}
+                    className="flex items-center justify-center w-7 h-7 rounded-full border border-white/10 bg-white/[0.04] text-white/70 active:scale-95 active:text-white transition"
                   >
                     <svg
                       viewBox="0 0 24 24"
@@ -1047,12 +1285,12 @@ export function MobileImmersiveSlide({
                       <path d="M3 12h4l3 8 4-16 3 8h4" />
                     </svg>
                   </button>
-                  {/* Messages — inactive placeholder (future drawer) */}
+                  {/* Messages — opens the Live Chat drawer */}
                   <button
                     type="button"
-                    disabled
-                    aria-label="Messages (coming soon)"
-                    className="flex items-center justify-center w-7 h-7 rounded-full border border-white/10 bg-white/[0.04] text-white/30 cursor-not-allowed"
+                    aria-label="Open live chat"
+                    onClick={() => setChatOpen(true)}
+                    className="flex items-center justify-center w-7 h-7 rounded-full border border-white/10 bg-white/[0.04] text-white/70 active:scale-95 active:text-white transition"
                   >
                     <svg
                       viewBox="0 0 24 24"
@@ -1369,14 +1607,27 @@ export function MobileImmersiveSlide({
         </div>
       </div>
 
-      {/* Market Chart drawer — last slide-root child so the StreamPlayer above
-          is never reordered/remounted when it opens. */}
+      {/* HUD drawers — last slide-root children so the StreamPlayer above is
+          never reordered/remounted when any of them open. */}
       <LiveChartDrawer
         open={chartOpen}
         onClose={() => setChartOpen(false)}
         marketAddress={market?.publicKey ?? null}
         names={derived?.names ?? null}
         percentages={derived?.percentages ?? null}
+        question={market?.question ?? session.title}
+      />
+      <LiveActivityDrawer
+        open={activityOpen}
+        onClose={() => setActivityOpen(false)}
+        marketAddress={market?.publicKey ?? null}
+        names={derived?.names ?? null}
+        question={market?.question ?? session.title}
+      />
+      <LiveChatDrawer
+        open={chatOpen}
+        onClose={() => setChatOpen(false)}
+        marketAddress={market?.publicKey ?? null}
         question={market?.question ?? session.title}
       />
     </div>
