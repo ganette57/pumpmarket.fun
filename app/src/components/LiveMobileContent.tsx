@@ -3,11 +3,27 @@
 "use client";
 
 import { useMemo, useState, useEffect, useRef, type ReactNode } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import Image from "next/image";
 import CategoryImagePlaceholder from "@/components/CategoryImagePlaceholder";
 import { lamportsToSol } from "@/utils/solana";
 import type { LiveSession } from "@/lib/liveSessions";
+import { supabase } from "@/lib/supabaseClient";
+import { getMarketByAddress } from "@/lib/markets";
+import { buildOddsSeries, downsample } from "@/lib/marketHistory";
+
+// Reuse the trade page's odds chart, lazy-loaded so recharts is only fetched
+// when a chart drawer actually opens (keeps it out of the swipe-critical
+// live bundle). No new dependency — recharts already ships via /trade/[id].
+const LiveOddsChart = dynamic(() => import("@/components/OddsHistoryChart"), {
+  ssr: false,
+  loading: () => (
+    <div className="h-[260px] flex items-center justify-center">
+      <span className="w-6 h-6 rounded-full border-2 border-pump-green/40 border-t-pump-green animate-spin" />
+    </div>
+  ),
+});
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
 
@@ -573,6 +589,161 @@ function CircularCountdownHUD({
   );
 }
 
+/* ── LiveChartDrawer ───────────────────────────────────────────────── */
+// Mobile bottom sheet that reuses the trade page's OddsHistoryChart (lazy)
+// fed with the live percentages already available in the slide. Rendered as
+// a sibling overlay of the slide, so opening it never remounts StreamPlayer.
+
+function LiveChartDrawer({
+  open,
+  onClose,
+  marketAddress,
+  names,
+  percentages,
+  question,
+}: {
+  open: boolean;
+  onClose: () => void;
+  marketAddress: string | null;
+  names: string[] | null;
+  percentages: number[] | null;
+  question?: string | null;
+}) {
+  const chartNames = useMemo(() => names?.slice(0, 2) ?? [], [names]);
+  const chartPct = percentages?.slice(0, 2);
+  const outcomesCount = chartNames.length;
+
+  // Historical odds series — same pipeline as /trade/[id]: replay the market's
+  // transactions into an odds curve. Loaded only when the drawer opens
+  // (one fetch per open — never polled).
+  const [history, setHistory] = useState<{ t: number; pct: number[] }[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
+  // Lock background scroll while open — mirrors MobileBuySheet behaviour.
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
+  // Resolve the Supabase market id from the on-chain address, then build the
+  // odds history exactly like the trade page does.
+  useEffect(() => {
+    if (!open || !marketAddress || outcomesCount <= 0) return;
+    let cancelled = false;
+    setLoadingHistory(true);
+    (async () => {
+      try {
+        const db = await getMarketByAddress(marketAddress);
+        const dbId = db?.id;
+        if (!dbId) {
+          if (!cancelled) setHistory([]);
+          return;
+        }
+        const { data, error } = await supabase
+          .from("transactions")
+          .select("created_at,is_buy,amount,outcome_index,is_yes,shares")
+          .eq("market_id", dbId)
+          .order("created_at", { ascending: true })
+          .limit(2000);
+        if (error) {
+          if (!cancelled) setHistory([]);
+          return;
+        }
+        const pts = buildOddsSeries((data as any[]) || [], outcomesCount);
+        const lite = downsample(pts, 220).map((p) => ({ t: p.t, pct: p.pct }));
+        if (!cancelled) setHistory(lite);
+      } catch {
+        if (!cancelled) setHistory([]);
+      } finally {
+        if (!cancelled) setLoadingHistory(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, marketAddress, outcomesCount]);
+
+  if (!open) return null;
+
+  const hasData = outcomesCount > 0;
+
+  return (
+    <div className="fixed inset-0 z-[200]">
+      {/* Backdrop */}
+      <button
+        type="button"
+        aria-label="Close chart"
+        onClick={onClose}
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+      />
+
+      {/* Sheet */}
+      <div className="absolute bottom-0 inset-x-0 bg-pump-dark border-t border-gray-800 rounded-t-2xl p-4 pb-6 animate-slideUp">
+        <div className="w-10 h-1 rounded-full bg-gray-600 mx-auto mb-3" />
+
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <div className="min-w-0">
+            <h3 className="text-white font-bold text-base leading-tight">
+              Market Chart
+            </h3>
+            {question && (
+              <p className="text-xs text-gray-400 line-clamp-1 mt-0.5">
+                {question}
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            className="shrink-0 w-8 h-8 rounded-full bg-white/[0.06] border border-white/10 flex items-center justify-center text-white/70 active:scale-95 active:text-white transition"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="w-4 h-4"
+            >
+              <path d="M18 6L6 18" />
+              <path d="M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {!hasData ? (
+          <div className="h-[260px] flex flex-col items-center justify-center text-center gap-1">
+            <p className="text-sm text-gray-400">No chart data yet</p>
+            <p className="text-xs text-gray-600">
+              Live odds will appear here once trading starts.
+            </p>
+          </div>
+        ) : loadingHistory && history.length === 0 ? (
+          <div className="h-[260px] flex items-center justify-center">
+            <span className="w-6 h-6 rounded-full border-2 border-pump-green/40 border-t-pump-green animate-spin" />
+          </div>
+        ) : (
+          <div className="rounded-xl bg-black/40 border border-white/[0.06] p-2">
+            <LiveOddsChart
+              points={history}
+              outcomeNames={chartNames}
+              livePct={history.length ? chartPct : undefined}
+              liveEnabled
+              height={260}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ── MobileImmersiveSlide ──────────────────────────────────────────── */
 // Shared full-bleed mobile immersive experience: persistent stream,
 // giant countdown overlay, title, YES/NO bottom action bar.
@@ -609,6 +780,9 @@ export function MobileImmersiveSlide({
   hostSlot?: ReactNode;
 }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
+  // Market Chart drawer — local to the slide so toggling it never touches the
+  // StreamPlayer subtree (which stays the first slide-root child).
+  const [chartOpen, setChartOpen] = useState(false);
   // Tracks the largest remaining-seconds value we've seen for this slide;
   // used as the denominator for the circular HUD progress arc so it sweeps
   // from full at session entry down to empty at lockout.
@@ -832,10 +1006,11 @@ export function MobileImmersiveSlide({
                   </span>
                 )}
                 <div className="flex items-center gap-1.5">
-                  {/* Analytics / stats — visual placeholder for now */}
+                  {/* Chart — opens the Market Chart drawer */}
                   <button
                     type="button"
-                    aria-label="Market stats"
+                    aria-label="Open market chart"
+                    onClick={() => setChartOpen(true)}
                     className="flex items-center justify-center w-7 h-7 rounded-full border border-white/10 bg-white/[0.04] text-white/70 active:scale-95 active:text-white transition"
                   >
                     <svg
@@ -851,6 +1026,44 @@ export function MobileImmersiveSlide({
                       <path d="M7 16v-4" />
                       <path d="M12 16V8" />
                       <path d="M17 16v-7" />
+                    </svg>
+                  </button>
+                  {/* Activity — inactive placeholder (future drawer) */}
+                  <button
+                    type="button"
+                    disabled
+                    aria-label="Activity (coming soon)"
+                    className="flex items-center justify-center w-7 h-7 rounded-full border border-white/10 bg-white/[0.04] text-white/30 cursor-not-allowed"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="w-3.5 h-3.5"
+                    >
+                      <path d="M3 12h4l3 8 4-16 3 8h4" />
+                    </svg>
+                  </button>
+                  {/* Messages — inactive placeholder (future drawer) */}
+                  <button
+                    type="button"
+                    disabled
+                    aria-label="Messages (coming soon)"
+                    className="flex items-center justify-center w-7 h-7 rounded-full border border-white/10 bg-white/[0.04] text-white/30 cursor-not-allowed"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="w-3.5 h-3.5"
+                    >
+                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
                     </svg>
                   </button>
                   {/* Share — premium box-arrow glyph */}
@@ -1155,6 +1368,17 @@ export function MobileImmersiveSlide({
           <div className="flex-1 min-h-[8px]" aria-hidden />
         </div>
       </div>
+
+      {/* Market Chart drawer — last slide-root child so the StreamPlayer above
+          is never reordered/remounted when it opens. */}
+      <LiveChartDrawer
+        open={chartOpen}
+        onClose={() => setChartOpen(false)}
+        marketAddress={market?.publicKey ?? null}
+        names={derived?.names ?? null}
+        percentages={derived?.percentages ?? null}
+        question={market?.question ?? session.title}
+      />
     </div>
   );
 }
