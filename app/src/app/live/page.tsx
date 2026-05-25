@@ -64,12 +64,17 @@ function parseEndDateToSec(raw: any): number {
     return Number.isFinite(t) ? Math.floor(t / 1000) : 0;
   }
   const s = String(raw).trim();
+  if (!s) return 0;
   let ms: number;
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
     ms = new Date(`${s}T23:59:59Z`).getTime();
   } else {
-    const n = /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/.test(s) ? s.replace(" ", "T") : s;
-    ms = new Date(n).getTime();
+    // Supabase timestamps often come back without a timezone suffix. Treat
+    // them as UTC (append Z) instead of letting `new Date` assume local time —
+    // otherwise short live markets shift hours off and read as 00:00.
+    const normalized = s.includes(" ") ? s.replace(" ", "T") : s;
+    const hasTz = /(?:Z|[+-]\d{2}:\d{2})$/i.test(normalized);
+    ms = new Date(hasTz ? normalized : `${normalized}Z`).getTime();
   }
   return Number.isFinite(ms) ? Math.floor(ms / 1000) : 0;
 }
@@ -397,6 +402,8 @@ export default function LivePage() {
   const liveScrollerRef = useRef<HTMLDivElement | null>(null);
   const inFlightTradeRef = useRef(false);
   const failedMarketLoadsRef = useRef<Set<string>>(new Set());
+  const pendingSessionParamRef = useRef<string | null>(null);
+  const appliedSessionParamRef = useRef(false);
 
   const handleGoLive = useCallback(() => {
     if (!publicKey) {
@@ -566,6 +573,33 @@ export default function LivePage() {
       return Math.max(0, Math.min(prev, mobileActiveSessions.length - 1));
     });
   }, [mobileActiveSessions.length]);
+
+  // Capture ?session= once (e.g. arriving from Go Live) so the feed can jump
+  // straight to the freshly created session instead of index 0.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sid = new URLSearchParams(window.location.search).get("session");
+    if (sid) pendingSessionParamRef.current = sid;
+  }, []);
+
+  // When the requested session appears in the live list, select & scroll to it
+  // once. Re-runs on each list update until the session is found.
+  useEffect(() => {
+    if (!isMobile || appliedSessionParamRef.current) return;
+    const sid = pendingSessionParamRef.current;
+    if (!sid) return;
+    const idx = mobileActiveSessions.findIndex((s) => s.id === sid);
+    if (idx < 0) return;
+    appliedSessionParamRef.current = true;
+    setMobileTab("live");
+    setMobileLiveIndex(idx);
+    requestAnimationFrame(() => {
+      const node = liveScrollerRef.current;
+      if (!node) return;
+      const pageHeight = node.clientHeight || window.innerHeight;
+      node.scrollTo({ top: idx * pageHeight, behavior: "auto" });
+    });
+  }, [isMobile, mobileActiveSessions]);
 
   useEffect(() => {
     if (!isMobile) return;
