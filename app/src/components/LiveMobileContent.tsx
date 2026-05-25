@@ -1060,6 +1060,11 @@ export function MobileImmersiveSlide({
     };
   }, [endIsoOverride, market?.resolutionTime, nowMs]);
 
+  // Time-based lock: once the visible countdown hits 00:00 the on-chain market
+  // rejects trades, so lock the action UI immediately (covers feed + deeplink).
+  const expired = !!countdown && countdown.remSec <= 0;
+  const locked = sessionLocked || expired;
+
   const isDeeplink = variant === "deeplink";
 
   const volLabel =
@@ -1544,7 +1549,7 @@ export function MobileImmersiveSlide({
               shrink-0, anchored lower in the slide (slightly shorter to make
               room for the taller Up Next module). */}
           <div className="px-3 pb-3 shrink-0">
-            {derived && !sessionLocked ? (
+            {derived && !locked ? (
               <div className="grid grid-cols-2 gap-3 h-[88px]">
                 {derived.names.slice(0, 2).map((name, idx) => {
                   const pct = (derived.percentages[idx] ?? 0).toFixed(1);
@@ -1615,7 +1620,7 @@ export function MobileImmersiveSlide({
                   );
                 })}
               </div>
-            ) : sessionLocked ? (
+            ) : locked ? (
               <div className="h-20 flex items-center justify-center rounded-2xl bg-white/[0.04] border border-white/10 backdrop-blur-md">
                 <p className="text-sm text-gray-400">Trading is locked</p>
               </div>

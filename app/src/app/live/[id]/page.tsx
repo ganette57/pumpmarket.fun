@@ -568,13 +568,18 @@ export default function LiveViewerPage() {
     return { remSec, label: fmtMmSs(remSec), phase, isFinal: remSec <= 5 };
   }, [trafficMeta?.window_end, market?.resolutionTime, nowMs]);
 
+  // Time-based lock: the market is expired once the countdown reaches 00:00.
+  // session.status stays "live" at that point, so this is what actually blocks
+  // trades when the timer runs out.
+  const expiredByTime = !!countdown && countdown.remSec <= 0;
+
   const threshold = trafficMeta?.threshold ?? null;
 
   /* ── Trade handler ─────────────────────────────────────────────── */
 
   async function handleTrade(shares: number, outcomeIndex: number, side: "buy" | "sell", costSol?: number) {
     if (!connected || !publicKey || !program || !market || !session || !derived) return;
-    if (sessionLocked) return;
+    if (sessionLocked || expiredByTime) return;
 
     const key = "trade";
     if (inFlightRef.current[key]) return;
@@ -813,8 +818,9 @@ export default function LiveViewerPage() {
                   : null
               }
               active={true}
-              sessionLocked={sessionLocked}
+              sessionLocked={sessionLocked || expiredByTime}
               onOutcomeTap={(idx) => {
+                if (sessionLocked || expiredByTime) return;
                 setDefaultOutcomeIndex(idx);
                 setMobileSheetOpen(true);
               }}
@@ -998,7 +1004,7 @@ export default function LiveViewerPage() {
                       onTrade={(s, idx, side, cost) => void handleTrade(s, idx, side, cost)}
                       marketBalanceLamports={marketBalanceLamports}
                       userHoldings={userSharesForUi}
-                      marketClosed={!!marketClosed}
+                      marketClosed={!!marketClosed || expiredByTime}
                     />
                   )}
 
@@ -1089,7 +1095,7 @@ export default function LiveViewerPage() {
                       onTrade={(s, idx, side, cost) => void handleTrade(s, idx, side, cost)}
                       marketBalanceLamports={marketBalanceLamports}
                       userHoldings={userSharesForUi}
-                      marketClosed={!!marketClosed}
+                      marketClosed={!!marketClosed || expiredByTime}
                     />
                   )}
 
@@ -1118,7 +1124,7 @@ export default function LiveViewerPage() {
           connected={connected}
           submitting={submitting}
           onTrade={handleTrade}
-          sessionLocked={sessionLocked}
+          sessionLocked={sessionLocked || expiredByTime}
           defaultOutcomeIndex={defaultOutcomeIndex}
           keepNavbar
         />

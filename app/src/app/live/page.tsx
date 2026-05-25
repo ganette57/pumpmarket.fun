@@ -684,6 +684,12 @@ export default function LivePage() {
       if (!loaded) return;
       if (session.status === "locked" || loaded.isBlocked || loaded.resolved)
         return;
+      // Time-based lock: market expired once the countdown reached 00:00.
+      if (
+        loaded.resolutionTime != null &&
+        Date.now() >= loaded.resolutionTime * 1000
+      )
+        return;
 
       setMobileTradeSessionId(session.id);
       setMobileTradeOutcomeIndex(
@@ -707,7 +713,9 @@ export default function LivePage() {
     !tradeMarket ||
     tradeSession.status === "locked" ||
     tradeMarket.isBlocked ||
-    tradeMarket.resolved;
+    tradeMarket.resolved ||
+    (tradeMarket.resolutionTime != null &&
+      Date.now() >= tradeMarket.resolutionTime * 1000);
 
   const handleTrade = useCallback(
     async (
@@ -719,6 +727,12 @@ export default function LivePage() {
       if (inFlightTradeRef.current) return;
       if (!connected || !publicKey || !signTransaction || !program) return;
       if (!tradeSession || !tradeMarket || tradeClosed) return;
+      // Hard stop: never submit a trade once the market timer has expired.
+      if (
+        tradeMarket.resolutionTime != null &&
+        Date.now() >= tradeMarket.resolutionTime * 1000
+      )
+        return;
 
       inFlightTradeRef.current = true;
       setSubmittingTrade(true);
