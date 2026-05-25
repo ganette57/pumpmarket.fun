@@ -55,9 +55,14 @@ function parseEndDateMs(raw: any): number {
   if (!raw) return NaN;
   if (raw instanceof Date) return raw.getTime();
   const s = String(raw).trim();
+  if (!s) return NaN;
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return new Date(`${s}T23:59:59Z`).getTime();
-  const n = /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/.test(s) ? s.replace(" ", "T") : s;
-  return new Date(n).getTime();
+  // Supabase timestamps often come back without a timezone suffix. Treat
+  // them as UTC (append Z) instead of letting `new Date` assume local time —
+  // otherwise short live markets shift hours off and read as 00:00.
+  const normalized = s.includes(" ") ? s.replace(" ", "T") : s;
+  const hasTz = /(?:Z|[+-]\d{2}:\d{2})$/i.test(normalized);
+  return new Date(hasTz ? normalized : `${normalized}Z`).getTime();
 }
 
 function toNumberArray(x: any): number[] | undefined {
