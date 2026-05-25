@@ -669,6 +669,14 @@ export function MobileImmersiveSlide({
   const momentumYes =
     (derived?.percentages?.[0] ?? 0) >= (derived?.percentages?.[1] ?? 0);
 
+  // Top-traders widget — no trader list is exposed to this component, so the
+  // avatar is derived from the real host wallet (the one identity we have)
+  // and the count stays a soft placeholder. Pure render computation.
+  const hostInitials = (session.host_wallet || "")
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .slice(0, 2)
+    .toUpperCase();
+
   // Pin layout heights so the stream wrapper (absolute) and the structured
   // stack's top spacer (in-flow) line up exactly — the stream sits flush
   // under the top controls, no dead black space.
@@ -758,9 +766,11 @@ export function MobileImmersiveSlide({
             </div>
           )}
 
-          {/* Compact circular timer — purely overlaid, never affects flow */}
+          {/* Compact circular timer — purely overlaid, never affects flow.
+              Lifted above the video's top edge (center column is free of the
+              feed's left toggle / right Go Live). */}
           {countdown && (
-            <div className="pointer-events-none absolute top-2 left-1/2 -translate-x-1/2 z-30">
+            <div className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 z-30">
               <CircularCountdownHUD
                 label={countdown.label}
                 phase={countdown.phase}
@@ -783,15 +793,18 @@ export function MobileImmersiveSlide({
           {!hostSlot && (
             <div className="absolute top-2 right-2 z-20 pointer-events-none">
               <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-black/55 backdrop-blur-md border border-white/10 shadow-[0_2px_10px_rgba(0,0,0,0.5)]">
-                <div className="flex -space-x-1.5">
-                  <span className="w-4 h-4 rounded-full bg-gradient-to-br from-pump-green to-emerald-700 border border-black" />
-                  <span className="w-4 h-4 rounded-full bg-gradient-to-br from-[#ff5c73] to-rose-700 border border-black" />
-                </div>
-                <span className="text-[9px] font-bold tabular-nums text-white/85">
-                  +32
-                </span>
                 <span className="text-[8px] font-semibold uppercase tracking-[0.12em] text-white/45 whitespace-nowrap">
                   Top traders
+                </span>
+                {hostInitials ? (
+                  <span className="flex items-center justify-center w-4 h-4 rounded-full bg-gradient-to-br from-pump-green/80 to-emerald-700 border border-black text-[7px] font-black text-black leading-none">
+                    {hostInitials}
+                  </span>
+                ) : (
+                  <span className="w-4 h-4 rounded-full bg-gradient-to-br from-pump-green/80 to-emerald-700 border border-black" />
+                )}
+                <span className="text-[9px] font-bold tabular-nums text-white/85">
+                  +32
                 </span>
               </div>
             </div>
@@ -928,9 +941,18 @@ export function MobileImmersiveSlide({
                     );
                   })}
                 </div>
-                  {/* VS bubble — centered between YES/NO, straddling the bar's
+                  {/* VS bubble — sits at the real YES/NO junction (left =
+                      YES%), clamped so it never leaves the bar, straddling the
                       lower edge with a clean premium glow. */}
-                  <div className="pointer-events-none absolute left-1/2 bottom-0 -translate-x-1/2 translate-y-1/2 z-10 w-7 h-7 rounded-full bg-gradient-to-b from-zinc-700 to-black border border-white/30 ring-2 ring-black flex items-center justify-center shadow-[0_2px_10px_rgba(0,0,0,0.7),0_0_14px_rgba(255,255,255,0.12)]">
+                  <div
+                    className="pointer-events-none absolute bottom-0 -translate-x-1/2 translate-y-1/2 z-10 w-7 h-7 rounded-full bg-gradient-to-b from-zinc-700 to-black border border-white/30 ring-2 ring-black flex items-center justify-center shadow-[0_2px_10px_rgba(0,0,0,0.7),0_0_14px_rgba(255,255,255,0.12)]"
+                    style={{
+                      left: `${Math.max(
+                        8,
+                        Math.min(92, derived.percentages[0] ?? 50)
+                      )}%`,
+                    }}
+                  >
                     <span className="text-[9px] font-black text-white tracking-[0.12em]">
                       VS
                     </span>
@@ -954,54 +976,85 @@ export function MobileImmersiveSlide({
             )}
           </div>
 
+          {/* CSS-only shimmer used by the momentum strip (no JS loop). The
+              <style> tag is display:none and never participates in layout. */}
+          <style>{`
+            .fm-mom-shimmer{background:linear-gradient(100deg,transparent 38%,rgba(255,255,255,0.10) 50%,transparent 62%);transform:translateX(-100%);animation:fm-mom-sweep 5s ease-in-out infinite;will-change:transform}
+            @keyframes fm-mom-sweep{0%{transform:translateX(-100%)}55%,100%{transform:translateX(100%)}}
+            @media (prefers-reduced-motion:reduce){.fm-mom-shimmer{animation:none}}
+          `}</style>
+
           {/* HUD STRIPS — visual placeholders between the market card and the
               action panels. Reserve the eventual Momentum and Up Next rows.
               Pure presentational; no data or effects wired yet. */}
           <div className="px-3 mt-3 space-y-2">
-            {/* Momentum / tension strip */}
-            <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-400/25 bg-gradient-to-r from-pump-green/10 via-amber-400/10 to-[#ff5c73]/10 px-3 py-1.5 shadow-[0_0_18px_-8px_rgba(252,211,77,0.6)]">
-              <span className="inline-flex items-center gap-1.5 min-w-0">
+            {/* Momentum / tension strip — gradient edge (green→amber→red),
+                soft colored edge-glow, and a CSS-only shimmer sweep. */}
+            <div className="relative rounded-lg p-px bg-[linear-gradient(90deg,rgba(109,255,164,0.65),rgba(252,211,77,0.6),rgba(255,92,115,0.65))] shadow-[-5px_0_18px_-9px_rgba(109,255,164,0.55),0_0_16px_-9px_rgba(252,211,77,0.45),5px_0_18px_-9px_rgba(255,92,115,0.55)]">
+              <div className="relative overflow-hidden rounded-[7px] bg-black/85 px-3 py-1.5">
                 <span
-                  className={`w-1.5 h-1.5 rounded-full ${
-                    momentumYes
-                      ? "bg-pump-green shadow-[0_0_6px_rgba(109,255,164,0.8)]"
-                      : "bg-[#ff5c73] shadow-[0_0_6px_rgba(255,92,115,0.8)]"
-                  }`}
+                  aria-hidden
+                  className="fm-mom-shimmer pointer-events-none absolute inset-0"
                 />
-                <span
-                  className={`text-[10px] font-bold uppercase tracking-wider whitespace-nowrap ${
-                    momentumYes ? "text-pump-green" : "text-[#ff5c73]"
-                  }`}
-                >
-                  Momentum: {momentumYes ? "YES" : "NO"}
-                </span>
-              </span>
-              <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-amber-300 drop-shadow-[0_0_6px_rgba(252,211,77,0.6)] whitespace-nowrap">
-                High Tension
-              </span>
-              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-red-500/15 border border-red-500/30 whitespace-nowrap">
-                <span className="text-[9px] font-bold uppercase tracking-wider text-red-300">
-                  Final
-                </span>
-                {countdown?.label && (
-                  <span className="text-[9px] font-bold tabular-nums text-red-200">
-                    {countdown.label}
+                <div className="relative z-10 flex items-center justify-between gap-2">
+                  <span className="inline-flex items-center gap-1.5 min-w-0">
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        momentumYes
+                          ? "bg-pump-green shadow-[0_0_6px_rgba(109,255,164,0.8)]"
+                          : "bg-[#ff5c73] shadow-[0_0_6px_rgba(255,92,115,0.8)]"
+                      }`}
+                    />
+                    <span
+                      className={`text-[10px] font-bold uppercase tracking-wider whitespace-nowrap ${
+                        momentumYes ? "text-pump-green" : "text-[#ff5c73]"
+                      }`}
+                    >
+                      Momentum: {momentumYes ? "YES" : "NO"}
+                    </span>
                   </span>
-                )}
-              </span>
+                  <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-amber-300 drop-shadow-[0_0_6px_rgba(252,211,77,0.6)] whitespace-nowrap">
+                    High Tension
+                  </span>
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-red-500/15 border border-red-500/30 whitespace-nowrap">
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-red-300">
+                      Final
+                    </span>
+                    {countdown?.label && (
+                      <span className="text-[9px] font-bold tabular-nums text-red-200">
+                        {countdown.label}
+                      </span>
+                    )}
+                  </span>
+                </div>
+              </div>
             </div>
 
-            {/* Up Next market strip */}
-            <div className="flex items-center justify-between gap-3 rounded-xl border border-dashed border-white/10 bg-white/[0.03] px-3 py-2">
-              <div className="min-w-0">
-                <div className="text-[9px] font-bold uppercase tracking-[0.2em] text-white/40">
+            {/* Up Next market strip — reserved module: left status badge,
+                eyebrow + question, and a 3-min-market pill. */}
+            <div className="flex items-center gap-3 rounded-xl border border-dashed border-white/10 bg-white/[0.03] px-3 py-3">
+              <div className="shrink-0 w-10 h-10 rounded-full border-2 border-pump-green/35 flex items-center justify-center shadow-[0_0_14px_-4px_rgba(109,255,164,0.5)]">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="w-4 h-4 text-pump-green/80"
+                >
+                  <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" />
+                </svg>
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/45">
                   Up Next (Preparing…)
                 </div>
-                <div className="text-[12px] font-semibold text-white/55 truncate">
+                <div className="text-[13px] font-semibold text-white/70 leading-snug line-clamp-2">
                   Next flash market coming soon
                 </div>
               </div>
-              <span className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-pump-green/10 border border-pump-green/25 text-[9px] font-bold uppercase tracking-wider text-pump-green/80">
+              <span className="shrink-0 self-start inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-pump-green/10 border border-pump-green/25 text-[9px] font-bold uppercase tracking-wider text-pump-green/80">
                 3 Min Market
               </span>
             </div>
@@ -1010,11 +1063,12 @@ export function MobileImmersiveSlide({
           {/* Flexible gap — pushes the action panels lower without dead space. */}
           <div className="flex-[1.5] min-h-[10px]" aria-hidden />
 
-          {/* ACTION CARDS — compact HUD action panels. Fixed h-24 (96 px)
-              and shrink-0, anchored lower in the slide. */}
+          {/* ACTION CARDS — compact HUD action panels. Fixed h-[88px] and
+              shrink-0, anchored lower in the slide (slightly shorter to make
+              room for the taller Up Next module). */}
           <div className="px-3 pb-3 shrink-0">
             {derived && !sessionLocked ? (
-              <div className="grid grid-cols-2 gap-3 h-24">
+              <div className="grid grid-cols-2 gap-3 h-[88px]">
                 {derived.names.slice(0, 2).map((name, idx) => {
                   const pct = (derived.percentages[idx] ?? 0).toFixed(1);
                   const isYes = idx === 0;
