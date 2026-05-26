@@ -32,6 +32,7 @@ import {
 } from "@/components/LiveMobileContent";
 import LiveHostControls from "@/components/LiveHostControls";
 import { proposeLiveResolution } from "@/lib/liveResolve";
+import { createLiveFlashMarket } from "@/lib/liveMarketCreate";
 import bs58 from "bs58";
 
 type DesktopTab = "live" | "feed";
@@ -338,6 +339,7 @@ function MobileLiveTradeSlide({
   onOutcomeTap,
   hostSlot,
   onResolve,
+  onCreateNextMarket,
 }: {
   session: LiveSession;
   market: MobileMarketSnapshot | null;
@@ -345,6 +347,11 @@ function MobileLiveTradeSlide({
   onOutcomeTap: (session: LiveSession, outcomeIndex: number) => void;
   hostSlot?: ReactNode;
   onResolve?: (outcomeIndex: number) => Promise<void> | void;
+  onCreateNextMarket?: (params: {
+    title: string;
+    outcomes: string[];
+    durationMin: number;
+  }) => Promise<void>;
 }) {
   const display = deriveOutcomeDisplay(market);
   const tradingLocked =
@@ -384,6 +391,7 @@ function MobileLiveTradeSlide({
               }
             : undefined
         }
+        onCreateNextMarket={onCreateNextMarket}
       />
     </section>
   );
@@ -618,6 +626,65 @@ export default function LivePage() {
       program,
       connection,
       mobileMarketBySession,
+      loadSessionMarketSnapshot,
+    ]
+  );
+
+  // Host "Next Market" (feed) — create a new on-chain flash market, then swap
+  // it into the same live session via the signed market_address endpoint.
+  // The session id + stream_url don't change, so the StreamPlayer is never
+  // remounted; only the market data refreshes.
+  const handleCreateNextMarketForSession = useCallback(
+    async (
+      session: LiveSession,
+      params: { title: string; outcomes: string[]; durationMin: number },
+    ) => {
+      if (!connected || !publicKey || !signTransaction || !signMessage || !program) {
+        throw new Error("Wallet not ready");
+      }
+      const { marketAddress: newAddr } = await createLiveFlashMarket({
+        program,
+        connection,
+        publicKey,
+        signTransaction,
+        title: params.title,
+        outcomes: params.outcomes,
+        durationMin: params.durationMin,
+      });
+
+      const ts = Date.now();
+      const message = `FUNMARKET_LIVE_MARKET|${session.id}|${newAddr}|${ts}`;
+      const sigBytes = await signMessage(new TextEncoder().encode(message));
+      const res = await fetch(`/api/live-sessions/${session.id}/market`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          wallet: publicKey.toBase58(),
+          signature: bs58.encode(sigBytes),
+          market_address: newAddr,
+          ts,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `Failed to link market (${res.status})`);
+
+      const updated = json.session as LiveSession;
+      setSessions((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+      // Drop the stale snapshot so the loader fetches the new market.
+      setMobileMarketBySession((prev) => {
+        const next = { ...prev };
+        delete next[updated.id];
+        return next;
+      });
+      await loadSessionMarketSnapshot(updated);
+    },
+    [
+      connected,
+      publicKey,
+      signTransaction,
+      signMessage,
+      program,
+      connection,
       loadSessionMarketSnapshot,
     ]
   );
@@ -1001,6 +1068,13 @@ export default function LivePage() {
                     connected &&
                     publicKey?.toBase58() === session.host_wallet
                       ? (idx) => handleLiveResolve(session, idx)
+                      : undefined
+                  }
+                  onCreateNextMarket={
+                    connected &&
+                    publicKey?.toBase58() === session.host_wallet
+                      ? (params) =>
+                          handleCreateNextMarketForSession(session, params)
                       : undefined
                   }
                 />

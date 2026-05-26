@@ -23,6 +23,7 @@ import {
 
 import { supabase } from "@/lib/supabaseClient";
 import { proposeLiveResolution } from "@/lib/liveResolve";
+import { createLiveFlashMarket } from "@/lib/liveMarketCreate";
 import { getMarketByAddress, recordTransaction, applyTradeToMarketInSupabase } from "@/lib/markets";
 import {
   getLiveSession,
@@ -593,6 +594,50 @@ export default function LiveViewerPage() {
     await loadMarket(market.publicKey);
   }
 
+  /* ── Host "Next Market" — same session, new linked market ────────── */
+  async function handleCreateNextMarket(params: {
+    title: string;
+    outcomes: string[];
+    durationMin: number;
+  }) {
+    if (!connected || !publicKey || !program || !signTransaction || !signMessage || !session) {
+      throw new Error("Wallet or session not ready");
+    }
+
+    // 1. Create the new flash market (on-chain + Supabase index).
+    const { marketAddress: newAddr } = await createLiveFlashMarket({
+      program,
+      connection,
+      publicKey,
+      signTransaction,
+      title: params.title,
+      outcomes: params.outcomes,
+      durationMin: params.durationMin,
+    });
+
+    // 2. Update live_sessions.market_address via the signed server route.
+    const ts = Date.now();
+    const message = `FUNMARKET_LIVE_MARKET|${session.id}|${newAddr}|${ts}`;
+    const sigBytes = await signMessage(new TextEncoder().encode(message));
+    const res = await fetch(`/api/live-sessions/${session.id}/market`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        wallet: publicKey.toBase58(),
+        signature: bs58.encode(sigBytes),
+        market_address: newAddr,
+        ts,
+      }),
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || `Failed to link market (${res.status})`);
+
+    // 3. Refresh local state — same session id + stream_url → StreamPlayer
+    // stays mounted; only the market data swaps.
+    setSession(json.session as LiveSession);
+    await loadMarket(newAddr);
+  }
+
   /* ── Trade handler ─────────────────────────────────────────────── */
 
   async function handleTrade(shares: number, outcomeIndex: number, side: "buy" | "sell", costSol?: number) {
@@ -870,6 +915,7 @@ export default function LiveViewerPage() {
                     }
                   : undefined
               }
+              onCreateNextMarket={isHost ? handleCreateNextMarket : undefined}
             />
           </div>
         ) : (

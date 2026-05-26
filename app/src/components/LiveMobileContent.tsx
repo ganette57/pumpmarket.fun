@@ -1077,6 +1077,153 @@ function LiveResolveSheet({
   );
 }
 
+// Create Next Market sheet — host-only. Collects title / outcomes / duration
+// and hands them to the page's onCreate handler (which reuses the shared
+// `createLiveFlashMarket` helper + signed market_address update).
+const NEXT_MARKET_DURATIONS = [3, 5, 10, 30] as const;
+
+function LiveNextMarketSheet({
+  open,
+  onClose,
+  onCreate,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreate: (params: {
+    title: string;
+    outcomes: string[];
+    durationMin: number;
+  }) => Promise<void>;
+}) {
+  const [title, setTitle] = useState("");
+  const [yesLabel, setYesLabel] = useState("YES");
+  const [noLabel, setNoLabel] = useState("NO");
+  const [durationMin, setDurationMin] = useState<number>(5);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Reset whenever the sheet (re)opens.
+  useEffect(() => {
+    if (open) {
+      setTitle("");
+      setYesLabel("YES");
+      setNoLabel("NO");
+      setDurationMin(5);
+      setError(null);
+      setSubmitting(false);
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  const canSubmit = !!title.trim() && !submitting;
+
+  return (
+    <LiveBottomDrawer
+      open={open}
+      onClose={onClose}
+      title="Create Next Market"
+      subtitle="Stays in this live session — stream keeps playing"
+      closeLabel="Close next market"
+    >
+      <div className="space-y-4">
+        <div>
+          <label className="block text-xs font-semibold text-white/70 mb-1.5">
+            Market Title
+          </label>
+          <input
+            type="text"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="e.g. Will he say Bitcoin in the next 5 minutes?"
+            className="w-full rounded-xl bg-white/[0.04] border border-white/10 px-3 py-2.5 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-pump-green/50"
+            maxLength={200}
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-white/70 mb-1.5">
+            Outcomes
+          </label>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={yesLabel}
+              onChange={(e) => setYesLabel(e.target.value)}
+              className="w-full rounded-xl bg-white/[0.04] border border-white/10 px-3 py-2.5 text-sm font-semibold text-pump-green focus:outline-none focus:border-pump-green/50"
+              maxLength={24}
+            />
+            <input
+              type="text"
+              value={noLabel}
+              onChange={(e) => setNoLabel(e.target.value)}
+              className="w-full rounded-xl bg-white/[0.04] border border-white/10 px-3 py-2.5 text-sm font-semibold text-[#ff5c73] focus:outline-none focus:border-[#ff5c73]/50"
+              maxLength={24}
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-white/70 mb-1.5">
+            Duration
+          </label>
+          <div className="grid grid-cols-4 gap-2">
+            {NEXT_MARKET_DURATIONS.map((d) => (
+              <button
+                key={d}
+                type="button"
+                onClick={() => setDurationMin(d)}
+                className={`py-2.5 rounded-xl text-sm font-semibold border transition ${
+                  durationMin === d
+                    ? "border-pump-green bg-pump-green/10 text-pump-green"
+                    : "border-white/10 text-gray-400 hover:border-white/20"
+                }`}
+              >
+                {d} min
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {error && (
+          <p className="text-xs text-red-300 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2">
+            {error}
+          </p>
+        )}
+
+        <button
+          type="button"
+          disabled={!canSubmit}
+          onClick={async () => {
+            if (!canSubmit) return;
+            setSubmitting(true);
+            setError(null);
+            try {
+              await onCreate({
+                title: title.trim(),
+                outcomes: [yesLabel, noLabel],
+                durationMin,
+              });
+              // Parent closes on success.
+            } catch (e: any) {
+              setError(String(e?.message || "Failed to create next market"));
+            } finally {
+              setSubmitting(false);
+            }
+          }}
+          className={`w-full py-3.5 rounded-xl font-bold text-base transition-all ${
+            !canSubmit
+              ? "bg-gray-700 text-gray-400 cursor-not-allowed"
+              : "bg-pump-green text-black hover:bg-[#74ffb8]"
+          }`}
+        >
+          {submitting ? "Creating…" : "Create Next Market"}
+        </button>
+      </div>
+    </LiveBottomDrawer>
+  );
+}
+
 /* ── MobileImmersiveSlide ──────────────────────────────────────────── */
 // Shared full-bleed mobile immersive experience: persistent stream,
 // giant countdown overlay, title, YES/NO bottom action bar.
@@ -1102,6 +1249,7 @@ export function MobileImmersiveSlide({
   hostSlot,
   onResolve,
   resolution,
+  onCreateNextMarket,
 }: {
   session: LiveSession;
   market: MobileImmersiveSlideMarket | null;
@@ -1121,6 +1269,12 @@ export function MobileImmersiveSlide({
     proposed: boolean;
     outcomeIndex: number | null;
   };
+  /** Host-only handler to create the session's next flash market. */
+  onCreateNextMarket?: (params: {
+    title: string;
+    outcomes: string[];
+    durationMin: number;
+  }) => Promise<void>;
 }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
   // HUD drawers — local to the slide so toggling them never touches the
@@ -1129,6 +1283,7 @@ export function MobileImmersiveSlide({
   const [activityOpen, setActivityOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [resolveOpen, setResolveOpen] = useState(false);
+  const [nextMarketOpen, setNextMarketOpen] = useState(false);
   // Tracks the largest remaining-seconds value we've seen for this slide;
   // used as the denominator for the circular HUD progress arc so it sweeps
   // from full at session entry down to empty at lockout.
@@ -1188,6 +1343,16 @@ export function MobileImmersiveSlide({
   useEffect(() => {
     if (needsResolve) setResolveOpen(true);
   }, [needsResolve]);
+
+  // Host can only create the next flash market once the current one has
+  // expired (timer at 00:00) or already settled (proposed/resolved).
+  const canCreateNext = isHost && (expired || settled) && !!onCreateNextMarket;
+
+  // Reset the countdown ring's peak so a freshly created market starts the arc
+  // from full instead of inheriting the previous market's larger duration.
+  useEffect(() => {
+    peakRemSecRef.current = null;
+  }, [market?.publicKey]);
 
   const isDeeplink = variant === "deeplink";
 
@@ -1615,10 +1780,25 @@ export function MobileImmersiveSlide({
                 <div className="min-w-0 flex-1">{hostSlot}</div>
                 <button
                   type="button"
-                  disabled
-                  aria-label="Create next market (coming soon)"
-                  title="Next market — coming soon"
-                  className="shrink-0 self-center w-10 h-10 rounded-full flex items-center justify-center border border-pump-green/40 bg-pump-green/15 text-pump-green shadow-[0_0_18px_-8px_rgba(109,255,164,0.7)] opacity-90 cursor-not-allowed"
+                  disabled={!canCreateNext}
+                  onClick={() => {
+                    if (canCreateNext) setNextMarketOpen(true);
+                  }}
+                  aria-label={
+                    canCreateNext
+                      ? "Create next market"
+                      : "Wait until the current market ends"
+                  }
+                  title={
+                    canCreateNext
+                      ? "Create next market"
+                      : "Wait until the current market ends"
+                  }
+                  className={`shrink-0 self-center w-10 h-10 rounded-full flex items-center justify-center border transition ${
+                    canCreateNext
+                      ? "border-pump-green bg-pump-green/20 text-pump-green shadow-[0_0_22px_-6px_rgba(109,255,164,0.8)] active:scale-95"
+                      : "border-pump-green/30 bg-pump-green/10 text-pump-green/60 opacity-60 cursor-not-allowed"
+                  }`}
                 >
                   <svg
                     viewBox="0 0 24 24"
@@ -1828,6 +2008,16 @@ export function MobileImmersiveSlide({
           onResolve={async (idx) => {
             await onResolve(idx);
             setResolveOpen(false);
+          }}
+        />
+      )}
+      {isHost && onCreateNextMarket && (
+        <LiveNextMarketSheet
+          open={nextMarketOpen}
+          onClose={() => setNextMarketOpen(false)}
+          onCreate={async (params) => {
+            await onCreateNextMarket(params);
+            setNextMarketOpen(false);
           }}
         />
       )}

@@ -5,18 +5,9 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
-import { Keypair, SystemProgram } from "@solana/web3.js";
-import { BN } from "@coral-xyz/anchor";
 import { createLiveSession } from "@/lib/liveSessions";
-import { indexMarket } from "@/lib/markets";
 import { useProgram } from "@/hooks/useProgram";
-import { sendSignedTx } from "@/lib/solanaSend";
-
-// Same on-chain market defaults as /create.
-const DEFAULT_B_SOL = 0.01;
-const DEFAULT_MAX_POSITION_BPS = 10_000;
-const DEFAULT_MAX_TRADE_SHARES = 5_000_000;
-const DEFAULT_COOLDOWN_SECONDS = 0;
+import { createLiveFlashMarket } from "@/lib/liveMarketCreate";
 
 const DURATION_OPTIONS = [3, 5, 10, 30] as const;
 
@@ -63,59 +54,18 @@ export default function NewLiveSessionPage() {
 
     setSubmitting(true);
     try {
-      const outcomes = [
-        yesLabel.trim().slice(0, 24) || "YES",
-        noLabel.trim().slice(0, 24) || "NO",
-      ];
-      const resolutionTimestamp =
-        Math.floor(Date.now() / 1000) + durationMin * 60;
-      const bLamportsU64 = Math.floor(DEFAULT_B_SOL * 1_000_000_000);
-
-      // 1. Create the short market on-chain (same flow as /create).
+      // 1. Create the short market on-chain (shared with the in-HUD Next
+      // Market flow). Same on-chain instruction as /create.
       setStep("market");
-      const marketKeypair = Keypair.generate();
-
-      const tx = await (program as any).methods
-        .createMarket(
-          new BN(resolutionTimestamp),
-          outcomes,
-          0, // market_type: binary
-          new BN(bLamportsU64),
-          DEFAULT_MAX_POSITION_BPS,
-          new BN(DEFAULT_MAX_TRADE_SHARES),
-          new BN(DEFAULT_COOLDOWN_SECONDS)
-        )
-        .accounts({
-          market: marketKeypair.publicKey,
-          creator: publicKey,
-          systemProgram: SystemProgram.programId,
-        })
-        .transaction();
-
-      await sendSignedTx({
+      const { marketAddress } = await createLiveFlashMarket({
+        program,
         connection,
-        tx,
-        feePayer: publicKey,
-        signTx: signTransaction,
-        beforeSign: (t) => t.partialSign(marketKeypair),
+        publicKey,
+        signTransaction,
+        title: marketTitle,
+        outcomes: [yesLabel, noLabel],
+        durationMin,
       });
-
-      const marketAddress = marketKeypair.publicKey.toBase58();
-
-      // Index into Supabase (end_date powers the live HUD countdown).
-      await indexMarket({
-        market_address: marketAddress,
-        question: marketTitle.trim().slice(0, 200),
-        category: "other",
-        creator: publicKey.toBase58(),
-        end_date: new Date(resolutionTimestamp * 1000).toISOString(),
-        market_type: 0,
-        outcome_names: outcomes,
-        outcome_supplies: outcomes.map(() => 0),
-        yes_supply: 0,
-        no_supply: 0,
-        total_volume: 0,
-      } as any);
 
       // 2. Create the live session linked to the new market (always live).
       setStep("session");
