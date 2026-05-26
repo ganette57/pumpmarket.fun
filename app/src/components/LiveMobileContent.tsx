@@ -1250,6 +1250,7 @@ export function MobileImmersiveSlide({
   onResolve,
   resolution,
   onCreateNextMarket,
+  queuedNext,
 }: {
   session: LiveSession;
   market: MobileImmersiveSlideMarket | null;
@@ -1275,6 +1276,13 @@ export function MobileImmersiveSlide({
     outcomes: string[];
     durationMin: number;
   }) => Promise<void>;
+  /** Queued next-market CONFIG (shown in viewer Up Next; the page creates the
+   *  market on-chain at resolve time so the timer starts fresh — no manual
+   *  Start Next button). */
+  queuedNext?: {
+    title?: string | null;
+    durationMin?: number | null;
+  } | null;
 }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
   // HUD drawers — local to the slide so toggling them never touches the
@@ -1344,9 +1352,12 @@ export function MobileImmersiveSlide({
     if (needsResolve) setResolveOpen(true);
   }, [needsResolve]);
 
-  // Host can only create the next flash market once the current one has
-  // expired (timer at 00:00) or already settled (proposed/resolved).
-  const canCreateNext = isHost && (expired || settled) && !!onCreateNextMarket;
+  // Host can prepare the next flash market at any time, but only one can be
+  // queued at once. The page persists it as a CONFIG; the on-chain market is
+  // created when the current market resolves so the timer starts fresh.
+  const hasQueuedNext = !!queuedNext;
+  const canCreateNext =
+    isHost && !hasQueuedNext && !!onCreateNextMarket;
 
   // Reset the countdown ring's peak so a freshly created market starts the arc
   // from full instead of inheriting the previous market's larger duration.
@@ -1787,12 +1798,16 @@ export function MobileImmersiveSlide({
                   aria-label={
                     canCreateNext
                       ? "Create next market"
-                      : "Wait until the current market ends"
+                      : hasQueuedNext
+                      ? "A next market is already queued"
+                      : "Create next market unavailable"
                   }
                   title={
                     canCreateNext
                       ? "Create next market"
-                      : "Wait until the current market ends"
+                      : hasQueuedNext
+                      ? "A next market is already queued"
+                      : "Create next market unavailable"
                   }
                   className={`shrink-0 self-center w-10 h-10 rounded-full flex items-center justify-center border transition ${
                     canCreateNext
@@ -1815,9 +1830,15 @@ export function MobileImmersiveSlide({
                 </button>
               </div>
             ) : (
-              /* Up Next market strip (viewer) — reserved module: left status
-                 badge, eyebrow + question, and a 3-min-market pill. */
-              <div className="flex items-center gap-3 rounded-xl border border-dashed border-white/10 bg-white/[0.03] px-3 py-3">
+              /* Up Next market strip (viewer) — real queued market when one
+                 exists, otherwise a placeholder. */
+              <div
+                className={`flex items-center gap-3 rounded-xl border ${
+                  hasQueuedNext
+                    ? "border-pump-green/40 bg-pump-green/[0.06]"
+                    : "border-dashed border-white/10 bg-white/[0.03]"
+                } px-3 py-3`}
+              >
                 <div className="shrink-0 w-10 h-10 rounded-full border-2 border-pump-green/35 flex items-center justify-center shadow-[0_0_14px_-4px_rgba(109,255,164,0.5)]">
                   <svg
                     viewBox="0 0 24 24"
@@ -1833,14 +1854,22 @@ export function MobileImmersiveSlide({
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/45">
-                    Up Next (Preparing…)
+                    {hasQueuedNext ? "Up Next" : "Up Next (Preparing…)"}
                   </div>
-                  <div className="text-[13px] font-semibold text-white/70 leading-snug line-clamp-2">
-                    Next flash market coming soon
+                  <div
+                    className={`text-[13px] font-semibold leading-snug line-clamp-2 ${
+                      hasQueuedNext ? "text-white/85" : "text-white/70"
+                    }`}
+                  >
+                    {hasQueuedNext
+                      ? queuedNext?.title || "Next market queued"
+                      : "Next flash market coming soon"}
                   </div>
                 </div>
                 <span className="shrink-0 self-start inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-pump-green/10 border border-pump-green/25 text-[9px] font-bold uppercase tracking-wider text-pump-green/80">
-                  3 Min Market
+                  {hasQueuedNext && queuedNext?.durationMin
+                    ? `${queuedNext.durationMin} Min Market`
+                    : "3 Min Market"}
                 </span>
               </div>
             )}

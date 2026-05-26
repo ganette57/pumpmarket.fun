@@ -88,12 +88,36 @@ export async function POST(
       );
     }
 
-    const { data: updated, error: updErr } = await supabase
-      .from("live_sessions")
-      .update({ market_address: newMarketAddress })
-      .eq("id", sessionId)
-      .select("*")
-      .single();
+    // Swapping the active market consumes any queued slot — try to clear
+    // both the config + legacy address columns in the same write. If those
+    // columns don't exist yet, fall back to a market-only update so the swap
+    // never regresses.
+    let updated: any;
+    let updErr: any;
+    {
+      const attempt = await supabase
+        .from("live_sessions")
+        .update({
+          market_address: newMarketAddress,
+          queued_market_config: null,
+          queued_market_address: null,
+        })
+        .eq("id", sessionId)
+        .select("*")
+        .single();
+      updated = attempt.data;
+      updErr = attempt.error;
+    }
+    if (updErr) {
+      const fallback = await supabase
+        .from("live_sessions")
+        .update({ market_address: newMarketAddress })
+        .eq("id", sessionId)
+        .select("*")
+        .single();
+      updated = fallback.data;
+      updErr = fallback.error;
+    }
 
     if (updErr) {
       return NextResponse.json({ error: updErr.message }, { status: 500 });

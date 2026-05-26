@@ -30,9 +30,12 @@ import {
   subscribeLiveSession,
   fetchRecentTrades,
   subscribeRecentTrades,
+  fetchQueuedNextMarketConfig,
+  serializeQueuedNextMarketConfig,
   type LiveSession,
   type LiveSessionStatus,
   type RecentTrade,
+  type QueuedNextMarketConfig,
 } from "@/lib/liveSessions";
 
 import { lamportsToSol, solToLamports, getUserPositionPDA, PLATFORM_WALLET } from "@/utils/solana";
@@ -292,6 +295,9 @@ export default function LiveViewerPage() {
   const [market, setMarket] = useState<UiMarket | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [queuedNext, setQueuedNext] = useState<QueuedNextMarketConfig | null>(
+    null,
+  );
 
   const [positionShares, setPositionShares] = useState<number[] | null>(null);
   const [marketBalanceLamports, setMarketBalanceLamports] = useState<number | null>(null);
@@ -473,6 +479,21 @@ export default function LiveViewerPage() {
     loadMarket(session.market_address);
   }, [session?.market_address, program, loadMarket]);
 
+  // Resolve the queued next-market CONFIG (if any) for the Up Next strip and
+  // the post-resolve auto-start. Tolerates a missing column gracefully.
+  const refreshQueuedNext = useCallback(async (sessionId: string) => {
+    const cfg = await fetchQueuedNextMarketConfig(sessionId);
+    setQueuedNext(cfg);
+  }, []);
+
+  useEffect(() => {
+    if (!session?.id) {
+      setQueuedNext(null);
+      return;
+    }
+    void refreshQueuedNext(session.id);
+  }, [session?.id, session?.market_address, refreshQueuedNext]);
+
   /* ── Derived market data ───────────────────────────────────────── */
 
   const derived = useMemo(() => {
@@ -592,30 +613,126 @@ export default function LiveViewerPage() {
       outcomeIndex,
     });
     await loadMarket(market.publicKey);
+
+    // Auto-promote the queued next market (if any) — no manual Start Next.
+    // The propose has already succeeded; if the auto-start fails we surface a
+    // clear error but the proposed state stays visible.
+    if (queuedNext) {
+      try {
+        await handleStartNextMarket();
+      } catch (e: any) {
+        throw new Error(
+          `Resolved, but failed to start next market: ${String(e?.message || e)}`,
+        );
+      }
+    }
   }
 
   /* ── Host "Next Market" — same session, new linked market ────────── */
+  // When the current market is still running we just PERSIST the config (no
+  // on-chain creation yet — that happens at resolve time so the timer starts
+  // fresh). When the current market has already settled we create and swap
+  // immediately (existing post-resolve behaviour).
   async function handleCreateNextMarket(params: {
     title: string;
     outcomes: string[];
     durationMin: number;
   }) {
-    if (!connected || !publicKey || !program || !signTransaction || !signMessage || !session) {
+    if (!connected || !publicKey || !signMessage || !session) {
       throw new Error("Wallet or session not ready");
     }
 
-    // 1. Create the new flash market (on-chain + Supabase index).
+    const currentSettled =
+      !!market?.resolved || market?.resolutionStatus === "proposed";
+
+    if (currentSettled) {
+      // Immediate swap path — create on-chain + signed /market update.
+      if (!program || !signTransaction) {
+        throw new Error("Program not ready");
+      }
+      const { marketAddress: newAddr } = await createLiveFlashMarket({
+        program,
+        connection,
+        publicKey,
+        signTransaction,
+        title: params.title,
+        outcomes: params.outcomes,
+        durationMin: params.durationMin,
+      });
+      const ts = Date.now();
+      const message = `FUNMARKET_LIVE_MARKET|${session.id}|${newAddr}|${ts}`;
+      const sigBytes = await signMessage(new TextEncoder().encode(message));
+      const res = await fetch(`/api/live-sessions/${session.id}/market`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          wallet: publicKey.toBase58(),
+          signature: bs58.encode(sigBytes),
+          market_address: newAddr,
+          ts,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok)
+        throw new Error(json.error || `Failed to link market (${res.status})`);
+
+      setSession(json.session as LiveSession);
+      setQueuedNext(null);
+      await loadMarket(newAddr);
+    } else {
+      // Queue path — persist CONFIG only. No on-chain creation; the market
+      // is built at resolve time inside handleStartNextMarket.
+      const config: QueuedNextMarketConfig = {
+        title: params.title,
+        outcomes: params.outcomes,
+        durationMin: params.durationMin,
+      };
+      const canonical = serializeQueuedNextMarketConfig(config);
+      const ts = Date.now();
+      const message = `FUNMARKET_LIVE_QUEUE|${session.id}|set|${canonical}|${ts}`;
+      const sigBytes = await signMessage(new TextEncoder().encode(message));
+      const res = await fetch(`/api/live-sessions/${session.id}/queue`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          wallet: publicKey.toBase58(),
+          signature: bs58.encode(sigBytes),
+          action: "set",
+          config,
+          ts,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok)
+        throw new Error(json.error || `Failed to queue market (${res.status})`);
+
+      // Stream + current market stay mounted; only the Up Next strip updates.
+      setSession(json.session as LiveSession);
+      await refreshQueuedNext(session.id);
+    }
+  }
+
+  /* ── Host auto-start — runs after resolve when a config is queued ── */
+  async function handleStartNextMarket() {
+    if (!connected || !publicKey || !program || !signTransaction || !signMessage || !session) {
+      throw new Error("Wallet or session not ready");
+    }
+    const cfg = queuedNext;
+    if (!cfg) throw new Error("No market is queued");
+
+    // 1. Create the on-chain market NOW — timer starts fresh.
     const { marketAddress: newAddr } = await createLiveFlashMarket({
       program,
       connection,
       publicKey,
       signTransaction,
-      title: params.title,
-      outcomes: params.outcomes,
-      durationMin: params.durationMin,
+      title: cfg.title,
+      outcomes: cfg.outcomes,
+      durationMin: cfg.durationMin,
     });
 
-    // 2. Update live_sessions.market_address via the signed server route.
+    // 2. Swap it into the session via the signed /market route (server-side
+    // the same call also clears queued_market_config / queued_market_address).
     const ts = Date.now();
     const message = `FUNMARKET_LIVE_MARKET|${session.id}|${newAddr}|${ts}`;
     const sigBytes = await signMessage(new TextEncoder().encode(message));
@@ -630,12 +747,13 @@ export default function LiveViewerPage() {
       }),
     });
     const json = await res.json();
-    if (!res.ok) throw new Error(json.error || `Failed to link market (${res.status})`);
+    if (!res.ok)
+      throw new Error(json.error || `Failed to start next market (${res.status})`);
 
-    // 3. Refresh local state — same session id + stream_url → StreamPlayer
-    // stays mounted; only the market data swaps.
-    setSession(json.session as LiveSession);
-    await loadMarket(newAddr);
+    const updated = json.session as LiveSession;
+    setSession(updated);
+    setQueuedNext(null);
+    await loadMarket(updated.market_address);
   }
 
   /* ── Trade handler ─────────────────────────────────────────────── */
@@ -916,6 +1034,7 @@ export default function LiveViewerPage() {
                   : undefined
               }
               onCreateNextMarket={isHost ? handleCreateNextMarket : undefined}
+              queuedNext={queuedNext}
             />
           </div>
         ) : (
