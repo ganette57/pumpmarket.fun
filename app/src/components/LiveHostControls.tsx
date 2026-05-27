@@ -16,7 +16,9 @@ export default function LiveHostControls({
   onStatusChange: (s: LiveSessionStatus) => void;
   error?: string | null;
 }) {
-  const statusFlow: LiveSessionStatus[] = ["live", "locked", "ended", "resolved"];
+  // UI only exposes Live / Locked / Ended. Resolved + Cancelled remain valid
+  // statuses on the backend but are not user-driven from this panel anymore.
+  const statusFlow: LiveSessionStatus[] = ["live", "locked", "ended"];
   const [collapsed, setCollapsed] = useState(false);
   const isTerminal = ["resolved", "cancelled"].includes(session.status);
 
@@ -60,13 +62,6 @@ export default function LiveHostControls({
                   {s.charAt(0).toUpperCase() + s.slice(1)}
                 </button>
               ))}
-              <button
-                disabled={session.status === "cancelled"}
-                onClick={() => onStatusChange("cancelled")}
-                className="px-2.5 py-1 rounded-md text-[11px] font-semibold border border-red-800/60 text-red-400/80 hover:bg-red-900/20 transition"
-              >
-                Cancel
-              </button>
             </div>
           )}
           {error && (

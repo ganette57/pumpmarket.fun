@@ -26,11 +26,6 @@ export type LiveDesktopHostPanelProps = {
   outcomeIndex: number | null;
   queuedNext: QueuedNextMarketConfig | null;
   onResolve?: (outcomeIndex: number) => Promise<void>;
-  onCreateNextMarket?: (params: {
-    title: string;
-    outcomes: string[];
-    durationMin: number;
-  }) => Promise<void>;
 };
 
 export default function LiveDesktopHostPanel(props: LiveDesktopHostPanelProps) {
@@ -44,16 +39,14 @@ export default function LiveDesktopHostPanel(props: LiveDesktopHostPanelProps) {
     outcomeIndex,
     queuedNext,
     onResolve,
-    onCreateNextMarket,
   } = props;
 
   const showResolve = isHost && expired && !settled && !!onResolve;
-  const showCreateNext = isHost && !queuedNext && !!onCreateNextMarket;
   const winnerLabel =
     outcomeIndex != null && outcomeNames ? outcomeNames[outcomeIndex] : null;
 
-  // Nothing to render in any of the four sections.
-  if (!settled && !showResolve && !queuedNext && !showCreateNext) return null;
+  // Create Next moved out — now sits next to HostControls in the page.
+  if (!settled && !showResolve && !queuedNext) return null;
 
   return (
     <div className="space-y-3">
@@ -70,10 +63,6 @@ export default function LiveDesktopHostPanel(props: LiveDesktopHostPanelProps) {
       )}
 
       {queuedNext && <QueuedNextCard config={queuedNext} />}
-
-      {showCreateNext && onCreateNextMarket && (
-        <CreateNextLauncher onCreate={onCreateNextMarket} />
-      )}
     </div>
   );
 }
@@ -220,7 +209,7 @@ function QueuedNextCard({ config }: { config: QueuedNextMarketConfig }) {
 
 /* ── Create Next Market launcher + modal (host only) ──────────────── */
 
-function CreateNextLauncher({
+export function CreateNextLauncher({
   onCreate,
 }: {
   onCreate: (params: {
@@ -235,7 +224,7 @@ function CreateNextLauncher({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-pump-green/45 bg-pump-green/15 text-pump-green font-bold text-sm py-2.5 shadow-[0_0_22px_-10px_rgba(109,255,164,0.7)] hover:bg-pump-green/20 transition"
+        className="inline-flex items-center gap-1.5 rounded-xl border border-pump-green/45 bg-pump-green/15 text-pump-green font-bold text-xs px-3 py-2 shadow-[0_0_22px_-10px_rgba(109,255,164,0.7)] hover:bg-pump-green/20 transition"
       >
         <svg
           viewBox="0 0 24 24"
@@ -244,7 +233,7 @@ function CreateNextLauncher({
           strokeWidth="2.5"
           strokeLinecap="round"
           strokeLinejoin="round"
-          className="w-4 h-4"
+          className="w-3.5 h-3.5"
         >
           <path d="M12 5v14" />
           <path d="M5 12h14" />

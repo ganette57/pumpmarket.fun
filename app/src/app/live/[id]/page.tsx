@@ -12,7 +12,9 @@ import { useProgram } from "@/hooks/useProgram";
 import TradingPanel from "@/components/TradingPanel";
 import CommentsSection from "@/components/CommentsSection";
 import HostControls from "@/components/LiveHostControls";
-import LiveDesktopHostPanel from "@/components/LiveDesktopHostPanel";
+import LiveDesktopHostPanel, {
+  CreateNextLauncher,
+} from "@/components/LiveDesktopHostPanel";
 import {
   StreamPlayer,
   StatusBanner,
@@ -145,14 +147,15 @@ type UiMarket = {
 /* ── Live Activity feed ──────────────────────────────────────────────── */
 
 function LiveActivity({ trades }: { trades: RecentTrade[] }) {
-  if (trades.length === 0) return null;
-
   return (
     <div className="card-pump p-4">
       <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
         <span className="w-1.5 h-1.5 rounded-full bg-pump-green animate-pulse" />
         Live Activity
       </h3>
+      {trades.length === 0 ? (
+        <p className="text-xs text-gray-500">No trades yet — be the first.</p>
+      ) : (
       <div className="space-y-1.5 max-h-[320px] overflow-y-auto">
         {trades.map((t) => {
           const wallet = t.user_address
@@ -175,6 +178,7 @@ function LiveActivity({ trades }: { trades: RecentTrade[] }) {
           );
         })}
       </div>
+      )}
     </div>
   );
 }
@@ -260,7 +264,7 @@ function GiantCountdown({
       : "clamp(56px, 14vw, 128px)";
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 top-[28%] sm:top-[22%] flex justify-center z-20">
+    <div className="pointer-events-none absolute inset-x-0 top-[8%] sm:top-[6%] flex justify-center z-20">
       <div
         className={`select-none font-black tabular-nums leading-none transition-all duration-500 ease-out ${color} ${
           phase === "panic" ? "animate-pulse" : ""
@@ -1118,7 +1122,9 @@ export default function LiveViewerPage() {
                   )}
 
                   {/* ── Camera overlay: top ────────────────────── */}
-                  <div className="absolute top-0 inset-x-0 z-10">
+                  {/* pointer-events-none — purely decorative, never blocks
+                       the YouTube/Twitch/Kick player controls underneath. */}
+                  <div className="pointer-events-none absolute top-0 inset-x-0 z-10">
                     <div className="px-5 pt-4 pb-10 bg-gradient-to-b from-black/70 via-black/30 to-transparent">
                       <div className="flex items-start justify-between gap-4">
                         <div className="min-w-0 flex-1">
@@ -1137,8 +1143,10 @@ export default function LiveViewerPage() {
                   </div>
 
                   {/* ── Camera overlay: bottom — stats ─────────── */}
+                  {/* pointer-events-none — must not cover the player's
+                       bottom control bar (volume, fullscreen, captions). */}
                   {overlayStats.length > 0 && (
-                    <div className="absolute bottom-0 inset-x-0 z-10">
+                    <div className="pointer-events-none absolute bottom-0 inset-x-0 z-10">
                       <div className="px-5 pb-4 pt-10 bg-gradient-to-t from-black/70 via-black/30 to-transparent">
                         <div className="flex items-center gap-2.5">
                           {overlayStats.map((s, i) => (
@@ -1165,9 +1173,21 @@ export default function LiveViewerPage() {
                   )}
                 </div>
 
-                {/* Host controls */}
+                {/* Host controls + Create Next Market (action beside the
+                    Live / Locked / Ended buttons). */}
                 {isHost && (
-                  <HostControls session={session} onStatusChange={handleStatusChange} error={statusError} />
+                  <div className="flex flex-wrap items-start gap-3">
+                    <div className="min-w-0 flex-1">
+                      <HostControls
+                        session={session}
+                        onStatusChange={handleStatusChange}
+                        error={statusError}
+                      />
+                    </div>
+                    {!queuedNext && handleCreateNextMarket && (
+                      <CreateNextLauncher onCreate={handleCreateNextMarket} />
+                    )}
+                  </div>
                 )}
 
                 {/* Comments (compact in immersive) */}
@@ -1210,8 +1230,9 @@ export default function LiveViewerPage() {
                     </div>
                   )}
 
-                  {/* Host actions: result / resolve form / queued Up Next /
-                      Create Next Market. Reuses the same handlers as mobile. */}
+                  {/* Host actions: result / resolve form / queued Up Next.
+                      "Create Next Market" lives beside the host status
+                      controls in the left column. */}
                   <LiveDesktopHostPanel
                     isHost={isHost}
                     expired={expiredByTime}
@@ -1224,9 +1245,6 @@ export default function LiveViewerPage() {
                     outcomeIndex={market?.proposedOutcome ?? null}
                     queuedNext={queuedNext}
                     onResolve={isHost ? handleResolveLive : undefined}
-                    onCreateNextMarket={
-                      isHost ? handleCreateNextMarket : undefined
-                    }
                   />
 
                   <LiveActivity trades={recentTrades} />
