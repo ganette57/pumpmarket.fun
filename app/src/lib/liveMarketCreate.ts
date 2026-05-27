@@ -100,7 +100,8 @@ export async function createLiveFlashMarket(
 
   const marketAddress = marketKeypair.publicKey.toBase58();
 
-  // 2. Supabase index — end_date powers the live HUD countdown.
+  // 2. Supabase index — end_date powers the live HUD countdown. Flagged so
+  // the main home feed can exclude live-session flash markets.
   await indexMarket({
     market_address: marketAddress,
     question: safeTitle,
@@ -113,6 +114,7 @@ export async function createLiveFlashMarket(
     yes_supply: 0,
     no_supply: 0,
     total_volume: 0,
+    is_live_session_market: true,
   } as any);
 
   return { marketAddress, resolutionTimestamp, outcomes };

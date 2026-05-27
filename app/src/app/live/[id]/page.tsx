@@ -15,6 +15,9 @@ import HostControls from "@/components/LiveHostControls";
 import LiveDesktopHostPanel, {
   CreateNextLauncher,
 } from "@/components/LiveDesktopHostPanel";
+import FlashMarketResultModal, {
+  type FlashMarketResultState,
+} from "@/components/FlashMarketResultModal";
 import {
   StreamPlayer,
   StatusBanner,
@@ -303,6 +306,13 @@ export default function LiveViewerPage() {
   const [queuedNext, setQueuedNext] = useState<QueuedNextMarketConfig | null>(
     null,
   );
+  const [resultModal, setResultModal] = useState<{
+    result: FlashMarketResultState;
+    outcomeLabel?: string | null;
+    winningShares?: number | null;
+  } | null>(null);
+  const prevSettledRef = useRef(false);
+  const hostJustResolvedRef = useRef(false);
 
   const [positionShares, setPositionShares] = useState<number[] | null>(null);
   const [marketBalanceLamports, setMarketBalanceLamports] = useState<number | null>(null);
@@ -499,6 +509,50 @@ export default function LiveViewerPage() {
     void refreshQueuedNext(session.id);
   }, [session?.id, session?.market_address, refreshQueuedNext]);
 
+  // Reset settled-tracker each time the market changes (new market starts
+  // fresh; suppression flag never carries across markets).
+  useEffect(() => {
+    prevSettledRef.current = false;
+    hostJustResolvedRef.current = false;
+  }, [market?.publicKey]);
+
+  // Auto-fire the win/lose modal on the false→true settle transition.
+  // Suppressed for the host (they just resolved); shown to viewers; falls
+  // back to no modal when no user position exists (the result panel already
+  // shows "Market resolved").
+  useEffect(() => {
+    const nowSettled =
+      !!market?.resolved || market?.resolutionStatus === "proposed";
+    if (nowSettled && !prevSettledRef.current) {
+      if (hostJustResolvedRef.current) {
+        hostJustResolvedRef.current = false;
+      } else if (market?.proposedOutcome != null && positionShares) {
+        const winningIdx = market.proposedOutcome;
+        const userShares = Number(positionShares[winningIdx] || 0);
+        const totalShares = positionShares.reduce(
+          (a, b) => a + (Number(b) || 0),
+          0,
+        );
+        if (totalShares > 0) {
+          const outcomeLabel =
+            (market.outcomeNames || [])[winningIdx] || null;
+          setResultModal({
+            result: userShares > 0 ? "win" : "lose",
+            outcomeLabel,
+            winningShares: userShares > 0 ? userShares : null,
+          });
+        }
+      }
+    }
+    prevSettledRef.current = nowSettled;
+  }, [
+    market?.resolved,
+    market?.resolutionStatus,
+    market?.proposedOutcome,
+    market?.outcomeNames,
+    positionShares,
+  ]);
+
   /* ── Derived market data ───────────────────────────────────────── */
 
   const derived = useMemo(() => {
@@ -609,6 +663,8 @@ export default function LiveViewerPage() {
       throw new Error("Wallet or market not ready");
     }
     if (!expiredByTime) throw new Error("Market has not ended yet");
+    // Suppress the auto-result modal for the host (they just used the sheet).
+    hostJustResolvedRef.current = true;
     await proposeLiveResolution({
       program,
       connection,
@@ -1363,6 +1419,17 @@ export default function LiveViewerPage() {
 
       {/* BUY toasts */}
       <BuyToasts toasts={buyToasts} />
+
+      {/* Viewer win/lose modal — host suppressed via hostJustResolvedRef. */}
+      {resultModal && (
+        <FlashMarketResultModal
+          open
+          result={resultModal.result}
+          outcomeLabel={resultModal.outcomeLabel}
+          winningShares={resultModal.winningShares}
+          onClose={() => setResultModal(null)}
+        />
+      )}
     </>
   );
 }

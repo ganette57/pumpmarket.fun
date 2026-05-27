@@ -1292,6 +1292,16 @@ export function MobileImmersiveSlide({
   const [chatOpen, setChatOpen] = useState(false);
   const [resolveOpen, setResolveOpen] = useState(false);
   const [nextMarketOpen, setNextMarketOpen] = useState(false);
+  // Tiny strip of recent winning outcomes for THIS live session — accumulates
+  // as the host swaps to a new market (was settled, now a different pk).
+  const [pastResults, setPastResults] = useState<
+    { winningIdx: number; pk: string }[]
+  >([]);
+  const prevMarketSnapRef = useRef<{
+    pk: string;
+    settled: boolean;
+    winningIdx: number | null;
+  } | null>(null);
   // Tracks the largest remaining-seconds value we've seen for this slide;
   // used as the denominator for the circular HUD progress arc so it sweeps
   // from full at session entry down to empty at lockout.
@@ -1364,6 +1374,34 @@ export function MobileImmersiveSlide({
   useEffect(() => {
     peakRemSecRef.current = null;
   }, [market?.publicKey]);
+
+  // Recent results strip — append the previous market's winning outcome when
+  // we detect a market swap (pk change) and the previous one was settled.
+  useEffect(() => {
+    const curr = {
+      pk: market?.publicKey || "",
+      settled: !!resolution?.resolved || !!resolution?.proposed,
+      winningIdx: resolution?.outcomeIndex ?? null,
+    };
+    const prev = prevMarketSnapRef.current;
+    if (
+      prev &&
+      prev.pk &&
+      prev.pk !== curr.pk &&
+      prev.settled &&
+      prev.winningIdx != null
+    ) {
+      setPastResults((h) =>
+        [...h, { winningIdx: prev.winningIdx!, pk: prev.pk }].slice(-5),
+      );
+    }
+    prevMarketSnapRef.current = curr;
+  }, [
+    market?.publicKey,
+    resolution?.resolved,
+    resolution?.proposed,
+    resolution?.outcomeIndex,
+  ]);
 
   const isDeeplink = variant === "deeplink";
 
@@ -1543,6 +1581,26 @@ export function MobileImmersiveSlide({
                   <span className="text-[10px] text-gray-500 font-medium tabular-nums tracking-wider uppercase">
                     {volLabel} Vol
                   </span>
+                )}
+                {pastResults.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setActivityOpen(true)}
+                    aria-label="Open recent results"
+                    title="Recent results in this session"
+                    className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-white/[0.04] border border-white/10 active:scale-95 transition"
+                  >
+                    {pastResults.map((r, i) => (
+                      <span
+                        key={`${r.pk}-${i}`}
+                        className={`w-1.5 h-1.5 rounded-full ${
+                          r.winningIdx === 0
+                            ? "bg-pump-green shadow-[0_0_4px_rgba(109,255,164,0.7)]"
+                            : "bg-[#ff5c73] shadow-[0_0_4px_rgba(255,92,115,0.7)]"
+                        }`}
+                      />
+                    ))}
+                  </button>
                 )}
                 <div className="flex items-center gap-1.5">
                   {/* Chart — opens the Market Chart drawer */}

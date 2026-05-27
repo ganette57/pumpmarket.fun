@@ -429,6 +429,11 @@ export default function LivePage() {
   const [mobileTradeOutcomeIndex, setMobileTradeOutcomeIndex] = useState(0);
   const [submittingTrade, setSubmittingTrade] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
+  const [lastBuyToast, setLastBuyToast] = useState<{
+    outcome: string;
+    shares: number;
+    key: number;
+  } | null>(null);
 
   const liveScrollerRef = useRef<HTMLDivElement | null>(null);
   const inFlightTradeRef = useRef(false);
@@ -1091,6 +1096,21 @@ export default function LivePage() {
 
         await loadSessionMarketSnapshot(tradeSession);
         setMobileTradeOpen(false);
+
+        // Brief "Bought YES · N shares" toast (own buy only).
+        if (side === "buy") {
+          const toastKey = Date.now();
+          setLastBuyToast({
+            outcome: outcomeName,
+            shares: safeShares,
+            key: toastKey,
+          });
+          setTimeout(() => {
+            setLastBuyToast((prev) =>
+              prev?.key === toastKey ? null : prev,
+            );
+          }, 2500);
+        }
       } catch (e: any) {
         const msg = String(e?.message || "");
         if (!msg.toLowerCase().includes("user rejected")) {
@@ -1263,6 +1283,23 @@ export default function LivePage() {
               </div>
             </div>
           )}
+
+        {/* Buy-success floating pop. Auto-dismisses; never blocks the stream. */}
+        {lastBuyToast && (
+          <div
+            key={lastBuyToast.key}
+            className="pointer-events-none fixed bottom-20 left-1/2 -translate-x-1/2 z-[150] animate-slideUp"
+          >
+            <div className="rounded-xl bg-pump-green/15 border border-pump-green/45 px-4 py-2 text-sm text-white shadow-lg backdrop-blur-sm">
+              <span className="font-semibold text-pump-green">Bought</span>{" "}
+              <span className="font-bold">{lastBuyToast.outcome}</span>
+              <span className="text-gray-300"> · </span>
+              <span className="font-medium tabular-nums">
+                {lastBuyToast.shares} share{lastBuyToast.shares === 1 ? "" : "s"}
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Shared stable MobileBuySheet */}
         {mobileTradeOpen && tradeSession && tradeMarket && (

@@ -94,16 +94,73 @@ function sortByVolumeThenRecencyDesc(a: MarketRow, b: MarketRow): number {
   return sortByRecencyDesc(a, b);
 }
 
-function sanitizeClassicRows(rows: MarketRow[]): MarketRow[] {
+function sanitizeClassicRows(
+  rows: MarketRow[],
+  liveSessionAddrs: Set<string>,
+): MarketRow[] {
   const isProdPublicListing = process.env.NODE_ENV === "production";
   return rows
     .filter((m) => !(isProdPublicListing && isDevnetOnlyLiveMicroMarket(m)))
     .filter((m) => !isSoccerNextGoalMicroMarket(m))
     .filter((m) => !isFlashCryptoMarket(m))
+    // Markets created from inside a live session stay only in /live.
+    .filter((m) => !isLiveSessionMarket(m, liveSessionAddrs))
     .map((m) => ({
       ...m,
       image_url: normalizeImage(m.image_url),
     }));
+}
+
+function isLiveSessionMarket(
+  row: Record<string, unknown>,
+  liveSessionAddrs: Set<string>,
+): boolean {
+  // Primary signal: the dedicated boolean column (set on creation).
+  if (isTrue((row as any).is_live_session_market)) return true;
+  // Fallback: the row's market_address currently/was linked to a live session.
+  const addr = String((row as any).market_address || "").trim();
+  if (addr && liveSessionAddrs.has(addr)) return true;
+  return false;
+}
+
+async function fetchLiveSessionMarketAddrs(): Promise<Set<string>> {
+  const set = new Set<string>();
+
+  // 1. Currently-linked live session markets (every status). Covers active
+  //    sessions including markets that have already settled.
+  try {
+    const { data, error } = await sb
+      .from("live_sessions")
+      .select("market_address");
+    if (!error && data) {
+      for (const r of data as Array<{ market_address?: unknown }>) {
+        const addr = String(r?.market_address || "").trim();
+        if (addr) set.add(addr);
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  // 2. Markets explicitly flagged at creation. Catches past markets that were
+  //    swapped out of a session (no live_sessions row still points to them).
+  //    Best-effort: returns nothing if the column does not exist yet.
+  try {
+    const { data, error } = await sb
+      .from("markets")
+      .select("market_address")
+      .eq("is_live_session_market", true);
+    if (!error && data) {
+      for (const r of data as Array<{ market_address?: unknown }>) {
+        const addr = String(r?.market_address || "").trim();
+        if (addr) set.add(addr);
+      }
+    }
+  } catch {
+    /* column likely missing — skip */
+  }
+
+  return set;
 }
 
 export async function GET() {
@@ -143,7 +200,14 @@ export async function GET() {
       feed_thumbnail_url
     `;
 
-    const [openRes, resolvedRes, proposedRes, liveRes, topLiveFlashMarket] = await Promise.all([
+    const [
+      openRes,
+      resolvedRes,
+      proposedRes,
+      liveRes,
+      topLiveFlashMarket,
+      liveSessionAddrs,
+    ] = await Promise.all([
       sb
         .from("markets")
         .select(marketSelect)
@@ -172,6 +236,7 @@ export async function GET() {
         .order("created_at", { ascending: false })
         .limit(100),
       homeLiveFlashPromise,
+      fetchLiveSessionMarketAddrs(),
     ]);
 
     if (openRes.error || resolvedRes.error || proposedRes.error) {
@@ -196,11 +261,17 @@ export async function GET() {
       }
     }
 
-    const openCandidates = sanitizeClassicRows((openRes.data as MarketRow[]) || []);
-    const resolvedCandidates = sanitizeClassicRows([
-      ...(((resolvedRes.data as MarketRow[]) || [])),
-      ...(((proposedRes.data as MarketRow[]) || [])),
-    ]);
+    const openCandidates = sanitizeClassicRows(
+      (openRes.data as MarketRow[]) || [],
+      liveSessionAddrs,
+    );
+    const resolvedCandidates = sanitizeClassicRows(
+      [
+        ...(((resolvedRes.data as MarketRow[]) || [])),
+        ...(((proposedRes.data as MarketRow[]) || [])),
+      ],
+      liveSessionAddrs,
+    );
 
     const openMarketsClassic = dedupeByAddress(openCandidates)
       .filter((m) => !isClassicResolved(m))
