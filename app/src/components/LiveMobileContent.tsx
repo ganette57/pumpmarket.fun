@@ -1588,18 +1588,50 @@ export function MobileImmersiveSlide({
                     onClick={() => setActivityOpen(true)}
                     aria-label="Open recent results"
                     title="Recent results in this session"
-                    className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-white/[0.04] border border-white/10 active:scale-95 transition"
+                    className="inline-flex items-center gap-1.5 h-7 px-2 rounded-full bg-black/45 border border-white/10 backdrop-blur-md active:scale-95 transition"
                   >
-                    {pastResults.map((r, i) => (
-                      <span
-                        key={`${r.pk}-${i}`}
-                        className={`w-1.5 h-1.5 rounded-full ${
-                          r.winningIdx === 0
-                            ? "bg-pump-green shadow-[0_0_4px_rgba(109,255,164,0.7)]"
-                            : "bg-[#ff5c73] shadow-[0_0_4px_rgba(255,92,115,0.7)]"
-                        }`}
-                      />
-                    ))}
+                    <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-white/85">
+                      Past
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className="w-3 h-3 opacity-75"
+                      >
+                        <path d="M6 9l6 6 6-6" />
+                      </svg>
+                    </span>
+                    <span className="w-px h-3.5 bg-white/20" aria-hidden />
+                    <span className="inline-flex items-center gap-1">
+                      {pastResults.map((r, i) => {
+                        const isYes = r.winningIdx === 0;
+                        return (
+                          <span
+                            key={`${r.pk}-${i}`}
+                            className={`inline-flex items-center justify-center w-[18px] h-[18px] rounded-full border border-black/30 ${
+                              isYes
+                                ? "bg-pump-green shadow-[0_0_6px_rgba(109,255,164,0.55)]"
+                                : "bg-[#ff5c73] shadow-[0_0_6px_rgba(255,92,115,0.55)]"
+                            }`}
+                          >
+                            <svg
+                              viewBox="0 0 10 10"
+                              className="w-2 h-2 fill-white"
+                              aria-hidden
+                            >
+                              {isYes ? (
+                                <polygon points="5,2 8.5,7.5 1.5,7.5" />
+                              ) : (
+                                <polygon points="5,8 8.5,2.5 1.5,2.5" />
+                              )}
+                            </svg>
+                          </span>
+                        );
+                      })}
+                    </span>
                   </button>
                 )}
                 <div className="flex items-center gap-1.5">
