@@ -12,6 +12,7 @@ import { useProgram } from "@/hooks/useProgram";
 import TradingPanel from "@/components/TradingPanel";
 import CommentsSection from "@/components/CommentsSection";
 import HostControls from "@/components/LiveHostControls";
+import LiveDesktopHostPanel from "@/components/LiveDesktopHostPanel";
 import {
   StreamPlayer,
   StatusBanner,
@@ -1208,6 +1209,25 @@ export default function LiveViewerPage() {
                       </p>
                     </div>
                   )}
+
+                  {/* Host actions: result / resolve form / queued Up Next /
+                      Create Next Market. Reuses the same handlers as mobile. */}
+                  <LiveDesktopHostPanel
+                    isHost={isHost}
+                    expired={expiredByTime}
+                    settled={
+                      !!market?.resolved || market?.resolutionStatus === "proposed"
+                    }
+                    resolved={!!market?.resolved}
+                    proposed={market?.resolutionStatus === "proposed"}
+                    outcomeNames={derived?.names ?? null}
+                    outcomeIndex={market?.proposedOutcome ?? null}
+                    queuedNext={queuedNext}
+                    onResolve={isHost ? handleResolveLive : undefined}
+                    onCreateNextMarket={
+                      isHost ? handleCreateNextMarket : undefined
+                    }
+                  />
 
                   <LiveActivity trades={recentTrades} />
                 </div>
