@@ -1109,6 +1109,11 @@ export default function Home() {
                           creatorAddress={market.creator}
                           creatorProfile={creatorProfile}
                           commentsCount={commentsCount}
+                          outcomeNames={
+                            (market as any).outcomeNames ||
+                            (market as any).outcome_names ||
+                            null
+                          }
                           onOpenComments={() => openCommentsSheet(market.publicKey, market.question)}
                         />
                       </div>

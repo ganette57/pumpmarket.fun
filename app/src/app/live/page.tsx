@@ -1,7 +1,7 @@
 // src/app/live/page.tsx
 "use client";
 
-import { useEffect, useState, useCallback, useRef, useMemo, type UIEvent } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo, type UIEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
@@ -11,7 +11,11 @@ import { BN } from "@coral-xyz/anchor";
 import {
   listLiveSessions,
   subscribeLiveSessionsList,
+  fetchQueuedNextMarketConfig,
+  serializeQueuedNextMarketConfig,
   type LiveSession,
+  type LiveSessionStatus,
+  type QueuedNextMarketConfig,
 } from "@/lib/liveSessions";
 import { useProgram } from "@/hooks/useProgram";
 import {
@@ -26,9 +30,13 @@ import {
 } from "@/utils/solana";
 import { sendSignedTx } from "@/lib/solanaSend";
 import {
-  LiveMobileContent,
   MobileBuySheet,
+  MobileImmersiveSlide,
 } from "@/components/LiveMobileContent";
+import LiveHostControls from "@/components/LiveHostControls";
+import { proposeLiveResolution } from "@/lib/liveResolve";
+import { createLiveFlashMarket } from "@/lib/liveMarketCreate";
+import bs58 from "bs58";
 
 type DesktopTab = "live" | "feed";
 type MobileTab = "live" | "feed";
@@ -50,7 +58,37 @@ type MobileMarketSnapshot = {
   noSupply: number;
   imageUrl?: string;
   category?: string;
+  /** Unix seconds — drives the immersive countdown overlay */
+  resolutionTime?: number;
+  /** Resolution state — drives the result panel after a market settles */
+  resolutionStatus?: string;
+  proposedOutcome?: number | null;
+  /** Queued next-market CONFIG — drives the viewer Up Next strip + post-
+   *  resolve auto-start (the on-chain market is created at resolve time). */
+  queuedNext?: QueuedNextMarketConfig | null;
 };
+
+function parseEndDateToSec(raw: any): number {
+  if (!raw) return 0;
+  if (raw instanceof Date) {
+    const t = raw.getTime();
+    return Number.isFinite(t) ? Math.floor(t / 1000) : 0;
+  }
+  const s = String(raw).trim();
+  if (!s) return 0;
+  let ms: number;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    ms = new Date(`${s}T23:59:59Z`).getTime();
+  } else {
+    // Supabase timestamps often come back without a timezone suffix. Treat
+    // them as UTC (append Z) instead of letting `new Date` assume local time —
+    // otherwise short live markets shift hours off and read as 00:00.
+    const normalized = s.includes(" ") ? s.replace(" ", "T") : s;
+    const hasTz = /(?:Z|[+-]\d{2}:\d{2})$/i.test(normalized);
+    ms = new Date(hasTz ? normalized : `${normalized}Z`).getTime();
+  }
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : 0;
+}
 
 function useIsMobile(bp = 1024) {
   const [m, setM] = useState(false);
@@ -305,57 +343,69 @@ function MobileLiveTradeSlide({
   market,
   active,
   onOutcomeTap,
+  hostSlot,
+  onResolve,
+  onCreateNextMarket,
 }: {
   session: LiveSession;
   market: MobileMarketSnapshot | null;
   active: boolean;
   onOutcomeTap: (session: LiveSession, outcomeIndex: number) => void;
+  hostSlot?: ReactNode;
+  onResolve?: (outcomeIndex: number) => Promise<void> | void;
+  onCreateNextMarket?: (params: {
+    title: string;
+    outcomes: string[];
+    durationMin: number;
+  }) => Promise<void>;
 }) {
   const display = deriveOutcomeDisplay(market);
   const tradingLocked =
     session.status === "locked" || !!market?.resolved || !!market?.isBlocked;
 
   return (
-    <section className="relative h-full snap-start bg-[linear-gradient(180deg,#030507_0%,#060a12_100%)]">
-      <div className="h-full px-4 pt-24 pb-4 overflow-y-auto">
-        <div className="space-y-4">
-          <LiveMobileContent
-            streamUrl={session.stream_url}
-            title={session.title}
-            hostWallet={session.host_wallet}
-            status={session.status}
-            market={
-              market
-                ? {
-                    publicKey: market.publicKey,
-                    question: market.question,
-                    imageUrl: market.imageUrl,
-                    category: market.category,
-                    totalVolume: market.totalVolume,
-                  }
-                : null
-            }
-            derived={
-              market
-                ? {
-                    names: display.names,
-                    percentages: display.percentages,
-                  }
-                : null
-            }
-            sessionLocked={tradingLocked}
-            onOutcomeTap={(idx) => onOutcomeTap(session, idx)}
-            active={active}
-            thumbnailUrl={session.thumbnail_url || undefined}
-          />
-        </div>
-      </div>
+    <section className="relative h-full snap-start bg-black">
+      <MobileImmersiveSlide
+        session={session}
+        market={
+          market
+            ? {
+                question: market.question,
+                resolutionTime: market.resolutionTime,
+                totalVolume: market.totalVolume,
+                publicKey: market.publicKey,
+              }
+            : null
+        }
+        derived={
+          market
+            ? { names: display.names, percentages: display.percentages }
+            : null
+        }
+        active={active}
+        sessionLocked={tradingLocked}
+        onOutcomeTap={(idx) => onOutcomeTap(session, idx)}
+        variant="feed"
+        hostSlot={hostSlot}
+        onResolve={onResolve}
+        resolution={
+          market
+            ? {
+                resolved: market.resolved,
+                proposed: market.resolutionStatus === "proposed",
+                outcomeIndex: market.proposedOutcome ?? null,
+              }
+            : undefined
+        }
+        onCreateNextMarket={onCreateNextMarket}
+        queuedNext={market?.queuedNext ?? null}
+      />
     </section>
   );
 }
 
 export default function LivePage() {
-  const { publicKey, connected, signTransaction } = useWallet();
+  const { publicKey, connected, signTransaction, signMessage } = useWallet();
   const { connection } = useConnection();
   const program = useProgram();
   const { setVisible } = useWalletModal();
@@ -378,10 +428,18 @@ export default function LivePage() {
   >(null);
   const [mobileTradeOutcomeIndex, setMobileTradeOutcomeIndex] = useState(0);
   const [submittingTrade, setSubmittingTrade] = useState(false);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const [lastBuyToast, setLastBuyToast] = useState<{
+    outcome: string;
+    shares: number;
+    key: number;
+  } | null>(null);
 
   const liveScrollerRef = useRef<HTMLDivElement | null>(null);
   const inFlightTradeRef = useRef(false);
   const failedMarketLoadsRef = useRef<Set<string>>(new Set());
+  const pendingSessionParamRef = useRef<string | null>(null);
+  const appliedSessionParamRef = useRef(false);
 
   const handleGoLive = useCallback(() => {
     if (!publicKey) {
@@ -390,6 +448,56 @@ export default function LivePage() {
     }
     router.push("/live/new");
   }, [publicKey, router, setVisible]);
+
+  // Host status change — same signed flow as /live/[id] (signMessage + POST to
+  // /api/live-sessions/[id]/status). No backend changes; updates local list.
+  const handleLiveStatusChange = useCallback(
+    async (session: LiveSession, newStatus: LiveSessionStatus) => {
+      if (!publicKey) return;
+      setStatusError(null);
+      if (!signMessage) {
+        setStatusError("Wallet does not support message signing");
+        return;
+      }
+      const ts = Date.now();
+      const message = `FUNMARKET_LIVE_STATUS|${session.id}|${newStatus}|${ts}`;
+      const messageBytes = new TextEncoder().encode(message);
+
+      let sigBytes: Uint8Array;
+      try {
+        sigBytes = await signMessage(messageBytes);
+      } catch (e: any) {
+        const msg = String(e?.message || "");
+        if (!msg.toLowerCase().includes("user rejected")) {
+          setStatusError("Failed to sign message");
+        }
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/live-sessions/${session.id}/status`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            wallet: publicKey.toBase58(),
+            signature: bs58.encode(sigBytes),
+            newStatus,
+            ts,
+          }),
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || `Server error ${res.status}`);
+        const updated = json.session as LiveSession;
+        setSessions((prev) =>
+          prev.map((s) => (s.id === updated.id ? updated : s))
+        );
+      } catch (e: any) {
+        console.error("Status change failed:", e);
+        setStatusError(String(e?.message || "Failed to update status"));
+      }
+    },
+    [publicKey, signMessage]
+  );
 
   const loadSessions = useCallback(async () => {
     setLoading(true);
@@ -478,7 +586,15 @@ export default function LivePage() {
           noSupply: Number(dbMarket.no_supply) || 0,
           imageUrl: (dbMarket as any).image_url || undefined,
           category: (dbMarket as any).category || undefined,
+          resolutionTime: parseEndDateToSec((dbMarket as any).end_date) || undefined,
+          resolutionStatus: String((dbMarket as any).resolution_status || "open"),
+          proposedOutcome: (dbMarket as any).proposed_winning_outcome ?? null,
+          queuedNext: null,
         };
+
+        // Resolve the queued next-market CONFIG (best-effort — tolerates a
+        // missing column so the rest of the snapshot is never lost).
+        snapshot.queuedNext = await fetchQueuedNextMarketConfig(session.id);
 
         setMobileMarketBySession((prev) => ({
           ...prev,
@@ -494,12 +610,252 @@ export default function LivePage() {
     []
   );
 
+  // Host resolve (feed) — reuses the existing propose flow, then refreshes the
+  // session's market snapshot so the result panel shows immediately.
+  // Defined BEFORE handleLiveResolve so the resolve handler can auto-promote
+  // the queued next market via this same code path (no Start Next button).
+  // Creates the on-chain market NOW from the queued CONFIG so the timer
+  // starts fresh, then swaps it into the session.
+  const handleStartNextMarketForSession = useCallback(
+    async (session: LiveSession) => {
+      if (!connected || !publicKey || !signTransaction || !signMessage || !program) {
+        throw new Error("Wallet not ready");
+      }
+      const snap = mobileMarketBySession[session.id];
+      const cfg = snap?.queuedNext;
+      if (!cfg) throw new Error("No market is queued");
+
+      // 1. Create the on-chain market NOW — fresh timer.
+      const { marketAddress: newAddr } = await createLiveFlashMarket({
+        program,
+        connection,
+        publicKey,
+        signTransaction,
+        title: cfg.title,
+        outcomes: cfg.outcomes,
+        durationMin: cfg.durationMin,
+      });
+
+      // 2. Swap into the session (server-side this call also clears
+      // queued_market_config / queued_market_address).
+      const ts = Date.now();
+      const message = `FUNMARKET_LIVE_MARKET|${session.id}|${newAddr}|${ts}`;
+      const sigBytes = await signMessage(new TextEncoder().encode(message));
+      const res = await fetch(`/api/live-sessions/${session.id}/market`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          wallet: publicKey.toBase58(),
+          signature: bs58.encode(sigBytes),
+          market_address: newAddr,
+          ts,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok)
+        throw new Error(json.error || `Failed to start next market (${res.status})`);
+
+      const updated = json.session as LiveSession;
+      setSessions((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+      setMobileMarketBySession((prev) => {
+        const next = { ...prev };
+        delete next[updated.id];
+        return next;
+      });
+      await loadSessionMarketSnapshot(updated);
+    },
+    [
+      connected,
+      publicKey,
+      signTransaction,
+      signMessage,
+      program,
+      connection,
+      mobileMarketBySession,
+      loadSessionMarketSnapshot,
+    ]
+  );
+
+  const handleLiveResolve = useCallback(
+    async (session: LiveSession, outcomeIndex: number) => {
+      if (!connected || !publicKey || !signTransaction || !program) {
+        throw new Error("Wallet not ready");
+      }
+      const snap = mobileMarketBySession[session.id];
+      const addr = snap?.publicKey || session.market_address;
+      if (!addr) throw new Error("No market linked to this session");
+      if (
+        snap?.resolutionTime != null &&
+        Date.now() < snap.resolutionTime * 1000
+      ) {
+        throw new Error("Market has not ended yet");
+      }
+      await proposeLiveResolution({
+        program,
+        connection,
+        publicKey,
+        signTransaction,
+        marketAddress: addr,
+        outcomeIndex,
+      });
+      await loadSessionMarketSnapshot(session);
+
+      // Auto-promote the queued next market (if any) — no manual Start Next.
+      // The propose has already succeeded; if the auto-start fails we surface
+      // a clear error but the proposed state stays visible.
+      if (snap?.queuedNext) {
+        try {
+          await handleStartNextMarketForSession(session);
+        } catch (e: any) {
+          throw new Error(
+            `Resolved, but failed to start next market: ${String(e?.message || e)}`,
+          );
+        }
+      }
+    },
+    [
+      connected,
+      publicKey,
+      signTransaction,
+      program,
+      connection,
+      mobileMarketBySession,
+      loadSessionMarketSnapshot,
+      handleStartNextMarketForSession,
+    ]
+  );
+
+  // Host "Next Market" (feed) — if the current market has settled, create
+  // on-chain + swap immediately; otherwise persist the CONFIG only (the
+  // on-chain market is created at resolve time inside
+  // handleStartNextMarketForSession so the timer starts fresh).
+  const handleCreateNextMarketForSession = useCallback(
+    async (
+      session: LiveSession,
+      params: { title: string; outcomes: string[]; durationMin: number },
+    ) => {
+      if (!connected || !publicKey || !signMessage) {
+        throw new Error("Wallet not ready");
+      }
+
+      const snap = mobileMarketBySession[session.id];
+      const currentSettled =
+        !!snap?.resolved || snap?.resolutionStatus === "proposed";
+
+      if (currentSettled) {
+        if (!program || !signTransaction) throw new Error("Program not ready");
+        const { marketAddress: newAddr } = await createLiveFlashMarket({
+          program,
+          connection,
+          publicKey,
+          signTransaction,
+          title: params.title,
+          outcomes: params.outcomes,
+          durationMin: params.durationMin,
+        });
+        const ts = Date.now();
+        const message = `FUNMARKET_LIVE_MARKET|${session.id}|${newAddr}|${ts}`;
+        const sigBytes = await signMessage(new TextEncoder().encode(message));
+        const res = await fetch(`/api/live-sessions/${session.id}/market`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            wallet: publicKey.toBase58(),
+            signature: bs58.encode(sigBytes),
+            market_address: newAddr,
+            ts,
+          }),
+        });
+        const json = await res.json();
+        if (!res.ok)
+          throw new Error(json.error || `Failed to link market (${res.status})`);
+
+        const updated = json.session as LiveSession;
+        setSessions((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+        setMobileMarketBySession((prev) => {
+          const next = { ...prev };
+          delete next[updated.id];
+          return next;
+        });
+        await loadSessionMarketSnapshot(updated);
+      } else {
+        // Persist CONFIG only — no on-chain creation yet.
+        const config: QueuedNextMarketConfig = {
+          title: params.title,
+          outcomes: params.outcomes,
+          durationMin: params.durationMin,
+        };
+        const canonical = serializeQueuedNextMarketConfig(config);
+        const ts = Date.now();
+        const message = `FUNMARKET_LIVE_QUEUE|${session.id}|set|${canonical}|${ts}`;
+        const sigBytes = await signMessage(new TextEncoder().encode(message));
+        const res = await fetch(`/api/live-sessions/${session.id}/queue`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            wallet: publicKey.toBase58(),
+            signature: bs58.encode(sigBytes),
+            action: "set",
+            config,
+            ts,
+          }),
+        });
+        const json = await res.json();
+        if (!res.ok)
+          throw new Error(json.error || `Failed to queue market (${res.status})`);
+
+        // Current market keeps running; refresh snapshot so the viewer Up
+        // Next strip + host queued indicator update.
+        const updated = json.session as LiveSession;
+        setSessions((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+        await loadSessionMarketSnapshot(updated);
+      }
+    },
+    [
+      connected,
+      publicKey,
+      signTransaction,
+      signMessage,
+      program,
+      connection,
+      mobileMarketBySession,
+      loadSessionMarketSnapshot,
+    ]
+  );
+
   useEffect(() => {
     setMobileLiveIndex((prev) => {
       if (mobileActiveSessions.length === 0) return 0;
       return Math.max(0, Math.min(prev, mobileActiveSessions.length - 1));
     });
   }, [mobileActiveSessions.length]);
+
+  // Capture ?session= once (e.g. arriving from Go Live) so the feed can jump
+  // straight to the freshly created session instead of index 0.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sid = new URLSearchParams(window.location.search).get("session");
+    if (sid) pendingSessionParamRef.current = sid;
+  }, []);
+
+  // When the requested session appears in the live list, select & scroll to it
+  // once. Re-runs on each list update until the session is found.
+  useEffect(() => {
+    if (!isMobile || appliedSessionParamRef.current) return;
+    const sid = pendingSessionParamRef.current;
+    if (!sid) return;
+    const idx = mobileActiveSessions.findIndex((s) => s.id === sid);
+    if (idx < 0) return;
+    appliedSessionParamRef.current = true;
+    setMobileTab("live");
+    setMobileLiveIndex(idx);
+    requestAnimationFrame(() => {
+      const node = liveScrollerRef.current;
+      if (!node) return;
+      const pageHeight = node.clientHeight || window.innerHeight;
+      node.scrollTo({ top: idx * pageHeight, behavior: "auto" });
+    });
+  }, [isMobile, mobileActiveSessions]);
 
   useEffect(() => {
     if (!isMobile) return;
@@ -584,6 +940,12 @@ export default function LivePage() {
       if (!loaded) return;
       if (session.status === "locked" || loaded.isBlocked || loaded.resolved)
         return;
+      // Time-based lock: market expired once the countdown reached 00:00.
+      if (
+        loaded.resolutionTime != null &&
+        Date.now() >= loaded.resolutionTime * 1000
+      )
+        return;
 
       setMobileTradeSessionId(session.id);
       setMobileTradeOutcomeIndex(
@@ -607,7 +969,9 @@ export default function LivePage() {
     !tradeMarket ||
     tradeSession.status === "locked" ||
     tradeMarket.isBlocked ||
-    tradeMarket.resolved;
+    tradeMarket.resolved ||
+    (tradeMarket.resolutionTime != null &&
+      Date.now() >= tradeMarket.resolutionTime * 1000);
 
   const handleTrade = useCallback(
     async (
@@ -619,6 +983,12 @@ export default function LivePage() {
       if (inFlightTradeRef.current) return;
       if (!connected || !publicKey || !signTransaction || !program) return;
       if (!tradeSession || !tradeMarket || tradeClosed) return;
+      // Hard stop: never submit a trade once the market timer has expired.
+      if (
+        tradeMarket.resolutionTime != null &&
+        Date.now() >= tradeMarket.resolutionTime * 1000
+      )
+        return;
 
       inFlightTradeRef.current = true;
       setSubmittingTrade(true);
@@ -726,6 +1096,21 @@ export default function LivePage() {
 
         await loadSessionMarketSnapshot(tradeSession);
         setMobileTradeOpen(false);
+
+        // Brief "Bought YES · N shares" toast (own buy only).
+        if (side === "buy") {
+          const toastKey = Date.now();
+          setLastBuyToast({
+            outcome: outcomeName,
+            shares: safeShares,
+            key: toastKey,
+          });
+          setTimeout(() => {
+            setLastBuyToast((prev) =>
+              prev?.key === toastKey ? null : prev,
+            );
+          }, 2500);
+        }
       } catch (e: any) {
         const msg = String(e?.message || "");
         if (!msg.toLowerCase().includes("user rejected")) {
@@ -749,17 +1134,6 @@ export default function LivePage() {
       loadSessionMarketSnapshot,
     ]
   );
-
-  const activeSession = mobileActiveSessions[mobileLiveIndex] ?? null;
-  const activeMarket = activeSession
-    ? mobileMarketBySession[activeSession.id] ?? null
-    : null;
-  const activeDisplay = deriveOutcomeDisplay(activeMarket);
-  const activeSessionLocked = activeSession
-    ? activeSession.status === "locked" ||
-      !!activeMarket?.resolved ||
-      !!activeMarket?.isBlocked
-    : false;
 
   if (isMobile) {
     if (loading) {
@@ -827,6 +1201,31 @@ export default function LivePage() {
                   market={mobileMarketBySession[session.id] || null}
                   active={index === mobileLiveIndex && !mobileTradeOpen}
                   onOutcomeTap={openQuickTrade}
+                  hostSlot={
+                    connected &&
+                    publicKey?.toBase58() === session.host_wallet ? (
+                      <LiveHostControls
+                        session={session}
+                        onStatusChange={(s) =>
+                          handleLiveStatusChange(session, s)
+                        }
+                        error={statusError}
+                      />
+                    ) : undefined
+                  }
+                  onResolve={
+                    connected &&
+                    publicKey?.toBase58() === session.host_wallet
+                      ? (idx) => handleLiveResolve(session, idx)
+                      : undefined
+                  }
+                  onCreateNextMarket={
+                    connected &&
+                    publicKey?.toBase58() === session.host_wallet
+                      ? (params) =>
+                          handleCreateNextMarketForSession(session, params)
+                      : undefined
+                  }
                 />
               ))}
             </div>
@@ -885,31 +1284,22 @@ export default function LivePage() {
             </div>
           )}
 
-        {/* FAB — exact stable behavior */}
-        {mobileTab === "live" &&
-          activeSession &&
-          activeMarket &&
-          !activeSessionLocked &&
-          !mobileTradeOpen && (
-            <div className="absolute bottom-4 right-4 z-[100]">
-              <button
-                onClick={() => openQuickTrade(activeSession, 0)}
-                className="w-14 h-14 rounded-full bg-pump-green text-black shadow-lg flex items-center justify-center hover:bg-[#74ffb8] transition active:scale-95"
-                aria-label="Trade"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2.5"
-                  className="w-6 h-6"
-                >
-                  <path d="M12 5v14" />
-                  <path d="M5 12h14" />
-                </svg>
-              </button>
+        {/* Buy-success floating pop. Auto-dismisses; never blocks the stream. */}
+        {lastBuyToast && (
+          <div
+            key={lastBuyToast.key}
+            className="pointer-events-none fixed bottom-20 left-1/2 -translate-x-1/2 z-[150] animate-slideUp"
+          >
+            <div className="rounded-xl bg-pump-green/15 border border-pump-green/45 px-4 py-2 text-sm text-white shadow-lg backdrop-blur-sm">
+              <span className="font-semibold text-pump-green">Bought</span>{" "}
+              <span className="font-bold">{lastBuyToast.outcome}</span>
+              <span className="text-gray-300"> · </span>
+              <span className="font-medium tabular-nums">
+                {lastBuyToast.shares} share{lastBuyToast.shares === 1 ? "" : "s"}
+              </span>
             </div>
-          )}
+          </div>
+        )}
 
         {/* Shared stable MobileBuySheet */}
         {mobileTradeOpen && tradeSession && tradeMarket && (

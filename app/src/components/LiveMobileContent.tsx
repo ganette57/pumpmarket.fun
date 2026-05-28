@@ -2,11 +2,29 @@
 // Used in both /live/[id] (detail) and /live (feed) to guarantee identical rendering.
 "use client";
 
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef, type ReactNode } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import Image from "next/image";
 import CategoryImagePlaceholder from "@/components/CategoryImagePlaceholder";
 import { lamportsToSol } from "@/utils/solana";
+import { fetchPastMarketAddresses, type LiveSession } from "@/lib/liveSessions";
+import { supabase } from "@/lib/supabaseClient";
+import { getMarketByAddress } from "@/lib/markets";
+import { buildOddsSeries, downsample } from "@/lib/marketHistory";
+import CommentsSection from "@/components/CommentsSection";
+
+// Reuse the trade page's odds chart, lazy-loaded so recharts is only fetched
+// when a chart drawer actually opens (keeps it out of the swipe-critical
+// live bundle). No new dependency — recharts already ships via /trade/[id].
+const LiveOddsChart = dynamic(() => import("@/components/OddsHistoryChart"), {
+  ssr: false,
+  loading: () => (
+    <div className="h-[260px] flex items-center justify-center">
+      <span className="w-6 h-6 rounded-full border-2 border-pump-green/40 border-t-pump-green animate-spin" />
+    </div>
+  ),
+});
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
 
@@ -442,5 +460,1917 @@ export function LiveMobileContent({
         </div>
       )}
     </>
+  );
+}
+
+/* ── Giant immersive countdown overlay ─────────────────────────────── */
+
+type CountdownPhase = "normal" | "warning" | "panic";
+
+function fmtMmSs(totalSec: number): string {
+  const safe = Math.max(0, Math.floor(totalSec));
+  return `${String(Math.floor(safe / 60)).padStart(2, "0")}:${String(
+    safe % 60
+  ).padStart(2, "0")}`;
+}
+
+// Compact circular HUD — sports-broadcast style. Smaller diameter, thinner
+// ring, dark glass disc behind the time label. Phase tints both the ring
+// and the label; panic phase pulses; final 5 s scales up with intensified
+// glow. Position is set by the parent so the parent can place it on the
+// video region (not the whole slide).
+function CircularCountdownHUD({
+  label,
+  phase,
+  isFinal,
+  progress,
+}: {
+  label: string;
+  phase: CountdownPhase;
+  isFinal: boolean;
+  progress: number;
+}) {
+  const SIZE = 100;
+  const STROKE = 3.5;
+  const RADIUS = (SIZE - STROKE) / 2;
+  const CIRC = 2 * Math.PI * RADIUS;
+  const safeProgress = Math.max(0, Math.min(1, progress));
+
+  const ringStroke =
+    phase === "panic"
+      ? "#f87171"
+      : phase === "warning"
+      ? "#fcd34d"
+      : "#6dffa4";
+
+  const labelColor =
+    phase === "panic"
+      ? "text-red-400"
+      : phase === "warning"
+      ? "text-amber-300"
+      : "text-white";
+
+  const dropShadow =
+    phase === "panic"
+      ? isFinal
+        ? "drop-shadow(0 0 18px rgba(248,113,113,0.85))"
+        : "drop-shadow(0 0 12px rgba(248,113,113,0.7))"
+      : phase === "warning"
+      ? "drop-shadow(0 0 10px rgba(252,211,77,0.55))"
+      : "drop-shadow(0 0 6px rgba(109,255,164,0.4))";
+
+  const labelShadow =
+    phase === "panic"
+      ? "0 0 10px rgba(248,113,113,0.55)"
+      : phase === "warning"
+      ? "0 0 8px rgba(252,211,77,0.4)"
+      : "0 1px 4px rgba(0,0,0,0.7)";
+
+  return (
+    <div
+      className={`relative transition-all duration-500 ease-out ${
+        phase === "panic" ? "animate-pulse" : ""
+      }`}
+      style={{
+        width: "clamp(88px, 24vw, 116px)",
+        aspectRatio: "1 / 1",
+        filter: dropShadow,
+        transform: isFinal ? "scale(1.06)" : "scale(1)",
+      }}
+    >
+      {/* Glass disc — sits inside the ring for label readability */}
+      <div className="absolute inset-[5px] rounded-full bg-black/60 backdrop-blur-md ring-1 ring-white/5" />
+      <svg
+        className="relative"
+        width="100%"
+        height="100%"
+        viewBox={`0 0 ${SIZE} ${SIZE}`}
+        aria-hidden
+      >
+        <circle
+          cx={SIZE / 2}
+          cy={SIZE / 2}
+          r={RADIUS}
+          fill="none"
+          stroke="rgba(255,255,255,0.12)"
+          strokeWidth={STROKE}
+        />
+        <circle
+          cx={SIZE / 2}
+          cy={SIZE / 2}
+          r={RADIUS}
+          fill="none"
+          stroke={ringStroke}
+          strokeWidth={STROKE}
+          strokeDasharray={CIRC}
+          strokeDashoffset={CIRC * (1 - safeProgress)}
+          strokeLinecap="round"
+          transform={`rotate(-90 ${SIZE / 2} ${SIZE / 2})`}
+          style={{
+            transition: "stroke-dashoffset 1s linear, stroke 0.5s ease-out",
+          }}
+        />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <span className="text-[8px] text-white/55 uppercase tracking-[0.22em] font-semibold leading-none mb-0.5">
+          Time
+        </span>
+        <span
+          className={`font-black tabular-nums leading-none transition-colors duration-500 ${labelColor}`}
+          style={{
+            fontSize: "clamp(20px, 6.2vw, 28px)",
+            letterSpacing: "-0.02em",
+            textShadow: labelShadow,
+          }}
+        >
+          {label}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/* ── Live HUD bottom drawers ───────────────────────────────────────── */
+// Shared mobile bottom-sheet shell + the chart / activity / chat drawers.
+// All render as sibling overlays of the slide, so opening any of them never
+// reorders or remounts the StreamPlayer.
+
+function shortAddr(addr?: string | null): string {
+  const s = String(addr || "").trim();
+  if (!s) return "anon";
+  return s.length <= 10 ? s : `${s.slice(0, 4)}…${s.slice(-4)}`;
+}
+
+function relTime(iso?: string | null): string {
+  const t = iso ? new Date(iso).getTime() : NaN;
+  if (!Number.isFinite(t)) return "";
+  const sec = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m`;
+  const hr = Math.floor(min / 60);
+  return hr < 24 ? `${hr}h` : `${Math.floor(hr / 24)}d`;
+}
+
+// Generic bottom-sheet shell: backdrop, rounded-top dark panel, drag handle,
+// header (title + optional subtitle) and a close X. Body scroll is locked
+// while mounted (mirrors MobileBuySheet). Returns null when closed.
+function LiveBottomDrawer({
+  open,
+  onClose,
+  title,
+  subtitle,
+  closeLabel = "Close",
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  subtitle?: string | null;
+  closeLabel?: string;
+  children: ReactNode;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[200]">
+      {/* Backdrop */}
+      <button
+        type="button"
+        aria-label={closeLabel}
+        onClick={onClose}
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+      />
+
+      {/* Sheet */}
+      <div className="absolute bottom-0 inset-x-0 bg-pump-dark border-t border-gray-800 rounded-t-2xl p-4 pb-6 animate-slideUp">
+        <div className="w-10 h-1 rounded-full bg-gray-600 mx-auto mb-3" />
+
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <div className="min-w-0">
+            <h3 className="text-white font-bold text-base leading-tight">
+              {title}
+            </h3>
+            {subtitle && (
+              <p className="text-xs text-gray-400 line-clamp-1 mt-0.5">
+                {subtitle}
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            className="shrink-0 w-8 h-8 rounded-full bg-white/[0.06] border border-white/10 flex items-center justify-center text-white/70 active:scale-95 active:text-white transition"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="w-4 h-4"
+            >
+              <path d="M18 6L6 18" />
+              <path d="M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// Market Chart drawer — reuses the trade page's OddsHistoryChart (lazy) fed
+// with the same transaction-replay history pipeline as /trade/[id].
+// Also reused from the main mobile feed (HomeFeedActionRail).
+export function LiveChartDrawer({
+  open,
+  onClose,
+  marketAddress,
+  names,
+  percentages,
+  question,
+}: {
+  open: boolean;
+  onClose: () => void;
+  marketAddress: string | null;
+  names: string[] | null;
+  percentages: number[] | null;
+  question?: string | null;
+}) {
+  const chartNames = useMemo(() => names?.slice(0, 2) ?? [], [names]);
+  const chartPct = percentages?.slice(0, 2);
+  const outcomesCount = chartNames.length;
+
+  // Historical odds series — loaded only when the drawer opens (one fetch per
+  // open — never polled).
+  const [history, setHistory] = useState<{ t: number; pct: number[] }[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
+  useEffect(() => {
+    if (!open || !marketAddress || outcomesCount <= 0) return;
+    let cancelled = false;
+    setLoadingHistory(true);
+    (async () => {
+      try {
+        const db = await getMarketByAddress(marketAddress);
+        const dbId = db?.id;
+        if (!dbId) {
+          if (!cancelled) setHistory([]);
+          return;
+        }
+        const { data, error } = await supabase
+          .from("transactions")
+          .select("created_at,is_buy,amount,outcome_index,is_yes,shares")
+          .eq("market_id", dbId)
+          .order("created_at", { ascending: true })
+          .limit(2000);
+        if (error) {
+          if (!cancelled) setHistory([]);
+          return;
+        }
+        const pts = buildOddsSeries((data as any[]) || [], outcomesCount);
+        const lite = downsample(pts, 220).map((p) => ({ t: p.t, pct: p.pct }));
+        if (!cancelled) setHistory(lite);
+      } catch {
+        if (!cancelled) setHistory([]);
+      } finally {
+        if (!cancelled) setLoadingHistory(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, marketAddress, outcomesCount]);
+
+  if (!open) return null;
+
+  const hasData = outcomesCount > 0;
+
+  return (
+    <LiveBottomDrawer
+      open={open}
+      onClose={onClose}
+      title="Market Chart"
+      subtitle={question}
+      closeLabel="Close chart"
+    >
+      {!hasData ? (
+        <div className="h-[260px] flex flex-col items-center justify-center text-center gap-1">
+          <p className="text-sm text-gray-400">No chart data yet</p>
+          <p className="text-xs text-gray-600">
+            Live odds will appear here once trading starts.
+          </p>
+        </div>
+      ) : loadingHistory && history.length === 0 ? (
+        <div className="h-[260px] flex items-center justify-center">
+          <span className="w-6 h-6 rounded-full border-2 border-pump-green/40 border-t-pump-green animate-spin" />
+        </div>
+      ) : (
+        <div className="rounded-xl bg-black/40 border border-white/[0.06] p-2">
+          <LiveOddsChart
+            points={history}
+            outcomeNames={chartNames}
+            livePct={history.length ? chartPct : undefined}
+            liveEnabled
+            height={260}
+          />
+        </div>
+      )}
+    </LiveBottomDrawer>
+  );
+}
+
+type LiveActivityRow = {
+  created_at: string;
+  user_address: string | null;
+  is_buy: boolean | null;
+  is_yes: boolean | null;
+  outcome_index: number | null;
+  outcome_name: string | null;
+  shares: number | string | null;
+  cost: number | string | null;
+};
+
+// Live Activity drawer — recent trades for this market, fetched with the same
+// supabase helper the chart drawer already uses (one fetch per open).
+// Also reused from the main mobile feed (HomeFeedActionRail).
+export function LiveActivityDrawer({
+  open,
+  onClose,
+  marketAddress,
+  names,
+  question,
+}: {
+  open: boolean;
+  onClose: () => void;
+  marketAddress: string | null;
+  names: string[] | null;
+  question?: string | null;
+}) {
+  const [rows, setRows] = useState<LiveActivityRow[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open || !marketAddress) return;
+    let cancelled = false;
+    setLoading(true);
+    (async () => {
+      try {
+        const db = await getMarketByAddress(marketAddress);
+        const dbId = db?.id;
+        if (!dbId) {
+          if (!cancelled) setRows([]);
+          return;
+        }
+        const { data, error } = await supabase
+          .from("transactions")
+          .select(
+            "created_at,user_address,is_buy,is_yes,outcome_index,outcome_name,shares,cost"
+          )
+          .eq("market_id", dbId)
+          .order("created_at", { ascending: false })
+          .limit(30);
+        if (error) {
+          if (!cancelled) setRows([]);
+          return;
+        }
+        if (!cancelled) setRows(((data as any[]) || []) as LiveActivityRow[]);
+      } catch {
+        if (!cancelled) setRows([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, marketAddress]);
+
+  if (!open) return null;
+
+  return (
+    <LiveBottomDrawer
+      open={open}
+      onClose={onClose}
+      title="Live Activity"
+      subtitle={question}
+      closeLabel="Close activity"
+    >
+      {loading && rows.length === 0 ? (
+        <div className="h-[220px] flex items-center justify-center">
+          <span className="w-6 h-6 rounded-full border-2 border-pump-green/40 border-t-pump-green animate-spin" />
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="h-[200px] flex flex-col items-center justify-center text-center gap-1">
+          <p className="text-sm text-gray-400">Live activity will appear here</p>
+          <p className="text-xs text-gray-600">
+            Trades on this market will show up here.
+          </p>
+        </div>
+      ) : (
+        <div className="max-h-[320px] overflow-y-auto -mx-1 px-1 space-y-1.5">
+          {rows.map((r, i) => {
+            const idx =
+              typeof r.outcome_index === "number"
+                ? r.outcome_index
+                : r.is_yes === false
+                ? 1
+                : 0;
+            const isYes = idx === 0;
+            const label = r.outcome_name || names?.[idx] || (isYes ? "YES" : "NO");
+            const sol =
+              r.cost != null && Number.isFinite(Number(r.cost))
+                ? Number(r.cost)
+                : null;
+            const shares = Math.max(0, Math.floor(Number(r.shares || 0)));
+            const action = r.is_buy === false ? "sold" : "bought";
+            const trader = shortAddr(r.user_address);
+            const initials =
+              trader.replace(/[^a-zA-Z0-9]/g, "").slice(0, 2).toUpperCase() || "?";
+            const t = relTime(r.created_at);
+            return (
+              <div
+                key={i}
+                className="flex items-center gap-2.5 rounded-xl bg-white/[0.03] border border-white/[0.06] px-3 py-2"
+              >
+                <span
+                  className={`shrink-0 flex items-center justify-center w-7 h-7 rounded-full text-[9px] font-black ${
+                    isYes
+                      ? "bg-pump-green/20 text-pump-green"
+                      : "bg-[#ff5c73]/20 text-[#ff5c73]"
+                  }`}
+                >
+                  {initials}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[12px] text-white/85 truncate">
+                    <span className="font-semibold">{trader}</span>{" "}
+                    <span className="text-gray-400">{action}</span>{" "}
+                    <span
+                      className={`font-bold ${
+                        isYes ? "text-pump-green" : "text-[#ff5c73]"
+                      }`}
+                    >
+                      {label}
+                    </span>
+                  </p>
+                  {t && <p className="text-[10px] text-gray-600">{t} ago</p>}
+                </div>
+                <span className="shrink-0 text-[12px] font-bold tabular-nums text-white/85">
+                  {sol != null ? `${sol.toFixed(2)} SOL` : `${shares} sh`}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </LiveBottomDrawer>
+  );
+}
+
+// Live Chat drawer — reuses the same CommentsSection as desktop live/trade
+// (embedded, composer pinned to the bottom). It self-resolves its market id
+// and loads/posts comments; mounted only while the drawer is open.
+function LiveChatDrawer({
+  open,
+  onClose,
+  marketAddress,
+  question,
+}: {
+  open: boolean;
+  onClose: () => void;
+  marketAddress: string | null;
+  question?: string | null;
+}) {
+  if (!open) return null;
+
+  return (
+    <LiveBottomDrawer
+      open={open}
+      onClose={onClose}
+      title="Live Chat"
+      subtitle={question}
+      closeLabel="Close chat"
+    >
+      {marketAddress ? (
+        <div className="h-[60vh] min-h-0">
+          <CommentsSection marketId={marketAddress} embedded composerAtBottom />
+        </div>
+      ) : (
+        <div className="h-[180px] flex flex-col items-center justify-center text-center gap-1">
+          <p className="text-sm text-gray-400">Live chat unavailable</p>
+          <p className="text-xs text-gray-600">
+            No market is linked to this stream yet.
+          </p>
+        </div>
+      )}
+    </LiveBottomDrawer>
+  );
+}
+
+// Resolve Market sheet — host-only. Pick the winning outcome and trigger the
+// existing propose/resolution flow (passed in via onResolve).
+function LiveResolveSheet({
+  open,
+  onClose,
+  question,
+  names,
+  onResolve,
+}: {
+  open: boolean;
+  onClose: () => void;
+  question?: string | null;
+  names: string[] | null;
+  onResolve: (outcomeIndex: number) => Promise<void> | void;
+}) {
+  const labels = useMemo(() => names?.slice(0, 2) ?? [], [names]);
+  const [selected, setSelected] = useState<number | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Reset selection whenever the sheet (re)opens.
+  useEffect(() => {
+    if (open) {
+      setSelected(null);
+      setError(null);
+      setSubmitting(false);
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  return (
+    <LiveBottomDrawer
+      open={open}
+      onClose={onClose}
+      title="Resolve Market"
+      subtitle={question}
+      closeLabel="Close resolve"
+    >
+      <p className="text-xs text-gray-400 mb-2">Select the winning outcome</p>
+      <div className="grid grid-cols-2 gap-3">
+        {labels.map((name, idx) => {
+          const isYes = idx === 0;
+          const active = selected === idx;
+          const accent = isYes ? "pump-green" : "[#ff5c73]";
+          return (
+            <button
+              key={idx}
+              type="button"
+              onClick={() => setSelected(idx)}
+              className={`rounded-2xl border px-3 py-4 text-center font-black text-lg transition ${
+                active
+                  ? isYes
+                    ? "border-pump-green bg-pump-green/15 text-pump-green shadow-[0_0_28px_-10px_rgba(109,255,164,0.7)]"
+                    : "border-[#ff5c73] bg-[#ff5c73]/15 text-[#ff5c73] shadow-[0_0_28px_-10px_rgba(255,92,115,0.7)]"
+                  : "border-white/10 bg-white/[0.03] text-gray-300"
+              }`}
+            >
+              {name}
+            </button>
+          );
+        })}
+      </div>
+
+      {error && (
+        <p className="mt-3 text-xs text-red-300 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2">
+          {error}
+        </p>
+      )}
+
+      <button
+        type="button"
+        disabled={selected == null || submitting}
+        onClick={async () => {
+          if (selected == null) return;
+          setSubmitting(true);
+          setError(null);
+          try {
+            await onResolve(selected);
+          } catch (e: any) {
+            setError(String(e?.message || "Resolve failed"));
+          } finally {
+            setSubmitting(false);
+          }
+        }}
+        className={`w-full mt-4 py-4 rounded-xl font-bold text-lg transition-all ${
+          selected == null || submitting
+            ? "bg-gray-700 text-gray-400 cursor-not-allowed"
+            : "bg-pump-green text-black hover:bg-[#74ffb8]"
+        }`}
+      >
+        {submitting ? "Resolving…" : "Resolve Winner"}
+      </button>
+    </LiveBottomDrawer>
+  );
+}
+
+// Create Next Market sheet — host-only. Collects title / outcomes / duration
+// and hands them to the page's onCreate handler (which reuses the shared
+// `createLiveFlashMarket` helper + signed market_address update).
+const NEXT_MARKET_DURATIONS = [3, 5, 10, 30] as const;
+
+function LiveNextMarketSheet({
+  open,
+  onClose,
+  onCreate,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreate: (params: {
+    title: string;
+    outcomes: string[];
+    durationMin: number;
+  }) => Promise<void>;
+}) {
+  const [title, setTitle] = useState("");
+  const [yesLabel, setYesLabel] = useState("YES");
+  const [noLabel, setNoLabel] = useState("NO");
+  const [durationMin, setDurationMin] = useState<number>(5);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Reset whenever the sheet (re)opens.
+  useEffect(() => {
+    if (open) {
+      setTitle("");
+      setYesLabel("YES");
+      setNoLabel("NO");
+      setDurationMin(5);
+      setError(null);
+      setSubmitting(false);
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  const canSubmit = !!title.trim() && !submitting;
+
+  return (
+    <LiveBottomDrawer
+      open={open}
+      onClose={onClose}
+      title="Create Next Market"
+      subtitle="Stays in this live session — stream keeps playing"
+      closeLabel="Close next market"
+    >
+      <div className="space-y-4">
+        <div>
+          <label className="block text-xs font-semibold text-white/70 mb-1.5">
+            Market Title
+          </label>
+          <input
+            type="text"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="e.g. Will he say Bitcoin in the next 5 minutes?"
+            className="w-full rounded-xl bg-white/[0.04] border border-white/10 px-3 py-2.5 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-pump-green/50"
+            maxLength={200}
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-white/70 mb-1.5">
+            Outcomes
+          </label>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={yesLabel}
+              onChange={(e) => setYesLabel(e.target.value)}
+              className="w-full rounded-xl bg-white/[0.04] border border-white/10 px-3 py-2.5 text-sm font-semibold text-pump-green focus:outline-none focus:border-pump-green/50"
+              maxLength={24}
+            />
+            <input
+              type="text"
+              value={noLabel}
+              onChange={(e) => setNoLabel(e.target.value)}
+              className="w-full rounded-xl bg-white/[0.04] border border-white/10 px-3 py-2.5 text-sm font-semibold text-[#ff5c73] focus:outline-none focus:border-[#ff5c73]/50"
+              maxLength={24}
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-white/70 mb-1.5">
+            Duration
+          </label>
+          <div className="grid grid-cols-4 gap-2">
+            {NEXT_MARKET_DURATIONS.map((d) => (
+              <button
+                key={d}
+                type="button"
+                onClick={() => setDurationMin(d)}
+                className={`py-2.5 rounded-xl text-sm font-semibold border transition ${
+                  durationMin === d
+                    ? "border-pump-green bg-pump-green/10 text-pump-green"
+                    : "border-white/10 text-gray-400 hover:border-white/20"
+                }`}
+              >
+                {d} min
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {error && (
+          <p className="text-xs text-red-300 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2">
+            {error}
+          </p>
+        )}
+
+        <button
+          type="button"
+          disabled={!canSubmit}
+          onClick={async () => {
+            if (!canSubmit) return;
+            setSubmitting(true);
+            setError(null);
+            try {
+              await onCreate({
+                title: title.trim(),
+                outcomes: [yesLabel, noLabel],
+                durationMin,
+              });
+              // Parent closes on success.
+            } catch (e: any) {
+              setError(String(e?.message || "Failed to create next market"));
+            } finally {
+              setSubmitting(false);
+            }
+          }}
+          className={`w-full py-3.5 rounded-xl font-bold text-base transition-all ${
+            !canSubmit
+              ? "bg-gray-700 text-gray-400 cursor-not-allowed"
+              : "bg-pump-green text-black hover:bg-[#74ffb8]"
+          }`}
+        >
+          {submitting ? "Creating…" : "Create Next Market"}
+        </button>
+      </div>
+    </LiveBottomDrawer>
+  );
+}
+
+/* ── MobileImmersiveSlide ──────────────────────────────────────────── */
+// Shared full-bleed mobile immersive experience: persistent stream,
+// giant countdown overlay, title, YES/NO bottom action bar.
+// Used by /live/[id] (variant="deeplink") and /live (variant="feed").
+
+export type MobileImmersiveSlideMarket = {
+  question?: string;
+  resolutionTime?: number; // unix seconds
+  totalVolume?: number;
+  publicKey?: string;
+};
+
+export function MobileImmersiveSlide({
+  session,
+  market,
+  derived,
+  active,
+  sessionLocked,
+  onOutcomeTap,
+  endIsoOverride = null,
+  countText = null,
+  variant = "deeplink",
+  hostSlot,
+  onResolve,
+  resolution,
+  onCreateNextMarket,
+  queuedNext,
+}: {
+  session: LiveSession;
+  market: MobileImmersiveSlideMarket | null;
+  derived: { names: string[]; percentages: number[] } | null;
+  active: boolean;
+  sessionLocked: boolean;
+  onOutcomeTap: (outcomeIndex: number) => void;
+  endIsoOverride?: string | null;
+  countText?: string | null;
+  variant?: "deeplink" | "feed";
+  hostSlot?: ReactNode;
+  /** Host-only resolve handler (reuses the existing propose flow). */
+  onResolve?: (outcomeIndex: number) => Promise<void> | void;
+  /** Current market resolution state for the result panel. */
+  resolution?: {
+    resolved: boolean;
+    proposed: boolean;
+    outcomeIndex: number | null;
+  };
+  /** Host-only handler to create the session's next flash market. */
+  onCreateNextMarket?: (params: {
+    title: string;
+    outcomes: string[];
+    durationMin: number;
+  }) => Promise<void>;
+  /** Queued next-market CONFIG (shown in viewer Up Next; the page creates the
+   *  market on-chain at resolve time so the timer starts fresh — no manual
+   *  Start Next button). */
+  queuedNext?: {
+    title?: string | null;
+    durationMin?: number | null;
+  } | null;
+}) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  // HUD drawers — local to the slide so toggling them never touches the
+  // StreamPlayer subtree (which stays the first slide-root child).
+  const [chartOpen, setChartOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [resolveOpen, setResolveOpen] = useState(false);
+  const [nextMarketOpen, setNextMarketOpen] = useState(false);
+  const [pastResultsOpen, setPastResultsOpen] = useState(false);
+  // Strip of recent settled markets for THIS live session — accumulates as
+  // the host swaps to a new market (previous was settled, now a different pk).
+  // Stores enough to render the "Past Markets" drawer rows + link to /trade.
+  const [pastResults, setPastResults] = useState<
+    {
+      pk: string;
+      winningIdx: number;
+      title: string;
+      winningLabel: string;
+      status: "resolved" | "proposed";
+    }[]
+  >([]);
+  // Persisted history hydrated from `live_sessions.past_market_addresses`.
+  // Merged with the local `pastResults` so navigation/refresh never loses
+  // the history. Empty when the column does not exist yet.
+  const [persistedPastResults, setPersistedPastResults] = useState<
+    {
+      pk: string;
+      winningIdx: number;
+      title: string;
+      winningLabel: string;
+      status: "resolved" | "proposed";
+    }[]
+  >([]);
+  const prevMarketSnapRef = useRef<{
+    pk: string;
+    settled: boolean;
+    winningIdx: number | null;
+    title: string;
+    winningLabel: string;
+    status: "resolved" | "proposed" | null;
+  } | null>(null);
+  // Tracks the largest remaining-seconds value we've seen for this slide;
+  // used as the denominator for the circular HUD progress arc so it sweeps
+  // from full at session entry down to empty at lockout.
+  const peakRemSecRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!active) return;
+    setNowMs(Date.now());
+    const iv = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(iv);
+  }, [active]);
+
+  const countdown = useMemo(() => {
+    const endStr =
+      endIsoOverride ??
+      (market?.resolutionTime
+        ? new Date(market.resolutionTime * 1000).toISOString()
+        : null);
+    if (!endStr) return null;
+    const endMs = new Date(endStr).getTime();
+    if (!Number.isFinite(endMs)) return null;
+    const remSec = Math.max(0, Math.ceil((endMs - nowMs) / 1000));
+
+    if (peakRemSecRef.current == null || remSec > peakRemSecRef.current) {
+      peakRemSecRef.current = Math.max(remSec, 60);
+    }
+    const peak = peakRemSecRef.current || 60;
+    const progress = peak > 0 ? remSec / peak : 0;
+
+    const phase: CountdownPhase =
+      remSec <= 10 ? "panic" : remSec <= 30 ? "warning" : "normal";
+    return {
+      remSec,
+      label: fmtMmSs(remSec),
+      phase,
+      isFinal: remSec <= 5,
+      progress,
+    };
+  }, [endIsoOverride, market?.resolutionTime, nowMs]);
+
+  // Time-based lock: once the visible countdown hits 00:00 the on-chain market
+  // rejects trades, so lock the action UI immediately (covers feed + deeplink).
+  const expired = !!countdown && countdown.remSec <= 0;
+  const locked = sessionLocked || expired;
+
+  // Host resolve gating: only the host, only after the timer expires, and only
+  // while the market is not yet resolved/proposed.
+  const isHost = !!hostSlot;
+  const settled = !!resolution?.resolved || !!resolution?.proposed;
+  const needsResolve = isHost && expired && !settled && !!onResolve;
+  const resolvedOutcomeLabel =
+    resolution?.outcomeIndex != null
+      ? derived?.names?.[resolution.outcomeIndex] ?? null
+      : null;
+
+  // Auto-open the resolve sheet once when the market first needs resolving.
+  // (Host can close it; it won't force-reopen — the inline button reopens it.)
+  useEffect(() => {
+    if (needsResolve) setResolveOpen(true);
+  }, [needsResolve]);
+
+  // Host can prepare the next flash market at any time, but only one can be
+  // queued at once. The page persists it as a CONFIG; the on-chain market is
+  // created when the current market resolves so the timer starts fresh.
+  const hasQueuedNext = !!queuedNext;
+  const canCreateNext =
+    isHost && !hasQueuedNext && !!onCreateNextMarket;
+
+  // Reset the countdown ring's peak so a freshly created market starts the arc
+  // from full instead of inheriting the previous market's larger duration.
+  useEffect(() => {
+    peakRemSecRef.current = null;
+  }, [market?.publicKey]);
+
+  // Recent results strip — append the previous market's title + winning
+  // outcome + status when we detect a market swap (pk change) and the previous
+  // one was settled. Drives the "Past Markets" drawer rows.
+  useEffect(() => {
+    const settledNow =
+      !!resolution?.resolved || !!resolution?.proposed;
+    const statusNow: "resolved" | "proposed" | null = resolution?.resolved
+      ? "resolved"
+      : resolution?.proposed
+      ? "proposed"
+      : null;
+    const winningIdxNow = resolution?.outcomeIndex ?? null;
+    const winningLabelNow =
+      winningIdxNow != null
+        ? derived?.names?.[winningIdxNow] ||
+          (winningIdxNow === 0 ? "YES" : "NO")
+        : "";
+    const curr = {
+      pk: market?.publicKey || "",
+      settled: settledNow,
+      winningIdx: winningIdxNow,
+      title: market?.question || session.title || "Market",
+      winningLabel: winningLabelNow,
+      status: statusNow,
+    };
+    const prev = prevMarketSnapRef.current;
+    if (
+      prev &&
+      prev.pk &&
+      prev.pk !== curr.pk &&
+      prev.settled &&
+      prev.winningIdx != null &&
+      prev.status
+    ) {
+      setPastResults((h) =>
+        [
+          ...h,
+          {
+            pk: prev.pk,
+            winningIdx: prev.winningIdx!,
+            title: prev.title,
+            winningLabel: prev.winningLabel,
+            status: prev.status!,
+          },
+        ].slice(-10),
+      );
+    }
+    prevMarketSnapRef.current = curr;
+  }, [
+    market?.publicKey,
+    market?.question,
+    session.title,
+    resolution?.resolved,
+    resolution?.proposed,
+    resolution?.outcomeIndex,
+    derived?.names,
+  ]);
+
+  // Hydrate the persisted history from `live_sessions.past_market_addresses`
+  // on session change / market swap so Past Markets survives navigation and
+  // page refresh. Best-effort: returns [] if the column does not exist yet.
+  useEffect(() => {
+    const sid = session?.id;
+    if (!sid) {
+      setPersistedPastResults([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const addrs = await fetchPastMarketAddresses(sid);
+      if (cancelled) return;
+      if (!addrs.length) {
+        setPersistedPastResults([]);
+        return;
+      }
+      const rows = (
+        await Promise.all(
+          addrs.map(async (addr) => {
+            try {
+              const m = await getMarketByAddress(addr);
+              if (!m) return null;
+              const winningIdxRaw =
+                (m as any).winning_outcome != null
+                  ? Number((m as any).winning_outcome)
+                  : m.proposed_winning_outcome != null
+                  ? Number(m.proposed_winning_outcome)
+                  : null;
+              if (winningIdxRaw == null || !Number.isFinite(winningIdxRaw)) {
+                return null;
+              }
+              const resolvedFlag =
+                !!m.resolved ||
+                String(m.resolution_status || "").toLowerCase() === "finalized";
+              const status: "resolved" | "proposed" = resolvedFlag
+                ? "resolved"
+                : "proposed";
+              const namesRaw = (m as any).outcome_names;
+              const names: string[] = Array.isArray(namesRaw)
+                ? namesRaw.map((x: unknown) => String(x ?? ""))
+                : [];
+              const winningLabel =
+                names[winningIdxRaw] || (winningIdxRaw === 0 ? "YES" : "NO");
+              return {
+                pk: addr,
+                winningIdx: winningIdxRaw,
+                title: String(m.question || "Market"),
+                winningLabel,
+                status,
+              };
+            } catch {
+              return null;
+            }
+          }),
+        )
+      ).filter(
+        (
+          x,
+        ): x is {
+          pk: string;
+          winningIdx: number;
+          title: string;
+          winningLabel: string;
+          status: "resolved" | "proposed";
+        } => x != null,
+      );
+      if (!cancelled) setPersistedPastResults(rows);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.id, session?.market_address]);
+
+  // Merge persisted history (oldest first) with the local tracker, deduped
+  // by market address. Order: persisted entries first, then any local entries
+  // not yet persisted (covers the brief gap between in-session swaps).
+  const mergedPastResults = useMemo(() => {
+    const seen = new Set<string>();
+    const out: typeof pastResults = [];
+    for (const r of persistedPastResults) {
+      if (!seen.has(r.pk)) {
+        seen.add(r.pk);
+        out.push(r);
+      }
+    }
+    for (const r of pastResults) {
+      if (!seen.has(r.pk)) {
+        seen.add(r.pk);
+        out.push(r);
+      }
+    }
+    return out;
+  }, [persistedPastResults, pastResults]);
+
+  const isDeeplink = variant === "deeplink";
+
+  const volLabel =
+    market?.totalVolume && market.totalVolume > 0
+      ? `${formatVol(market.totalVolume)} SOL`
+      : null;
+
+  // Approximate per-side volume from share-percentage × total volume.
+  // Not a perfect mapping (volume is trade-flow, percentages are state)
+  // but it carries the right visual weight per side.
+  const perSideSol = (idx: number): string | null => {
+    if (!market?.totalVolume || market.totalVolume <= 0) return null;
+    const pct = derived?.percentages?.[idx] ?? 0;
+    return `${formatVol((market.totalVolume * pct) / 100)} SOL`;
+  };
+
+  // Higher-percentage side — drives the Momentum strip placeholder label.
+  // Pure render computation (no state / effect / timer).
+  const momentumYes =
+    (derived?.percentages?.[0] ?? 0) >= (derived?.percentages?.[1] ?? 0);
+
+  // Top-traders widget — no trader list is exposed to this component, so the
+  // avatar is derived from the real host wallet (the one identity we have)
+  // and the count stays a soft placeholder. Pure render computation.
+  const hostInitials = (session.host_wallet || "")
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .slice(0, 2)
+    .toUpperCase();
+
+  // Pin layout heights so the stream wrapper (absolute) and the structured
+  // stack's top spacer (in-flow) line up exactly — the stream sits flush
+  // under the top controls, no dead black space.
+  const TOP_BAR_H = isDeeplink ? "h-10" : "h-14"; // 40 / 56 px
+  const STREAM_TOP = isDeeplink ? "top-10" : "top-14";
+
+  return (
+    <div className="relative h-full bg-black overflow-hidden">
+      {/* STREAM — slide-root[0]. Same React tree position as before; only
+          its bounding box shrinks from inset-0 to aspect-video. The 16:9
+          iframe now fills a 16:9 container exactly → no letterbox bars. */}
+      <div
+        className={`absolute inset-x-0 ${STREAM_TOP} aspect-video bg-black`}
+      >
+        {active && session.stream_url ? (
+          <StreamPlayer
+            url={session.stream_url}
+            className="absolute inset-0 w-full h-full bg-black"
+          />
+        ) : session.thumbnail_url ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={session.thumbnail_url}
+            alt={session.title}
+            className="absolute inset-0 w-full h-full object-cover opacity-80"
+          />
+        ) : (
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(109,255,164,0.12),transparent_42%),linear-gradient(180deg,#020304_0%,#04070c_100%)]" />
+        )}
+      </div>
+
+      {/* STRUCTURED STACK — slide-root[1]. Top bar (fixed height matching
+          the stream's top offset) + aspect-video overlay region for HUD
+          chips (transparent, the stream below shows through) + lower
+          section that overlaps the video bottom and fades to black. */}
+      <div className="relative h-full flex flex-col">
+        {/* Top bar — fixed height. Deeplink shows back link; feed reserves
+            space for the floating MobileTabs above. */}
+        <div
+          className={`shrink-0 ${TOP_BAR_H} ${
+            isDeeplink ? "px-4 flex items-center" : ""
+          }`}
+        >
+          {isDeeplink && (
+            <Link
+              href="/live"
+              className="inline-flex items-center gap-1 text-sm text-white/75 active:text-white transition"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                className="w-4 h-4"
+              >
+                <path d="M15 18l-6-6 6-6" />
+              </svg>
+              Back
+            </Link>
+          )}
+        </div>
+
+        {/* VIDEO OVERLAY REGION — transparent aspect-video band aligned
+            with the stream wrapper. Anchors the floating HUD elements. */}
+        <div className="shrink-0 relative w-full aspect-video">
+          {/* LIVE / status pill (top-left, broadcast-style) */}
+          <div className="absolute top-3 left-3 z-20 pointer-events-none">
+            {session.status === "live" ? (
+              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-600/40 border border-red-500/50 backdrop-blur-md">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                <span className="text-[10px] font-bold text-red-300 tracking-[0.15em]">
+                  LIVE
+                </span>
+              </div>
+            ) : (
+              <StatusBanner status={session.status} />
+            )}
+          </div>
+
+          {/* Count pill — for flash_traffic etc. Below LIVE pill. */}
+          {countText && (
+            <div className="absolute top-12 left-3 z-20 pointer-events-none">
+              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold bg-black/60 backdrop-blur-md text-white/85 border border-white/10">
+                <span className="opacity-70">Count</span>
+                <span className="tabular-nums">{countText}</span>
+              </span>
+            </div>
+          )}
+
+          {/* Compact circular timer — purely overlaid, never affects flow.
+              Lifted above the video's top edge (center column is free of the
+              feed's left toggle / right Go Live). */}
+          {countdown && (
+            <div className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 z-30">
+              <CircularCountdownHUD
+                label={countdown.label}
+                phase={countdown.phase}
+                isFinal={countdown.isFinal}
+                progress={countdown.progress}
+              />
+            </div>
+          )}
+
+          {/* Host controls now render in the Up Next slot below (not over the
+              video) so the stream stays clean. The top-right stays free. */}
+
+          {/* Top traders — floating placeholder pill. Rendered only when no
+              host controls occupy the top-right, so it never blocks them or
+              the feed's Go Live button. Purely visual. */}
+          {!hostSlot && (
+            <div className="absolute top-2 right-2 z-20 pointer-events-none">
+              <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-black/55 backdrop-blur-md border border-white/10 shadow-[0_2px_10px_rgba(0,0,0,0.5)]">
+                <span className="text-[8px] font-semibold uppercase tracking-[0.12em] text-white/45 whitespace-nowrap">
+                  Top traders
+                </span>
+                {hostInitials ? (
+                  <span className="flex items-center justify-center w-4 h-4 rounded-full bg-gradient-to-br from-pump-green/80 to-emerald-700 border border-black text-[7px] font-black text-black leading-none">
+                    {hostInitials}
+                  </span>
+                ) : (
+                  <span className="w-4 h-4 rounded-full bg-gradient-to-br from-pump-green/80 to-emerald-700 border border-black" />
+                )}
+                <span className="text-[9px] font-bold tabular-nums text-white/85">
+                  +32
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* LOWER SECTION — overlaps the video's last 24 px and fades to
+            fully opaque black underneath. flex-1 lets the trailing empty
+            zone host future Up Next / activity strip without layout work. */}
+        <div className="relative -mt-6 z-20 flex-1 flex flex-col bg-gradient-to-b from-transparent via-black/85 to-black">
+          {/* MARKET CARD — LIVE pill + total vol header, question,
+              horizontal progress bar with VS bubble, per-side volume. */}
+          <div className="mx-3 rounded-2xl border border-white/[0.08] bg-black/85 backdrop-blur-xl px-4 pt-3 pb-3 shadow-[0_8px_32px_rgba(0,0,0,0.6),inset_18px_0_44px_-32px_rgba(109,255,164,0.6),inset_-18px_0_44px_-32px_rgba(255,92,115,0.6)]">
+            <div className="flex items-center justify-between mb-2">
+              <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-pump-green/15 border border-pump-green/30">
+                <span className="w-1 h-1 rounded-full bg-pump-green shadow-[0_0_6px_rgba(109,255,164,0.8)]" />
+                <span className="text-[9px] text-pump-green uppercase tracking-[0.18em] font-bold">
+                  Live Market
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                {volLabel && (
+                  <span className="text-[10px] text-gray-500 font-medium tabular-nums tracking-wider uppercase">
+                    {volLabel} Vol
+                  </span>
+                )}
+                {mergedPastResults.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setPastResultsOpen(true)}
+                    aria-label="Open past markets"
+                    title="Past markets in this session"
+                    className="inline-flex items-center gap-1.5 h-7 px-2 rounded-full bg-black/45 border border-white/10 backdrop-blur-md active:scale-95 transition"
+                  >
+                    <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-white/85">
+                      Past
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className="w-3 h-3 opacity-75"
+                      >
+                        <path d="M6 9l6 6 6-6" />
+                      </svg>
+                    </span>
+                    <span className="w-px h-3.5 bg-white/20" aria-hidden />
+                    <span className="inline-flex items-center gap-1">
+                      {mergedPastResults.slice(-5).map((r, i) => {
+                        const isYes = r.winningIdx === 0;
+                        return (
+                          <span
+                            key={`${r.pk}-${i}`}
+                            className={`inline-flex items-center justify-center w-[18px] h-[18px] rounded-full border border-black/30 ${
+                              isYes
+                                ? "bg-pump-green shadow-[0_0_6px_rgba(109,255,164,0.55)]"
+                                : "bg-[#ff5c73] shadow-[0_0_6px_rgba(255,92,115,0.55)]"
+                            }`}
+                          >
+                            <svg
+                              viewBox="0 0 10 10"
+                              className="w-2 h-2 fill-white"
+                              aria-hidden
+                            >
+                              {isYes ? (
+                                <polygon points="5,2 8.5,7.5 1.5,7.5" />
+                              ) : (
+                                <polygon points="5,8 8.5,2.5 1.5,2.5" />
+                              )}
+                            </svg>
+                          </span>
+                        );
+                      })}
+                    </span>
+                  </button>
+                )}
+                <div className="flex items-center gap-1.5">
+                  {/* Chart — opens the Market Chart drawer */}
+                  <button
+                    type="button"
+                    aria-label="Open market chart"
+                    onClick={() => setChartOpen(true)}
+                    className="flex items-center justify-center w-7 h-7 rounded-full border border-white/10 bg-white/[0.04] text-white/70 active:scale-95 active:text-white transition"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="w-3.5 h-3.5"
+                    >
+                      <path d="M3 3v18h18" />
+                      <path d="M7 16v-4" />
+                      <path d="M12 16V8" />
+                      <path d="M17 16v-7" />
+                    </svg>
+                  </button>
+                  {/* Activity — opens the Live Activity drawer */}
+                  <button
+                    type="button"
+                    aria-label="Open live activity"
+                    onClick={() => setActivityOpen(true)}
+                    className="flex items-center justify-center w-7 h-7 rounded-full border border-white/10 bg-white/[0.04] text-white/70 active:scale-95 active:text-white transition"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="w-3.5 h-3.5"
+                    >
+                      <path d="M3 12h4l3 8 4-16 3 8h4" />
+                    </svg>
+                  </button>
+                  {/* Messages — opens the Live Chat drawer */}
+                  <button
+                    type="button"
+                    aria-label="Open live chat"
+                    onClick={() => setChatOpen(true)}
+                    className="flex items-center justify-center w-7 h-7 rounded-full border border-white/10 bg-white/[0.04] text-white/70 active:scale-95 active:text-white transition"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="w-3.5 h-3.5"
+                    >
+                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                    </svg>
+                  </button>
+                  {/* Share — premium box-arrow glyph */}
+                  <button
+                    type="button"
+                    aria-label="Share market"
+                    onClick={() => {
+                      const pk = market?.publicKey;
+                      if (!pk || typeof window === "undefined") return;
+                      const url = `${window.location.origin}/trade/${pk}`;
+                      if (navigator.share) {
+                        navigator
+                          .share({ title: market?.question || session.title, url })
+                          .catch(() => {});
+                      } else {
+                        navigator.clipboard?.writeText(url).catch(() => {});
+                      }
+                    }}
+                    className="flex items-center justify-center w-7 h-7 rounded-full border border-white/10 bg-white/[0.04] text-white/70 active:scale-95 active:text-white transition"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="w-3.5 h-3.5"
+                    >
+                      <path d="M12 15V3" />
+                      <path d="M8 7l4-4 4 4" />
+                      <path d="M5 13v6a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-6" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <h2 className="text-white font-bold text-[16px] leading-snug line-clamp-2 mb-2.5 drop-shadow-[0_1px_4px_rgba(0,0,0,0.7)]">
+              {market?.question || session.title}
+            </h2>
+
+            {derived ? (
+              <>
+                {/* Continuous horizontal progress bar. Wrapper is non-clipping
+                    so the VS bubble can straddle the bar's lower edge. */}
+                <div className="relative">
+                <div className="relative flex rounded-xl overflow-hidden h-10 border border-white/[0.06]">
+                  {derived.names.slice(0, 2).map((name, idx) => {
+                    const pctNum = derived.percentages[idx] ?? 0;
+                    const pct = pctNum.toFixed(1);
+                    const isYes = idx === 0;
+                    return (
+                      <div
+                        key={idx}
+                        className={`relative flex items-center h-full overflow-hidden ${
+                          isYes
+                            ? "bg-pump-green pl-3 justify-start"
+                            : "bg-[#ff5c73] pr-3 justify-end"
+                        }`}
+                        style={{
+                          flexBasis: `${Math.max(0, Math.min(100, pctNum))}%`,
+                          minWidth: 0,
+                        }}
+                      >
+                        <span
+                          className={`text-[13px] font-bold whitespace-nowrap ${
+                            isYes ? "text-black" : "text-white"
+                          }`}
+                        >
+                          {isYes ? (
+                            <>
+                              {name}{" "}
+                              <span className="font-black tabular-nums">
+                                {pct}%
+                              </span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="font-black tabular-nums">
+                                {pct}%
+                              </span>{" "}
+                              {name}
+                            </>
+                          )}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+                  {/* VS bubble — sits at the real YES/NO junction (left =
+                      YES%), clamped so it never leaves the bar, straddling the
+                      lower edge with a clean premium glow. */}
+                  <div
+                    className="pointer-events-none absolute bottom-0 -translate-x-1/2 translate-y-1/2 z-10 w-7 h-7 rounded-full bg-gradient-to-b from-zinc-700 to-black border border-white/30 ring-2 ring-black flex items-center justify-center shadow-[0_2px_10px_rgba(0,0,0,0.7),0_0_14px_rgba(255,255,255,0.12)]"
+                    style={{
+                      left: `${Math.max(
+                        8,
+                        Math.min(92, derived.percentages[0] ?? 50)
+                      )}%`,
+                    }}
+                  >
+                    <span className="text-[9px] font-black text-white tracking-[0.12em]">
+                      VS
+                    </span>
+                  </div>
+                </div>
+
+                {/* Per-side approximate volume row */}
+                {volLabel && (
+                  <div className="flex items-center justify-between mt-2 px-1">
+                    <span className="text-[11px] text-pump-green/75 font-semibold tabular-nums">
+                      {perSideSol(0)}
+                    </span>
+                    <span className="text-[11px] text-[#ff5c73]/75 font-semibold tabular-nums">
+                      {perSideSol(1)}
+                    </span>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="h-10 rounded-xl bg-white/5 border border-white/10 animate-pulse" />
+            )}
+          </div>
+
+          {/* CSS-only shimmer used by the momentum strip (no JS loop). The
+              <style> tag is display:none and never participates in layout. */}
+          <style>{`
+            .fm-mom-shimmer{background:linear-gradient(100deg,transparent 38%,rgba(255,255,255,0.10) 50%,transparent 62%);transform:translateX(-100%);animation:fm-mom-sweep 5s ease-in-out infinite;will-change:transform}
+            @keyframes fm-mom-sweep{0%{transform:translateX(-100%)}55%,100%{transform:translateX(100%)}}
+            @media (prefers-reduced-motion:reduce){.fm-mom-shimmer{animation:none}}
+          `}</style>
+
+          {/* HUD STRIPS — visual placeholders between the market card and the
+              action panels. Reserve the eventual Momentum and Up Next rows.
+              Pure presentational; no data or effects wired yet. */}
+          <div className="px-3 mt-3 space-y-2">
+            {/* Momentum / tension strip — gradient edge (green→amber→red),
+                soft colored edge-glow, and a CSS-only shimmer sweep. */}
+            <div className="relative rounded-lg p-px bg-[linear-gradient(90deg,rgba(109,255,164,0.65),rgba(252,211,77,0.6),rgba(255,92,115,0.65))] shadow-[-5px_0_18px_-9px_rgba(109,255,164,0.55),0_0_16px_-9px_rgba(252,211,77,0.45),5px_0_18px_-9px_rgba(255,92,115,0.55)]">
+              <div className="relative overflow-hidden rounded-[7px] bg-black/85 px-3 py-1.5">
+                <span
+                  aria-hidden
+                  className="fm-mom-shimmer pointer-events-none absolute inset-0"
+                />
+                <div className="relative z-10 flex items-center justify-between gap-2">
+                  <span className="inline-flex items-center gap-1.5 min-w-0">
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        momentumYes
+                          ? "bg-pump-green shadow-[0_0_6px_rgba(109,255,164,0.8)]"
+                          : "bg-[#ff5c73] shadow-[0_0_6px_rgba(255,92,115,0.8)]"
+                      }`}
+                    />
+                    <span
+                      className={`text-[10px] font-bold uppercase tracking-wider whitespace-nowrap ${
+                        momentumYes ? "text-pump-green" : "text-[#ff5c73]"
+                      }`}
+                    >
+                      Momentum: {momentumYes ? "YES" : "NO"}
+                    </span>
+                  </span>
+                  <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-amber-300 drop-shadow-[0_0_6px_rgba(252,211,77,0.6)] whitespace-nowrap">
+                    High Tension
+                  </span>
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-red-500/15 border border-red-500/30 whitespace-nowrap">
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-red-300">
+                      Final
+                    </span>
+                    {countdown?.label && (
+                      <span className="text-[9px] font-bold tabular-nums text-red-200">
+                        {countdown.label}
+                      </span>
+                    )}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {hostSlot ? (
+              /* HOST CONTROL CARD (host only) — replaces the Up Next module.
+                 Reuses HostControls (Live / Locked / Ended / Resolved /
+                 Cancel) wired to the same handlers, with a compact round
+                 "Next Market" placeholder beside it. Viewers never see this. */
+              <div className="flex items-stretch gap-2">
+                <div className="min-w-0 flex-1">{hostSlot}</div>
+                <button
+                  type="button"
+                  disabled={!canCreateNext}
+                  onClick={() => {
+                    if (canCreateNext) setNextMarketOpen(true);
+                  }}
+                  aria-label={
+                    canCreateNext
+                      ? "Create next market"
+                      : hasQueuedNext
+                      ? "A next market is already queued"
+                      : "Create next market unavailable"
+                  }
+                  title={
+                    canCreateNext
+                      ? "Create next market"
+                      : hasQueuedNext
+                      ? "A next market is already queued"
+                      : "Create next market unavailable"
+                  }
+                  className={`shrink-0 self-center w-10 h-10 rounded-full flex items-center justify-center border transition ${
+                    canCreateNext
+                      ? "border-pump-green bg-pump-green/20 text-pump-green shadow-[0_0_22px_-6px_rgba(109,255,164,0.8)] active:scale-95"
+                      : "border-pump-green/30 bg-pump-green/10 text-pump-green/60 opacity-60 cursor-not-allowed"
+                  }`}
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="w-4 h-4"
+                  >
+                    <path d="M12 5v14" />
+                    <path d="M5 12h14" />
+                  </svg>
+                </button>
+              </div>
+            ) : (
+              /* Up Next market strip (viewer) — real queued market when one
+                 exists, otherwise a placeholder. */
+              <div
+                className={`flex items-center gap-3 rounded-xl border ${
+                  hasQueuedNext
+                    ? "border-pump-green/40 bg-pump-green/[0.06]"
+                    : "border-dashed border-white/10 bg-white/[0.03]"
+                } px-3 py-3`}
+              >
+                <div className="shrink-0 w-10 h-10 rounded-full border-2 border-pump-green/35 flex items-center justify-center shadow-[0_0_14px_-4px_rgba(109,255,164,0.5)]">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="w-4 h-4 text-pump-green/80"
+                  >
+                    <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" />
+                  </svg>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/45">
+                    {hasQueuedNext ? "Up Next" : "Up Next (Preparing…)"}
+                  </div>
+                  <div
+                    className={`text-[13px] font-semibold leading-snug line-clamp-2 ${
+                      hasQueuedNext ? "text-white/85" : "text-white/70"
+                    }`}
+                  >
+                    {hasQueuedNext
+                      ? queuedNext?.title || "Next market queued"
+                      : "Next flash market coming soon"}
+                  </div>
+                </div>
+                <span className="shrink-0 self-start inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-pump-green/10 border border-pump-green/25 text-[9px] font-bold uppercase tracking-wider text-pump-green/80">
+                  {hasQueuedNext && queuedNext?.durationMin
+                    ? `${queuedNext.durationMin} Min Market`
+                    : "3 Min Market"}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Flexible gap — pushes the action panels lower without dead space. */}
+          <div className="flex-[1.5] min-h-[10px]" aria-hidden />
+
+          {/* ACTION CARDS — compact HUD action panels. Fixed h-[88px] and
+              shrink-0, anchored lower in the slide (slightly shorter to make
+              room for the taller Up Next module). */}
+          <div className="px-3 pb-3 shrink-0">
+            {settled ? (
+              <div className="rounded-2xl border border-pump-green/30 bg-pump-green/[0.06] backdrop-blur-md px-4 py-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/45">
+                    {resolution?.resolved ? "Market resolved" : "Outcome proposed"}
+                  </div>
+                  <div className="text-lg font-black text-white truncate">
+                    {resolvedOutcomeLabel ? `${resolvedOutcomeLabel} wins` : "Resolved"}
+                  </div>
+                </div>
+                <span className="shrink-0 inline-flex items-center px-3 py-1 rounded-full bg-pump-green/20 border border-pump-green/40 text-pump-green text-[11px] font-bold uppercase tracking-wider">
+                  {resolution?.resolved ? "Final" : "Proposed"}
+                </span>
+              </div>
+            ) : derived && !locked ? (
+              <div className="grid grid-cols-2 gap-3 h-[88px]">
+                {derived.names.slice(0, 2).map((name, idx) => {
+                  const pct = (derived.percentages[idx] ?? 0).toFixed(1);
+                  const isYes = idx === 0;
+                  return (
+                    <button
+                      key={idx}
+                      onClick={() => onOutcomeTap(idx)}
+                      className={`group relative h-full overflow-hidden rounded-2xl border backdrop-blur-xl px-3.5 py-2 active:scale-[0.97] transition-all duration-150 ${
+                        isYes
+                          ? "bg-gradient-to-br from-pump-green/25 via-pump-green/10 to-pump-green/5 border-pump-green/50 shadow-[0_0_36px_-8px_rgba(109,255,164,0.45)]"
+                          : "bg-gradient-to-br from-[#ff5c73]/25 via-[#ff5c73]/10 to-[#ff5c73]/5 border-[#ff5c73]/50 shadow-[0_0_36px_-8px_rgba(255,92,115,0.45)]"
+                      }`}
+                    >
+                      <div
+                        className="absolute inset-0 pointer-events-none"
+                        style={{
+                          background: isYes
+                            ? "radial-gradient(circle at 50% -20%, rgba(109,255,164,0.3), transparent 65%)"
+                            : "radial-gradient(circle at 50% -20%, rgba(255,92,115,0.3), transparent 65%)",
+                        }}
+                      />
+                      <div className="relative">
+                        <div
+                          className={`font-black tracking-tight leading-none ${
+                            isYes ? "text-pump-green" : "text-[#ff5c73]"
+                          }`}
+                          style={{
+                            fontSize: "clamp(28px, 8.5vw, 38px)",
+                            textShadow: isYes
+                              ? "0 0 18px rgba(109,255,164,0.55)"
+                              : "0 0 18px rgba(255,92,115,0.55)",
+                          }}
+                        >
+                          {name}
+                        </div>
+                        <div
+                          className={`text-sm font-bold tabular-nums mt-0.5 ${
+                            isYes ? "text-pump-green/85" : "text-[#ff5c73]/85"
+                          }`}
+                        >
+                          {pct}%
+                        </div>
+                      </div>
+                      {/* Arrow chip — absolutely placed so it doesn't push
+                          the typography */}
+                      <div
+                        className={`absolute bottom-2 right-2 w-6 h-6 rounded-full flex items-center justify-center ${
+                          isYes
+                            ? "bg-pump-green shadow-[0_0_14px_rgba(109,255,164,0.55)]"
+                            : "bg-[#ff5c73] shadow-[0_0_14px_rgba(255,92,115,0.55)]"
+                        }`}
+                      >
+                        <svg
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="3"
+                          className={`w-3 h-3 ${
+                            isYes ? "text-black" : "text-white"
+                          }`}
+                        >
+                          <path d="M12 19V5" />
+                          <path d="M5 12l7-7 7 7" />
+                        </svg>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : needsResolve ? (
+              <button
+                type="button"
+                onClick={() => setResolveOpen(true)}
+                className="w-full h-20 flex items-center justify-center gap-2 rounded-2xl border border-pump-green/50 bg-gradient-to-br from-pump-green/25 via-pump-green/10 to-pump-green/5 text-pump-green font-black text-base shadow-[0_0_36px_-8px_rgba(109,255,164,0.45)] active:scale-[0.98] transition"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="w-5 h-5"
+                >
+                  <path d="M9 11l3 3L22 4" />
+                  <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+                </svg>
+                Resolve Market
+              </button>
+            ) : locked ? (
+              <div className="h-20 flex items-center justify-center rounded-2xl bg-white/[0.04] border border-white/10 backdrop-blur-md">
+                <p className="text-sm text-gray-400">Trading is locked</p>
+              </div>
+            ) : (
+              <div className="h-20 flex items-center justify-center rounded-2xl bg-white/[0.04] border border-white/10 backdrop-blur-md">
+                <p className="text-sm text-gray-500 animate-pulse">
+                  Loading market...
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Trailing spacer — keeps the action panels off the bottom nav. */}
+          <div className="flex-1 min-h-[8px]" aria-hidden />
+        </div>
+      </div>
+
+      {/* HUD drawers — last slide-root children so the StreamPlayer above is
+          never reordered/remounted when any of them open. */}
+      <LiveChartDrawer
+        open={chartOpen}
+        onClose={() => setChartOpen(false)}
+        marketAddress={market?.publicKey ?? null}
+        names={derived?.names ?? null}
+        percentages={derived?.percentages ?? null}
+        question={market?.question ?? session.title}
+      />
+      <LiveActivityDrawer
+        open={activityOpen}
+        onClose={() => setActivityOpen(false)}
+        marketAddress={market?.publicKey ?? null}
+        names={derived?.names ?? null}
+        question={market?.question ?? session.title}
+      />
+      <LiveChatDrawer
+        open={chatOpen}
+        onClose={() => setChatOpen(false)}
+        marketAddress={market?.publicKey ?? null}
+        question={market?.question ?? session.title}
+      />
+      {isHost && onResolve && (
+        <LiveResolveSheet
+          open={resolveOpen}
+          onClose={() => setResolveOpen(false)}
+          question={market?.question ?? session.title}
+          names={derived?.names ?? null}
+          onResolve={async (idx) => {
+            await onResolve(idx);
+            setResolveOpen(false);
+          }}
+        />
+      )}
+      {isHost && onCreateNextMarket && (
+        <LiveNextMarketSheet
+          open={nextMarketOpen}
+          onClose={() => setNextMarketOpen(false)}
+          onCreate={async (params) => {
+            await onCreateNextMarket(params);
+            setNextMarketOpen(false);
+          }}
+        />
+      )}
+
+      {/* Past Markets drawer — opened by the "Past" pill. Rows navigate to
+          /trade/{marketAddress} so users can revisit any prior market. */}
+      <LiveBottomDrawer
+        open={pastResultsOpen}
+        onClose={() => setPastResultsOpen(false)}
+        title="Past Markets"
+        subtitle="Previous markets in this live session"
+        closeLabel="Close past markets"
+      >
+        {mergedPastResults.length === 0 ? (
+          <div className="h-[160px] flex flex-col items-center justify-center text-center gap-1">
+            <p className="text-sm text-gray-400">No past markets yet</p>
+            <p className="text-xs text-gray-600">
+              They'll appear here as the host resolves each market.
+            </p>
+          </div>
+        ) : (
+          <div className="max-h-[60vh] overflow-y-auto -mx-1 px-1 space-y-1.5">
+            {[...mergedPastResults].reverse().map((r, i) => {
+              const isYes = r.winningIdx === 0;
+              return (
+                <Link
+                  key={`${r.pk}-${i}`}
+                  href={`/trade/${encodeURIComponent(r.pk)}`}
+                  className="flex items-center gap-3 rounded-xl bg-white/[0.03] border border-white/10 px-3 py-2.5 active:scale-[0.99] transition"
+                >
+                  <span
+                    className={`shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-full border border-black/30 ${
+                      isYes
+                        ? "bg-pump-green shadow-[0_0_8px_rgba(109,255,164,0.55)]"
+                        : "bg-[#ff5c73] shadow-[0_0_8px_rgba(255,92,115,0.55)]"
+                    }`}
+                  >
+                    <svg
+                      viewBox="0 0 10 10"
+                      className="w-2.5 h-2.5 fill-white"
+                      aria-hidden
+                    >
+                      {isYes ? (
+                        <polygon points="5,2 8.5,7.5 1.5,7.5" />
+                      ) : (
+                        <polygon points="5,8 8.5,2.5 1.5,2.5" />
+                      )}
+                    </svg>
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-white font-semibold truncate">
+                      {r.title}
+                    </p>
+                    <p className="text-xs text-gray-400 truncate">
+                      <span
+                        className={`font-semibold ${
+                          isYes ? "text-pump-green" : "text-[#ff5c73]"
+                        }`}
+                      >
+                        {r.winningLabel}
+                      </span>
+                      <span className="text-gray-500">
+                        {" "}
+                        · {r.status === "resolved" ? "Final" : "Proposed"}
+                      </span>
+                    </p>
+                  </div>
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="w-4 h-4 text-gray-500 shrink-0"
+                  >
+                    <path d="M9 18l6-6-6-6" />
+                  </svg>
+                </Link>
+              );
+            })}
+          </div>
+        )}
+      </LiveBottomDrawer>
+    </div>
   );
 }

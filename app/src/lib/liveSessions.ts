@@ -27,7 +27,46 @@ export type LiveSession = {
   lock_at?: string | null;
   end_at?: string | null;
   ended_at?: string | null;
+  /** Legacy column (no longer written by the queue flow). Kept so older rows
+   *  parse cleanly. */
+  queued_market_address?: string | null;
+  /** Config for the next market the host has prepared (created on-chain only
+   *  when the current market resolves). Requires column
+   *  `queued_market_config jsonb` on `live_sessions`. Not part of
+   *  LIVE_SESSION_COLS so existing queries keep working before the column is
+   *  added. */
+  queued_market_config?: QueuedNextMarketConfig | null;
+  /** Append-only history of past on-chain market addresses linked to this
+   *  session (newest entries pushed by the signed `/market` route on swap).
+   *  Requires column `past_market_addresses jsonb default '[]'::jsonb`. Not
+   *  part of LIVE_SESSION_COLS so existing queries keep working before the
+   *  column is added. */
+  past_market_addresses?: string[] | null;
 };
+
+/** Host-prepared config for the next flash market. Created on-chain only at
+ *  resolve time, so the timer starts fresh from `durationMin`. */
+export type QueuedNextMarketConfig = {
+  title: string;
+  outcomes: string[];
+  durationMin: number;
+};
+
+/** Canonical serialisation used in the signed-message payload AND as the row
+ *  stored in `queued_market_config`. Same code runs on client and server so
+ *  the signature can be verified exactly. */
+export function serializeQueuedNextMarketConfig(
+  c: QueuedNextMarketConfig,
+): string {
+  const title = String(c.title || "").trim().slice(0, 200);
+  const outcomes = (c.outcomes || []).slice(0, 2).map((o, i) =>
+    String(o || "").trim().slice(0, 24) || (i === 0 ? "YES" : "NO"),
+  );
+  while (outcomes.length < 2) outcomes.push(outcomes.length === 0 ? "YES" : "NO");
+  const durationMin = Math.max(1, Math.floor(Number(c.durationMin) || 0));
+  // Fixed key order — deterministic across client/server.
+  return JSON.stringify({ title, outcomes, durationMin });
+}
 
 export type CreateLiveSessionPayload = {
   title: string;
@@ -52,6 +91,87 @@ export type UpdateLiveSessionPatch = Partial<
 
 const LIVE_SESSION_COLS =
   "id,created_at,title,market_address,host_wallet,stream_url,status,thumbnail_url,pinned_outcome,started_at,lock_at,end_at,ended_at";
+
+/** Reads `live_sessions.queued_market_address` safely. Returns null if the
+ *  column does not exist yet, the row is missing, or nothing is queued.
+ *  Legacy — superseded by `fetchQueuedNextMarketConfig`. */
+export async function fetchQueuedMarketAddress(
+  sessionId: string,
+): Promise<string | null> {
+  if (!sessionId) return null;
+  try {
+    const { data, error } = await supabase
+      .from("live_sessions")
+      .select("queued_market_address")
+      .eq("id", sessionId)
+      .maybeSingle();
+    if (error) return null; // column missing / permission → no queue
+    const raw = (data as any)?.queued_market_address;
+    const s = typeof raw === "string" ? raw.trim() : "";
+    return s || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Reads `live_sessions.past_market_addresses` safely. Returns [] when the
+ *  column does not exist yet, the row is missing, or the history is empty.
+ *  Strings are trimmed and deduplicated while preserving insertion order. */
+export async function fetchPastMarketAddresses(
+  sessionId: string,
+): Promise<string[]> {
+  if (!sessionId) return [];
+  try {
+    const { data, error } = await supabase
+      .from("live_sessions")
+      .select("past_market_addresses")
+      .eq("id", sessionId)
+      .maybeSingle();
+    if (error) return [];
+    const raw = (data as any)?.past_market_addresses;
+    if (!Array.isArray(raw)) return [];
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const item of raw) {
+      const s = String(item || "").trim();
+      if (!s || seen.has(s)) continue;
+      seen.add(s);
+      out.push(s);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** Reads `live_sessions.queued_market_config` safely. Returns null if the
+ *  column does not exist yet, the row is missing, or nothing is queued. */
+export async function fetchQueuedNextMarketConfig(
+  sessionId: string,
+): Promise<QueuedNextMarketConfig | null> {
+  if (!sessionId) return null;
+  try {
+    const { data, error } = await supabase
+      .from("live_sessions")
+      .select("queued_market_config")
+      .eq("id", sessionId)
+      .maybeSingle();
+    if (error) return null;
+    const raw = (data as any)?.queued_market_config;
+    if (!raw || typeof raw !== "object") return null;
+    const title = typeof raw.title === "string" ? raw.title : "";
+    const outcomes = Array.isArray(raw.outcomes)
+      ? raw.outcomes.map((x: unknown) => String(x ?? ""))
+      : [];
+    const durationMin = Number(raw.durationMin);
+    if (!title || outcomes.length < 2 || !Number.isFinite(durationMin)) {
+      return null;
+    }
+    return { title, outcomes, durationMin };
+  } catch {
+    return null;
+  }
+}
 
 /* -------------------------------------------------------------------------- */
 /*  READ                                                                       */

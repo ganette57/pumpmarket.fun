@@ -11,24 +11,38 @@ import { BN } from "@coral-xyz/anchor";
 import { useProgram } from "@/hooks/useProgram";
 import TradingPanel from "@/components/TradingPanel";
 import CommentsSection from "@/components/CommentsSection";
+import HostControls from "@/components/LiveHostControls";
+import LiveDesktopHostPanel, {
+  CreateNextLauncher,
+} from "@/components/LiveDesktopHostPanel";
+import LiveDesktopPastMarkets from "@/components/LiveDesktopPastMarkets";
+import FlashMarketResultModal, {
+  type FlashMarketResultState,
+} from "@/components/FlashMarketResultModal";
 import {
   StreamPlayer,
   StatusBanner,
   MobileBuySheet,
   formatVol,
   LiveMobileContent,
+  MobileImmersiveSlide,
 } from "@/components/LiveMobileContent";
 
 import { supabase } from "@/lib/supabaseClient";
+import { proposeLiveResolution } from "@/lib/liveResolve";
+import { createLiveFlashMarket } from "@/lib/liveMarketCreate";
 import { getMarketByAddress, recordTransaction, applyTradeToMarketInSupabase } from "@/lib/markets";
 import {
   getLiveSession,
   subscribeLiveSession,
   fetchRecentTrades,
   subscribeRecentTrades,
+  fetchQueuedNextMarketConfig,
+  serializeQueuedNextMarketConfig,
   type LiveSession,
   type LiveSessionStatus,
   type RecentTrade,
+  type QueuedNextMarketConfig,
 } from "@/lib/liveSessions";
 
 import { lamportsToSol, solToLamports, getUserPositionPDA, PLATFORM_WALLET } from "@/utils/solana";
@@ -53,9 +67,14 @@ function parseEndDateMs(raw: any): number {
   if (!raw) return NaN;
   if (raw instanceof Date) return raw.getTime();
   const s = String(raw).trim();
+  if (!s) return NaN;
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return new Date(`${s}T23:59:59Z`).getTime();
-  const n = /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/.test(s) ? s.replace(" ", "T") : s;
-  return new Date(n).getTime();
+  // Supabase timestamps often come back without a timezone suffix. Treat
+  // them as UTC (append Z) instead of letting `new Date` assume local time —
+  // otherwise short live markets shift hours off and read as 00:00.
+  const normalized = s.includes(" ") ? s.replace(" ", "T") : s;
+  const hasTz = /(?:Z|[+-]\d{2}:\d{2})$/i.test(normalized);
+  return new Date(hasTz ? normalized : `${normalized}Z`).getTime();
 }
 
 function toNumberArray(x: any): number[] | undefined {
@@ -126,91 +145,21 @@ type UiMarket = {
 };
 
 /* ── Host controls ──────────────────────────────────────────────────── */
-
-function HostControls({
-  session,
-  onStatusChange,
-  error,
-}: {
-  session: LiveSession;
-  onStatusChange: (s: LiveSessionStatus) => void;
-  error?: string | null;
-}) {
-  const statusFlow: LiveSessionStatus[] = ["live", "locked", "ended", "resolved"];
-  const [collapsed, setCollapsed] = useState(false);
-  const isTerminal = ["resolved", "cancelled"].includes(session.status);
-
-  return (
-    <div className="rounded-xl border border-gray-800/60 bg-pump-dark/40 px-3 py-2">
-      <button
-        type="button"
-        onClick={() => setCollapsed((v) => !v)}
-        className="flex items-center justify-between w-full text-xs text-gray-400 hover:text-white transition"
-      >
-        <span className="font-semibold">Host</span>
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          className={`w-3.5 h-3.5 transition-transform ${collapsed ? "" : "rotate-180"}`}
-        >
-          <path d="M6 9l6 6 6-6" />
-        </svg>
-      </button>
-      {!collapsed && (
-        <div className="space-y-2 mt-2">
-          {isTerminal ? (
-            <p className="text-[11px] text-gray-500">
-              Session is {session.status}. No further actions available.
-            </p>
-          ) : (
-            <div className="flex flex-wrap gap-1.5">
-              {statusFlow.map((s) => (
-                <button
-                  key={s}
-                  disabled={session.status === s}
-                  onClick={() => onStatusChange(s)}
-                  className={`px-2.5 py-1 rounded-md text-[11px] font-semibold border transition ${
-                    session.status === s
-                      ? "bg-pump-green/15 border-pump-green text-pump-green"
-                      : "bg-pump-dark/40 border-gray-800 text-gray-400 hover:border-gray-600 hover:text-gray-200"
-                  }`}
-                >
-                  {s.charAt(0).toUpperCase() + s.slice(1)}
-                </button>
-              ))}
-              <button
-                disabled={session.status === "cancelled"}
-                onClick={() => onStatusChange("cancelled")}
-                className="px-2.5 py-1 rounded-md text-[11px] font-semibold border border-red-800/60 text-red-400/80 hover:bg-red-900/20 transition"
-              >
-                Cancel
-              </button>
-            </div>
-          )}
-          {error && (
-            <p className="text-[11px] text-red-400 bg-red-900/20 rounded-md px-2 py-1">
-              {error}
-            </p>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
+// HostControls now lives in @/components/LiveHostControls (shared with the
+// /live swipe feed). Imported above as `HostControls`.
 
 /* ── Live Activity feed ──────────────────────────────────────────────── */
 
 function LiveActivity({ trades }: { trades: RecentTrade[] }) {
-  if (trades.length === 0) return null;
-
   return (
     <div className="card-pump p-4">
       <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
         <span className="w-1.5 h-1.5 rounded-full bg-pump-green animate-pulse" />
         Live Activity
       </h3>
+      {trades.length === 0 ? (
+        <p className="text-xs text-gray-500">No trades yet — be the first.</p>
+      ) : (
       <div className="space-y-1.5 max-h-[320px] overflow-y-auto">
         {trades.map((t) => {
           const wallet = t.user_address
@@ -233,6 +182,7 @@ function LiveActivity({ trades }: { trades: RecentTrade[] }) {
           );
         })}
       </div>
+      )}
     </div>
   );
 }
@@ -281,6 +231,61 @@ function BuyToasts({ toasts }: { toasts: (RecentTrade & { _key: number })[] }) {
   );
 }
 
+/* ── Giant immersive countdown overlay ──────────────────────────────── */
+
+type CountdownPhase = "normal" | "warning" | "panic";
+
+function GiantCountdown({
+  label,
+  phase,
+  isFinal,
+}: {
+  label: string;
+  phase: CountdownPhase;
+  isFinal: boolean;
+}) {
+  const color =
+    phase === "panic"
+      ? "text-red-400"
+      : phase === "warning"
+      ? "text-amber-300"
+      : "text-white";
+
+  const glow =
+    phase === "panic"
+      ? isFinal
+        ? "0 0 48px rgba(248,113,113,0.85), 0 0 14px rgba(248,113,113,0.7)"
+        : "0 0 34px rgba(248,113,113,0.7), 0 0 10px rgba(248,113,113,0.55)"
+      : phase === "warning"
+      ? "0 0 28px rgba(252,211,77,0.55)"
+      : "0 0 22px rgba(255,255,255,0.22)";
+
+  const fontSize =
+    phase === "panic"
+      ? "clamp(72px, 18vw, 168px)"
+      : phase === "warning"
+      ? "clamp(64px, 16vw, 144px)"
+      : "clamp(56px, 14vw, 128px)";
+
+  return (
+    <div className="pointer-events-none absolute inset-x-0 top-[8%] sm:top-[6%] flex justify-center z-20">
+      <div
+        className={`select-none font-black tabular-nums leading-none transition-all duration-500 ease-out ${color} ${
+          phase === "panic" ? "animate-pulse" : ""
+        }`}
+        style={{
+          fontSize,
+          letterSpacing: "-0.04em",
+          textShadow: glow,
+          transform: isFinal ? "scale(1.08)" : "scale(1)",
+        }}
+      >
+        {label}
+      </div>
+    </div>
+  );
+}
+
 /* ══════════════════════════════════════════════════════════════════════
    MAIN PAGE
    ══════════════════════════════════════════════════════════════════════ */
@@ -299,6 +304,16 @@ export default function LiveViewerPage() {
   const [market, setMarket] = useState<UiMarket | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [queuedNext, setQueuedNext] = useState<QueuedNextMarketConfig | null>(
+    null,
+  );
+  const [resultModal, setResultModal] = useState<{
+    result: FlashMarketResultState;
+    outcomeLabel?: string | null;
+    winningShares?: number | null;
+  } | null>(null);
+  const prevSettledRef = useRef(false);
+  const hostJustResolvedRef = useRef(false);
 
   const [positionShares, setPositionShares] = useState<number[] | null>(null);
   const [marketBalanceLamports, setMarketBalanceLamports] = useState<number | null>(null);
@@ -480,6 +495,65 @@ export default function LiveViewerPage() {
     loadMarket(session.market_address);
   }, [session?.market_address, program, loadMarket]);
 
+  // Resolve the queued next-market CONFIG (if any) for the Up Next strip and
+  // the post-resolve auto-start. Tolerates a missing column gracefully.
+  const refreshQueuedNext = useCallback(async (sessionId: string) => {
+    const cfg = await fetchQueuedNextMarketConfig(sessionId);
+    setQueuedNext(cfg);
+  }, []);
+
+  useEffect(() => {
+    if (!session?.id) {
+      setQueuedNext(null);
+      return;
+    }
+    void refreshQueuedNext(session.id);
+  }, [session?.id, session?.market_address, refreshQueuedNext]);
+
+  // Reset settled-tracker each time the market changes (new market starts
+  // fresh; suppression flag never carries across markets).
+  useEffect(() => {
+    prevSettledRef.current = false;
+    hostJustResolvedRef.current = false;
+  }, [market?.publicKey]);
+
+  // Auto-fire the win/lose modal on the false→true settle transition.
+  // Suppressed for the host (they just resolved); shown to viewers; falls
+  // back to no modal when no user position exists (the result panel already
+  // shows "Market resolved").
+  useEffect(() => {
+    const nowSettled =
+      !!market?.resolved || market?.resolutionStatus === "proposed";
+    if (nowSettled && !prevSettledRef.current) {
+      if (hostJustResolvedRef.current) {
+        hostJustResolvedRef.current = false;
+      } else if (market?.proposedOutcome != null && positionShares) {
+        const winningIdx = market.proposedOutcome;
+        const userShares = Number(positionShares[winningIdx] || 0);
+        const totalShares = positionShares.reduce(
+          (a, b) => a + (Number(b) || 0),
+          0,
+        );
+        if (totalShares > 0) {
+          const outcomeLabel =
+            (market.outcomeNames || [])[winningIdx] || null;
+          setResultModal({
+            result: userShares > 0 ? "win" : "lose",
+            outcomeLabel,
+            winningShares: userShares > 0 ? userShares : null,
+          });
+        }
+      }
+    }
+    prevSettledRef.current = nowSettled;
+  }, [
+    market?.resolved,
+    market?.resolutionStatus,
+    market?.proposedOutcome,
+    market?.outcomeNames,
+    positionShares,
+  ]);
+
   /* ── Derived market data ───────────────────────────────────────── */
 
   const derived = useMemo(() => {
@@ -509,7 +583,14 @@ export default function LiveViewerPage() {
     ? ["locked", "ended", "resolved", "cancelled"].includes(session.status)
     : false;
 
-  const isHost = publicKey && session?.host_wallet === publicKey.toBase58();
+  // Defensive: stable boolean. Guards against null wallet, missing
+  // host_wallet, and whitespace/casing drift in the stored value.
+  const isHost = useMemo(() => {
+    if (!publicKey) return false;
+    const hostWallet = (session?.host_wallet ?? "").trim();
+    if (!hostWallet) return false;
+    return hostWallet === publicKey.toBase58();
+  }, [publicKey, session?.host_wallet]);
 
   const marketClosed = market?.resolved || market?.isBlocked || sessionLocked
     || market?.resolutionStatus === "proposed";
@@ -557,24 +638,191 @@ export default function LiveViewerPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLiveImmersive, trafficMeta?.round_id, market?.publicKey]);
 
-  // Countdown label
-  const countdownLabel = useMemo(() => {
+  // Countdown — drives the giant immersive overlay
+  const countdown = useMemo(() => {
     const endStr = trafficMeta?.window_end
       ?? (market?.resolutionTime ? new Date(market.resolutionTime * 1000).toISOString() : null);
     if (!endStr) return null;
     const endMs = new Date(endStr).getTime();
     if (!Number.isFinite(endMs)) return null;
-    const rem = Math.max(0, Math.ceil((endMs - nowMs) / 1000));
-    return fmtMmSs(rem);
+    const remSec = Math.max(0, Math.ceil((endMs - nowMs) / 1000));
+    const phase: CountdownPhase =
+      remSec <= 10 ? "panic" : remSec <= 30 ? "warning" : "normal";
+    return { remSec, label: fmtMmSs(remSec), phase, isFinal: remSec <= 5 };
   }, [trafficMeta?.window_end, market?.resolutionTime, nowMs]);
 
+  // Time-based lock: the market is expired once the countdown reaches 00:00.
+  // session.status stays "live" at that point, so this is what actually blocks
+  // trades when the timer runs out.
+  const expiredByTime = !!countdown && countdown.remSec <= 0;
+
   const threshold = trafficMeta?.threshold ?? null;
+
+  /* ── Host resolve (reuses the existing propose flow) ────────────── */
+  async function handleResolveLive(outcomeIndex: number) {
+    if (!connected || !publicKey || !program || !signTransaction || !market) {
+      throw new Error("Wallet or market not ready");
+    }
+    if (!expiredByTime) throw new Error("Market has not ended yet");
+    // Suppress the auto-result modal for the host (they just used the sheet).
+    hostJustResolvedRef.current = true;
+    await proposeLiveResolution({
+      program,
+      connection,
+      publicKey,
+      signTransaction,
+      marketAddress: market.publicKey,
+      outcomeIndex,
+    });
+    await loadMarket(market.publicKey);
+
+    // Auto-promote the queued next market (if any) — no manual Start Next.
+    // The propose has already succeeded; if the auto-start fails we surface a
+    // clear error but the proposed state stays visible.
+    if (queuedNext) {
+      try {
+        await handleStartNextMarket();
+      } catch (e: any) {
+        throw new Error(
+          `Resolved, but failed to start next market: ${String(e?.message || e)}`,
+        );
+      }
+    }
+  }
+
+  /* ── Host "Next Market" — same session, new linked market ────────── */
+  // When the current market is still running we just PERSIST the config (no
+  // on-chain creation yet — that happens at resolve time so the timer starts
+  // fresh). When the current market has already settled we create and swap
+  // immediately (existing post-resolve behaviour).
+  async function handleCreateNextMarket(params: {
+    title: string;
+    outcomes: string[];
+    durationMin: number;
+  }) {
+    if (!connected || !publicKey || !signMessage || !session) {
+      throw new Error("Wallet or session not ready");
+    }
+
+    const currentSettled =
+      !!market?.resolved || market?.resolutionStatus === "proposed";
+
+    if (currentSettled) {
+      // Immediate swap path — create on-chain + signed /market update.
+      if (!program || !signTransaction) {
+        throw new Error("Program not ready");
+      }
+      const { marketAddress: newAddr } = await createLiveFlashMarket({
+        program,
+        connection,
+        publicKey,
+        signTransaction,
+        title: params.title,
+        outcomes: params.outcomes,
+        durationMin: params.durationMin,
+      });
+      const ts = Date.now();
+      const message = `FUNMARKET_LIVE_MARKET|${session.id}|${newAddr}|${ts}`;
+      const sigBytes = await signMessage(new TextEncoder().encode(message));
+      const res = await fetch(`/api/live-sessions/${session.id}/market`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          wallet: publicKey.toBase58(),
+          signature: bs58.encode(sigBytes),
+          market_address: newAddr,
+          ts,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok)
+        throw new Error(json.error || `Failed to link market (${res.status})`);
+
+      setSession(json.session as LiveSession);
+      setQueuedNext(null);
+      await loadMarket(newAddr);
+    } else {
+      // Queue path — persist CONFIG only. No on-chain creation; the market
+      // is built at resolve time inside handleStartNextMarket.
+      const config: QueuedNextMarketConfig = {
+        title: params.title,
+        outcomes: params.outcomes,
+        durationMin: params.durationMin,
+      };
+      const canonical = serializeQueuedNextMarketConfig(config);
+      const ts = Date.now();
+      const message = `FUNMARKET_LIVE_QUEUE|${session.id}|set|${canonical}|${ts}`;
+      const sigBytes = await signMessage(new TextEncoder().encode(message));
+      const res = await fetch(`/api/live-sessions/${session.id}/queue`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          wallet: publicKey.toBase58(),
+          signature: bs58.encode(sigBytes),
+          action: "set",
+          config,
+          ts,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok)
+        throw new Error(json.error || `Failed to queue market (${res.status})`);
+
+      // Stream + current market stay mounted; only the Up Next strip updates.
+      setSession(json.session as LiveSession);
+      await refreshQueuedNext(session.id);
+    }
+  }
+
+  /* ── Host auto-start — runs after resolve when a config is queued ── */
+  async function handleStartNextMarket() {
+    if (!connected || !publicKey || !program || !signTransaction || !signMessage || !session) {
+      throw new Error("Wallet or session not ready");
+    }
+    const cfg = queuedNext;
+    if (!cfg) throw new Error("No market is queued");
+
+    // 1. Create the on-chain market NOW — timer starts fresh.
+    const { marketAddress: newAddr } = await createLiveFlashMarket({
+      program,
+      connection,
+      publicKey,
+      signTransaction,
+      title: cfg.title,
+      outcomes: cfg.outcomes,
+      durationMin: cfg.durationMin,
+    });
+
+    // 2. Swap it into the session via the signed /market route (server-side
+    // the same call also clears queued_market_config / queued_market_address).
+    const ts = Date.now();
+    const message = `FUNMARKET_LIVE_MARKET|${session.id}|${newAddr}|${ts}`;
+    const sigBytes = await signMessage(new TextEncoder().encode(message));
+    const res = await fetch(`/api/live-sessions/${session.id}/market`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        wallet: publicKey.toBase58(),
+        signature: bs58.encode(sigBytes),
+        market_address: newAddr,
+        ts,
+      }),
+    });
+    const json = await res.json();
+    if (!res.ok)
+      throw new Error(json.error || `Failed to start next market (${res.status})`);
+
+    const updated = json.session as LiveSession;
+    setSession(updated);
+    setQueuedNext(null);
+    await loadMarket(updated.market_address);
+  }
 
   /* ── Trade handler ─────────────────────────────────────────────── */
 
   async function handleTrade(shares: number, outcomeIndex: number, side: "buy" | "sell", costSol?: number) {
     if (!connected || !publicKey || !program || !market || !session || !derived) return;
-    if (sessionLocked) return;
+    if (sessionLocked || expiredByTime) return;
 
     const key = "trade";
     if (inFlightRef.current[key]) return;
@@ -736,6 +984,19 @@ export default function LiveViewerPage() {
     }
   }
 
+  /* ── Immersive overlay data pill ─────────────────────────────── */
+  // NOTE: must stay above any early return — keeps hook order stable.
+
+  const overlayStats = useMemo(() => {
+    const pills: { label: string; value: string; accent?: boolean }[] = [];
+    if (trafficCount != null && threshold != null) {
+      pills.push({ label: "Count", value: `${trafficCount} / ${threshold}` });
+    } else if (trafficCount != null) {
+      pills.push({ label: "Count", value: `${trafficCount}` });
+    }
+    return pills;
+  }, [trafficCount, threshold]);
+
   /* ── Render ────────────────────────────────────────────────────── */
 
   if (loading) {
@@ -773,19 +1034,6 @@ export default function LiveViewerPage() {
     );
   }
 
-  /* ── Immersive overlay data pill ─────────────────────────────── */
-
-  const overlayStats = useMemo(() => {
-    const pills: { label: string; value: string; accent?: boolean }[] = [];
-    if (countdownLabel) pills.push({ label: "⏱", value: countdownLabel, accent: true });
-    if (trafficCount != null && threshold != null) {
-      pills.push({ label: "Count", value: `${trafficCount} / ${threshold}` });
-    } else if (trafficCount != null) {
-      pills.push({ label: "Count", value: `${trafficCount}` });
-    }
-    return pills;
-  }, [countdownLabel, trafficCount, threshold]);
-
   return (
     <>
       {/* ═══════════════════════════════════════════════════════════
@@ -794,111 +1042,62 @@ export default function LiveViewerPage() {
       {isMobile ? (
         isLiveImmersive ? (
           /* ── MOBILE LIVE IMMERSIVE ──────────────────────────────── */
-          <div className="fixed inset-0 bottom-14 z-[40] bg-black flex flex-col">
-            {/* Camera — fills all available space */}
-            <div className="flex-1 relative min-h-0 bg-black">
-              {session.stream_url ? (
-                <StreamPlayer
-                  url={session.stream_url}
-                  className="relative w-full h-full bg-black overflow-hidden"
-                />
-              ) : (
-                <div className="w-full h-full bg-[radial-gradient(circle_at_top,rgba(109,255,164,0.12),transparent_42%),linear-gradient(180deg,#020304_0%,#04070c_100%)]" />
-              )}
-
-              {/* ── Top overlay: back + LIVE + question + stats ───── */}
-              <div className="absolute top-0 inset-x-0 z-10 pointer-events-auto">
-                <div className="px-4 pt-3 pb-14 bg-gradient-to-b from-black/85 via-black/50 to-transparent">
-                  {/* Row 1: back + LIVE badge */}
-                  <div className="flex items-center justify-between">
-                    <Link
-                      href="/live"
-                      className="flex items-center gap-1 text-sm text-white/60 active:text-white transition"
-                    >
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
-                        <path d="M15 18l-6-6 6-6" />
-                      </svg>
-                      Back
-                    </Link>
-                    {session.status === "live" ? (
-                      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-600/30 border border-red-500/40">
-                        <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-                        <span className="text-[11px] font-bold text-red-400 tracking-wide">LIVE</span>
-                      </div>
-                    ) : (
-                      <StatusBanner status={session.status} />
-                    )}
-                  </div>
-
-                  {/* Row 2: question / title */}
-                  <h1 className="text-white font-bold text-[17px] mt-3 leading-snug line-clamp-2 drop-shadow-[0_1px_4px_rgba(0,0,0,0.8)]">
-                    {market?.question || session.title}
-                  </h1>
-
-                  {/* Row 3: count + timer pills */}
-                  {overlayStats.length > 0 && (
-                    <div className="flex items-center gap-2 mt-2.5">
-                      {overlayStats.map((s, i) => (
-                        <span
-                          key={i}
-                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold backdrop-blur-sm ${
-                            s.accent
-                              ? "bg-white/15 text-white border border-white/20"
-                              : "bg-white/10 text-white/80 border border-white/10"
-                          }`}
-                        >
-                          <span className="opacity-70">{s.label}</span>
-                          <span className="tabular-nums">{s.value}</span>
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Host controls overlay */}
-              {isHost && (
-                <div className="absolute bottom-2 inset-x-2 z-10">
-                  <HostControls session={session} onStatusChange={handleStatusChange} error={statusError} />
-                </div>
-              )}
-            </div>
-
-            {/* ── Bottom action bar: YES / NO ─────────────────────── */}
-            {market && derived && !sessionLocked ? (
-              <div className="shrink-0 bg-pump-dark/95 backdrop-blur-md border-t border-white/[0.06] px-4 py-3">
-                <div className="flex gap-3">
-                  {derived.names.slice(0, 2).map((name, idx) => {
-                    const pct = (derived.percentages[idx] ?? 0).toFixed(0);
-                    const isYes = idx === 0;
-                    return (
-                      <button
-                        key={idx}
-                        onClick={() => {
-                          setDefaultOutcomeIndex(idx);
-                          setMobileSheetOpen(true);
-                        }}
-                        className={`flex-1 py-3.5 rounded-xl font-bold text-base active:scale-[0.97] transition ${
-                          isYes
-                            ? "bg-pump-green text-black"
-                            : "bg-[#ff5c73] text-white"
-                        }`}
-                      >
-                        Buy {name} <span className="opacity-70 ml-1">{pct}¢</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : sessionLocked ? (
-              <div className="shrink-0 bg-pump-dark/95 border-t border-white/[0.06] px-4 py-3 text-center">
-                <p className="text-sm text-gray-500">Trading is locked</p>
-              </div>
-            ) : (
-              <div className="shrink-0 bg-pump-dark/95 border-t border-white/[0.06] px-4 py-3 text-center">
-                <p className="text-sm text-gray-500 animate-pulse">Loading market...</p>
-              </div>
-            )}
+          <div className="fixed inset-0 bottom-14 z-[40] bg-black">
+            <MobileImmersiveSlide
+              session={session}
+              market={
+                market
+                  ? {
+                      question: market.question,
+                      resolutionTime: market.resolutionTime,
+                      totalVolume: market.totalVolume,
+                      publicKey: market.publicKey,
+                    }
+                  : null
+              }
+              derived={
+                derived
+                  ? { names: derived.names, percentages: derived.percentages }
+                  : null
+              }
+              active={true}
+              sessionLocked={sessionLocked || expiredByTime}
+              onOutcomeTap={(idx) => {
+                if (sessionLocked || expiredByTime) return;
+                setDefaultOutcomeIndex(idx);
+                setMobileSheetOpen(true);
+              }}
+              endIsoOverride={trafficMeta?.window_end ?? null}
+              countText={
+                trafficCount != null && threshold != null
+                  ? `${trafficCount} / ${threshold}`
+                  : trafficCount != null
+                  ? `${trafficCount}`
+                  : null
+              }
+              variant="deeplink"
+              hostSlot={
+                isHost ? (
+                  <HostControls
+                    session={session}
+                    onStatusChange={handleStatusChange}
+                    error={statusError}
+                  />
+                ) : null
+              }
+              onResolve={isHost ? handleResolveLive : undefined}
+              resolution={
+                market
+                  ? {
+                      resolved: !!market.resolved,
+                      proposed: market.resolutionStatus === "proposed",
+                      outcomeIndex: market.proposedOutcome ?? null,
+                    }
+                  : undefined
+              }
+              onCreateNextMarket={isHost ? handleCreateNextMarket : undefined}
+              queuedNext={queuedNext}
+            />
           </div>
         ) : (
           /* ── MOBILE NORMAL (scheduled / non-live) ───────────────── */
@@ -970,8 +1169,19 @@ export default function LiveViewerPage() {
                     </div>
                   )}
 
+                  {/* ── Giant immersive countdown ─────────────── */}
+                  {countdown && (
+                    <GiantCountdown
+                      label={countdown.label}
+                      phase={countdown.phase}
+                      isFinal={countdown.isFinal}
+                    />
+                  )}
+
                   {/* ── Camera overlay: top ────────────────────── */}
-                  <div className="absolute top-0 inset-x-0 z-10">
+                  {/* pointer-events-none — purely decorative, never blocks
+                       the YouTube/Twitch/Kick player controls underneath. */}
+                  <div className="pointer-events-none absolute top-0 inset-x-0 z-10">
                     <div className="px-5 pt-4 pb-10 bg-gradient-to-b from-black/70 via-black/30 to-transparent">
                       <div className="flex items-start justify-between gap-4">
                         <div className="min-w-0 flex-1">
@@ -990,8 +1200,10 @@ export default function LiveViewerPage() {
                   </div>
 
                   {/* ── Camera overlay: bottom — stats ─────────── */}
+                  {/* pointer-events-none — must not cover the player's
+                       bottom control bar (volume, fullscreen, captions). */}
                   {overlayStats.length > 0 && (
-                    <div className="absolute bottom-0 inset-x-0 z-10">
+                    <div className="pointer-events-none absolute bottom-0 inset-x-0 z-10">
                       <div className="px-5 pb-4 pt-10 bg-gradient-to-t from-black/70 via-black/30 to-transparent">
                         <div className="flex items-center gap-2.5">
                           {overlayStats.map((s, i) => (
@@ -1018,9 +1230,21 @@ export default function LiveViewerPage() {
                   )}
                 </div>
 
-                {/* Host controls */}
+                {/* Host controls + Create Next Market (action beside the
+                    Live / Locked / Ended buttons). */}
                 {isHost && (
-                  <HostControls session={session} onStatusChange={handleStatusChange} error={statusError} />
+                  <div className="flex flex-wrap items-start gap-3">
+                    <div className="min-w-0 flex-1">
+                      <HostControls
+                        session={session}
+                        onStatusChange={handleStatusChange}
+                        error={statusError}
+                      />
+                    </div>
+                    {!queuedNext && handleCreateNextMarket && (
+                      <CreateNextLauncher onCreate={handleCreateNextMarket} />
+                    )}
+                  </div>
                 )}
 
                 {/* Comments (compact in immersive) */}
@@ -1051,7 +1275,7 @@ export default function LiveViewerPage() {
                       onTrade={(s, idx, side, cost) => void handleTrade(s, idx, side, cost)}
                       marketBalanceLamports={marketBalanceLamports}
                       userHoldings={userSharesForUi}
-                      marketClosed={!!marketClosed}
+                      marketClosed={!!marketClosed || expiredByTime}
                     />
                   )}
 
@@ -1062,6 +1286,31 @@ export default function LiveViewerPage() {
                       </p>
                     </div>
                   )}
+
+                  {/* Host actions: result / resolve form / queued Up Next.
+                      "Create Next Market" lives beside the host status
+                      controls in the left column. */}
+                  <LiveDesktopHostPanel
+                    isHost={isHost}
+                    expired={expiredByTime}
+                    settled={
+                      !!market?.resolved || market?.resolutionStatus === "proposed"
+                    }
+                    resolved={!!market?.resolved}
+                    proposed={market?.resolutionStatus === "proposed"}
+                    outcomeNames={derived?.names ?? null}
+                    outcomeIndex={market?.proposedOutcome ?? null}
+                    queuedNext={queuedNext}
+                    onResolve={isHost ? handleResolveLive : undefined}
+                  />
+
+                  {/* Past Markets — persisted history (same data as mobile).
+                      Hidden when empty; refreshes whenever the session swaps
+                      to a new market. */}
+                  <LiveDesktopPastMarkets
+                    sessionId={session?.id ?? null}
+                    refreshKey={session?.market_address ?? null}
+                  />
 
                   <LiveActivity trades={recentTrades} />
                 </div>
@@ -1142,7 +1391,7 @@ export default function LiveViewerPage() {
                       onTrade={(s, idx, side, cost) => void handleTrade(s, idx, side, cost)}
                       marketBalanceLamports={marketBalanceLamports}
                       userHoldings={userSharesForUi}
-                      marketClosed={!!marketClosed}
+                      marketClosed={!!marketClosed || expiredByTime}
                     />
                   )}
 
@@ -1171,7 +1420,7 @@ export default function LiveViewerPage() {
           connected={connected}
           submitting={submitting}
           onTrade={handleTrade}
-          sessionLocked={sessionLocked}
+          sessionLocked={sessionLocked || expiredByTime}
           defaultOutcomeIndex={defaultOutcomeIndex}
           keepNavbar
         />
@@ -1179,6 +1428,17 @@ export default function LiveViewerPage() {
 
       {/* BUY toasts */}
       <BuyToasts toasts={buyToasts} />
+
+      {/* Viewer win/lose modal — host suppressed via hostJustResolvedRef. */}
+      {resultModal && (
+        <FlashMarketResultModal
+          open
+          result={resultModal.result}
+          outcomeLabel={resultModal.outcomeLabel}
+          winningShares={resultModal.winningShares}
+          onClose={() => setResultModal(null)}
+        />
+      )}
     </>
   );
 }

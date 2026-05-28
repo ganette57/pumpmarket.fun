@@ -1,57 +1,31 @@
 // src/app/live/new/page.tsx
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useWallet } from "@solana/wallet-adapter-react";
-import { supabase } from "@/lib/supabaseClient";
+import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { createLiveSession } from "@/lib/liveSessions";
+import { useProgram } from "@/hooks/useProgram";
+import { createLiveFlashMarket } from "@/lib/liveMarketCreate";
 
-type MarketOption = {
-  market_address: string;
-  question: string;
-};
+const DURATION_OPTIONS = [3, 5, 10, 30] as const;
 
 export default function NewLiveSessionPage() {
   const router = useRouter();
-  const { publicKey, connected } = useWallet();
+  const { publicKey, connected, signTransaction } = useWallet();
+  const { connection } = useConnection();
+  const program = useProgram();
 
-  const [title, setTitle] = useState("");
   const [streamUrl, setStreamUrl] = useState("");
-  const [thumbnailUrl, setThumbnailUrl] = useState("");
-  const [marketAddress, setMarketAddress] = useState("");
-  const [status, setStatus] = useState<"live" | "scheduled">("live");
+  const [marketTitle, setMarketTitle] = useState("");
+  const [yesLabel, setYesLabel] = useState("YES");
+  const [noLabel, setNoLabel] = useState("NO");
+  const [durationMin, setDurationMin] = useState<number>(5);
 
-  const [markets, setMarkets] = useState<MarketOption[]>([]);
-  const [loadingMarkets, setLoadingMarkets] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [step, setStep] = useState<"" | "market" | "session">("");
   const [error, setError] = useState("");
-
-  // Load user's markets
-  useEffect(() => {
-    if (!publicKey) return;
-    setLoadingMarkets(true);
-
-    (async () => {
-      try {
-        const { data, error } = await supabase
-          .from("markets")
-          .select("market_address,question")
-          .eq("creator", publicKey.toBase58())
-          .eq("resolved", false)
-          .order("created_at", { ascending: false })
-          .limit(50);
-
-        if (error) throw error;
-        setMarkets(data || []);
-      } catch (e) {
-        console.error("Failed to load markets:", e);
-      } finally {
-        setLoadingMarkets(false);
-      }
-    })();
-  }, [publicKey]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -61,27 +35,57 @@ export default function NewLiveSessionPage() {
       setError("Please connect your wallet first.");
       return;
     }
-    if (!title.trim()) { setError("Title is required."); return; }
-    if (!streamUrl.trim()) { setError("Stream URL is required."); return; }
-    if (!marketAddress.trim()) { setError("Please select or enter a market address."); return; }
+    if (!streamUrl.trim()) {
+      setError("Stream URL is required.");
+      return;
+    }
+    if (!marketTitle.trim()) {
+      setError("Market title is required.");
+      return;
+    }
+    if (!program) {
+      setError("Market program not ready — reconnect your wallet.");
+      return;
+    }
+    if (!signTransaction) {
+      setError("Wallet cannot sign transactions.");
+      return;
+    }
 
     setSubmitting(true);
     try {
-      const session = await createLiveSession({
-        title: title.trim(),
-        market_address: marketAddress.trim(),
-        host_wallet: publicKey.toBase58(),
-        stream_url: streamUrl.trim(),
-        status,
-        thumbnail_url: thumbnailUrl.trim() || null,
+      // 1. Create the short market on-chain (shared with the in-HUD Next
+      // Market flow). Same on-chain instruction as /create.
+      setStep("market");
+      const { marketAddress } = await createLiveFlashMarket({
+        program,
+        connection,
+        publicKey,
+        signTransaction,
+        title: marketTitle,
+        outcomes: [yesLabel, noLabel],
+        durationMin,
       });
 
-      router.push(`/live/${session.id}`);
+      // 2. Create the live session linked to the new market (always live).
+      setStep("session");
+      const session = await createLiveSession({
+        title: marketTitle.trim(),
+        market_address: marketAddress,
+        host_wallet: publicKey.toBase58(),
+        stream_url: streamUrl.trim(),
+        status: "live",
+        thumbnail_url: null,
+      });
+
+      // 3. Go to the main live feed, focused on the new session.
+      router.push(`/live?session=${encodeURIComponent(session.id)}`);
     } catch (err: any) {
-      console.error("Create session error:", err);
-      setError(String(err?.message || "Failed to create session"));
+      console.error("Go Live error:", err);
+      setError(String(err?.message || "Failed to go live"));
     } finally {
       setSubmitting(false);
+      setStep("");
     }
   }
 
@@ -90,41 +94,46 @@ export default function NewLiveSessionPage() {
       <div className="min-h-[70vh] flex items-center justify-center px-4">
         <div className="text-center">
           <h1 className="text-xl font-bold text-white mb-2">Connect Wallet</h1>
-          <p className="text-sm text-gray-400">You need to connect your wallet to create a live session.</p>
+          <p className="text-sm text-gray-400">
+            You need to connect your wallet to go live.
+          </p>
         </div>
       </div>
     );
   }
 
+  const submitLabel = submitting
+    ? step === "market"
+      ? "Creating market…"
+      : step === "session"
+      ? "Starting session…"
+      : "Working…"
+    : "Go Live";
+
   return (
     <div className="min-h-[70vh] px-4 py-6 max-w-lg mx-auto">
       {/* Back */}
-      <Link href="/live" className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-white mb-6 transition">
+      <Link
+        href="/live"
+        className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-white mb-6 transition"
+      >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
           <path d="M15 18l-6-6 6-6" />
         </svg>
         Back to live
       </Link>
 
-      <h1 className="text-2xl font-bold text-white mb-6">Go Live</h1>
+      <h1 className="text-2xl font-bold text-white mb-1">Go Live</h1>
+      <p className="text-sm text-gray-400 mb-6">
+        Create a stream and its first flash market in one step.
+      </p>
 
       <form onSubmit={handleSubmit} className="space-y-5">
-        {/* Title */}
+        {/* 1. Stream URL */}
         <div>
-          <label className="block text-sm font-semibold text-white mb-1.5">Session Title</label>
-          <input
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="e.g. Market Analysis Stream"
-            className="input-pump w-full"
-            maxLength={120}
-          />
-        </div>
-
-        {/* Stream URL */}
-        <div>
-          <label className="block text-sm font-semibold text-white mb-1.5">Stream URL</label>
+          <label className="block text-sm font-semibold text-white mb-1.5">
+            Stream URL
+          </label>
           <input
             type="url"
             value={streamUrl}
@@ -135,80 +144,69 @@ export default function NewLiveSessionPage() {
           <p className="text-xs text-gray-500 mt-1">YouTube, Twitch, or Kick stream URL</p>
         </div>
 
-        {/* Thumbnail URL (optional) */}
+        {/* 2. Market title */}
         <div>
           <label className="block text-sm font-semibold text-white mb-1.5">
-            Thumbnail URL <span className="text-gray-500 font-normal">(optional)</span>
+            Market Title
           </label>
           <input
-            type="url"
-            value={thumbnailUrl}
-            onChange={(e) => setThumbnailUrl(e.target.value)}
-            placeholder="https://..."
+            type="text"
+            value={marketTitle}
+            onChange={(e) => setMarketTitle(e.target.value)}
+            placeholder="e.g. Will he say Bitcoin in the next 5 minutes?"
             className="input-pump w-full"
+            maxLength={200}
           />
         </div>
 
-        {/* Market */}
+        {/* 3. Outcomes */}
         <div>
-          <label className="block text-sm font-semibold text-white mb-1.5">Linked Market</label>
-
-          {loadingMarkets ? (
-            <div className="text-sm text-gray-500">Loading your markets...</div>
-          ) : markets.length > 0 ? (
-            <select
-              value={marketAddress}
-              onChange={(e) => setMarketAddress(e.target.value)}
-              className="input-pump w-full"
-            >
-              <option value="">Select a market...</option>
-              {markets.map((m) => (
-                <option key={m.market_address} value={m.market_address}>
-                  {m.question?.slice(0, 60) || m.market_address.slice(0, 12) + "..."}
-                </option>
-              ))}
-            </select>
-          ) : null}
-
-          <div className="mt-2">
-            <label className="block text-xs text-gray-500 mb-1">Or paste market address directly:</label>
+          <label className="block text-sm font-semibold text-white mb-1.5">
+            Outcomes
+          </label>
+          <div className="flex gap-2">
             <input
               type="text"
-              value={marketAddress}
-              onChange={(e) => setMarketAddress(e.target.value)}
-              placeholder="Market public key..."
-              className="input-pump w-full text-sm"
+              value={yesLabel}
+              onChange={(e) => setYesLabel(e.target.value)}
+              className="input-pump w-full text-pump-green font-semibold"
+              maxLength={24}
+            />
+            <input
+              type="text"
+              value={noLabel}
+              onChange={(e) => setNoLabel(e.target.value)}
+              className="input-pump w-full text-[#ff5c73] font-semibold"
+              maxLength={24}
             />
           </div>
+          <p className="text-xs text-gray-500 mt-1">Two outcomes (defaults to YES / NO).</p>
         </div>
 
-        {/* Status */}
+        {/* 4. Duration */}
         <div>
-          <label className="block text-sm font-semibold text-white mb-1.5">Initial Status</label>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => setStatus("live")}
-              className={`flex-1 py-2.5 rounded-lg text-sm font-semibold border transition ${
-                status === "live"
-                  ? "border-pump-green bg-pump-green/10 text-pump-green"
-                  : "border-gray-700 text-gray-400 hover:border-gray-600"
-              }`}
-            >
-              Go Live Now
-            </button>
-            <button
-              type="button"
-              onClick={() => setStatus("scheduled")}
-              className={`flex-1 py-2.5 rounded-lg text-sm font-semibold border transition ${
-                status === "scheduled"
-                  ? "border-yellow-500 bg-yellow-500/10 text-yellow-400"
-                  : "border-gray-700 text-gray-400 hover:border-gray-600"
-              }`}
-            >
-              Schedule
-            </button>
+          <label className="block text-sm font-semibold text-white mb-1.5">
+            Duration
+          </label>
+          <div className="grid grid-cols-4 gap-2">
+            {DURATION_OPTIONS.map((d) => (
+              <button
+                key={d}
+                type="button"
+                onClick={() => setDurationMin(d)}
+                className={`py-2.5 rounded-lg text-sm font-semibold border transition ${
+                  durationMin === d
+                    ? "border-pump-green bg-pump-green/10 text-pump-green"
+                    : "border-gray-700 text-gray-400 hover:border-gray-600"
+                }`}
+              >
+                {d} min
+              </button>
+            ))}
           </div>
+          <p className="text-xs text-gray-500 mt-1">
+            Market resolves {durationMin} minute{durationMin === 1 ? "" : "s"} after going live.
+          </p>
         </div>
 
         {/* Error */}
@@ -228,7 +226,7 @@ export default function NewLiveSessionPage() {
               : "bg-pump-green text-black hover:bg-[#74ffb8]"
           }`}
         >
-          {submitting ? "Creating..." : status === "live" ? "Start Live Session" : "Schedule Session"}
+          {submitLabel}
         </button>
       </form>
     </div>

@@ -417,6 +417,12 @@ export type IndexMarketInput = {
   // feed video (optional short vertical video for the social feed)
   feed_video_url?: string | null;
   feed_thumbnail_url?: string | null;
+
+  // True for markets created from inside a live session (Go Live quick create
+  // or in-HUD next-market). Used by /api/home to keep these out of the main
+  // feed. Requires column `is_live_session_market boolean default false` on
+  // `markets`. Safely omitted on the upsert if undefined.
+  is_live_session_market?: boolean | null;
 };
 
 export async function indexMarket(input: IndexMarketInput): Promise<void> {
@@ -462,10 +468,31 @@ export async function indexMarket(input: IndexMarketInput): Promise<void> {
   if (input.feed_video_url) payload.feed_video_url = input.feed_video_url;
   if (input.feed_thumbnail_url) payload.feed_thumbnail_url = input.feed_thumbnail_url;
 
-  // Upsert by market_address (requires unique index on market_address)
-  const { error } = await supabase
+  // Live-session flag (only included when explicitly set so older callers
+  // never write to a column that may not exist yet).
+  if (input.is_live_session_market !== undefined && input.is_live_session_market !== null) {
+    payload.is_live_session_market = !!input.is_live_session_market;
+  }
+
+  // Upsert by market_address (requires unique index on market_address).
+  // If the optional `is_live_session_market` column does not exist yet, fall
+  // back to an upsert without it so existing creation flows never regress
+  // before the migration is run.
+  let { error } = await supabase
     .from("markets")
     .upsert(payload, { onConflict: "market_address" });
+
+  if (
+    error &&
+    payload.is_live_session_market !== undefined &&
+    /is_live_session_market/i.test(String(error.message || ""))
+  ) {
+    const { is_live_session_market: _omit, ...fallbackPayload } = payload;
+    const retry = await supabase
+      .from("markets")
+      .upsert(fallbackPayload, { onConflict: "market_address" });
+    error = retry.error;
+  }
 
   if (error) {
     console.error("indexMarket error:", error);
