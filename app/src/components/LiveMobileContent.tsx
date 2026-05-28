@@ -695,7 +695,8 @@ function LiveBottomDrawer({
 
 // Market Chart drawer — reuses the trade page's OddsHistoryChart (lazy) fed
 // with the same transaction-replay history pipeline as /trade/[id].
-function LiveChartDrawer({
+// Also reused from the main mobile feed (HomeFeedActionRail).
+export function LiveChartDrawer({
   open,
   onClose,
   marketAddress,
@@ -806,7 +807,8 @@ type LiveActivityRow = {
 
 // Live Activity drawer — recent trades for this market, fetched with the same
 // supabase helper the chart drawer already uses (one fetch per open).
-function LiveActivityDrawer({
+// Also reused from the main mobile feed (HomeFeedActionRail).
+export function LiveActivityDrawer({
   open,
   onClose,
   marketAddress,
