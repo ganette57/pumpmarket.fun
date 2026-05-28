@@ -36,6 +36,12 @@ export type LiveSession = {
    *  LIVE_SESSION_COLS so existing queries keep working before the column is
    *  added. */
   queued_market_config?: QueuedNextMarketConfig | null;
+  /** Append-only history of past on-chain market addresses linked to this
+   *  session (newest entries pushed by the signed `/market` route on swap).
+   *  Requires column `past_market_addresses jsonb default '[]'::jsonb`. Not
+   *  part of LIVE_SESSION_COLS so existing queries keep working before the
+   *  column is added. */
+  past_market_addresses?: string[] | null;
 };
 
 /** Host-prepared config for the next flash market. Created on-chain only at
@@ -105,6 +111,36 @@ export async function fetchQueuedMarketAddress(
     return s || null;
   } catch {
     return null;
+  }
+}
+
+/** Reads `live_sessions.past_market_addresses` safely. Returns [] when the
+ *  column does not exist yet, the row is missing, or the history is empty.
+ *  Strings are trimmed and deduplicated while preserving insertion order. */
+export async function fetchPastMarketAddresses(
+  sessionId: string,
+): Promise<string[]> {
+  if (!sessionId) return [];
+  try {
+    const { data, error } = await supabase
+      .from("live_sessions")
+      .select("past_market_addresses")
+      .eq("id", sessionId)
+      .maybeSingle();
+    if (error) return [];
+    const raw = (data as any)?.past_market_addresses;
+    if (!Array.isArray(raw)) return [];
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const item of raw) {
+      const s = String(item || "").trim();
+      if (!s || seen.has(s)) continue;
+      seen.add(s);
+      out.push(s);
+    }
+    return out;
+  } catch {
+    return [];
   }
 }
 

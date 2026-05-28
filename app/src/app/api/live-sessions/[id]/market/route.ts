@@ -89,9 +89,36 @@ export async function POST(
     }
 
     // Swapping the active market consumes any queued slot — try to clear
-    // both the config + legacy address columns in the same write. If those
-    // columns don't exist yet, fall back to a market-only update so the swap
-    // never regresses.
+    // both the config + legacy address columns AND append the OLD active
+    // market_address to past_market_addresses in the same write. If any of
+    // those columns don't exist yet, fall back to a market-only update so
+    // the swap never regresses.
+    const previousMarketAddress = String(
+      (session as any).market_address || "",
+    ).trim();
+    const previousHistory = Array.isArray(
+      (session as any).past_market_addresses,
+    )
+      ? ((session as any).past_market_addresses as unknown[])
+          .map((x) => String(x || "").trim())
+          .filter(Boolean)
+      : [];
+    const nextHistory: string[] = [];
+    const seen = new Set<string>();
+    for (const a of previousHistory) {
+      if (!seen.has(a)) {
+        seen.add(a);
+        nextHistory.push(a);
+      }
+    }
+    if (
+      previousMarketAddress &&
+      previousMarketAddress !== newMarketAddress &&
+      !seen.has(previousMarketAddress)
+    ) {
+      nextHistory.push(previousMarketAddress);
+    }
+
     let updated: any;
     let updErr: any;
     {
@@ -101,6 +128,7 @@ export async function POST(
           market_address: newMarketAddress,
           queued_market_config: null,
           queued_market_address: null,
+          past_market_addresses: nextHistory,
         })
         .eq("id", sessionId)
         .select("*")
@@ -109,6 +137,7 @@ export async function POST(
       updErr = attempt.error;
     }
     if (updErr) {
+      // Some optional columns missing — retry without queue/history fields.
       const fallback = await supabase
         .from("live_sessions")
         .update({ market_address: newMarketAddress })

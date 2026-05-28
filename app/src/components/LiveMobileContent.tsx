@@ -8,7 +8,7 @@ import Link from "next/link";
 import Image from "next/image";
 import CategoryImagePlaceholder from "@/components/CategoryImagePlaceholder";
 import { lamportsToSol } from "@/utils/solana";
-import type { LiveSession } from "@/lib/liveSessions";
+import { fetchPastMarketAddresses, type LiveSession } from "@/lib/liveSessions";
 import { supabase } from "@/lib/supabaseClient";
 import { getMarketByAddress } from "@/lib/markets";
 import { buildOddsSeries, downsample } from "@/lib/marketHistory";
@@ -1305,6 +1305,18 @@ export function MobileImmersiveSlide({
       status: "resolved" | "proposed";
     }[]
   >([]);
+  // Persisted history hydrated from `live_sessions.past_market_addresses`.
+  // Merged with the local `pastResults` so navigation/refresh never loses
+  // the history. Empty when the column does not exist yet.
+  const [persistedPastResults, setPersistedPastResults] = useState<
+    {
+      pk: string;
+      winningIdx: number;
+      title: string;
+      winningLabel: string;
+      status: "resolved" | "proposed";
+    }[]
+  >([]);
   const prevMarketSnapRef = useRef<{
     pk: string;
     settled: boolean;
@@ -1443,6 +1455,101 @@ export function MobileImmersiveSlide({
     resolution?.outcomeIndex,
     derived?.names,
   ]);
+
+  // Hydrate the persisted history from `live_sessions.past_market_addresses`
+  // on session change / market swap so Past Markets survives navigation and
+  // page refresh. Best-effort: returns [] if the column does not exist yet.
+  useEffect(() => {
+    const sid = session?.id;
+    if (!sid) {
+      setPersistedPastResults([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const addrs = await fetchPastMarketAddresses(sid);
+      if (cancelled) return;
+      if (!addrs.length) {
+        setPersistedPastResults([]);
+        return;
+      }
+      const rows = (
+        await Promise.all(
+          addrs.map(async (addr) => {
+            try {
+              const m = await getMarketByAddress(addr);
+              if (!m) return null;
+              const winningIdxRaw =
+                (m as any).winning_outcome != null
+                  ? Number((m as any).winning_outcome)
+                  : m.proposed_winning_outcome != null
+                  ? Number(m.proposed_winning_outcome)
+                  : null;
+              if (winningIdxRaw == null || !Number.isFinite(winningIdxRaw)) {
+                return null;
+              }
+              const resolvedFlag =
+                !!m.resolved ||
+                String(m.resolution_status || "").toLowerCase() === "finalized";
+              const status: "resolved" | "proposed" = resolvedFlag
+                ? "resolved"
+                : "proposed";
+              const namesRaw = (m as any).outcome_names;
+              const names: string[] = Array.isArray(namesRaw)
+                ? namesRaw.map((x: unknown) => String(x ?? ""))
+                : [];
+              const winningLabel =
+                names[winningIdxRaw] || (winningIdxRaw === 0 ? "YES" : "NO");
+              return {
+                pk: addr,
+                winningIdx: winningIdxRaw,
+                title: String(m.question || "Market"),
+                winningLabel,
+                status,
+              };
+            } catch {
+              return null;
+            }
+          }),
+        )
+      ).filter(
+        (
+          x,
+        ): x is {
+          pk: string;
+          winningIdx: number;
+          title: string;
+          winningLabel: string;
+          status: "resolved" | "proposed";
+        } => x != null,
+      );
+      if (!cancelled) setPersistedPastResults(rows);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.id, session?.market_address]);
+
+  // Merge persisted history (oldest first) with the local tracker, deduped
+  // by market address. Order: persisted entries first, then any local entries
+  // not yet persisted (covers the brief gap between in-session swaps).
+  const mergedPastResults = useMemo(() => {
+    const seen = new Set<string>();
+    const out: typeof pastResults = [];
+    for (const r of persistedPastResults) {
+      if (!seen.has(r.pk)) {
+        seen.add(r.pk);
+        out.push(r);
+      }
+    }
+    for (const r of pastResults) {
+      if (!seen.has(r.pk)) {
+        seen.add(r.pk);
+        out.push(r);
+      }
+    }
+    return out;
+  }, [persistedPastResults, pastResults]);
 
   const isDeeplink = variant === "deeplink";
 
@@ -1623,7 +1730,7 @@ export function MobileImmersiveSlide({
                     {volLabel} Vol
                   </span>
                 )}
-                {pastResults.length > 0 && (
+                {mergedPastResults.length > 0 && (
                   <button
                     type="button"
                     onClick={() => setPastResultsOpen(true)}
@@ -1647,7 +1754,7 @@ export function MobileImmersiveSlide({
                     </span>
                     <span className="w-px h-3.5 bg-white/20" aria-hidden />
                     <span className="inline-flex items-center gap-1">
-                      {pastResults.map((r, i) => {
+                      {mergedPastResults.slice(-5).map((r, i) => {
                         const isYes = r.winningIdx === 0;
                         return (
                           <span
@@ -2191,7 +2298,7 @@ export function MobileImmersiveSlide({
         subtitle="Previous markets in this live session"
         closeLabel="Close past markets"
       >
-        {pastResults.length === 0 ? (
+        {mergedPastResults.length === 0 ? (
           <div className="h-[160px] flex flex-col items-center justify-center text-center gap-1">
             <p className="text-sm text-gray-400">No past markets yet</p>
             <p className="text-xs text-gray-600">
@@ -2200,7 +2307,7 @@ export function MobileImmersiveSlide({
           </div>
         ) : (
           <div className="max-h-[60vh] overflow-y-auto -mx-1 px-1 space-y-1.5">
-            {[...pastResults].reverse().map((r, i) => {
+            {[...mergedPastResults].reverse().map((r, i) => {
               const isYes = r.winningIdx === 0;
               return (
                 <Link
