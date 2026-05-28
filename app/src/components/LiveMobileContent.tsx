@@ -1292,15 +1292,26 @@ export function MobileImmersiveSlide({
   const [chatOpen, setChatOpen] = useState(false);
   const [resolveOpen, setResolveOpen] = useState(false);
   const [nextMarketOpen, setNextMarketOpen] = useState(false);
-  // Tiny strip of recent winning outcomes for THIS live session — accumulates
-  // as the host swaps to a new market (was settled, now a different pk).
+  const [pastResultsOpen, setPastResultsOpen] = useState(false);
+  // Strip of recent settled markets for THIS live session — accumulates as
+  // the host swaps to a new market (previous was settled, now a different pk).
+  // Stores enough to render the "Past Markets" drawer rows + link to /trade.
   const [pastResults, setPastResults] = useState<
-    { winningIdx: number; pk: string }[]
+    {
+      pk: string;
+      winningIdx: number;
+      title: string;
+      winningLabel: string;
+      status: "resolved" | "proposed";
+    }[]
   >([]);
   const prevMarketSnapRef = useRef<{
     pk: string;
     settled: boolean;
     winningIdx: number | null;
+    title: string;
+    winningLabel: string;
+    status: "resolved" | "proposed" | null;
   } | null>(null);
   // Tracks the largest remaining-seconds value we've seen for this slide;
   // used as the denominator for the circular HUD progress arc so it sweeps
@@ -1375,13 +1386,30 @@ export function MobileImmersiveSlide({
     peakRemSecRef.current = null;
   }, [market?.publicKey]);
 
-  // Recent results strip — append the previous market's winning outcome when
-  // we detect a market swap (pk change) and the previous one was settled.
+  // Recent results strip — append the previous market's title + winning
+  // outcome + status when we detect a market swap (pk change) and the previous
+  // one was settled. Drives the "Past Markets" drawer rows.
   useEffect(() => {
+    const settledNow =
+      !!resolution?.resolved || !!resolution?.proposed;
+    const statusNow: "resolved" | "proposed" | null = resolution?.resolved
+      ? "resolved"
+      : resolution?.proposed
+      ? "proposed"
+      : null;
+    const winningIdxNow = resolution?.outcomeIndex ?? null;
+    const winningLabelNow =
+      winningIdxNow != null
+        ? derived?.names?.[winningIdxNow] ||
+          (winningIdxNow === 0 ? "YES" : "NO")
+        : "";
     const curr = {
       pk: market?.publicKey || "",
-      settled: !!resolution?.resolved || !!resolution?.proposed,
-      winningIdx: resolution?.outcomeIndex ?? null,
+      settled: settledNow,
+      winningIdx: winningIdxNow,
+      title: market?.question || session.title || "Market",
+      winningLabel: winningLabelNow,
+      status: statusNow,
     };
     const prev = prevMarketSnapRef.current;
     if (
@@ -1389,18 +1417,31 @@ export function MobileImmersiveSlide({
       prev.pk &&
       prev.pk !== curr.pk &&
       prev.settled &&
-      prev.winningIdx != null
+      prev.winningIdx != null &&
+      prev.status
     ) {
       setPastResults((h) =>
-        [...h, { winningIdx: prev.winningIdx!, pk: prev.pk }].slice(-5),
+        [
+          ...h,
+          {
+            pk: prev.pk,
+            winningIdx: prev.winningIdx!,
+            title: prev.title,
+            winningLabel: prev.winningLabel,
+            status: prev.status!,
+          },
+        ].slice(-10),
       );
     }
     prevMarketSnapRef.current = curr;
   }, [
     market?.publicKey,
+    market?.question,
+    session.title,
     resolution?.resolved,
     resolution?.proposed,
     resolution?.outcomeIndex,
+    derived?.names,
   ]);
 
   const isDeeplink = variant === "deeplink";
@@ -1585,9 +1626,9 @@ export function MobileImmersiveSlide({
                 {pastResults.length > 0 && (
                   <button
                     type="button"
-                    onClick={() => setActivityOpen(true)}
-                    aria-label="Open recent results"
-                    title="Recent results in this session"
+                    onClick={() => setPastResultsOpen(true)}
+                    aria-label="Open past markets"
+                    title="Past markets in this session"
                     className="inline-flex items-center gap-1.5 h-7 px-2 rounded-full bg-black/45 border border-white/10 backdrop-blur-md active:scale-95 transition"
                   >
                     <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-white/85">
@@ -2140,6 +2181,87 @@ export function MobileImmersiveSlide({
           }}
         />
       )}
+
+      {/* Past Markets drawer — opened by the "Past" pill. Rows navigate to
+          /trade/{marketAddress} so users can revisit any prior market. */}
+      <LiveBottomDrawer
+        open={pastResultsOpen}
+        onClose={() => setPastResultsOpen(false)}
+        title="Past Markets"
+        subtitle="Previous markets in this live session"
+        closeLabel="Close past markets"
+      >
+        {pastResults.length === 0 ? (
+          <div className="h-[160px] flex flex-col items-center justify-center text-center gap-1">
+            <p className="text-sm text-gray-400">No past markets yet</p>
+            <p className="text-xs text-gray-600">
+              They'll appear here as the host resolves each market.
+            </p>
+          </div>
+        ) : (
+          <div className="max-h-[60vh] overflow-y-auto -mx-1 px-1 space-y-1.5">
+            {[...pastResults].reverse().map((r, i) => {
+              const isYes = r.winningIdx === 0;
+              return (
+                <Link
+                  key={`${r.pk}-${i}`}
+                  href={`/trade/${encodeURIComponent(r.pk)}`}
+                  className="flex items-center gap-3 rounded-xl bg-white/[0.03] border border-white/10 px-3 py-2.5 active:scale-[0.99] transition"
+                >
+                  <span
+                    className={`shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-full border border-black/30 ${
+                      isYes
+                        ? "bg-pump-green shadow-[0_0_8px_rgba(109,255,164,0.55)]"
+                        : "bg-[#ff5c73] shadow-[0_0_8px_rgba(255,92,115,0.55)]"
+                    }`}
+                  >
+                    <svg
+                      viewBox="0 0 10 10"
+                      className="w-2.5 h-2.5 fill-white"
+                      aria-hidden
+                    >
+                      {isYes ? (
+                        <polygon points="5,2 8.5,7.5 1.5,7.5" />
+                      ) : (
+                        <polygon points="5,8 8.5,2.5 1.5,2.5" />
+                      )}
+                    </svg>
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-white font-semibold truncate">
+                      {r.title}
+                    </p>
+                    <p className="text-xs text-gray-400 truncate">
+                      <span
+                        className={`font-semibold ${
+                          isYes ? "text-pump-green" : "text-[#ff5c73]"
+                        }`}
+                      >
+                        {r.winningLabel}
+                      </span>
+                      <span className="text-gray-500">
+                        {" "}
+                        · {r.status === "resolved" ? "Final" : "Proposed"}
+                      </span>
+                    </p>
+                  </div>
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="w-4 h-4 text-gray-500 shrink-0"
+                  >
+                    <path d="M9 18l6-6-6-6" />
+                  </svg>
+                </Link>
+              );
+            })}
+          </div>
+        )}
+      </LiveBottomDrawer>
     </div>
   );
 }
