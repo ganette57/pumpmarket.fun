@@ -15,6 +15,7 @@ import HostControls from "@/components/LiveHostControls";
 import LiveDesktopHostPanel, {
   CreateNextLauncher,
 } from "@/components/LiveDesktopHostPanel";
+import LiveDesktopPastMarkets from "@/components/LiveDesktopPastMarkets";
 import FlashMarketResultModal, {
   type FlashMarketResultState,
 } from "@/components/FlashMarketResultModal";
@@ -1301,6 +1302,14 @@ export default function LiveViewerPage() {
                     outcomeIndex={market?.proposedOutcome ?? null}
                     queuedNext={queuedNext}
                     onResolve={isHost ? handleResolveLive : undefined}
+                  />
+
+                  {/* Past Markets — persisted history (same data as mobile).
+                      Hidden when empty; refreshes whenever the session swaps
+                      to a new market. */}
+                  <LiveDesktopPastMarkets
+                    sessionId={session?.id ?? null}
+                    refreshKey={session?.market_address ?? null}
                   />
 
                   <LiveActivity trades={recentTrades} />
