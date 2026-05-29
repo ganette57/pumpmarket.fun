@@ -1,11 +1,16 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { Clock, TrendingUp } from "lucide-react";
+import { Activity as ActivityIcon, BarChart3, Clock, TrendingUp } from "lucide-react";
 import { lamportsToSol } from "@/utils/solana";
 import { triggerHaptic } from "@/utils/haptics";
 import MobileFeedVideoBackground from "@/components/MobileFeedVideoBackground";
+import {
+  LiveActivityDrawer,
+  LiveChartDrawer,
+} from "@/components/LiveMobileContent";
 
 interface HomeFeedItemProps {
   market: {
@@ -50,6 +55,15 @@ export default function HomeFeedItem({
   onTitleTap,
   onOutcomeTap,
 }: HomeFeedItemProps) {
+  const [chartOpen, setChartOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
+  const drawerNames = useMemo(
+    () =>
+      market.outcomeNames && market.outcomeNames.length >= 2
+        ? market.outcomeNames
+        : ["YES", "NO"],
+    [market.outcomeNames],
+  );
   const now = Date.now() / 1000;
   const daysLeft = Math.max(0, Math.floor((market.resolutionTime - now) / 86400));
   const isEnded = market.resolved || now >= market.resolutionTime;
@@ -175,16 +189,43 @@ export default function HomeFeedItem({
           withActionRail ? "pl-4 pr-24" : "px-4"
         }`}
       >
-        {/* Category badge */}
-        <div className="mb-2">
+        {/* Category badge + Chart/Activity quick actions (room here, away
+            from the right rail). */}
+        <div className="mb-2 flex items-center gap-2">
           <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wide bg-white/15 backdrop-blur-sm border border-white/10 text-white/90">
             {safeCategory}
           </span>
           {showEndedBadge && (
-            <span className="ml-2 inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wide bg-black/60 border border-gray-700 text-gray-300">
+            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wide bg-black/60 border border-gray-700 text-gray-300">
               Ended
             </span>
           )}
+          <button
+            type="button"
+            aria-label="Open market chart"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              triggerHaptic("light");
+              setChartOpen(true);
+            }}
+            className="inline-flex items-center justify-center w-7 h-7 rounded-full border border-white/15 bg-black/40 text-white/85 backdrop-blur-sm active:scale-95 transition"
+          >
+            <BarChart3 className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            aria-label="Open market activity"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              triggerHaptic("light");
+              setActivityOpen(true);
+            }}
+            className="inline-flex items-center justify-center w-7 h-7 rounded-full border border-white/15 bg-black/40 text-white/85 backdrop-blur-sm active:scale-95 transition"
+          >
+            <ActivityIcon className="w-3.5 h-3.5" />
+          </button>
         </div>
 
         {/* Title — tapping opens the full trade page */}
@@ -286,6 +327,24 @@ export default function HomeFeedItem({
           </button>
         </div>
       </div>
+
+      {/* Chart + Activity drawers — reused from Live mobile. Portal to body
+          inside LiveBottomDrawer so they sit above the BREAKING ticker. */}
+      <LiveChartDrawer
+        open={chartOpen}
+        onClose={() => setChartOpen(false)}
+        marketAddress={market.publicKey}
+        names={drawerNames}
+        percentages={null}
+        question={market.question}
+      />
+      <LiveActivityDrawer
+        open={activityOpen}
+        onClose={() => setActivityOpen(false)}
+        marketAddress={market.publicKey}
+        names={drawerNames}
+        question={market.question}
+      />
     </div>
   );
 }
