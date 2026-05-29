@@ -2,21 +2,10 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  Activity as ActivityIcon,
-  BarChart3,
-  Bookmark,
-  Heart,
-  MessageCircle,
-  Share2,
-} from "lucide-react";
+import { Bookmark, Heart, MessageCircle, Share2 } from "lucide-react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { supabase } from "@/lib/supabaseClient";
 import { triggerHaptic } from "@/utils/haptics";
-import {
-  LiveActivityDrawer,
-  LiveChartDrawer,
-} from "@/components/LiveMobileContent";
 
 type CreatorProfile = {
   display_name?: string | null;
@@ -31,8 +20,6 @@ type HomeFeedActionRailProps = {
   creatorProfile?: CreatorProfile;
   commentsCount?: number | null;
   onOpenComments: () => void;
-  /** Outcome labels for chart/activity drawers (defaults to ["YES","NO"]). */
-  outcomeNames?: string[] | null;
 };
 
 function compactCount(value: number): string {
@@ -66,7 +53,6 @@ export default function HomeFeedActionRail({
   creatorProfile = null,
   commentsCount = null,
   onOpenComments,
-  outcomeNames = null,
 }: HomeFeedActionRailProps) {
   const { publicKey } = useWallet();
   const [liked, setLiked] = useState(false);
@@ -75,20 +61,10 @@ export default function HomeFeedActionRail({
   const [remoteLikeRowId, setRemoteLikeRowId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [bookmarkRowId, setBookmarkRowId] = useState<string | null>(null);
-  const [chartOpen, setChartOpen] = useState(false);
-  const [activityOpen, setActivityOpen] = useState(false);
   const likeMarketIdRef = useRef<string | null>(null);
   const likeInFlightRef = useRef(false);
   const userAddress = useMemo(() => publicKey?.toBase58() ?? null, [publicKey]);
   const bookmarked = !!bookmarkRowId;
-
-  // Default outcome labels for chart/activity drawers. Most markets in the
-  // feed are binary YES/NO; multi-outcome markets pass real names explicitly.
-  const drawerNames = useMemo(
-    () =>
-      outcomeNames && outcomeNames.length >= 2 ? outcomeNames : ["YES", "NO"],
-    [outcomeNames],
-  );
 
   async function resolveLikeMarketId(): Promise<string | null> {
     if (likeMarketIdRef.current) return likeMarketIdRef.current;
@@ -428,34 +404,6 @@ export default function HomeFeedActionRail({
         type="button"
         onClick={() => {
           triggerHaptic("light");
-          setChartOpen(true);
-        }}
-        className="group flex flex-col items-center gap-1.5 transition-transform duration-150 ease-out active:scale-[0.95]"
-        aria-label="Open market chart"
-      >
-        <span className="flex h-11 w-11 items-center justify-center rounded-full border border-white/25 bg-black/40 text-white shadow-[0_10px_24px_rgba(0,0,0,0.42)] backdrop-blur-xl ring-1 ring-inset ring-white/10 transition-all duration-150 ease-out group-active:scale-[0.92]">
-          <BarChart3 className="h-5 w-5 text-white" />
-        </span>
-      </button>
-
-      <button
-        type="button"
-        onClick={() => {
-          triggerHaptic("light");
-          setActivityOpen(true);
-        }}
-        className="group flex flex-col items-center gap-1.5 transition-transform duration-150 ease-out active:scale-[0.95]"
-        aria-label="Open market activity"
-      >
-        <span className="flex h-11 w-11 items-center justify-center rounded-full border border-white/25 bg-black/40 text-white shadow-[0_10px_24px_rgba(0,0,0,0.42)] backdrop-blur-xl ring-1 ring-inset ring-white/10 transition-all duration-150 ease-out group-active:scale-[0.92]">
-          <ActivityIcon className="h-5 w-5 text-white" />
-        </span>
-      </button>
-
-      <button
-        type="button"
-        onClick={() => {
-          triggerHaptic("light");
           void toggleBookmark();
         }}
         disabled={busy}
@@ -483,23 +431,6 @@ export default function HomeFeedActionRail({
         </span>
       </button>
 
-      {/* Reused drawers from the Live mobile flow — identical chart history
-          pipeline and recent-trades query. Each loads once per open. */}
-      <LiveChartDrawer
-        open={chartOpen}
-        onClose={() => setChartOpen(false)}
-        marketAddress={marketAddress}
-        names={drawerNames}
-        percentages={null}
-        question={question}
-      />
-      <LiveActivityDrawer
-        open={activityOpen}
-        onClose={() => setActivityOpen(false)}
-        marketAddress={marketAddress}
-        names={drawerNames}
-        question={question}
-      />
     </div>
   );
 }

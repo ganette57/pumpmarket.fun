@@ -215,3 +215,48 @@ body {
 .react-datepicker__navigation:hover *::before {
   border-color: #00ff9d !important;
 }
+
+/* =========================
+   Solana wallet adapter modal — defensive overrides for mobile.
+
+   The modal renders above every in-app overlay, and CRITICALLY the backdrop
+   (.wallet-adapter-modal-overlay) is the LAST child in the adapter DOM, so it
+   must be kept strictly BELOW the dialog — otherwise (e.g. with equal z-index)
+   the transparent backdrop paints on top of the wallet rows and swallows every
+   tap (visible but unclickable on mobile / Phantom in-app browser).
+   ========================= */
+.wallet-adapter-modal {
+  z-index: 2147483647 !important;
+  pointer-events: auto !important; /* root must be hittable even if the
+                                      fade-in class fails to toggle it in a
+                                      mobile webview */
+}
+/* Backdrop sits behind the dialog (within the modal root's stacking ctx). */
+.wallet-adapter-modal-overlay {
+  z-index: 0 !important;
+  pointer-events: auto !important; /* still tappable to close */
+}
+/* Dialog + its wrapper sit above the backdrop. */
+.wallet-adapter-modal-container {
+  z-index: 1 !important;
+  pointer-events: auto !important;
+}
+.wallet-adapter-modal-wrapper {
+  position: relative;
+  z-index: 2 !important;
+  pointer-events: auto !important;
+}
+/* Wallet rows / buttons must be tappable and above any wrapper pseudo-bg. */
+.wallet-adapter-modal-list,
+.wallet-adapter-modal-list-item,
+.wallet-adapter-modal-list .wallet-adapter-button,
+.wallet-adapter-button,
+.wallet-adapter-modal-button-close,
+.wallet-adapter-modal-collapse-button,
+.wallet-adapter-dropdown-list-item {
+  position: relative;
+  z-index: 3;
+  pointer-events: auto !important;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
