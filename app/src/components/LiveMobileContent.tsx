@@ -3,6 +3,7 @@
 "use client";
 
 import { useMemo, useState, useEffect, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import Image from "next/image";
@@ -47,7 +48,10 @@ export function StreamPlayer({ url, className }: { url: string; className?: stri
       /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/live\/)([\w-]+)/
     );
     if (ytMatch)
-      return `https://www.youtube.com/embed/${ytMatch[1]}?autoplay=1&mute=1`;
+      // playsinline=1 → iOS/Phantom webview plays in place (not forced
+      // fullscreen) so the user can tap the player; muted autoplay stays
+      // for autoplay policy, the user unmutes via the YouTube controls.
+      return `https://www.youtube.com/embed/${ytMatch[1]}?autoplay=1&mute=1&playsinline=1`;
 
     const twitchMatch = url.match(/twitch\.tv\/(\w+)/);
     if (twitchMatch)
@@ -640,8 +644,12 @@ function LiveBottomDrawer({
   }, [open]);
 
   if (!open) return null;
+  if (typeof document === "undefined") return null;
 
-  return (
+  // Portal to document.body so the drawer escapes any ancestor stacking
+  // context (e.g. the home feed's right action rail wrapper at z-30) and
+  // sits above page-level overlays like the BREAKING ticker.
+  return createPortal(
     <div className="fixed inset-0 z-[200]">
       {/* Backdrop */}
       <button
@@ -689,7 +697,8 @@ function LiveBottomDrawer({
 
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -1616,19 +1625,25 @@ export function MobileImmersiveSlide({
       {/* STRUCTURED STACK — slide-root[1]. Top bar (fixed height matching
           the stream's top offset) + aspect-video overlay region for HUD
           chips (transparent, the stream below shows through) + lower
-          section that overlaps the video bottom and fades to black. */}
-      <div className="relative h-full flex flex-col">
+          section that overlaps the video bottom and fades to black.
+          pointer-events-none on the container so taps over the video area
+          (top bar + overlay region, both transparent) fall through to the
+          iframe sibling beneath. The lower section + any interactive HUD
+          children opt back in via pointer-events-auto. */}
+      <div className="pointer-events-none relative h-full flex flex-col">
         {/* Top bar — fixed height. Deeplink shows back link; feed reserves
-            space for the floating MobileTabs above. */}
+            space for the floating MobileTabs above. pointer-events-none so
+            the transparent strip never blocks the YouTube/Twitch/Kick top
+            controls beneath; the Back link opts back in explicitly. */}
         <div
-          className={`shrink-0 ${TOP_BAR_H} ${
+          className={`pointer-events-none shrink-0 ${TOP_BAR_H} ${
             isDeeplink ? "px-4 flex items-center" : ""
           }`}
         >
           {isDeeplink && (
             <Link
               href="/live"
-              className="inline-flex items-center gap-1 text-sm text-white/75 active:text-white transition"
+              className="pointer-events-auto inline-flex items-center gap-1 text-sm text-white/75 active:text-white transition"
             >
               <svg
                 viewBox="0 0 24 24"
@@ -1645,8 +1660,11 @@ export function MobileImmersiveSlide({
         </div>
 
         {/* VIDEO OVERLAY REGION — transparent aspect-video band aligned
-            with the stream wrapper. Anchors the floating HUD elements. */}
-        <div className="shrink-0 relative w-full aspect-video">
+            with the stream wrapper. Anchors the floating HUD elements.
+            pointer-events-none so the strip never blocks taps on the iframe
+            (YouTube center play / unmute / fullscreen). Interactive HUD
+            children (host controls, etc.) opt back in via pointer-events-auto. */}
+        <div className="pointer-events-none shrink-0 relative w-full aspect-video">
           {/* LIVE / status pill (top-left, broadcast-style) */}
           <div className="absolute top-3 left-3 z-20 pointer-events-none">
             {session.status === "live" ? (
@@ -1714,8 +1732,9 @@ export function MobileImmersiveSlide({
 
         {/* LOWER SECTION — overlaps the video's last 24 px and fades to
             fully opaque black underneath. flex-1 lets the trailing empty
-            zone host future Up Next / activity strip without layout work. */}
-        <div className="relative -mt-6 z-20 flex-1 flex flex-col bg-gradient-to-b from-transparent via-black/85 to-black">
+            zone host future Up Next / activity strip without layout work.
+            pointer-events-auto re-enables interaction (container is none). */}
+        <div className="pointer-events-auto relative -mt-6 z-20 flex-1 flex flex-col bg-gradient-to-b from-transparent via-black/85 to-black">
           {/* MARKET CARD — LIVE pill + total vol header, question,
               horizontal progress bar with VS bubble, per-side volume. */}
           <div className="mx-3 rounded-2xl border border-white/[0.08] bg-black/85 backdrop-blur-xl px-4 pt-3 pb-3 shadow-[0_8px_32px_rgba(0,0,0,0.6),inset_18px_0_44px_-32px_rgba(109,255,164,0.6),inset_-18px_0_44px_-32px_rgba(255,92,115,0.6)]">
@@ -1756,7 +1775,9 @@ export function MobileImmersiveSlide({
                     </span>
                     <span className="w-px h-3.5 bg-white/20" aria-hidden />
                     <span className="inline-flex items-center gap-1">
-                      {mergedPastResults.slice(-5).map((r, i) => {
+                      {/* Pill shows the 2 most recent chips only; the drawer
+                          (setPastResultsOpen) lists the full history. */}
+                      {mergedPastResults.slice(-2).map((r, i) => {
                         const isYes = r.winningIdx === 0;
                         return (
                           <span
