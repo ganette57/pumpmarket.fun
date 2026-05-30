@@ -1583,14 +1583,6 @@ export function MobileImmersiveSlide({
   const momentumYes =
     (derived?.percentages?.[0] ?? 0) >= (derived?.percentages?.[1] ?? 0);
 
-  // Top-traders widget — no trader list is exposed to this component, so the
-  // avatar is derived from the real host wallet (the one identity we have)
-  // and the count stays a soft placeholder. Pure render computation.
-  const hostInitials = (session.host_wallet || "")
-    .replace(/[^a-zA-Z0-9]/g, "")
-    .slice(0, 2)
-    .toUpperCase();
-
   // Pin layout heights so the stream wrapper (absolute) and the structured
   // stack's top spacer (in-flow) line up exactly — the stream sits flush
   // under the top controls, no dead black space.
@@ -1704,30 +1696,11 @@ export function MobileImmersiveSlide({
           )}
 
           {/* Host controls now render in the Up Next slot below (not over the
-              video) so the stream stays clean. The top-right stays free. */}
+              video) so the stream stays clean. The top-right stays free.
 
-          {/* Top traders — floating placeholder pill. Rendered only when no
-              host controls occupy the top-right, so it never blocks them or
-              the feed's Go Live button. Purely visual. */}
-          {!hostSlot && (
-            <div className="absolute top-2 right-2 z-20 pointer-events-none">
-              <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-black/55 backdrop-blur-md border border-white/10 shadow-[0_2px_10px_rgba(0,0,0,0.5)]">
-                <span className="text-[8px] font-semibold uppercase tracking-[0.12em] text-white/45 whitespace-nowrap">
-                  Top traders
-                </span>
-                {hostInitials ? (
-                  <span className="flex items-center justify-center w-4 h-4 rounded-full bg-gradient-to-br from-pump-green/80 to-emerald-700 border border-black text-[7px] font-black text-black leading-none">
-                    {hostInitials}
-                  </span>
-                ) : (
-                  <span className="w-4 h-4 rounded-full bg-gradient-to-br from-pump-green/80 to-emerald-700 border border-black" />
-                )}
-                <span className="text-[9px] font-bold tabular-nums text-white/85">
-                  +32
-                </span>
-              </div>
-            </div>
-          )}
+              The "Top traders" placeholder pill was removed from the mobile
+              HUD: it overlapped the YouTube sound/control area in the top-right
+              and blocked taps on the unmute button. */}
         </div>
 
         {/* LOWER SECTION — overlaps the video's last 24 px and fades to

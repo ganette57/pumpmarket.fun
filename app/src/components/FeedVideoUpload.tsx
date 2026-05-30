@@ -191,24 +191,34 @@ export default function FeedVideoUpload({
 
       {!previewUrl ? (
         <>
-          <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-gray-700 rounded-lg cursor-pointer hover:border-pump-green transition-colors bg-pump-dark/50">
-            <div className="flex flex-col items-center justify-center pt-5 pb-6">
-              <Upload className="w-10 h-10 text-gray-500 mb-2" />
-              <p className="text-sm text-gray-400 mb-1">
-                <span className="font-semibold text-pump-green">Upload / Record video</span>
-              </p>
-              <p className="text-xs text-gray-500">
-                Vertical video recommended
-              </p>
+          <div className="flex flex-col items-center justify-center w-full border-2 border-dashed border-gray-700 rounded-lg bg-pump-dark/50 px-4 py-6">
+            <Upload className="w-9 h-9 text-gray-500 mb-2" />
+            <p className="text-xs text-gray-500 mb-4">Vertical video recommended</p>
+            <div className="flex w-full gap-3">
+              {/* Upload from library — no `capture`, so mobile shows the
+                  Photos/Files picker (does NOT force the camera). */}
+              <label className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg border border-gray-700 bg-pump-dark text-sm font-semibold text-pump-green cursor-pointer hover:border-pump-green transition-colors">
+                Upload video
+                <input
+                  type="file"
+                  accept="video/*"
+                  onChange={handleFile}
+                  className="hidden"
+                />
+              </label>
+              {/* Record — opt-in camera capture only when the user chooses it. */}
+              <label className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg border border-gray-700 bg-pump-dark text-sm font-semibold text-gray-300 cursor-pointer hover:border-pump-green transition-colors">
+                Record video
+                <input
+                  type="file"
+                  accept="video/*"
+                  capture="environment"
+                  onChange={handleFile}
+                  className="hidden"
+                />
+              </label>
             </div>
-            <input
-              type="file"
-              accept="video/*"
-              capture="environment"
-              onChange={handleFile}
-              className="hidden"
-            />
-          </label>
+          </div>
           {error && <p className="text-pump-red text-sm mt-2 font-semibold">❌ {error}</p>}
         </>
       ) : (
