@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { useWallet } from '@solana/wallet-adapter-react';
-import HowItWorksModal from '@/components/HowItWorksModal';
 import { getProfile } from '@/lib/profiles';
 
 // --- Hook pour fermer le menu avatar quand on clique en dehors ---
@@ -27,7 +26,6 @@ export default function Header() {
   const { connected, publicKey, disconnect } = useWallet();
 
   const [search, setSearch] = useState('');
-  const [isHowItWorksOpen, setIsHowItWorksOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [headerAvatarUrl, setHeaderAvatarUrl] = useState<string | null>(null);
 
@@ -40,7 +38,7 @@ export default function Header() {
 
   // Check if we're on explorer/search page
   const isOnSearchPage = pathname === '/search' || pathname === '/explorer';
-  const isExplore = pathname === '/explorer';
+  const isWorldCup = pathname === '/world-cup' || pathname?.startsWith('/world-cup/');
 
   // pré-remplir search si on est sur /search?q=
   useEffect(() => {
@@ -100,16 +98,17 @@ export default function Header() {
             </Link>
 
             <nav className="ml-6 hidden md:flex items-center gap-4">
-              {/* Explore */}
+              {/* World Cup */}
               <Link
-                href="/explorer"
-                className={`inline-flex items-center border-b pb-0.5 text-sm transition ${
-                  isExplore
-                    ? 'border-pump-green text-pump-green'
-                    : 'border-transparent text-gray-300 hover:text-white'
+                href="/world-cup"
+                className={`inline-flex items-center gap-1.5 border-b pb-0.5 text-sm font-medium transition ${
+                  isWorldCup
+                    ? 'border-[#EAB54C] text-[#EAB54C]'
+                    : 'border-transparent text-[#EAB54C] hover:text-[#F5C76A]'
                 }`}
               >
-                Explore
+                <span aria-hidden="true">🏆</span>
+                World Cup
               </Link>
 
               {/* Live */}
@@ -123,15 +122,6 @@ export default function Header() {
                 </span>
                 Live
               </Link>
-
-              {/* How it works */}
-              <button
-                type="button"
-                onClick={() => setIsHowItWorksOpen(true)}
-                className="text-sm text-gray-300 hover:text-white"
-              >
-                How it works
-              </button>
             </nav>
           </div>
 
@@ -294,9 +284,6 @@ export default function Header() {
 
       {/* SPACER : h-16 = 64px (matches header height) */}
       <div className="h-16" />
-
-      {/* How it works modal */}
-      <HowItWorksModal isOpen={isHowItWorksOpen} onClose={() => setIsHowItWorksOpen(false)} />
     </>
   );
 }
