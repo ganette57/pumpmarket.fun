@@ -9,6 +9,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import MarketCard from "@/components/MarketCard";
 import FeaturedMarketCardFull from "@/components/FeaturedMarketCardFull";
 import FlashMarketCard from "@/components/FlashMarketCard";
+import WorldCupChampionshipHero from "@/components/WorldCupChampionshipHero";
 import CategoryFilters from "@/components/CategoryFilters";
 import type { SelectedCategory } from "@/components/CategoryFilters";
 import { SkeletonCard, SkeletonFeaturedCard } from "@/components/SkeletonCard";
@@ -82,6 +83,7 @@ type FeaturedCarouselMarket = {
 };
 
 type HomeCarouselSlide =
+  | { kind: "championship" }
   | { kind: "flash"; market: FlashMarket }
   | { kind: "featured"; market: FeaturedCarouselMarket };
 type MobileFeedEntry =
@@ -651,10 +653,13 @@ export default function Home() {
       flashSlides.push({ kind: "flash", market });
     }
 
-    const scopedFlashSlides = flashSlides.slice(0, CAROUSEL_LIMIT);
-    const baseSlides = featuredMarkets.slice(0, Math.max(0, CAROUSEL_LIMIT - scopedFlashSlides.length));
+    // World Cup Championship is always the first slide on the home carousel.
+    const championshipSlide: HomeCarouselSlide = { kind: "championship" };
+    const dynamicBudget = Math.max(0, CAROUSEL_LIMIT - 1);
+    const scopedFlashSlides = flashSlides.slice(0, dynamicBudget);
+    const baseSlides = featuredMarkets.slice(0, Math.max(0, dynamicBudget - scopedFlashSlides.length));
     const mappedBase = baseSlides.map((market) => ({ kind: "featured" as const, market }));
-    return [...scopedFlashSlides, ...mappedBase];
+    return [championshipSlide, ...scopedFlashSlides, ...mappedBase];
   }, [featuredMarkets, homeLiveCryptoFlashMarkets, homeLiveFlashMarket, homeLiveIrlFlashMarkets]);
 
   // reset index when list changes
@@ -1210,22 +1215,32 @@ export default function Home() {
                     className="flex transition-transform duration-500 ease-out h-[400px]"
                     style={{ transform: `translateX(-${currentFeaturedIndex * 100}%)` }}
                   >
-                    {carouselSlides.map((slide) => (
-                      <div
-                        key={slide.kind === "flash" ? `flash-${slide.market.liveMicroId}` : `featured-${slide.market.id}`}
-                        className="w-full flex-shrink-0 h-[400px]"
-                      >
-                        {slide.kind === "flash" ? (
-                          <FlashMarketCard market={slide.market} variant="hero" className="h-full" />
-                        ) : (
-                          <FeaturedMarketCardFull
-                            market={slide.market}
-                            liveSessionId={liveMap[slide.market.id] || null}
-                            creatorProfile={slide.market.creator ? profilesMap[slide.market.creator] ?? null : null}
-                          />
-                        )}
-                      </div>
-                    ))}
+                    {carouselSlides.map((slide) => {
+                      const key =
+                        slide.kind === "championship"
+                          ? "championship"
+                          : slide.kind === "flash"
+                          ? `flash-${slide.market.liveMicroId}`
+                          : `featured-${slide.market.id}`;
+                      return (
+                        <div
+                          key={key}
+                          className="w-full flex-shrink-0 h-[400px]"
+                        >
+                          {slide.kind === "championship" ? (
+                            <WorldCupChampionshipHero />
+                          ) : slide.kind === "flash" ? (
+                            <FlashMarketCard market={slide.market} variant="hero" className="h-full" />
+                          ) : (
+                            <FeaturedMarketCardFull
+                              market={slide.market}
+                              liveSessionId={liveMap[slide.market.id] || null}
+                              creatorProfile={slide.market.creator ? profilesMap[slide.market.creator] ?? null : null}
+                            />
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
 
                   {carouselSlides.length > 1 && (

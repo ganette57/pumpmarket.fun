@@ -424,6 +424,7 @@ function eventToMatch(event: any, leagueCfg?: LeagueConfig): NormalizedMatch | n
       away_score: event.intAwayScore != null ? Number(event.intAwayScore) : null,
       status_text: event.strStatus || null,
       round: event.intRound || null,
+      group: event.strGroup || null,
       venue: event.strVenue || null,
       league_id: event.idLeague || leagueCfg?.id || null,
       season: event.strSeason || null,
@@ -514,6 +515,57 @@ export async function listUpcomingMatchesTheSportsDB(params: {
   dbg(`total: ${all.length} matches for sport=${sport}`);
   setCache(cacheKey, all);
   return all;
+}
+
+// ---------------------------------------------------------------------------
+// Full World Cup season listing
+//
+// eventsnextleague.php only returns the next ~15 events, which misses most of
+// the World Cup schedule before the tournament starts. eventsseason.php
+// returns the whole season's fixtures for a league. This helper is World
+// Cup-specific (league 4429) and reuses the same eventToMatch normalization
+// + cache as the rest of the provider. Never throws — returns [] on failure.
+// ---------------------------------------------------------------------------
+
+const WORLD_CUP_LEAGUE_ID = 4429;
+
+export async function listWorldCupSeasonMatchesTheSportsDB(params: {
+  season?: string;
+} = {}): Promise<NormalizedMatch[]> {
+  const season = params.season || "2026";
+
+  const cacheKey = `tsdb:wc-season:${season}`;
+  const cached = getCached<NormalizedMatch[]>(cacheKey);
+  if (cached) {
+    dbg("cache hit:", cacheKey, `(${cached.length} matches)`);
+    return cached;
+  }
+
+  const leagueCfg = TARGET_LEAGUES.find((l) => l.id === WORLD_CUP_LEAGUE_ID);
+
+  try {
+    const url = v1Url(`eventsseason.php?id=${WORLD_CUP_LEAGUE_ID}&s=${encodeURIComponent(season)}`);
+    const json = await fetchJson(url);
+    const events: any[] = json?.events || [];
+    dbg(`WC season ${season} → ${events.length} events`);
+
+    const matches: NormalizedMatch[] = [];
+    for (const ev of events) {
+      const m = eventToMatch(ev, leagueCfg);
+      if (m) matches.push(m);
+    }
+
+    matches.sort(
+      (a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime(),
+    );
+
+    setCache(cacheKey, matches);
+    dbg(`WC season ${season}: ${matches.length} normalized matches`);
+    return matches;
+  } catch (e: any) {
+    dbg("listWorldCupSeasonMatchesTheSportsDB error:", e?.message);
+    return [];
+  }
 }
 
 // ---------------------------------------------------------------------------
