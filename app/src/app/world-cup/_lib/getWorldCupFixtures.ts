@@ -128,6 +128,15 @@ function pickBadge(raw: Record<string, unknown>, side: "home" | "away"): string 
   return typeof v === "string" && v.trim() ? v : null;
 }
 
+/** Match artwork, priority: thumb → poster → banner. Null if none. */
+function pickImage(raw: Record<string, unknown>): string | null {
+  for (const key of ["event_thumb", "event_poster", "event_banner"]) {
+    const v = raw[key];
+    if (typeof v === "string" && v.trim()) return v;
+  }
+  return null;
+}
+
 function pickScore(raw: Record<string, unknown>, side: "home" | "away"): number {
   const v = raw[`${side}_score`];
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
@@ -246,6 +255,7 @@ function toUpcomingMatch(m: NormalizedMatch): UpcomingMatch {
     home: makeTeam(m.home_team, pickBadge(raw, "home")),
     away: makeTeam(m.away_team, pickBadge(raw, "away")),
     markets: fakeMarketsCount(m.provider_event_id),
+    image: pickImage(raw),
     outcomes: fakeThreeWayOdds(m.provider_event_id, m.home_team, m.away_team),
   };
 }

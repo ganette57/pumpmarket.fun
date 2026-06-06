@@ -26,8 +26,10 @@ import TreasuryPreview from "./_components/TreasuryPreview";
 import {
   UPCOMING_MATCHES,
   SIDE_MARKETS,
+  GROUPS,
 } from "./_components/mockData";
 import { getWorldCupFixtures } from "./_lib/getWorldCupFixtures";
+import { getWorldCupGroups } from "./_lib/getWorldCupGroups";
 
 // Re-fetch at most every 5 minutes (route-level cache); the provider stack
 // already has its own 15 min cache, so this is a cheap upper bound.
@@ -39,8 +41,8 @@ export const revalidate = 300;
  * is reserved for championship-coded elements.
  */
 export default async function WorldCupHubPage() {
-  const { hasRealFixtures, liveMatches, upcomingMatches } =
-    await getWorldCupFixtures();
+  const [{ hasRealFixtures, liveMatches, upcomingMatches }, groupsResult] =
+    await Promise.all([getWorldCupFixtures(), getWorldCupGroups()]);
 
   // Live: real live matches only — never mock, never fake. Section is hidden
   // entirely when there are none.
@@ -49,6 +51,15 @@ export default async function WorldCupHubPage() {
   // Upcoming: real fixtures when available; mock fallback only when the
   // provider returned zero World Cup fixtures.
   const upcoming = hasRealFixtures ? upcomingMatches : UPCOMING_MATCHES;
+
+  // Groups: official standings → fixture-derived → mock.
+  const groups = groupsResult.groups ?? GROUPS;
+  const groupsSubtitle =
+    groupsResult.source === "official"
+      ? "Live group standings"
+      : groupsResult.source === "derived"
+        ? "Group standings from World Cup fixtures"
+        : "Group standings — mock data for now";
 
   return (
     <div className="min-h-screen bg-pump-dark text-white">
@@ -88,8 +99,8 @@ export default async function WorldCupHubPage() {
       </HubSection>
 
       {/* 4. Groups */}
-      <HubSection title="Groups" subtitle="Group standings — mock data for now">
-        <GroupsGrid />
+      <HubSection title="Groups" subtitle={groupsSubtitle}>
+        <GroupsGrid groups={groups} />
       </HubSection>
 
       {/* 5. Side Markets */}

@@ -61,29 +61,53 @@ export function LiveMatchCard({ m }: { m: LiveMatch }) {
 }
 
 // ---------------------------------------------------------------------------
-// Upcoming card — homepage-market-card feel with outcome buttons.
+// Upcoming card — FunMarket market-card layout: image hero with overlaid
+// SOCCER / UPCOMING pills + team crests, then title, meta, outcome buttons.
+// No fake market count, no "Open →".
 // ---------------------------------------------------------------------------
 
 export function UpcomingMatchCard({ m }: { m: UpcomingMatch }) {
   return (
-    <article className={CARD_SHELL}>
-      <div className="flex flex-col gap-3 p-4">
-        <div className="flex items-center justify-between">
+    <article className={`${CARD_SHELL} group`}>
+      {/* IMAGE HERO */}
+      <div className="relative h-40 w-full overflow-hidden bg-black">
+        {m.image ? (
+          <img
+            src={m.image}
+            alt=""
+            aria-hidden="true"
+            className="h-full w-full object-cover opacity-80 transition group-hover:opacity-95"
+          />
+        ) : (
+          <div className="h-full w-full bg-gradient-to-br from-pump-gray to-black" />
+        )}
+
+        {/* dark fade bottom (matches MarketCard) */}
+        <div className="absolute inset-0 bg-gradient-to-t from-[#05070b] via-transparent to-black/30" />
+
+        {/* SOCCER pill */}
+        <div className="absolute left-3 top-3">
           <span className={SPORT_BADGE}>Soccer</span>
-          <span className="inline-flex items-center gap-1 rounded-full border border-pump-green/30 bg-pump-green/15 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-pump-green">
+        </div>
+        {/* UPCOMING pill */}
+        <div className="absolute right-3 top-3">
+          <span className="inline-flex items-center gap-1 rounded-full border border-pump-green/30 bg-black/70 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-pump-green">
             Upcoming
           </span>
         </div>
 
-        {/* Crests */}
-        <div className="flex items-center justify-center gap-3">
-          <Crest team={m.home} />
-          <span className="text-xs font-bold uppercase tracking-wide text-gray-500">
+        {/* team crests overlaid near the bottom of the image */}
+        <div className="absolute inset-x-0 bottom-2 flex items-center justify-center gap-3">
+          <Crest team={m.home} size="sm" ring />
+          <span className="text-[11px] font-bold uppercase tracking-wide text-white/80">
             vs
           </span>
-          <Crest team={m.away} />
+          <Crest team={m.away} size="sm" ring />
         </div>
+      </div>
 
+      {/* CONTENT */}
+      <div className="flex flex-col gap-3 p-4">
         <h3 className="line-clamp-2 text-center text-[15px] font-semibold leading-tight text-white">
           {m.home.name} vs {m.away.name}
         </h3>
@@ -98,11 +122,6 @@ export function UpcomingMatchCard({ m }: { m: UpcomingMatch }) {
         </div>
 
         <OutcomeButtons outcomes={m.outcomes} />
-
-        <div className="flex items-center justify-between border-t border-gray-800 pt-2 text-[11px] text-gray-400">
-          <span>{m.markets} markets</span>
-          <span className="font-semibold text-pump-green">Open →</span>
-        </div>
       </div>
     </article>
   );
@@ -149,26 +168,40 @@ function OutcomeButtons({ outcomes }: { outcomes: MatchOutcome[] }) {
 }
 
 /** Team crest: real badge → emoji flag → neutral placeholder. */
-function Crest({ team }: { team: Team }) {
+function Crest({
+  team,
+  size = "md",
+  ring = false,
+}: {
+  team: Team;
+  size?: "sm" | "md";
+  ring?: boolean;
+}) {
+  const box = size === "sm" ? "h-9 w-9" : "h-10 w-10";
+  const emoji = size === "sm" ? "text-2xl" : "text-3xl";
+  const ringCls = ring ? "ring-2 ring-black/60" : "";
+
   if (team.badge) {
     return (
       <img
         src={team.badge}
         alt=""
         aria-hidden="true"
-        className="h-10 w-10 shrink-0 rounded-full bg-black/40 object-contain p-0.5"
+        className={`${box} ${ringCls} shrink-0 rounded-full bg-black/60 object-contain p-0.5`}
       />
     );
   }
   if (team.flag) {
     return (
-      <span className="text-3xl leading-none" aria-hidden="true">
+      <span className={`${emoji} leading-none`} aria-hidden="true">
         {team.flag}
       </span>
     );
   }
   return (
-    <div className="h-10 w-10 shrink-0 rounded-full border border-gray-700 bg-gray-800" />
+    <div
+      className={`${box} ${ringCls} shrink-0 rounded-full border border-gray-700 bg-gray-800`}
+    />
   );
 }
 

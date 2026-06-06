@@ -569,6 +569,87 @@ export async function listWorldCupSeasonMatchesTheSportsDB(params: {
 }
 
 // ---------------------------------------------------------------------------
+// Official World Cup standings table
+//
+// lookuptable.php returns league standings rows. With the free key "3" this is
+// capped at 5 placeholder rows; a premium THESPORTSDB_KEY returns the full set
+// (one row per team, with strDescription carrying the group label e.g.
+// "Group A"). Reuses the same key/fetch/cache as the rest of the provider.
+// Never throws — returns [] on failure.
+// ---------------------------------------------------------------------------
+
+export type WorldCupTableRow = {
+  team: string;
+  badge: string | null;
+  /** Group/stage label from strDescription, e.g. "Group A". Null if absent. */
+  group: string | null;
+  rank: number;
+  played: number;
+  win: number;
+  draw: number;
+  loss: number;
+  goalsFor: number;
+  goalsAgainst: number;
+  goalDifference: number;
+  points: number;
+};
+
+export async function fetchWorldCupTableTheSportsDB(params: {
+  season?: string;
+} = {}): Promise<WorldCupTableRow[]> {
+  const season = params.season || "2026";
+
+  const cacheKey = `tsdb:wc-table:${season}`;
+  const cached = getCached<WorldCupTableRow[]>(cacheKey);
+  if (cached) {
+    dbg("cache hit:", cacheKey, `(${cached.length} rows)`);
+    return cached;
+  }
+
+  try {
+    const url = v1Url(
+      `lookuptable.php?l=${WORLD_CUP_LEAGUE_ID}&s=${encodeURIComponent(season)}`,
+    );
+    const json = await fetchJson(url);
+    const rows: any[] = json?.table || [];
+    dbg(`WC table ${season} → ${rows.length} rows (premium=${isPremium()})`);
+
+    const mapped = rows
+      .map(tableRowToStanding)
+      .filter((r): r is WorldCupTableRow => r !== null);
+
+    setCache(cacheKey, mapped);
+    return mapped;
+  } catch (e: any) {
+    dbg("fetchWorldCupTableTheSportsDB error:", e?.message);
+    return [];
+  }
+}
+
+function tableRowToStanding(r: any): WorldCupTableRow | null {
+  const team = r?.strTeam || "";
+  if (!team) return null;
+  const num = (v: any) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  return {
+    team,
+    badge: r.strBadge || null,
+    group: r.strDescription || null,
+    rank: num(r.intRank),
+    played: num(r.intPlayed),
+    win: num(r.intWin),
+    draw: num(r.intDraw),
+    loss: num(r.intLoss),
+    goalsFor: num(r.intGoalsFor),
+    goalsAgainst: num(r.intGoalsAgainst),
+    goalDifference: num(r.intGoalDifference),
+    points: num(r.intPoints),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Live score lookup — single event
 // ---------------------------------------------------------------------------
 

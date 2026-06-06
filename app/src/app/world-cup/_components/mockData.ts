@@ -106,6 +106,8 @@ export type UpcomingMatch = {
   home: Team;
   away: Team;
   markets: number;
+  /** TheSportsDB match artwork (strThumb → strPoster → strBanner). Optional. */
+  image?: string | null;
   outcomes: MatchOutcome[];
 };
 
@@ -252,6 +254,8 @@ export type GroupRow = {
   win: number;
   draw: number;
   loss: number;
+  /** Goal difference — optional (real data has it; mock omits it). */
+  gd?: number;
   points: number;
 };
 
