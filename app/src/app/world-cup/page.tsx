@@ -18,21 +18,19 @@ import HubSection from "./_components/HubSection";
 import {
   HorizontalRail,
   LiveMatchCard,
-  UpcomingMatchCard,
 } from "./_components/MatchRails";
 import { SideMarketRowCard } from "./_components/MarketsBlocks";
 import LeaderboardPreview from "./_components/LeaderboardPreview";
 import GroupsGrid from "./_components/GroupsTable";
 import TreasuryPreview from "./_components/TreasuryPreview";
 import MarketCard from "@/components/MarketCard";
-import {
-  UPCOMING_MATCHES,
-  SIDE_MARKETS,
-  GROUPS,
-} from "./_components/mockData";
+import { SIDE_MARKETS, GROUPS } from "./_components/mockData";
 import { getWorldCupFixtures } from "./_lib/getWorldCupFixtures";
 import { getWorldCupGroups } from "./_lib/getWorldCupGroups";
-import { getWorldCupSideMarkets } from "./_lib/getWorldCupSideMarkets";
+import {
+  getWorldCupMatchMarkets,
+  getWorldCupSideMarkets,
+} from "./_lib/marketQueries";
 
 // Re-fetch at most every 5 minutes (route-level cache); the provider stack
 // already has its own 15 min cache, so this is a cheap upper bound.
@@ -44,20 +42,17 @@ export const revalidate = 300;
  * is reserved for championship-coded elements.
  */
 export default async function WorldCupHubPage() {
-  const [{ hasRealFixtures, liveMatches, upcomingMatches }, groupsResult, sideMarkets] =
+  const [{ liveMatches }, groupsResult, matchMarkets, sideMarkets] =
     await Promise.all([
       getWorldCupFixtures(),
       getWorldCupGroups(),
-      getWorldCupSideMarkets(),
+      getWorldCupMatchMarkets(12),
+      getWorldCupSideMarkets(12),
     ]);
 
   // Live: real live matches only — never mock, never fake. Section is hidden
   // entirely when there are none.
   const live = liveMatches;
-
-  // Upcoming: real fixtures when available; mock fallback only when the
-  // provider returned zero World Cup fixtures.
-  const upcoming = hasRealFixtures ? upcomingMatches : UPCOMING_MATCHES;
 
   // Groups: official standings → fixture-derived → mock.
   const groups = groupsResult.groups ?? GROUPS;
@@ -84,25 +79,36 @@ export default async function WorldCupHubPage() {
         </HubSection>
       )}
 
-      {/* 3. Upcoming Matches */}
+      {/* 3. Upcoming Matches — official admin-created match markets only
+          (sourced from the markets table, not raw provider fixtures). */}
       <HubSection
         title="Upcoming Matches"
-        subtitle="Next World Cup fixtures"
+        subtitle="Official World Cup match markets"
         action={
           <Link
-            href="#"
+            href="/world-cup/matches"
             className="inline-flex items-center gap-1 text-xs font-semibold text-pump-green hover:underline"
-            aria-disabled
           >
             View all <ChevronRight className="h-3.5 w-3.5" />
           </Link>
         }
       >
-        <HorizontalRail>
-          {upcoming.map((m) => (
-            <UpcomingMatchCard key={m.id} m={m} />
-          ))}
-        </HorizontalRail>
+        {matchMarkets.length > 0 ? (
+          <HorizontalRail>
+            {matchMarkets.map((m) => (
+              <div
+                key={m.publicKey}
+                className="min-w-[300px] max-w-[320px] flex-shrink-0"
+              >
+                <MarketCard market={m} />
+              </div>
+            ))}
+          </HorizontalRail>
+        ) : (
+          <div className="rounded-xl border border-gray-800 bg-[#05070b] px-4 py-6 text-sm text-gray-400">
+            No official World Cup match markets yet.
+          </div>
+        )}
       </HubSection>
 
       {/* 4. Side Markets — horizontal rail like Upcoming. Real user-created
@@ -113,6 +119,14 @@ export default async function WorldCupHubPage() {
           sideMarkets.length > 0
             ? "User-created soccer side markets."
             : "Classic match markets."
+        }
+        action={
+          <Link
+            href="/world-cup/side-markets"
+            className="inline-flex items-center gap-1 text-xs font-semibold text-pump-green hover:underline"
+          >
+            View all <ChevronRight className="h-3.5 w-3.5" />
+          </Link>
         }
       >
         <HorizontalRail>
