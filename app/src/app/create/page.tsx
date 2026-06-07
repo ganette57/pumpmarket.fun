@@ -17,6 +17,8 @@ import CategoryImagePlaceholder from "@/components/CategoryImagePlaceholder";
 import FeedVideoUpload from "@/components/FeedVideoUpload";
 
 import { useProgram } from "@/hooks/useProgram";
+import { isOfficialFixtureAdmin, getAdminWallets } from "@/lib/adminClient";
+import { withMatchPrefix } from "@/lib/sideMarketTitle";
 import { indexMarket } from "@/lib/markets";
 import { createSportEventServer } from "@/lib/sportEvents";
 import { sendSignedTx } from "@/lib/solanaSend";
@@ -565,10 +567,12 @@ function CreationModal({
   step,
   error,
   onClose,
+  marketAddress,
 }: {
   step: CreationStep;
   error: string | null;
   onClose: () => void;
+  marketAddress?: string | null;
 }) {
   if (step === "idle") return null;
 
@@ -663,6 +667,16 @@ function CreationModal({
           </div>
         )}
 
+        {/* Done: manual fallback in case the auto-redirect doesn't fire */}
+        {isDone && marketAddress && (
+          <a
+            href={`/trade/${marketAddress}`}
+            className="block w-full py-3 rounded-lg bg-pump-green text-black font-semibold text-center hover:bg-pump-green/90 transition"
+          >
+            View market →
+          </a>
+        )}
+
         {/* Error close button */}
         {isError && (
           <button
@@ -678,7 +692,7 @@ function CreationModal({
 }
 
 export default function CreateMarketPage() {
-  const { publicKey, connected, signTransaction } = useWallet();
+  const { publicKey, connected, connecting, signTransaction } = useWallet();
   const { connection } = useConnection();
   const router = useRouter();
   const program = useProgram();
@@ -686,6 +700,7 @@ export default function CreateMarketPage() {
   const [loading, setLoading] = useState(false);
   const [creationStep, setCreationStep] = useState<CreationStep>("idle");
   const [creationError, setCreationError] = useState<string | null>(null);
+  const [createdMarketAddress, setCreatedMarketAddress] = useState<string | null>(null);
 
   // Tx guard: prevent double-submit
   const inFlightRef = useRef<Record<string, boolean>>({});
@@ -735,20 +750,44 @@ export default function CreateMarketPage() {
   // Match picker modal
   const [matchPickerOpen, setMatchPickerOpen] = useState(false);
 
-  // Sports mode: "match" (default for sport subcategories) or "general" (Sports General only)
-  const [sportsMode, setSportsMode] = useState<"match" | "general">("match");
+  // A sport SUBCATEGORY (soccer, basketball, ...) is selected. The top-level
+  // "Sports (General)" category now behaves like any normal category.
+  const isSportSubcategorySelected =
+    category !== "" && isSportSubcategory(category);
 
-  // Check if current category is a sport
-  const isSportsMarket = useMemo(() => {
-    return category === "sports" || (category !== "" && isSportSubcategory(category));
-  }, [category]);
+  // Used only for the "appears under Sports → ..." hint.
+  const isSportsMarket = category === "sports" || isSportSubcategorySelected;
 
-  // Is this specifically the "Sports (General)" top-level category?
-  const isSportsGeneral = category === "sports";
+  // ── Official fixture picking is admin-only ──────────────────────────────
+  // Wallet may be undefined on first render / during autoConnect. Never treat
+  // "publicKey === null" as a definitive "disconnected" — fold the
+  // initializing window into a loading state so the UI doesn't flicker/hide.
+  const walletBase58 = publicKey?.toBase58() ?? null;
+  const isFixtureAdmin = isOfficialFixtureAdmin(walletBase58);
 
-  // Should we show match-specific fields? (match picker, sport type, teams, match end time)
-  const isMatchMode = isSportsMarket && !(isSportsGeneral && sportsMode === "general");
+  // ── Match flows ─────────────────────────────────────────────────────────
+  // OFFICIAL (admin): sport subcategory + admin wallet → frozen official flow
+  //   (provider fixture, live sport_event, near-end auto-lock). DO NOT CHANGE.
+  //   `isMatchMode` now means "official admin match flow" — every existing
+  //   match-only field keys off it and therefore stays admin-only.
+  // SIDE MARKET (user): sport subcategory + non-admin → simplified flow whose
+  //   trading ends at kickoff and creates NO live sport_event.
+  const isMatchMode = isSportSubcategorySelected && isFixtureAdmin;
+  const sideMarketMode = isSportSubcategorySelected && !isFixtureAdmin;
   const hasLinkedFixture = isMatchMode && sportProviderEventId.trim().length > 0;
+
+  // Temporary debug logs (development only)
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
+    console.log("[create] wallet/admin state", {
+      connected,
+      connecting,
+      publicKey: walletBase58,
+      adminAllowlist: getAdminWallets(),
+      isOfficialFixtureAdmin: isFixtureAdmin,
+      category,
+    });
+  }, [connected, connecting, walletBase58, isFixtureAdmin, category]);
 
   // On-chain defaults (hidden from user)
   const DEFAULT_B_SOL = 0.01;
@@ -804,7 +843,9 @@ export default function CreateMarketPage() {
     !outcomesError &&
     !!category && // Category is required
     !!resolutionDate &&
-    resolutionDate > new Date();
+    resolutionDate > new Date() &&
+    // Side markets require a selected fixture (kickoff drives the end date).
+    (!sideMarketMode || sportProviderEventId.trim().length > 0);
 
   const handleQuestionChange = (value: string) => {
     setQuestion(value);
@@ -964,6 +1005,53 @@ export default function CreateMarketPage() {
     setMatchPickerOpen(true);
   }
 
+  // ── Side market fixture selection (normal users) ────────────────────────
+  // Sets ONLY the hidden fixture metadata + kickoff. It deliberately does NOT
+  // touch question / outcomes / marketType (the user writes those) and does
+  // NOT compute the official near-end lock — side markets end at kickoff.
+  function selectSideMatch(m: any) {
+    const eventTimeZone = extractEventTimeZone(m);
+    setSportType(m.sport || sportType);
+    setSportHomeTeam(m.home_team || "");
+    setSportAwayTeam(m.away_team || "");
+    setSportLeague(m.league || "");
+    setSportProviderEventId(m.provider_event_id || "");
+    setSportProviderName(m.provider || "");
+    setSportRaw(m.raw ?? null);
+    setSportEventTimezone(eventTimeZone || "");
+
+    const matchStart = parseEventStartDate(m.start_time, eventTimeZone);
+    if (matchStart) {
+      setSportStartTime(matchStart);
+      // Side market: trading lock / end date = kickoff.
+      setResolutionDate(matchStart);
+    }
+
+    // Use the provider artwork as the market image unless the user set one.
+    if (!imageManuallyEdited) {
+      const providerImageUrl = extractProviderMatchImageUrl(m);
+      if (providerImageUrl) {
+        setImageFile(null);
+        setImageError("");
+        setImagePreview(providerImageUrl);
+      }
+    }
+
+    setMatchPickerOpen(false);
+  }
+
+  function clearSideMatch() {
+    setSportProviderEventId("");
+    setSportProviderName("");
+    setSportEventTimezone("");
+    setSportHomeTeam("");
+    setSportAwayTeam("");
+    setSportLeague("");
+    setSportStartTime(null);
+    setSportEndTime(null);
+    setSportRaw(null);
+  }
+
   async function handleCreateMarket() {
     if (!canSubmit || !publicKey || !program) return;
     if (!signTransaction) {
@@ -989,7 +1077,11 @@ export default function CreateMarketPage() {
       let effectiveEndDate = resolutionDate;
       let persistedMatchStart: Date | null = null;
       let persistedMatchEnd: Date | null = null;
-      if (hasLinkedProviderFixture && sportStartTime) {
+      if (sideMarketMode && sportStartTime) {
+        // SIDE MARKET (user): trading lock / resolution = kickoff. No live
+        // sport_event, no near-end auto-lock. Independent of official timing.
+        effectiveEndDate = sportStartTime;
+      } else if (hasLinkedProviderFixture && sportStartTime) {
         persistedMatchStart = sportStartTime;
         const estimatedTimes = estimateMatchTimes(sportStartTime, sportType);
         persistedMatchEnd = estimatedTimes.endTime;
@@ -1095,6 +1187,26 @@ export default function CreateMarketPage() {
           start_time: dbStartTimeIso,
           end_time: dbEndTimeIso,
           raw: sportRaw ?? undefined,
+        };
+      }
+
+      // SIDE MARKET (user): store fixture metadata WITHOUT creating a live
+      // sport_event. Identifiable later via market_mode "sport_side" +
+      // sport_meta.provider_event_id; resolves at kickoff (effectiveEndDate).
+      if (sideMarketMode && sportProviderEventId.trim() && sportStartTime) {
+        sportMeta = {
+          side_market: true,
+          sport: selectedSport || "soccer",
+          provider: sportProviderName || "thesportsdb",
+          provider_event_id: sportProviderEventId.trim(),
+          home_team: sportHomeTeam.trim() || undefined,
+          away_team: sportAwayTeam.trim() || undefined,
+          league: sportLeague || undefined,
+          kickoff: sportStartTime.toISOString(),
+          image:
+            imagePreview && !imagePreview.startsWith("data:image/")
+              ? imagePreview
+              : undefined,
         };
       }
 
@@ -1208,9 +1320,19 @@ export default function CreateMarketPage() {
       // so existing card/home/search renderers still get an image.
       const effectiveImageUrl = persistedImageUrl || uploadedFeedThumbnailUrl;
 
+      // Side markets: always prefix the displayed title with the match
+      // context, e.g. "Brazil vs Morocco: Hakimi to score?". Only skip when the
+      // question already STARTS WITH the same match label (avoid double-prefix).
+      // Does not affect official admin matches or non-soccer markets.
+      let effectiveQuestion = question.trim();
+      if (sideMarketMode && sportHomeTeam.trim() && sportAwayTeam.trim()) {
+        const matchLabel = `${sportHomeTeam.trim()} vs ${sportAwayTeam.trim()}`;
+        effectiveQuestion = withMatchPrefix(matchLabel, effectiveQuestion);
+      }
+
       await indexMarket({
         market_address: marketKeypair.publicKey.toBase58(),
-        question: question.slice(0, 200),
+        question: effectiveQuestion.slice(0, 200),
         description: fullDescription || undefined,
         category: category || "other",
         image_url: effectiveImageUrl,
@@ -1231,17 +1353,27 @@ export default function CreateMarketPage() {
         total_volume: 0,
 
         // Sport fields (undefined for normal markets — ignored by indexMarket)
-        market_mode: sportEventId ? "sport" : undefined,
+        // "sport"      → official admin match market (live sport_event linked)
+        // "sport_side" → user soccer side market (no sport_event, ends at kickoff)
+        market_mode: sportEventId
+          ? "sport"
+          : sideMarketMode && sportMeta
+          ? "sport_side"
+          : undefined,
         sport_event_id: sportEventId,
         sport_meta: sportMeta,
       } as any);
 
+      const createdAddress = marketKeypair.publicKey.toBase58();
+      setCreatedMarketAddress(createdAddress);
       setCreationStep("done");
 
-      // Redirect after short delay
+      // Redirect to the new market. Works for normal, side, and official
+      // markets (shared success path). The modal also shows a manual
+      // "View market" link as a fallback if this push is interrupted.
       setTimeout(() => {
-        router.push(`/trade/${marketKeypair.publicKey.toBase58()}`);
-      }, 1500);
+        router.push(`/trade/${createdAddress}`);
+      }, 1200);
     } catch (e: any) {
       console.error("Create market error:", e);
       const errMsg = String(e?.message || "");
@@ -1292,7 +1424,7 @@ export default function CreateMarketPage() {
   return (
     <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-12">
       {/* Creation Progress Modal */}
-      <CreationModal step={creationStep} error={creationError} onClose={closeCreationModal} />
+      <CreationModal step={creationStep} error={creationError} onClose={closeCreationModal} marketAddress={createdMarketAddress} />
 
       <div className="mb-7 sm:mb-8">
         <h1 className="text-3xl sm:text-4xl font-bold text-white mb-2">Create Market</h1>
@@ -1326,47 +1458,17 @@ export default function CreateMarketPage() {
           )}
         </div>
 
-        {/* Sports mode toggle (only for "Sports (General)" top-level) */}
-        {isSportsGeneral && (
-          <div className="mb-6">
-            <label className="block text-white font-semibold mb-2">Market Type</label>
-            <div className="grid grid-cols-2 gap-3">
-              <TypeCard
-                active={sportsMode === "match"}
-                onClick={() => setSportsMode("match")}
-                title="Match"
-                desc="Tied to a specific match with auto-lock."
-              />
-              <TypeCard
-                active={sportsMode === "general"}
-                onClick={() => setSportsMode("general")}
-                title="General"
-                desc="General sports question (e.g. medals, awards)."
-              />
-            </div>
-          </div>
-        )}
-
-        {/* Sports Info Box */}
-        {isSportsMarket && (
+        {/* Sports Info Box — official admin match flow only */}
+        {isMatchMode && (
           <div className="mb-6">
             <InfoBox>
-              {isMatchMode ? (
-                <>
-                  <p className="font-semibold mb-1">Sports Match Market</p>
-                  <p>Live trading enabled. Trading auto-locks 2 minutes before end time. After the match ends, you have 24h to propose the outcome.</p>
-                </>
-              ) : (
-                <>
-                  <p className="font-semibold mb-1">Sports Question</p>
-                  <p>General sports prediction market. Resolution works like a normal market — propose the outcome before the end date.</p>
-                </>
-              )}
+              <p className="font-semibold mb-1">Sports Match Market</p>
+              <p>Live trading enabled. Trading auto-locks 2 minutes before end time. After the match ends, you have 24h to propose the outcome.</p>
             </InfoBox>
           </div>
         )}
 
-        {/* Pick a match — opens modal */}
+        {/* Pick a match — OFFICIAL fixture picking (admin only). FROZEN. */}
         {isMatchMode && (
           <div className="mb-6">
             <div className="flex items-center justify-between mb-2">
@@ -1433,6 +1535,75 @@ export default function CreateMarketPage() {
               open={matchPickerOpen}
               onClose={() => setMatchPickerOpen(false)}
               onSelectMatch={selectMatch}
+              sportType={sportType}
+              onSportTypeChange={setSportType}
+            />
+          </div>
+        )}
+
+        {/* Pick a match — USER side market fixture selector. */}
+        {sideMarketMode && (
+          <div className="mb-6">
+            <label className="block text-white font-semibold mb-2">
+              Select a match *
+            </label>
+            <p className="text-xs text-gray-500 mb-3">
+              Choose the match your prediction is about. Trading closes at kickoff.
+            </p>
+
+            {sportProviderEventId ? (
+              <div className="flex items-start justify-between p-3 rounded-lg bg-pump-green/10 border border-pump-green/30">
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-white">
+                    {sportHomeTeam} vs {sportAwayTeam}
+                  </div>
+                  {sportLeague && (
+                    <div className="mt-0.5 text-xs text-gray-400">{sportLeague}</div>
+                  )}
+                  {sportStartTime && (
+                    <div className="mt-0.5 text-xs text-gray-400">
+                      Kickoff: {formatYourTime(sportStartTime)}
+                      {isValidIanaTimeZone(sportEventTimezone)
+                        ? ` · ${formatMatchTime(sportStartTime, sportEventTimezone)}`
+                        : ""}
+                    </div>
+                  )}
+                  <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-pump-green">
+                    <CheckCircle className="w-3 h-3" /> Trading closes at kickoff
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 ml-3 shrink-0">
+                  <button
+                    type="button"
+                    onClick={openMatchPicker}
+                    className="text-xs text-gray-400 hover:text-white underline"
+                  >
+                    Change
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearSideMatch}
+                    className="text-xs text-gray-400 hover:text-white underline"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={openMatchPicker}
+                className="px-4 py-2.5 rounded-lg text-sm font-semibold transition flex items-center gap-2 bg-white/10 text-white border border-white/20 hover:bg-white/15 hover:border-white/30"
+              >
+                <Trophy className="w-4 h-4 text-pump-green" />
+                Pick a match
+              </button>
+            )}
+
+            <MatchPickerModal
+              open={matchPickerOpen}
+              onClose={() => setMatchPickerOpen(false)}
+              onSelectMatch={selectSideMatch}
               sportType={sportType}
               onSportTypeChange={setSportType}
             />
@@ -1710,52 +1881,79 @@ export default function CreateMarketPage() {
         </div>
 
         {/* End Date / Match End Time */}
-        <div className="mb-6">
-          <label className="block text-white font-semibold mb-2">
-            {isMatchMode ? "Match End Time *" : "End Date & Time *"}
-          </label>
-          <div className="relative">
-            <DatePicker
-              selected={isMatchMode && sportEndTime ? sportEndTime : resolutionDate}
-              onChange={(date: Date | null) => {
-                if (!date) return;
-                if (hasLinkedFixture) return;
-                if (isMatchMode) {
-                  setSportEndTime(date);
-                  // Also push resolution date forward if needed
-                  if (!resolutionDate || date > resolutionDate) {
+        {sideMarketMode ? (
+          // Side markets: end / trading lock is fixed to kickoff (read-only).
+          <div className="mb-6">
+            <label className="block text-white font-semibold mb-2">
+              Trading closes
+            </label>
+            <div className="flex items-center gap-2 rounded-lg border border-gray-700 bg-black/30 px-4 py-3 text-sm">
+              <Calendar className="w-4 h-4 text-gray-500" />
+              {sportStartTime ? (
+                <span className="text-white">
+                  At kickoff · {formatYourTime(sportStartTime)}
+                  {isValidIanaTimeZone(sportEventTimezone)
+                    ? ` (${formatMatchTime(sportStartTime, sportEventTimezone)})`
+                    : ""}
+                </span>
+              ) : (
+                <span className="text-gray-400">
+                  Select a match to set the closing time.
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              This market resolves at kickoff — no live trading.
+            </p>
+          </div>
+        ) : (
+          <div className="mb-6">
+            <label className="block text-white font-semibold mb-2">
+              {isMatchMode ? "Match End Time *" : "End Date & Time *"}
+            </label>
+            <div className="relative">
+              <DatePicker
+                selected={isMatchMode && sportEndTime ? sportEndTime : resolutionDate}
+                onChange={(date: Date | null) => {
+                  if (!date) return;
+                  if (hasLinkedFixture) return;
+                  if (isMatchMode) {
+                    setSportEndTime(date);
+                    // Also push resolution date forward if needed
+                    if (!resolutionDate || date > resolutionDate) {
+                      setResolutionDate(date);
+                    }
+                  } else {
                     setResolutionDate(date);
                   }
-                } else {
-                  setResolutionDate(date);
-                }
-              }}
-              showTimeSelect
-              timeFormat="HH:mm"
-              timeIntervals={15}
-              dateFormat="MMMM d, yyyy h:mm aa"
-              minDate={new Date()}
-              readOnly={hasLinkedFixture}
-              className="input-pump w-full pl-10"
-              placeholderText={isMatchMode ? "Select match end time" : "Select end date and time"}
-            />
-            <Calendar className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-500 pointer-events-none" />
+                }}
+                showTimeSelect
+                timeFormat="HH:mm"
+                timeIntervals={15}
+                dateFormat="MMMM d, yyyy h:mm aa"
+                minDate={new Date()}
+                readOnly={hasLinkedFixture}
+                className="input-pump w-full pl-10"
+                placeholderText={isMatchMode ? "Select match end time" : "Select end date and time"}
+              />
+              <Calendar className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-500 pointer-events-none" />
+            </div>
+            {isMatchMode && (
+              <>
+                {sportEndTime && (
+                  <p className="text-xs text-gray-500 mt-2">
+                    Your time: {formatYourTime(sportEndTime)} ·{" "}
+                    {isValidIanaTimeZone(sportEventTimezone)
+                      ? `Match time: ${formatMatchTime(sportEndTime, sportEventTimezone)}`
+                      : `UTC: ${formatMatchTime(sportEndTime)}`}
+                    {!isValidIanaTimeZone(sportEventTimezone) && " (timezone unknown)"}
+                  </p>
+                )}
+                <p className="text-xs text-gray-500 mt-2">Live trading enabled. Trading auto-locks 2 minutes before end time.</p>
+              </>
+            )}
           </div>
-          {isMatchMode && (
-            <>
-              {sportEndTime && (
-                <p className="text-xs text-gray-500 mt-2">
-                  Your time: {formatYourTime(sportEndTime)} ·{" "}
-                  {isValidIanaTimeZone(sportEventTimezone)
-                    ? `Match time: ${formatMatchTime(sportEndTime, sportEventTimezone)}`
-                    : `UTC: ${formatMatchTime(sportEndTime)}`}
-                  {!isValidIanaTimeZone(sportEventTimezone) && " (timezone unknown)"}
-                </p>
-              )}
-              <p className="text-xs text-gray-500 mt-2">Live trading enabled. Trading auto-locks 2 minutes before end time.</p>
-            </>
-          )}
-        </div>
+        )}
 
         {/* Cancellation Policy Warning (Match only) */}
         {isMatchMode && (

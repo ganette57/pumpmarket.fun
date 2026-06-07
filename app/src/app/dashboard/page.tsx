@@ -630,7 +630,7 @@ function ActionModal({
 /* -------------------------------------------------------------------------- */
 
 export default function DashboardPage() {
-  const { publicKey, connected } = useWallet();
+  const { publicKey, connected, connecting } = useWallet();
   const anchorWallet = useAnchorWallet();
   const walletBase58 = publicKey?.toBase58() || "";
   const { connection } = useConnection();
@@ -1321,10 +1321,20 @@ export default function DashboardPage() {
   /* -------------------------------------------------------------------------- */
 
   if (!connected) {
+    // Don't assume "disconnected" while the adapter is still auto-connecting —
+    // publicKey can be null for a moment after a hard load. Show a loading
+    // state during that window instead of the connect prompt.
+    const stillInitializing = connecting || !!publicKey;
     return (
       <div className="max-w-6xl mx-auto px-4 py-12">
         <h1 className="text-3xl md:text-4xl font-bold text-white mb-6">Dashboard</h1>
-        <div className="card-pump"><p className="text-gray-400">Connect wallet to view your dashboard.</p></div>
+        <div className="card-pump">
+          <p className="text-gray-400">
+            {stillInitializing
+              ? "Connecting wallet…"
+              : "Connect wallet to view your dashboard."}
+          </p>
+        </div>
       </div>
     );
   }

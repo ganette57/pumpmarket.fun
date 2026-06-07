@@ -5,9 +5,10 @@
 // to real data; Live Matches shows real live games only (hidden when none).
 // Groups, Side Markets, Leaderboard, and Treasury remain mock previews.
 //
-// Section order: Hero → (Live) → Upcoming → Groups → Side Markets →
-// Leaderboard → Treasury. Flash Markets and Knockout Stage are intentionally
-// not rendered on the overview yet (their components/data are kept).
+// Section order: Hero → (Live) → Upcoming → Side Markets → Groups →
+// Leaderboard → Treasury. Match/market rows (Live, Upcoming, Side Markets)
+// use the shared HorizontalRail. Flash Markets and Knockout Stage are
+// intentionally not rendered on the overview yet (their components/data kept).
 
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
@@ -23,6 +24,7 @@ import { SideMarketRowCard } from "./_components/MarketsBlocks";
 import LeaderboardPreview from "./_components/LeaderboardPreview";
 import GroupsGrid from "./_components/GroupsTable";
 import TreasuryPreview from "./_components/TreasuryPreview";
+import MarketCard from "@/components/MarketCard";
 import {
   UPCOMING_MATCHES,
   SIDE_MARKETS,
@@ -30,6 +32,7 @@ import {
 } from "./_components/mockData";
 import { getWorldCupFixtures } from "./_lib/getWorldCupFixtures";
 import { getWorldCupGroups } from "./_lib/getWorldCupGroups";
+import { getWorldCupSideMarkets } from "./_lib/getWorldCupSideMarkets";
 
 // Re-fetch at most every 5 minutes (route-level cache); the provider stack
 // already has its own 15 min cache, so this is a cheap upper bound.
@@ -41,8 +44,12 @@ export const revalidate = 300;
  * is reserved for championship-coded elements.
  */
 export default async function WorldCupHubPage() {
-  const [{ hasRealFixtures, liveMatches, upcomingMatches }, groupsResult] =
-    await Promise.all([getWorldCupFixtures(), getWorldCupGroups()]);
+  const [{ hasRealFixtures, liveMatches, upcomingMatches }, groupsResult, sideMarkets] =
+    await Promise.all([
+      getWorldCupFixtures(),
+      getWorldCupGroups(),
+      getWorldCupSideMarkets(),
+    ]);
 
   // Live: real live matches only — never mock, never fake. Section is hidden
   // entirely when there are none.
@@ -98,18 +105,40 @@ export default async function WorldCupHubPage() {
         </HorizontalRail>
       </HubSection>
 
-      {/* 4. Groups */}
-      <HubSection title="Groups" subtitle={groupsSubtitle}>
-        <GroupsGrid groups={groups} />
+      {/* 4. Side Markets — horizontal rail like Upcoming. Real user-created
+          soccer side markets, else mock fallback. */}
+      <HubSection
+        title="Side Markets"
+        subtitle={
+          sideMarkets.length > 0
+            ? "User-created soccer side markets."
+            : "Classic match markets."
+        }
+      >
+        <HorizontalRail>
+          {sideMarkets.length > 0
+            ? sideMarkets.map((m) => (
+                <div
+                  key={m.publicKey}
+                  className="min-w-[300px] max-w-[320px] flex-shrink-0"
+                >
+                  <MarketCard market={m} />
+                </div>
+              ))
+            : SIDE_MARKETS.map((m) => (
+                <div
+                  key={m.id}
+                  className="min-w-[300px] max-w-[320px] flex-shrink-0"
+                >
+                  <SideMarketRowCard m={m} />
+                </div>
+              ))}
+        </HorizontalRail>
       </HubSection>
 
-      {/* 5. Side Markets */}
-      <HubSection title="Side Markets" subtitle="Classic match markets.">
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {SIDE_MARKETS.map((m) => (
-            <SideMarketRowCard key={m.id} m={m} />
-          ))}
-        </div>
+      {/* 5. Groups */}
+      <HubSection title="Groups" subtitle={groupsSubtitle}>
+        <GroupsGrid groups={groups} />
       </HubSection>
 
       {/* 6. Championship Leaderboard Preview */}
