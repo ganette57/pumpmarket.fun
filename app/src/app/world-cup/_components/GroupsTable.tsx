@@ -9,11 +9,14 @@ export default function GroupsGrid({
   groups?: GroupStanding[];
 }) {
   return (
-    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+    <div
+      className="-mx-4 flex gap-4 overflow-x-auto px-4 pb-2 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8"
+      style={{ scrollbarWidth: "thin" }}
+    >
       {groups.map((g) => (
         <div
           key={g.name}
-          className="overflow-hidden rounded-xl border border-gray-800 bg-[#05070b]"
+          className="min-w-[300px] max-w-[320px] flex-shrink-0 overflow-hidden rounded-xl border border-gray-800 bg-[#05070b]"
         >
           <div className="border-b border-gray-800 bg-pump-gray/40 px-4 py-2 text-sm font-bold text-white">
             {g.name}

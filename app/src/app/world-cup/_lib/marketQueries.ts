@@ -63,7 +63,10 @@ async function fetchSoccerRows(): Promise<any[]> {
 // Public queries
 // ---------------------------------------------------------------------------
 
-/** Official admin-created World Cup match markets. */
+/**
+ * Official admin-created World Cup match markets, sorted by kickoff ascending
+ * (nearest upcoming first). Falls back to end_date when no kickoff is stored.
+ */
 export async function getWorldCupMatchMarkets(
   limit?: number,
 ): Promise<WorldCupMarket[]> {
@@ -71,10 +74,44 @@ export async function getWorldCupMatchMarkets(
     const rows = (await fetchSoccerRows())
       .filter(isOfficialMatchMarket)
       .filter(isWorldCupMarket)
-      .map((r) => toWorldCupMarket(r));
+      .map((r) => toWorldCupMarket(r))
+      .sort((a, b) => kickoffMs(a) - kickoffMs(b));
     return typeof limit === "number" ? rows.slice(0, limit) : rows;
   } catch {
     return [];
+  }
+}
+
+function kickoffMs(m: WorldCupMarket): number {
+  const t = m.kickoffIso ? new Date(m.kickoffIso).getTime() : NaN;
+  if (Number.isFinite(t)) return t;
+  // Fallback: resolutionTime is unix seconds (end_date).
+  return m.resolutionTime > 0 ? m.resolutionTime * 1000 : Number.MAX_SAFE_INTEGER;
+}
+
+/**
+ * Provider event ids that already have an OFFICIAL match market.
+ * Used to prevent admins from creating duplicate official markets. Side
+ * markets are intentionally NOT included here (a fixture can have many side
+ * markets and still be available for an official market). Never throws.
+ */
+export async function getOfficialMatchProviderEventIds(): Promise<Set<string>> {
+  try {
+    const rows = (await fetchSoccerRows()).filter(isOfficialMatchMarket);
+    const ids = new Set<string>();
+    for (const r of rows) {
+      const meta = asObject(r?.sport_meta);
+      const id =
+        pickStr(meta.provider_event_id) ||
+        pickStr(asObject(meta.raw).thesportsdb_id) ||
+        (asObject(meta.raw).league_id != null
+          ? pickStr(String(asObject(meta.raw).thesportsdb_id ?? ""))
+          : null);
+      if (id) ids.add(id);
+    }
+    return ids;
+  } catch {
+    return new Set();
   }
 }
 

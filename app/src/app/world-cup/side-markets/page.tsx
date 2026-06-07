@@ -7,7 +7,8 @@ import { ChevronLeft } from "lucide-react";
 import WorldCupMarketsBrowser from "../_components/WorldCupMarketsBrowser";
 import { getWorldCupSideMarkets } from "../_lib/marketQueries";
 
-export const revalidate = 300;
+// Fresh on every request so newly-created side markets appear at once.
+export const dynamic = "force-dynamic";
 
 export default async function WorldCupSideMarketsPage() {
   const markets = await getWorldCupSideMarkets();

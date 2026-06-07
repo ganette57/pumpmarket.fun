@@ -4,6 +4,7 @@
 import { useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import MarketCard from "@/components/MarketCard";
+import WorldCupMatchMarketCard from "./WorldCupMatchMarketCard";
 import type { WorldCupMarket } from "../_lib/marketQueries";
 
 type StatusFilter = "open" | "ended" | "all";
@@ -11,9 +12,12 @@ type StatusFilter = "open" | "ended" | "all";
 export default function WorldCupMarketsBrowser({
   markets,
   emptyLabel,
+  cardKind = "side",
 }: {
   markets: WorldCupMarket[];
   emptyLabel: string;
+  /** "match" → 3-way match card; "side" → standard MarketCard. */
+  cardKind?: "match" | "side";
 }) {
   const [query, setQuery] = useState("");
   const [team, setTeam] = useState("all");
@@ -101,9 +105,13 @@ export default function WorldCupMarketsBrowser({
             {filtered.length} market{filtered.length !== 1 ? "s" : ""}
           </p>
           <div className="grid grid-cols-1 gap-4 auto-rows-fr sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {filtered.map((m) => (
-              <MarketCard key={m.publicKey} market={m} />
-            ))}
+            {filtered.map((m) =>
+              cardKind === "match" ? (
+                <WorldCupMatchMarketCard key={m.publicKey} market={m} />
+              ) : (
+                <MarketCard key={m.publicKey} market={m} />
+              ),
+            )}
           </div>
         </>
       ) : (

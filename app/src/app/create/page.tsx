@@ -331,12 +331,15 @@ function MatchPickerModal({
   onSelectMatch,
   sportType,
   onSportTypeChange,
+  excludeOfficial = false,
 }: {
   open: boolean;
   onClose: () => void;
   onSelectMatch: (m: any) => void;
   sportType: string;
   onSportTypeChange: (s: string) => void;
+  /** Admin official picker: hide fixtures that already have an official market. */
+  excludeOfficial?: boolean;
 }) {
   const [fixtures, setFixtures] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -369,7 +372,7 @@ function MatchPickerModal({
       const res = await fetch("/api/sports/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sport: sportType }),
+        body: JSON.stringify({ sport: sportType, exclude_official: excludeOfficial }),
       });
 
       if (res.status === 429) {
@@ -1537,6 +1540,7 @@ export default function CreateMarketPage() {
               onSelectMatch={selectMatch}
               sportType={sportType}
               onSportTypeChange={setSportType}
+              excludeOfficial
             />
           </div>
         )}

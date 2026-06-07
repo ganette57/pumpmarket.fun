@@ -24,6 +24,7 @@ import LeaderboardPreview from "./_components/LeaderboardPreview";
 import GroupsGrid from "./_components/GroupsTable";
 import TreasuryPreview from "./_components/TreasuryPreview";
 import MarketCard from "@/components/MarketCard";
+import WorldCupMatchMarketCard from "./_components/WorldCupMatchMarketCard";
 import { SIDE_MARKETS, GROUPS } from "./_components/mockData";
 import { getWorldCupFixtures } from "./_lib/getWorldCupFixtures";
 import { getWorldCupGroups } from "./_lib/getWorldCupGroups";
@@ -32,9 +33,10 @@ import {
   getWorldCupSideMarkets,
 } from "./_lib/marketQueries";
 
-// Re-fetch at most every 5 minutes (route-level cache); the provider stack
-// already has its own 15 min cache, so this is a cheap upper bound.
-export const revalidate = 300;
+// Render fresh on every request so newly-created official match markets and
+// side markets appear immediately (the TheSportsDB provider keeps its own
+// in-memory cache, so this does not hammer the provider).
+export const dynamic = "force-dynamic";
 
 /**
  * World Cup Hub overview.
@@ -100,7 +102,7 @@ export default async function WorldCupHubPage() {
                 key={m.publicKey}
                 className="min-w-[300px] max-w-[320px] flex-shrink-0"
               >
-                <MarketCard market={m} />
+                <WorldCupMatchMarketCard market={m} />
               </div>
             ))}
           </HorizontalRail>

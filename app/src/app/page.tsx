@@ -1060,6 +1060,17 @@ export default function Home() {
               style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
             >
               <style>{`.md\\:hidden div::-webkit-scrollbar { display: none; }`}</style>
+
+              {/* World Cup hero — always the first card in the mobile feed. */}
+              <div
+                key="wc-hero"
+                className="relative flex h-[100dvh] w-full snap-start snap-always flex-shrink-0 items-center justify-center overflow-hidden bg-black px-3 py-4"
+              >
+                <div className="h-[86vh] max-h-[720px] w-full">
+                  <WorldCupChampionshipHero />
+                </div>
+              </div>
+
               {mobileFeedEntries.map((entry, index) => {
                 const entryKey = mobileFeedEntryKey(entry);
                 if (entry.kind === "flash") {

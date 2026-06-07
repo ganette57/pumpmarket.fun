@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { listUpcomingMatches } from "@/lib/sportsProviders/fixturesProvider";
 import { listWorldCupSeasonMatchesTheSportsDB } from "@/lib/sportsProviders/theSportsDbProvider";
+import { getOfficialMatchProviderEventIds } from "@/app/world-cup/_lib/marketQueries";
 
 const WORLD_CUP_SEASON = "2026";
 
@@ -43,10 +44,15 @@ function setCache(key: string, data: any[]) {
 // q is optional — applied as local substring filter if present.
 // ---------------------------------------------------------------------------
 
-async function handleList(sport: string, base_date?: string, q?: string) {
+async function handleList(
+  sport: string,
+  base_date?: string,
+  q?: string,
+  excludeOfficial = false,
+) {
   const requestedSport = sport;
   // Check route-level cache
-  const cacheKey = `list:${sport}:${base_date || "today"}:q:${(q || "").toLowerCase()}`;
+  const cacheKey = `list:${sport}:${base_date || "today"}:q:${(q || "").toLowerCase()}:xo:${excludeOfficial ? 1 : 0}`;
   const cached = getCached(cacheKey);
   if (cached) {
     scoreDbg({ requested_sport: requestedSport, cached: true, returned_count: cached.length });
@@ -92,6 +98,22 @@ async function handleList(sport: string, base_date?: string, q?: string) {
     }
   }
 
+  // Admin-only: remove fixtures that already have an OFFICIAL match market so
+  // admins can't create duplicates. Side-market-only fixtures stay available,
+  // and normal users (excludeOfficial=false) still see every fixture.
+  if (excludeOfficial) {
+    try {
+      const taken = await getOfficialMatchProviderEventIds();
+      if (taken.size > 0) {
+        matches = matches.filter(
+          (m) => !taken.has(String(m.provider_event_id)),
+        );
+      }
+    } catch {
+      // On failure, fall through with the unfiltered list.
+    }
+  }
+
   // Optional server-side text filter (min 3 chars)
   const trimmed = (q || "").trim().toLowerCase();
   const filtered = trimmed.length >= 3
@@ -116,12 +138,18 @@ async function handleList(sport: string, base_date?: string, q?: string) {
 // Route handlers
 // ---------------------------------------------------------------------------
 
+function truthy(v: unknown): boolean {
+  const s = String(v ?? "").trim().toLowerCase();
+  return s === "1" || s === "true" || s === "yes";
+}
+
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const sport = (searchParams.get("sport") || "soccer").trim();
   const base_date = searchParams.get("base_date") || undefined;
   const q = searchParams.get("q") || undefined;
-  return handleList(sport, base_date, q);
+  const excludeOfficial = truthy(searchParams.get("exclude_official"));
+  return handleList(sport, base_date, q, excludeOfficial);
 }
 
 export async function POST(req: Request) {
@@ -130,7 +158,8 @@ export async function POST(req: Request) {
     const sport = String(body.sport || "soccer").trim();
     const base_date = body.base_date ? String(body.base_date) : undefined;
     const q = body.q ? String(body.q) : undefined;
-    return handleList(sport, base_date, q);
+    const excludeOfficial = truthy(body.exclude_official);
+    return handleList(sport, base_date, q, excludeOfficial);
   } catch {
     return NextResponse.json({ matches: [] });
   }

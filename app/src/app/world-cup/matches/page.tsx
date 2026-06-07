@@ -7,7 +7,8 @@ import { ChevronLeft } from "lucide-react";
 import WorldCupMarketsBrowser from "../_components/WorldCupMarketsBrowser";
 import { getWorldCupMatchMarkets } from "../_lib/marketQueries";
 
-export const revalidate = 300;
+// Fresh on every request so newly-created official match markets appear at once.
+export const dynamic = "force-dynamic";
 
 export default async function WorldCupMatchesPage() {
   const markets = await getWorldCupMatchMarkets();
@@ -31,6 +32,7 @@ export default async function WorldCupMatchesPage() {
 
         <WorldCupMarketsBrowser
           markets={markets}
+          cardKind="match"
           emptyLabel="No official World Cup match markets yet."
         />
       </div>
