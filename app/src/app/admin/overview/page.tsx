@@ -1196,6 +1196,21 @@ export default function AdminOverviewPage() {
                   </button>
                 ))}
               </div>
+
+              {/* External link — Rewards Tasks lives on its own page so it
+                  does not interfere with the inbox / resolutions flow. */}
+              <div className="mt-3 border-t border-white/5 pt-3">
+                <Link
+                  href="/admin/rewards"
+                  className="flex items-center justify-between gap-2 rounded-xl border border-white/5 bg-transparent px-3 py-2.5 text-sm text-gray-400 transition hover:bg-white/5 hover:text-white"
+                >
+                  <span className="inline-flex items-center gap-2">
+                    <span aria-hidden="true">🏆</span>
+                    Rewards Tasks
+                  </span>
+                  <span className="text-xs text-gray-500">↗</span>
+                </Link>
+              </div>
             </aside>
 
             <div className="min-w-0 space-y-6">

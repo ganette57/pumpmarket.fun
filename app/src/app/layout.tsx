@@ -7,6 +7,7 @@ import { WalletContextProvider } from "@/components/WalletProvider";
 import AppShell from "@/components/AppShell";
 import LiveBuysTicker from "@/components/LiveBuysTicker";
 import GeoGateController from "@/components/GeoGateController";
+import ReferralCapture from "@/components/ReferralCapture";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -32,6 +33,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <WalletContextProvider>
           <AppShell>
           <GeoGateController />
+          <ReferralCapture />
             {children}
 
             {/* Single ticker: bottom-14 on mobile (above nav), bottom-0 on desktop */}

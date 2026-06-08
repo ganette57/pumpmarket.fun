@@ -1,5 +1,6 @@
 // app/src/lib/transactions.ts
 import { supabase } from "./supabaseClient";
+import { awardTradePoints } from "./funPoints";
 
 export type LogTxParams = {
   marketId?: string | null;
@@ -90,5 +91,16 @@ export async function logTransaction(params: LogTxParams) {
   const { error } = await supabase.from("transactions").insert(payload);
   if (error) {
     console.error("logTransaction error:", error, payload);
+    return;
+  }
+
+  // Fun Points — award trading points on every confirmed buy. Never throws.
+  if (payload.is_buy && payload.cost > 0) {
+    void awardTradePoints({
+      wallet: payload.user_address,
+      costSol: payload.cost,
+      marketAddress: payload.market_address,
+      txSignature: payload.tx_signature,
+    });
   }
 }

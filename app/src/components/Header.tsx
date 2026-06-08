@@ -6,7 +6,8 @@ import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { getProfile } from '@/lib/profiles';
-import { formatPoints, getFunPointsSummary } from '@/lib/funPoints';
+import { formatPoints } from '@/lib/funPoints';
+import { useFunPointsBalance } from '@/hooks/useFunPointsBalance';
 
 // --- Hook pour fermer le menu avatar quand on clique en dehors ---
 function useClickOutside(ref: React.RefObject<HTMLDivElement>, onClose: () => void) {
@@ -32,6 +33,8 @@ export default function Header() {
 
   const menuRef = useRef<HTMLDivElement>(null);
   useClickOutside(menuRef, () => setMenuOpen(false));
+
+  const funPointsBalance = useFunPointsBalance();
   
   const DOCS_URL = "https://funmarket.gitbook.io/funmarket/";
   const TERMS_URL = "https://funmarket.gitbook.io/funmarket/terms-of-use";
@@ -169,9 +172,7 @@ export default function Header() {
               className="inline-flex h-8 items-center gap-1.5 rounded-full border border-pump-green/40 bg-black/60 px-3 text-sm font-semibold text-pump-green hover:border-pump-green hover:bg-black/80 transition"
             >
               <span aria-hidden="true">🏆</span>
-              <span className="tabular-nums">
-                {formatPoints(getFunPointsSummary(publicKey?.toBase58() ?? null).balance)}
-              </span>
+              <span className="tabular-nums">{formatPoints(funPointsBalance)}</span>
             </Link>
 
             {/* Avatar/Menu (always visible) */}

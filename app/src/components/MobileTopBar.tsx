@@ -6,7 +6,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { formatPointsCompact, getFunPointsSummary } from "@/lib/funPoints";
+import { formatPointsCompact } from "@/lib/funPoints";
+import { useFunPointsBalance } from "@/hooks/useFunPointsBalance";
 
 export default function MobileTopBar({ showSearch }: { showSearch: boolean }) {
   const router = useRouter();
@@ -76,17 +77,8 @@ const avatarLabel = useMemo(() => {
   </div>
 </Link>
 
-         {/* Fun Points pill */}
-<Link
-  href="/rewards"
-  aria-label="Fun Points"
-  className="shrink-0 inline-flex h-9 items-center gap-1 rounded-full border border-pump-green/40 bg-black/60 px-2.5 text-xs font-semibold text-pump-green active:bg-black/80"
->
-  <span aria-hidden="true">🏆</span>
-  <span className="tabular-nums">
-    {formatPointsCompact(getFunPointsSummary(publicKey?.toBase58() ?? null).balance)}
-  </span>
-</Link>
+         <FunPointsPill />
+
 
          {/* Menu button */}
 <div className="shrink-0 relative" ref={menuRef}>
@@ -199,5 +191,19 @@ const avatarLabel = useMemo(() => {
       {/* Spacer */}
       <div className={showSearch ? "h-[116px]" : "h-16"} />
           </>
+  );
+}
+
+function FunPointsPill() {
+  const balance = useFunPointsBalance();
+  return (
+    <Link
+      href="/rewards"
+      aria-label="Fun Points"
+      className="shrink-0 inline-flex h-9 items-center gap-1 rounded-full border border-pump-green/40 bg-black/60 px-2.5 text-xs font-semibold text-pump-green active:bg-black/80"
+    >
+      <span aria-hidden="true">🏆</span>
+      <span className="tabular-nums">{formatPointsCompact(balance)}</span>
+    </Link>
   );
 }

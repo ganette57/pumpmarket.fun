@@ -1,5 +1,6 @@
 // app/src/lib/markets.ts
 import { supabase } from "@/lib/supabaseClient";
+import { awardTradePoints } from "@/lib/funPoints";
 
 /* -------------------------------------------------------------------------- */
 /*  Types                                                                      */
@@ -284,6 +285,18 @@ export async function recordTransaction(input: RecordTxInput): Promise<void> {
   if (error) {
     console.error("recordTransaction error:", error);
     throw error;
+  }
+
+  // Fun Points — award trading points (and propagate referral bonus) on
+  // every confirmed buy. Fire-and-forget; trading must never be blocked
+  // by the points system, so this never throws.
+  if (payload.is_buy && Number(payload.cost) > 0) {
+    void awardTradePoints({
+      wallet: payload.user_address,
+      costSol: Number(payload.cost),
+      marketAddress: payload.market_address,
+      txSignature: payload.tx_signature,
+    });
   }
 }
 
