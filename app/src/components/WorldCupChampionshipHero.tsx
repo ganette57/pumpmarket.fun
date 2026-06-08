@@ -83,10 +83,10 @@ export default function WorldCupChampionshipHero() {
 
           <div className="mt-6 flex flex-wrap items-center gap-3">
             <Link
-              href="/world-cup"
+              href="/rewards"
               className="inline-flex h-10 items-center justify-center rounded-full bg-pump-green px-5 text-sm font-bold text-black transition hover:bg-pump-green/90"
             >
-              Join Championship
+              Earn Fun Points
             </Link>
             <Link
               href="/world-cup/leaderboard"

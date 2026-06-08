@@ -70,12 +70,12 @@ export default function HubHero() {
               </p>
 
               <div className="mt-6 flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
+                <Link
+                  href="/rewards"
                   className="inline-flex h-10 items-center justify-center rounded-full bg-pump-green px-5 text-sm font-bold text-black transition hover:bg-pump-green/90"
                 >
-                  Join Championship
-                </button>
+                  Earn Fun Points
+                </Link>
                 <Link
                   href="/world-cup/leaderboard"
                   className="inline-flex h-10 items-center justify-center rounded-full border border-pump-green/60 bg-black/30 px-5 text-sm font-semibold text-pump-green transition hover:bg-black/50"

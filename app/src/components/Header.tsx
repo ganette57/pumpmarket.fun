@@ -6,6 +6,7 @@ import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { getProfile } from '@/lib/profiles';
+import { formatPoints, getFunPointsSummary } from '@/lib/funPoints';
 
 // --- Hook pour fermer le menu avatar quand on clique en dehors ---
 function useClickOutside(ref: React.RefObject<HTMLDivElement>, onClose: () => void) {
@@ -161,6 +162,18 @@ export default function Header() {
               Create
             </Link>
 
+            {/* Fun Points pill */}
+            <Link
+              href="/rewards"
+              aria-label="Fun Points"
+              className="inline-flex h-8 items-center gap-1.5 rounded-full border border-pump-green/40 bg-black/60 px-3 text-sm font-semibold text-pump-green hover:border-pump-green hover:bg-black/80 transition"
+            >
+              <span aria-hidden="true">🏆</span>
+              <span className="tabular-nums">
+                {formatPoints(getFunPointsSummary(publicKey?.toBase58() ?? null).balance)}
+              </span>
+            </Link>
+
             {/* Avatar/Menu (always visible) */}
             <div className="relative" ref={menuRef}>
               <button
@@ -218,11 +231,11 @@ export default function Header() {
                   </Link>
 
                   <Link
-                    href="/affiliate"
+                    href="/rewards"
                     className="block px-4 py-2 hover:bg-pump-dark"
                     onClick={() => setMenuOpen(false)}
                   >
-                    💸 Affiliate
+                    🏆 Rewards
                   </Link>
 
                   <a
