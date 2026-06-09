@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Trophy } from "lucide-react";
 import { useUserRank } from "@/hooks/useUserRank";
 import { useTreasuryMilestone } from "@/hooks/useTreasuryMilestone";
+import { useTopPlayer } from "@/hooks/useTopPlayer";
 
 /**
  * World Cup Championship hero card.
@@ -12,24 +13,22 @@ import { useTreasuryMilestone } from "@/hooks/useTreasuryMilestone";
  * Used in the desktop home carousel (h-[400px] slot) and as the first card in
  * the mobile home feed. FunMarket palette: white headline, neon-green accents,
  * dark-glass stats card. Responsive: stacks on mobile, grid on md+.
- * Prize pool / volume are presentational; Your Rank is the real connected
- * rank and Next Milestone is the live Treasury milestone.
+ *
+ * Stats are real/shared: Volume + Next Milestone + Progress come from the
+ * Treasury helper, Top Player from the leaderboard helper, Your Rank from the
+ * connected wallet (hidden when disconnected). Prize Pool is the manual
+ * Championship constant ($150,000).
  */
 
 const GREEN = "#00FF87";
 const GREEN_SOFT = "#61ff9a";
 
-const STATS = {
-  prizePool: "$150,000",
-  volume: "$27,358,492",
-  topTrader: "@MaxTrader",
-  // % progress toward next milestone (mock)
-  progressPct: 54,
-};
+const PRIZE_POOL = "$150,000"; // manual Championship constant
 
 export default function WorldCupChampionshipHero() {
   const rank = useUserRank();
-  const { nextLabel } = useTreasuryMilestone();
+  const { volumeSol, nextLabel, progressPct, progressLabel } = useTreasuryMilestone();
+  const topPlayer = useTopPlayer();
   return (
     <div className="relative h-full w-full overflow-hidden rounded-2xl border border-pump-green/25 bg-pump-gray">
       {/* Center visual */}
@@ -111,34 +110,37 @@ export default function WorldCupChampionshipHero() {
             </div>
 
             <div className="grid grid-cols-2 gap-3">
-              <StatBlock label="Prize Pool" value={STATS.prizePool} accent />
-              <StatBlock label="Volume" value={STATS.volume} />
+              <StatBlock label="Prize Pool" value={PRIZE_POOL} accent />
+              <StatBlock label="Volume" value={volumeSol ?? "…"} href="/treasury" />
               <StatBlock label="Next Milestone" value={nextLabel ?? "…"} href="/treasury" />
               {rank != null && (
                 <StatBlock label="Your Rank" value={`#${rank.toLocaleString("en-US")}`} href="/leaderboard" />
               )}
             </div>
 
-            <div className="mt-3 rounded-lg border border-white/10 bg-black/40 px-3 py-2">
+            <Link
+              href="/leaderboard"
+              className="mt-3 block rounded-lg border border-white/10 bg-black/40 px-3 py-2 transition hover:border-pump-green/50 hover:bg-black/60"
+            >
               <div className="text-[10px] uppercase tracking-wider text-gray-400">
-                Top Trader
+                Top Player
               </div>
               <div className="mt-0.5 text-sm font-semibold text-white">
-                {STATS.topTrader}
+                {topPlayer ?? "—"}
               </div>
-            </div>
+            </Link>
 
-            {/* Progress bar */}
+            {/* Progress bar — Treasury milestone progress */}
             <div className="mt-3">
               <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wider text-gray-400">
-                <span>Progress</span>
-                <span className="text-pump-green">{STATS.progressPct}%</span>
+                <span>Progress{nextLabel ? ` toward ${nextLabel}` : ""}</span>
+                <span className="text-pump-green">{progressLabel}</span>
               </div>
               <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
                 <div
-                  className="h-full rounded-full"
+                  className="h-full rounded-full transition-all"
                   style={{
-                    width: `${STATS.progressPct}%`,
+                    width: `${progressPct}%`,
                     background: `linear-gradient(90deg, ${GREEN} 0%, ${GREEN_SOFT} 100%)`,
                   }}
                 />
