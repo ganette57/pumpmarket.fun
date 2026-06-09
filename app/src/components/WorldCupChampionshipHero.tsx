@@ -3,6 +3,8 @@
 
 import Link from "next/link";
 import { Trophy } from "lucide-react";
+import { useUserRank } from "@/hooks/useUserRank";
+import { useTreasuryMilestone } from "@/hooks/useTreasuryMilestone";
 
 /**
  * World Cup Championship hero card.
@@ -10,7 +12,8 @@ import { Trophy } from "lucide-react";
  * Used in the desktop home carousel (h-[400px] slot) and as the first card in
  * the mobile home feed. FunMarket palette: white headline, neon-green accents,
  * dark-glass stats card. Responsive: stacks on mobile, grid on md+.
- * Mock data only — no API calls, no backend.
+ * Prize pool / volume are presentational; Your Rank is the real connected
+ * rank and Next Milestone is the live Treasury milestone.
  */
 
 const GREEN = "#00FF87";
@@ -19,14 +22,14 @@ const GREEN_SOFT = "#61ff9a";
 const STATS = {
   prizePool: "$150,000",
   volume: "$27,358,492",
-  nextMilestone: "$50,000,000",
-  yourRank: "#842",
   topTrader: "@MaxTrader",
   // % progress toward next milestone (mock)
   progressPct: 54,
 };
 
 export default function WorldCupChampionshipHero() {
+  const rank = useUserRank();
+  const { nextLabel } = useTreasuryMilestone();
   return (
     <div className="relative h-full w-full overflow-hidden rounded-2xl border border-pump-green/25 bg-pump-gray">
       {/* Center visual */}
@@ -110,8 +113,10 @@ export default function WorldCupChampionshipHero() {
             <div className="grid grid-cols-2 gap-3">
               <StatBlock label="Prize Pool" value={STATS.prizePool} accent />
               <StatBlock label="Volume" value={STATS.volume} />
-              <StatBlock label="Next Milestone" value={STATS.nextMilestone} />
-              <StatBlock label="Your Rank" value={STATS.yourRank} />
+              <StatBlock label="Next Milestone" value={nextLabel ?? "…"} href="/treasury" />
+              {rank != null && (
+                <StatBlock label="Your Rank" value={`#${rank.toLocaleString("en-US")}`} href="/leaderboard" />
+              )}
             </div>
 
             <div className="mt-3 rounded-lg border border-white/10 bg-black/40 px-3 py-2">
@@ -150,19 +155,32 @@ function StatBlock({
   label,
   value,
   accent = false,
+  href,
 }: {
   label: string;
   value: string;
   accent?: boolean;
+  href?: string;
 }) {
-  return (
-    <div className="rounded-lg border border-white/10 bg-black/40 px-3 py-2">
+  const inner = (
+    <>
       <div className="text-[10px] uppercase tracking-wider text-gray-400">
         {label}
       </div>
       <div className={`mt-0.5 text-sm font-bold ${accent ? "text-pump-green" : "text-white"}`}>
         {value}
       </div>
-    </div>
+    </>
   );
+  if (href) {
+    return (
+      <Link
+        href={href}
+        className="block rounded-lg border border-white/10 bg-black/40 px-3 py-2 transition hover:border-pump-green/50 hover:bg-black/60"
+      >
+        {inner}
+      </Link>
+    );
+  }
+  return <div className="rounded-lg border border-white/10 bg-black/40 px-3 py-2">{inner}</div>;
 }

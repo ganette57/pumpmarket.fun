@@ -239,6 +239,14 @@ export default function Header() {
                     🏆 Rewards
                   </Link>
 
+                  <Link
+                    href="/treasury"
+                    className="block px-4 py-2 hover:bg-pump-dark"
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    💰 Treasury
+                  </Link>
+
                   <a
                     href={DOCS_URL}
                     target="_blank"

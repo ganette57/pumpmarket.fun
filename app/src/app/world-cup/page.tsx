@@ -176,7 +176,7 @@ export default async function WorldCupHubPage() {
       {/* 7. Treasury Preview */}
       <HubSection
         title="Treasury"
-        subtitle="Championship treasury — preview only."
+        subtitle="Championship progress and prize pool."
         action={
           <Link
             href="/world-cup/treasury"

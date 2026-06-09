@@ -4,6 +4,8 @@
 import Link from "next/link";
 import { Trophy } from "lucide-react";
 import { CHAMPIONSHIP_STATS } from "./mockData";
+import { useUserRank } from "@/hooks/useUserRank";
+import { useTreasuryMilestone } from "@/hooks/useTreasuryMilestone";
 
 const GREEN = "#00FF87";
 const GREEN_SOFT = "#61ff9a";
@@ -12,8 +14,12 @@ const GREEN_SOFT = "#61ff9a";
  * Hub-page Championship hero. Larger than the carousel slot variant —
  * full-width banner with image, copy + stats panel. FunMarket palette:
  * white headline, neon-green accents/CTAs, dark-glass stats card.
+ * Your Rank is the real connected rank; Next Milestone is the live
+ * Treasury milestone.
  */
 export default function HubHero() {
+  const rank = useUserRank();
+  const { nextLabel } = useTreasuryMilestone();
   return (
     <section className="pt-6 pb-4">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -98,8 +104,10 @@ export default function HubHero() {
                 <div className="grid grid-cols-2 gap-3">
                   <StatBlock label="Prize Pool" value={CHAMPIONSHIP_STATS.prizePool} accent />
                   <StatBlock label="Volume" value={CHAMPIONSHIP_STATS.volume} />
-                  <StatBlock label="Next Milestone" value={CHAMPIONSHIP_STATS.nextMilestone} />
-                  <StatBlock label="Your Rank" value={CHAMPIONSHIP_STATS.yourRank} />
+                  <StatBlock label="Next Milestone" value={nextLabel ?? "…"} href="/treasury" />
+                  {rank != null && (
+                    <StatBlock label="Your Rank" value={`#${rank.toLocaleString("en-US")}`} href="/leaderboard" />
+                  )}
                 </div>
 
                 <div className="mt-3 rounded-lg border border-white/10 bg-black/40 px-3 py-2">
@@ -141,17 +149,30 @@ function StatBlock({
   label,
   value,
   accent = false,
+  href,
 }: {
   label: string;
   value: string;
   accent?: boolean;
+  href?: string;
 }) {
-  return (
-    <div className="rounded-lg border border-white/10 bg-black/40 px-3 py-2">
+  const inner = (
+    <>
       <div className="text-[10px] uppercase tracking-wider text-gray-400">{label}</div>
       <div className={`mt-0.5 text-sm font-bold ${accent ? "text-pump-green" : "text-white"}`}>
         {value}
       </div>
-    </div>
+    </>
   );
+  if (href) {
+    return (
+      <Link
+        href={href}
+        className="block rounded-lg border border-white/10 bg-black/40 px-3 py-2 transition hover:border-pump-green/50 hover:bg-black/60"
+      >
+        {inner}
+      </Link>
+    );
+  }
+  return <div className="rounded-lg border border-white/10 bg-black/40 px-3 py-2">{inner}</div>;
 }

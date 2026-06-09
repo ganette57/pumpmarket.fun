@@ -113,6 +113,10 @@ const avatarLabel = useMemo(() => {
         🏆 Rewards
       </Link>
 
+      <Link href="/treasury" onClick={() => setMenuOpen(false)} className="block px-4 py-3 text-white/90 hover:bg-white/5">
+        💰 Treasury
+      </Link>
+
       <a
   href={DOCS_URL}
   target="_blank"
