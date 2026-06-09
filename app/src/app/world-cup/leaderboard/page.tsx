@@ -1,17 +1,8 @@
-"use client";
+import { redirect } from "next/navigation";
 
+// The World Cup leaderboard is the same global Fun Points leaderboard.
+// We keep this route so existing hub links don't break, but send users
+// to the single canonical page rather than maintaining a duplicate.
 export default function WorldCupLeaderboardPage() {
-  return (
-    <div className="min-h-[70vh] px-4 py-10 flex items-center justify-center">
-      <div className="w-full max-w-md text-center">
-        <div className="mx-auto mb-6 w-24 h-24 rounded-3xl border border-[#EAB54C]/30 bg-[#EAB54C]/10 flex items-center justify-center shadow-[0_0_40px_rgba(234,181,76,0.18)]">
-          <span className="text-5xl" aria-hidden="true">🏆</span>
-        </div>
-        <h1 className="text-2xl font-extrabold text-white tracking-tight">
-          Championship Leaderboard
-        </h1>
-        <p className="mt-2 text-sm text-gray-400">Coming Soon</p>
-      </div>
-    </div>
-  );
+  redirect("/leaderboard");
 }

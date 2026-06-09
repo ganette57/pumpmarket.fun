@@ -160,7 +160,7 @@ export default async function WorldCupHubPage() {
       {/* 6. Championship Leaderboard Preview */}
       <HubSection
         title="Championship Leaderboard"
-        subtitle="Top 5 traders — preview only."
+        subtitle="Top 5 by Fun Points."
         action={
           <Link
             href="/world-cup/leaderboard"
