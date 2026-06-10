@@ -43,7 +43,16 @@ export function formatVol(volLamports: number) {
 /* ── StreamPlayer ────────────────────────────────────────────────── */
 
 export function StreamPlayer({ url, className }: { url: string; className?: string }) {
-  const embedUrl = useMemo(() => {
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  // Phantom's in-app webview (and some other mobile webviews) ignore the
+  // muted-autoplay allowance normal mobile browsers grant, so the YouTube
+  // embed loads paused. We observe playback state via the YT iframe API and,
+  // if nothing ever starts, surface a tap-to-play CTA as an overlay SIBLING —
+  // the iframe itself is never remounted.
+  const [showPlayCta, setShowPlayCta] = useState(false);
+  const startedRef = useRef(false);
+
+  const { embedUrl, isYouTube } = useMemo(() => {
     const ytMatch = url.match(
       /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/live\/)([\w-]+)/
     );
@@ -51,29 +60,126 @@ export function StreamPlayer({ url, className }: { url: string; className?: stri
       // playsinline=1 → iOS/Phantom webview plays in place (not forced
       // fullscreen) so the user can tap the player; muted autoplay stays
       // for autoplay policy, the user unmutes via the YouTube controls.
-      return `https://www.youtube.com/embed/${ytMatch[1]}?autoplay=1&mute=1&playsinline=1`;
+      // enablejsapi=1 lets us observe playback state and send playVideo
+      // from the CTA without reloading the iframe.
+      return {
+        embedUrl: `https://www.youtube.com/embed/${ytMatch[1]}?autoplay=1&mute=1&playsinline=1&enablejsapi=1`,
+        isYouTube: true,
+      };
 
     const twitchMatch = url.match(/twitch\.tv\/(\w+)/);
     if (twitchMatch)
-      return `https://player.twitch.tv/?channel=${twitchMatch[1]}&parent=${
-        typeof window !== "undefined" ? window.location.hostname : "localhost"
-      }`;
+      return {
+        embedUrl: `https://player.twitch.tv/?channel=${twitchMatch[1]}&parent=${
+          typeof window !== "undefined" ? window.location.hostname : "localhost"
+        }`,
+        isYouTube: false,
+      };
 
     const kickMatch = url.match(/kick\.com\/(\w+)/);
-    if (kickMatch) return `https://player.kick.com/${kickMatch[1]}`;
+    if (kickMatch)
+      return { embedUrl: `https://player.kick.com/${kickMatch[1]}`, isYouTube: false };
 
-    return url;
+    return { embedUrl: url, isYouTube: false };
   }, [url]);
+
+  // YouTube only: detect blocked autoplay. The embed emits state events after
+  // a "listening" handshake; playerState 1 (playing) / 3 (buffering) means
+  // autoplay was honored. If neither arrives within the grace period the
+  // webview blocked it → show the CTA. Twitch/Kick are untouched.
+  useEffect(() => {
+    if (!isYouTube) return;
+    startedRef.current = false;
+    setShowPlayCta(false);
+
+    const onMessage = (evt: MessageEvent) => {
+      if (evt.source !== iframeRef.current?.contentWindow) return;
+      let data: any = evt.data;
+      if (typeof data === "string") {
+        try {
+          data = JSON.parse(data);
+        } catch {
+          return;
+        }
+      }
+      const state = data?.info?.playerState;
+      if (state === 1 || state === 3) {
+        startedRef.current = true;
+        setShowPlayCta(false);
+      }
+    };
+    window.addEventListener("message", onMessage);
+
+    let tries = 0;
+    const handshake = setInterval(() => {
+      tries += 1;
+      if (startedRef.current || tries > 20) {
+        clearInterval(handshake);
+        return;
+      }
+      try {
+        iframeRef.current?.contentWindow?.postMessage(
+          JSON.stringify({ event: "listening", id: "fm-stream" }),
+          "*"
+        );
+      } catch {}
+    }, 400);
+
+    const ctaTimer = setTimeout(() => {
+      if (!startedRef.current) setShowPlayCta(true);
+    }, 3000);
+
+    return () => {
+      window.removeEventListener("message", onMessage);
+      clearInterval(handshake);
+      clearTimeout(ctaTimer);
+    };
+  }, [isYouTube, embedUrl]);
 
   return (
     <div className={className ?? "relative w-full aspect-video bg-black rounded-xl overflow-hidden"}>
       <iframe
+        ref={iframeRef}
         src={embedUrl}
         className="absolute inset-0 w-full h-full"
         allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
         allowFullScreen
         frameBorder="0"
       />
+      {/* Tap-to-play CTA — rendered AFTER the iframe so mounting/unmounting it
+          never reconciles the iframe away. The tap is a real user gesture: we
+          send playVideo through the iframe API and dismiss the overlay; if the
+          webview still refuses programmatic play, the overlay is gone so the
+          next tap lands directly on the YouTube player's own play button. */}
+      {isYouTube && showPlayCta && (
+        <button
+          type="button"
+          aria-label="Tap to play stream"
+          onClick={() => {
+            setShowPlayCta(false);
+            try {
+              iframeRef.current?.contentWindow?.postMessage(
+                JSON.stringify({ event: "command", func: "playVideo", args: [] }),
+                "*"
+              );
+            } catch {}
+          }}
+          className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/55"
+        >
+          <span className="flex items-center justify-center w-16 h-16 rounded-full bg-pump-green shadow-[0_0_34px_rgba(109,255,164,0.5)]">
+            <svg
+              viewBox="0 0 24 24"
+              className="w-7 h-7 fill-black translate-x-0.5"
+              aria-hidden
+            >
+              <polygon points="6,4 20,12 6,20" />
+            </svg>
+          </span>
+          <span className="text-sm font-semibold text-white drop-shadow">
+            Tap to play stream
+          </span>
+        </button>
+      )}
     </div>
   );
 }

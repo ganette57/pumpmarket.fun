@@ -34,6 +34,9 @@ import {
   MobileImmersiveSlide,
 } from "@/components/LiveMobileContent";
 import LiveHostControls from "@/components/LiveHostControls";
+import FlashMarketResultModal, {
+  type FlashMarketResultState,
+} from "@/components/FlashMarketResultModal";
 import { proposeLiveResolution } from "@/lib/liveResolve";
 import { createLiveFlashMarket } from "@/lib/liveMarketCreate";
 import bs58 from "bs58";
@@ -1135,6 +1138,132 @@ export default function LivePage() {
     ]
   );
 
+  /* ── Viewer win/lose modal (mobile feed) ─────────────────────────── */
+  // Fires when the ACTIVE slide's market transitions to proposed/resolved
+  // (driven by the existing 10s snapshot poll), or when the session's market
+  // swaps before this client observed the settle (resolve → auto-start runs
+  // between two polls; we then look up the previous market's final state).
+  //
+  // Behavior notes:
+  // - Host is suppressed: they just used the resolve sheet and already see
+  //   the proposed/result card, no duplicate modal.
+  // - Viewer with a position: winning-outcome shares > 0 → YOU WON,
+  //   otherwise → YOU LOST.
+  // - No on-chain position (or wallet not connected): NO modal — the
+  //   existing "Market resolved / Outcome proposed" card is the fallback.
+  const [resultModal, setResultModal] = useState<{
+    result: FlashMarketResultState;
+    outcomeLabel: string | null;
+    winningShares: number | null;
+  } | null>(null);
+  const settledSeenRef = useRef<
+    Record<string, { pk: string; settled: boolean }>
+  >({});
+  const shownResultsRef = useRef<Set<string>>(new Set());
+
+  const fetchViewerShares = useCallback(
+    async (marketAddress: string): Promise<number[] | null> => {
+      if (!publicKey || !program) return null;
+      try {
+        const mk = new PublicKey(marketAddress);
+        const [posPda] = getUserPositionPDA(mk, publicKey);
+        const info = await connection.getAccountInfo(posPda, "confirmed");
+        if (!info?.data) return null;
+        const acc = (program as any).coder.accounts.decode(
+          "userPosition",
+          info.data
+        );
+        return Array.isArray(acc?.shares)
+          ? acc.shares.map((x: any) => Number(x) || 0)
+          : null;
+      } catch {
+        return null;
+      }
+    },
+    [publicKey, program, connection]
+  );
+
+  const activeFeedSession = mobileActiveSessions[mobileLiveIndex] ?? null;
+  const activeFeedSnapshot = activeFeedSession
+    ? mobileMarketBySession[activeFeedSession.id] ?? null
+    : null;
+
+  useEffect(() => {
+    if (!isMobile || !activeFeedSession || !activeFeedSnapshot) return;
+    const sid = activeFeedSession.id;
+    const isHostViewer =
+      !!publicKey && publicKey.toBase58() === activeFeedSession.host_wallet;
+    const settledNow =
+      activeFeedSnapshot.resolved ||
+      activeFeedSnapshot.resolutionStatus === "proposed";
+    const prev = settledSeenRef.current[sid];
+
+    const maybeShow = async (
+      pk: string,
+      winningIdx: number | null,
+      names: string[]
+    ) => {
+      if (winningIdx == null || !Number.isFinite(winningIdx)) return;
+      if (shownResultsRef.current.has(pk)) return;
+      shownResultsRef.current.add(pk);
+      if (isHostViewer) return;
+      const shares = await fetchViewerShares(pk);
+      const total = (shares ?? []).reduce((a, b) => a + (Number(b) || 0), 0);
+      if (!shares || total <= 0) return;
+      const winningShares = Number(shares[winningIdx] || 0);
+      setResultModal({
+        result: winningShares > 0 ? "win" : "lose",
+        outcomeLabel: names[winningIdx] ?? null,
+        winningShares: winningShares > 0 ? winningShares : null,
+      });
+    };
+
+    if (!prev || prev.pk === activeFeedSnapshot.publicKey) {
+      if (prev && settledNow && !prev.settled) {
+        void maybeShow(
+          activeFeedSnapshot.publicKey,
+          activeFeedSnapshot.proposedOutcome != null
+            ? Number(activeFeedSnapshot.proposedOutcome)
+            : null,
+          activeFeedSnapshot.outcomeNames
+        );
+      }
+    } else if (!prev.settled) {
+      // pk swapped before this client saw the settle — check the previous
+      // market's final state directly so the viewer still gets their result.
+      const oldPk = prev.pk;
+      void (async () => {
+        try {
+          const m = await getMarketByAddress(oldPk);
+          if (!m) return;
+          const winningIdx =
+            (m as any).winning_outcome != null
+              ? Number((m as any).winning_outcome)
+              : m.proposed_winning_outcome != null
+              ? Number(m.proposed_winning_outcome)
+              : null;
+          const settledOld =
+            !!m.resolved ||
+            String(m.resolution_status || "") === "proposed" ||
+            winningIdx != null;
+          if (!settledOld) return;
+          const names = toStringArray(m.outcome_names) ?? ["YES", "NO"];
+          await maybeShow(oldPk, winningIdx, names);
+        } catch {}
+      })();
+    }
+    settledSeenRef.current[sid] = {
+      pk: activeFeedSnapshot.publicKey,
+      settled: settledNow,
+    };
+  }, [
+    isMobile,
+    publicKey,
+    fetchViewerShares,
+    activeFeedSession,
+    activeFeedSnapshot,
+  ]);
+
   if (isMobile) {
     if (loading) {
       return (
@@ -1199,7 +1328,11 @@ export default function LivePage() {
                   key={session.id}
                   session={session}
                   market={mobileMarketBySession[session.id] || null}
-                  active={index === mobileLiveIndex && !mobileTradeOpen}
+                  // `active` must NOT depend on the buy sheet: toggling it
+                  // unmounts the StreamPlayer iframe, and the post-buy
+                  // remount's muted autoplay is blocked in mobile webviews →
+                  // the stream comes back paused. The sheet only overlays.
+                  active={index === mobileLiveIndex}
                   onOutcomeTap={openQuickTrade}
                   hostSlot={
                     connected &&
@@ -1317,6 +1450,18 @@ export default function LivePage() {
               void handleTrade(shares, outcomeIndex, side, costSol)
             }
             keepNavbar
+          />
+        )}
+
+        {/* Viewer win/lose modal — host suppressed (no duplicate after the
+            resolve sheet); no modal without a position (result card covers it). */}
+        {resultModal && (
+          <FlashMarketResultModal
+            open
+            result={resultModal.result}
+            outcomeLabel={resultModal.outcomeLabel}
+            winningShares={resultModal.winningShares}
+            onClose={() => setResultModal(null)}
           />
         )}
       </div>
