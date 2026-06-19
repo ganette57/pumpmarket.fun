@@ -95,7 +95,38 @@ const CAROUSEL_LIMIT = 5;
 const MOBILE_HOME_RETAP_EVENT = "home-feed:retap";
 const MOBILE_FEED_RESTORE_KEY = "home-feed:restore:v1";
 
+// Mobile feed: number of "freshest" non-live posts kept pinned at the top of
+// the remaining bucket before the lightweight shuffle kicks in. Keeps very
+// recent content prioritized so the feed never feels fully randomized.
+const MOBILE_FEED_FRESH_KEEP = 3;
+
 const DEBUG_SPORT_OPEN_FILTER = false;
+
+// Small deterministic PRNG (mulberry32) so a given seed always yields the same
+// order — stable across re-renders within one refresh, different across refreshes.
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Seeded Fisher–Yates. Returns a new array; never duplicates or drops items.
+function seededShuffle<T>(items: T[], seed: number): T[] {
+  const out = [...items];
+  const rand = mulberry32(seed || 1);
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    const tmp = out[i]!;
+    out[i] = out[j]!;
+    out[j] = tmp;
+  }
+  return out;
+}
 
 function normalizeCategoryId(raw: unknown): string {
   const s = String(raw || "")
@@ -348,6 +379,10 @@ export default function Home() {
   const [homeLiveCryptoFlashMarkets, setHomeLiveCryptoFlashMarkets] = useState<FlashMarket[]>([]);
   const [homeLiveIrlFlashMarkets, setHomeLiveIrlFlashMarkets] = useState<FlashMarket[]>([]);
   const [displayedCount, setDisplayedCount] = useState(12);
+  // Lightweight randomization seed for the mobile feed. Starts at a constant so
+  // the initial server/client render match (no hydration mismatch); regenerated
+  // on every (re)load so the order changes slightly between refreshes.
+  const [feedSeed, setFeedSeed] = useState(1);
   const router = useRouter();
   const sp = useSearchParams();
 
@@ -416,6 +451,8 @@ export default function Home() {
 
   const loadMarkets = useCallback(async () => {
     setLoading(true);
+    // New randomized ordering for the mobile feed on each (re)fetch.
+    setFeedSeed((Math.random() * 0xffffffff) >>> 0 || 1);
     try {
       const reqStart = performance.now();
       const res = await fetch("/api/home");
@@ -826,8 +863,15 @@ export default function Home() {
     }
 
     const liveFlash: MobileFeedEntry[] = activeFlashFeedMarkets.map((market) => ({ kind: "flash", market }));
-    return [...liveClassic, ...liveFlash, ...remainingClassic];
-  }, [activeFlashFeedMarkets, liveMap, prioritizedClassicFeedMarkets]);
+
+    // Lightweight shuffle: live content stays pinned up top, the freshest few
+    // non-live posts stay put, and only the long tail is gently reordered so
+    // returning users don't see the exact same sequence each refresh.
+    const freshHead = remainingClassic.slice(0, MOBILE_FEED_FRESH_KEEP);
+    const shuffledTail = seededShuffle(remainingClassic.slice(MOBILE_FEED_FRESH_KEEP), feedSeed);
+
+    return [...liveClassic, ...liveFlash, ...freshHead, ...shuffledTail];
+  }, [activeFlashFeedMarkets, feedSeed, liveMap, prioritizedClassicFeedMarkets]);
 
   const saveFeedRestoreState = useCallback(
     (entryKey?: string, index?: number) => {

@@ -38,6 +38,8 @@ export type WorldCupMarket = {
   league: string | null;
   kickoffIso: string | null;
   ended: boolean;
+  createdAtMs: number;
+  providerEventId: string | null;
 };
 
 const MARKET_SELECT =
@@ -64,8 +66,10 @@ async function fetchSoccerRows(): Promise<any[]> {
 // ---------------------------------------------------------------------------
 
 /**
- * Official admin-created World Cup match markets, sorted by kickoff ascending
- * (nearest upcoming first). Falls back to end_date when no kickoff is stored.
+ * Official admin-created World Cup match markets for the "Upcoming" rail.
+ * Ended/resolved/closed markets are dropped, then sorted by kickoff ascending
+ * (nearest upcoming first) so today's next matches surface first. Falls back to
+ * end_date when no kickoff is stored.
  */
 export async function getWorldCupMatchMarkets(
   limit?: number,
@@ -75,10 +79,33 @@ export async function getWorldCupMatchMarkets(
       .filter(isOfficialMatchMarket)
       .filter(isWorldCupMarket)
       .map((r) => toWorldCupMarket(r))
+      .filter((m) => !m.ended)
       .sort((a, b) => kickoffMs(a) - kickoffMs(b));
     return typeof limit === "number" ? rows.slice(0, limit) : rows;
   } catch {
     return [];
+  }
+}
+
+/**
+ * Map of provider event id → official match market address, across ALL official
+ * World Cup match markets (no ended filter, no limit). Lets the live-match rail
+ * link each real fixture to its trade page. Never throws.
+ */
+export async function getOfficialMatchMarketAddressByEventId(): Promise<
+  Map<string, string>
+> {
+  try {
+    const rows = (await fetchSoccerRows()).filter(isOfficialMatchMarket);
+    const map = new Map<string, string>();
+    for (const r of rows) {
+      const id = providerEventIdOf(r);
+      const addr = pickStr(r?.market_address);
+      if (id && addr && !map.has(id)) map.set(id, addr);
+    }
+    return map;
+  } catch {
+    return new Map();
   }
 }
 
@@ -115,18 +142,56 @@ export async function getOfficialMatchProviderEventIds(): Promise<Set<string>> {
   }
 }
 
-/** User-created soccer side markets. */
+/**
+ * User-created soccer side markets for the hub rail. Ended/resolved/closed
+ * markets are dropped, then the active ones are ranked by relevance:
+ *   1. live/open first (match currently in progress),
+ *   2. then soonest start/end date,
+ *   3. then newest created.
+ */
 export async function getWorldCupSideMarkets(
   limit?: number,
 ): Promise<WorldCupMarket[]> {
   try {
     const rows = (await fetchSoccerRows())
       .filter(isSideMarket)
-      .map((r) => toWorldCupMarket(r, true));
+      .map((r) => toWorldCupMarket(r, true))
+      .filter((m) => !m.ended)
+      .sort((a, b) => {
+        const aLive = isLiveMarket(a);
+        const bLive = isLiveMarket(b);
+        if (aLive !== bLive) return aLive ? -1 : 1;
+        const dateDiff = relevanceDateMs(a) - relevanceDateMs(b);
+        if (dateDiff !== 0) return dateDiff;
+        return b.createdAtMs - a.createdAtMs;
+      });
     return typeof limit === "number" ? rows.slice(0, limit) : rows;
   } catch {
     return [];
   }
+}
+
+/** Market is "live" when now sits between kickoff and end. */
+function isLiveMarket(m: WorldCupMarket): boolean {
+  const start = m.kickoffIso ? new Date(m.kickoffIso).getTime() : NaN;
+  const end = m.resolutionTime > 0 ? m.resolutionTime * 1000 : NaN;
+  const now = Date.now();
+  return (
+    Number.isFinite(start) &&
+    Number.isFinite(end) &&
+    now >= start &&
+    now < end
+  );
+}
+
+/** Soonest relevant moment: upcoming kickoff if still in the future, else end. */
+function relevanceDateMs(m: WorldCupMarket): number {
+  const start = m.kickoffIso ? new Date(m.kickoffIso).getTime() : NaN;
+  const now = Date.now();
+  if (Number.isFinite(start) && start >= now) return start;
+  if (m.resolutionTime > 0) return m.resolutionTime * 1000;
+  if (Number.isFinite(start)) return start;
+  return Number.MAX_SAFE_INTEGER;
 }
 
 // ---------------------------------------------------------------------------
@@ -170,6 +235,7 @@ function toWorldCupMarket(row: any, sideMarket = false): WorldCupMarket {
   const raw = asObject(meta.raw);
   const endMs = row?.end_date ? new Date(row.end_date).getTime() : NaN;
   const resolutionTime = Number.isFinite(endMs) ? Math.floor(endMs / 1000) : 0;
+  const createdMs = row?.created_at ? new Date(row.created_at).getTime() : NaN;
   const resolved = !!row?.resolved || row?.resolution_status === "finalized";
   const ended =
     resolved ||
@@ -218,7 +284,20 @@ function toWorldCupMarket(row: any, sideMarket = false): WorldCupMarket {
       pickStr(meta.start_time) ||
       (row?.end_date ? String(row.end_date) : null),
     ended,
+    createdAtMs: Number.isFinite(createdMs) ? createdMs : 0,
+    providerEventId: providerEventIdOf(row),
   };
+}
+
+/** Best-effort provider (TheSportsDB) event id stored on a market row. */
+function providerEventIdOf(row: any): string | null {
+  const meta = asObject(row?.sport_meta);
+  const raw = asObject(meta.raw);
+  return (
+    pickStr(meta.provider_event_id) ||
+    pickStr(raw.thesportsdb_id) ||
+    (raw.thesportsdb_id != null ? pickStr(String(raw.thesportsdb_id)) : null)
+  );
 }
 
 // ---------------------------------------------------------------------------

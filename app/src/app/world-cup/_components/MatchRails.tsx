@@ -1,6 +1,7 @@
 // app/src/app/world-cup/_components/MatchRails.tsx
 "use client";
 
+import Link from "next/link";
 import { Clock } from "lucide-react";
 import type { LiveMatch, UpcomingMatch, MatchOutcome, Team } from "./mockData";
 
@@ -21,43 +22,52 @@ const CARD_SHELL =
 // ---------------------------------------------------------------------------
 
 export function LiveMatchCard({ m }: { m: LiveMatch }) {
-  return (
-    <article className={CARD_SHELL}>
-      <div className="flex flex-col gap-3 p-4">
-        <div className="flex items-center justify-between">
-          <span className={SPORT_BADGE}>Soccer</span>
-          <span className="inline-flex items-center gap-1 rounded-full bg-red-600 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />
-            Live {m.minute}
-          </span>
-        </div>
-
-        {/* Crests + score */}
-        <div className="flex items-center justify-center gap-3">
-          <Crest team={m.home} />
-          <span className="px-1 text-2xl font-extrabold tabular-nums text-white">
-            {m.scoreHome}–{m.scoreAway}
-          </span>
-          <Crest team={m.away} />
-        </div>
-
-        <h3 className="line-clamp-2 text-center text-[15px] font-semibold leading-tight text-white">
-          {m.home.name} vs {m.away.name}
-        </h3>
-
-        <div className="text-center text-[11px] uppercase tracking-wide text-gray-400">
-          {m.group}
-        </div>
-
-        <OutcomeButtons outcomes={m.outcomes} />
-
-        <div className="flex items-center justify-between border-t border-gray-800 pt-2 text-[11px] text-gray-400">
-          <span>{m.markets} markets</span>
-          <span className="font-semibold text-pump-green">Trade →</span>
-        </div>
+  const inner = (
+    <div className="flex flex-col gap-3 p-4">
+      <div className="flex items-center justify-between">
+        <span className={SPORT_BADGE}>Soccer</span>
+        <span className="inline-flex items-center gap-1 rounded-full bg-red-600 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />
+          Live {m.minute}
+        </span>
       </div>
-    </article>
+
+      {/* Crests + score */}
+      <div className="flex items-center justify-center gap-3">
+        <Crest team={m.home} />
+        <span className="px-1 text-2xl font-extrabold tabular-nums text-white">
+          {m.scoreHome}–{m.scoreAway}
+        </span>
+        <Crest team={m.away} />
+      </div>
+
+      <h3 className="line-clamp-2 text-center text-[15px] font-semibold leading-tight text-white">
+        {m.home.name} vs {m.away.name}
+      </h3>
+
+      <div className="text-center text-[11px] uppercase tracking-wide text-gray-400">
+        {m.group}
+      </div>
+
+      <OutcomeButtons outcomes={m.outcomes} />
+
+      <div className="flex items-center justify-between border-t border-gray-800 pt-2 text-[11px] text-gray-400">
+        <span>{m.markets} markets</span>
+        <span className="font-semibold text-pump-green">Trade →</span>
+      </div>
+    </div>
   );
+
+  // Clickable when we have a destination (the match's trade page); same routing
+  // behavior as the other market cards. Styling is preserved either way.
+  if (m.href) {
+    return (
+      <Link href={m.href} className={`${CARD_SHELL} group block`}>
+        {inner}
+      </Link>
+    );
+  }
+  return <article className={CARD_SHELL}>{inner}</article>;
 }
 
 // ---------------------------------------------------------------------------

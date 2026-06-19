@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useWallet } from "@solana/wallet-adapter-react";
 
 const MOBILE_HOME_RETAP_EVENT = "home-feed:retap";
@@ -40,6 +40,7 @@ function Item({
 
 export default function MobileNav() {
   const pathname = usePathname();
+  const router = useRouter();
   const { connected, publicKey } = useWallet();
 
   const isActive = (p: string) => pathname === p || pathname?.startsWith(p + "/");
@@ -56,6 +57,25 @@ export default function MobileNav() {
     if (isActive("/")) {
       e.preventDefault();
       window.dispatchEvent(new Event(MOBILE_HOME_RETAP_EVENT));
+    }
+  };
+
+  const handleChampionshipTap = (e: React.MouseEvent) => {
+    // Retap on the championship tab: re-fetch the (server) page data and reset
+    // scroll to the very top so the hero shows again. When navigating in from
+    // elsewhere, Link handles it (the page is force-dynamic, so it fetches
+    // fresh and Next resets scroll on its own).
+    if (isActive("/world-cup")) {
+      e.preventDefault();
+      router.refresh();
+      // router.refresh() re-renders the server tree and can restore the prior
+      // scroll position, so reset immediately AND again after the refresh
+      // commits (rAF + a short timeout) to reliably land at the absolute top.
+      const toTop = () => window.scrollTo(0, 0);
+      toTop();
+      requestAnimationFrame(toTop);
+      window.setTimeout(toTop, 60);
+      window.setTimeout(toTop, 200);
     }
   };
 
@@ -79,6 +99,7 @@ export default function MobileNav() {
         <Item
           href="/world-cup"
           active={isActive("/world-cup")}
+          onClick={handleChampionshipTap}
           icon={
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6" />
