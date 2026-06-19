@@ -31,6 +31,7 @@ import { getWorldCupGroups } from "./_lib/getWorldCupGroups";
 import {
   getWorldCupMatchMarkets,
   getWorldCupSideMarkets,
+  getOfficialMatchMarketAddressByEventId,
 } from "./_lib/marketQueries";
 
 // Render fresh on every request so newly-created official match markets and
@@ -44,17 +45,22 @@ export const dynamic = "force-dynamic";
  * is reserved for championship-coded elements.
  */
 export default async function WorldCupHubPage() {
-  const [{ liveMatches }, groupsResult, matchMarkets, sideMarkets] =
+  const [{ liveMatches }, groupsResult, matchMarkets, sideMarkets, matchAddressByEventId] =
     await Promise.all([
       getWorldCupFixtures(),
       getWorldCupGroups(),
       getWorldCupMatchMarkets(12),
       getWorldCupSideMarkets(12),
+      getOfficialMatchMarketAddressByEventId(),
     ]);
 
   // Live: real live matches only — never mock, never fake. Section is hidden
-  // entirely when there are none.
-  const live = liveMatches;
+  // entirely when there are none. Each card links to its match's trade page
+  // when an official market exists, else to the full matches list.
+  const live = liveMatches.map((m) => {
+    const address = matchAddressByEventId.get(m.id);
+    return { ...m, href: address ? `/trade/${address}` : "/world-cup/matches" };
+  });
 
   // Groups: official standings → fixture-derived → mock.
   const groups = groupsResult.groups ?? GROUPS;

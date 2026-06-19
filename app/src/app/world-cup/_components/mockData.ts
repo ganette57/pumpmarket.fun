@@ -34,6 +34,8 @@ export type LiveMatch = {
   minute: string;
   markets: number;
   outcomes: MatchOutcome[];
+  /** Destination for the card when clicked (e.g. the match's trade page). */
+  href?: string | null;
 };
 
 export const LIVE_MATCHES: LiveMatch[] = [

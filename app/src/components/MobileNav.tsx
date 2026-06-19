@@ -62,12 +62,20 @@ export default function MobileNav() {
 
   const handleChampionshipTap = (e: React.MouseEvent) => {
     // Retap on the championship tab: re-fetch the (server) page data and reset
-    // scroll. When navigating in from elsewhere, Link handles it (the page is
-    // force-dynamic, so it fetches fresh and Next resets scroll on its own).
+    // scroll to the very top so the hero shows again. When navigating in from
+    // elsewhere, Link handles it (the page is force-dynamic, so it fetches
+    // fresh and Next resets scroll on its own).
     if (isActive("/world-cup")) {
       e.preventDefault();
       router.refresh();
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      // router.refresh() re-renders the server tree and can restore the prior
+      // scroll position, so reset immediately AND again after the refresh
+      // commits (rAF + a short timeout) to reliably land at the absolute top.
+      const toTop = () => window.scrollTo(0, 0);
+      toTop();
+      requestAnimationFrame(toTop);
+      window.setTimeout(toTop, 60);
+      window.setTimeout(toTop, 200);
     }
   };
 
