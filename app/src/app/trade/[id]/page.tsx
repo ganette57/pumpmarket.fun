@@ -286,262 +286,6 @@ function toOutcomeIndex(value: unknown): number | null {
   return null;
 }
 
-function buildIrlProofNote(
-  baseNote: string | null,
-  params: {
-    windowStart: string | null;
-    windowEnd: string | null;
-    threshold: number | null;
-    finalCount: number | null;
-    outcome: "YES" | "NO" | null;
-    txSig: string | null;
-  },
-): string | null {
-  const parsed = parseJsonObjectFromText(baseNote);
-  const payload: Record<string, unknown> = parsed ? { ...parsed } : {};
-
-  if (!parsed && baseNote) payload.raw_note = baseNote;
-  if (!payload.source) payload.source = "traffic_flash_ui_fallback";
-
-  if (params.windowStart && !payload.window_start) payload.window_start = params.windowStart;
-  if (params.windowEnd && !payload.window_end) payload.window_end = params.windowEnd;
-  if (payload.start_score == null) payload.start_score = { home: 0, away: 0 };
-
-  if (params.finalCount != null) {
-    if (payload.end_score == null) payload.end_score = { home: params.finalCount, away: 0 };
-    if (payload.current_count == null) payload.current_count = params.finalCount;
-    if (payload.end_count == null) payload.end_count = params.finalCount;
-  }
-
-  if (params.threshold != null && payload.threshold == null) payload.threshold = params.threshold;
-
-  if (params.outcome) {
-    if (!payload.proposed_outcome) payload.proposed_outcome = params.outcome;
-    if (!payload.outcome) payload.outcome = params.outcome;
-  }
-
-  if (params.txSig && !payload.onchain_tx_sig) payload.onchain_tx_sig = params.txSig;
-
-  return Object.keys(payload).length > 0 ? JSON.stringify(payload) : baseNote;
-}
-
-function isIrlFlashMarket(marketModeValue: unknown, sportMetaValue: unknown): boolean {
-  const marketMode = String(marketModeValue ?? "").trim().toLowerCase();
-  if (marketMode === "flash_traffic") return true;
-  const meta = asObject(sportMetaValue);
-  const typeTag = String(meta.type ?? "").trim().toLowerCase();
-  const sourceTag = String(meta.source ?? "").trim().toLowerCase();
-  return typeTag === "flash_traffic" || sourceTag === "traffic";
-}
-
-function withIrlResolutionFallback(input: UiMarket, marketModeValue: unknown, sportMetaValue: unknown): UiMarket {
-  if (!isIrlFlashMarket(marketModeValue, sportMetaValue)) return input;
-
-  const meta = asObject(sportMetaValue);
-  const liveMicroMeta = asObject(meta.live_micro);
-  const statusFromMeta = firstNonBlankText([
-    meta.resolution_status,
-    meta.resolutionStatus,
-    liveMicroMeta.resolution_status,
-    liveMicroMeta.resolutionStatus,
-  ]);
-
-  const proposedOutcomeFromMeta = toOutcomeIndex(
-    firstNonBlankText([
-      meta.proposed_winning_outcome,
-      meta.proposedOutcome,
-      meta.proposed_outcome,
-      meta.auto_resolved_outcome,
-      liveMicroMeta.proposed_winning_outcome,
-      liveMicroMeta.proposed_outcome,
-    ]),
-  );
-  const winningOutcomeFromMeta = toOutcomeIndex(
-    firstNonBlankText([
-      meta.winning_outcome,
-      meta.winningOutcome,
-      meta.final_outcome,
-      meta.resolved_outcome,
-      liveMicroMeta.winning_outcome,
-      liveMicroMeta.final_outcome,
-      meta.auto_resolved_outcome,
-    ]),
-  );
-
-  const proposedAtFromMeta = firstNonBlankText([
-    meta.resolution_proposed_at,
-    meta.proposed_at,
-    meta.proposedAt,
-    meta.auto_resolved_at,
-    liveMicroMeta.resolution_proposed_at,
-  ]);
-  const contestDeadlineFromMeta = firstNonBlankText([
-    meta.contest_deadline,
-    meta.contestDeadline,
-    liveMicroMeta.contest_deadline,
-  ]);
-  const resolvedAtFromMeta = firstNonBlankText([
-    meta.resolved_at,
-    meta.resolvedAt,
-    meta.finalized_at,
-    meta.finalizedAt,
-    liveMicroMeta.resolved_at,
-  ]);
-  const windowStartFromMeta = firstNonBlankText([
-    meta.window_start,
-    meta.windowStart,
-    liveMicroMeta.window_start,
-    liveMicroMeta.windowStart,
-  ]);
-  const windowEndFromMeta = firstNonBlankText([
-    meta.window_end,
-    meta.windowEnd,
-    liveMicroMeta.window_end,
-    liveMicroMeta.windowEnd,
-    input.endTime,
-  ]);
-
-  const thresholdRaw = firstFiniteNumber([
-    readPath(meta, ["threshold"]),
-    readPath(meta, ["target"]),
-    readPath(meta, ["target_count"]),
-    readPath(liveMicroMeta, ["threshold"]),
-  ]);
-  const thresholdFromMeta = thresholdRaw == null ? null : Math.max(0, Math.floor(thresholdRaw));
-  const finalCountRaw = firstFiniteNumber([
-    readPath(meta, ["end_count"]),
-    readPath(meta, ["current_count"]),
-    readPath(meta, ["currentCount"]),
-    readPath(liveMicroMeta, ["end_count"]),
-    readPath(liveMicroMeta, ["current_count"]),
-    readPath(liveMicroMeta, ["currentCount"]),
-    readPath(meta, ["start_count"]),
-  ]);
-  const finalCountFromMeta = finalCountRaw == null ? null : Math.max(0, Math.floor(finalCountRaw));
-  const derivedOutcomeLabel =
-    finalCountFromMeta != null && thresholdFromMeta != null
-      ? finalCountFromMeta >= thresholdFromMeta
-        ? "YES"
-        : "NO"
-      : null;
-  const derivedOutcomeIndex = derivedOutcomeLabel == null ? null : derivedOutcomeLabel === "YES" ? 0 : 1;
-  const onchainTxSigFromMeta = firstNonBlankText([
-    meta.proposal_tx_sig,
-    meta.onchain_tx_sig,
-    meta.resolve_tx,
-    meta.finalize_tx_sig,
-  ]);
-
-  const proposedProofUrlFromMeta = firstNonBlankText([
-    meta.proposed_proof_url,
-    meta.proposedProofUrl,
-    liveMicroMeta.proposed_proof_url,
-  ]);
-  const proposedProofImageFromMeta = firstNonBlankText([
-    meta.proposed_proof_image,
-    meta.proposedProofImage,
-    liveMicroMeta.proposed_proof_image,
-  ]);
-  const proposedProofNoteFromMeta = firstProofValue([
-    meta.proposed_proof_note,
-    meta.proposedProofNote,
-    liveMicroMeta.proposed_proof_note,
-    meta.proof_note,
-    meta.proof,
-    meta.proof_payload,
-    meta.raw_proof,
-  ]);
-
-  const resolutionProofUrlFromMeta = firstNonBlankText([
-    meta.resolution_proof_url,
-    meta.resolutionProofUrl,
-    meta.final_proof_url,
-    liveMicroMeta.resolution_proof_url,
-  ]);
-  const resolutionProofImageFromMeta = firstNonBlankText([
-    meta.resolution_proof_image,
-    meta.resolutionProofImage,
-    meta.final_proof_image,
-    liveMicroMeta.resolution_proof_image,
-  ]);
-  const resolutionProofNoteFromMeta = firstProofValue([
-    meta.resolution_proof_note,
-    meta.resolutionProofNote,
-    meta.final_proof_note,
-    liveMicroMeta.resolution_proof_note,
-  ]);
-
-  const next: UiMarket = { ...input };
-
-  if ((next.resolutionStatus == null || next.resolutionStatus === "open") && statusFromMeta) {
-    next.resolutionStatus = toResolutionStatus(statusFromMeta);
-  }
-  const irlStatus = String(next.resolutionStatus || "open").trim().toLowerCase();
-  const windowEndMs = parseIsoUtc(windowEndFromMeta)?.getTime() ?? NaN;
-  const windowEnded = Number.isFinite(windowEndMs) && Date.now() >= windowEndMs;
-  const allowResolutionFallback =
-    next.resolved ||
-    irlStatus === "proposed" ||
-    irlStatus === "finalized" ||
-    irlStatus === "cancelled" ||
-    next.proposedAt != null ||
-    next.contestDeadline != null ||
-    windowEnded;
-
-  if (next.proposedOutcome == null) {
-    if (proposedOutcomeFromMeta != null) next.proposedOutcome = proposedOutcomeFromMeta;
-    else if (allowResolutionFallback && derivedOutcomeIndex != null) next.proposedOutcome = derivedOutcomeIndex;
-  }
-  if (next.proposedAt == null && proposedAtFromMeta) next.proposedAt = proposedAtFromMeta;
-  if (next.contestDeadline == null && contestDeadlineFromMeta) next.contestDeadline = contestDeadlineFromMeta;
-  if (allowResolutionFallback) {
-    if (!next.proposedProofUrl && proposedProofUrlFromMeta) next.proposedProofUrl = proposedProofUrlFromMeta;
-    if (!next.proposedProofImage && proposedProofImageFromMeta) next.proposedProofImage = proposedProofImageFromMeta;
-    if (!next.proposedProofNote && proposedProofNoteFromMeta) next.proposedProofNote = proposedProofNoteFromMeta;
-    next.proposedProofNote = buildIrlProofNote(next.proposedProofNote ?? null, {
-      windowStart: windowStartFromMeta,
-      windowEnd: windowEndFromMeta,
-      threshold: thresholdFromMeta,
-      finalCount: finalCountFromMeta,
-      outcome: derivedOutcomeLabel,
-      txSig: onchainTxSigFromMeta,
-    });
-  }
-
-  if (next.winningOutcome == null) {
-    if (winningOutcomeFromMeta != null) next.winningOutcome = winningOutcomeFromMeta;
-    else if (derivedOutcomeIndex != null && (next.resolved || next.resolutionStatus === "finalized")) {
-      next.winningOutcome = derivedOutcomeIndex;
-    }
-  }
-  if (next.resolvedAt == null && resolvedAtFromMeta) next.resolvedAt = resolvedAtFromMeta;
-  if (!next.resolutionProofUrl && resolutionProofUrlFromMeta) next.resolutionProofUrl = resolutionProofUrlFromMeta;
-  if (!next.resolutionProofImage && resolutionProofImageFromMeta) next.resolutionProofImage = resolutionProofImageFromMeta;
-  if (!next.resolutionProofNote && resolutionProofNoteFromMeta) next.resolutionProofNote = resolutionProofNoteFromMeta;
-
-  const isFinalLike = next.resolved || next.resolutionStatus === "finalized";
-  if (isFinalLike) {
-    if (next.winningOutcome == null && next.proposedOutcome != null) next.winningOutcome = next.proposedOutcome;
-    if (next.resolvedAt == null && next.proposedAt) next.resolvedAt = next.proposedAt;
-    if (!next.resolutionProofUrl && next.proposedProofUrl) next.resolutionProofUrl = next.proposedProofUrl;
-    if (!next.resolutionProofImage && next.proposedProofImage) next.resolutionProofImage = next.proposedProofImage;
-    if (!next.resolutionProofNote && next.proposedProofNote) next.resolutionProofNote = next.proposedProofNote;
-  }
-
-  if (isFinalLike) {
-    next.resolutionProofNote = buildIrlProofNote(next.resolutionProofNote ?? null, {
-      windowStart: windowStartFromMeta,
-      windowEnd: windowEndFromMeta,
-      threshold: thresholdFromMeta,
-      finalCount: finalCountFromMeta,
-      outcome: derivedOutcomeLabel,
-      txSig: onchainTxSigFromMeta,
-    });
-  }
-
-  return next;
-}
-
 function applyMarketDbPatch(prev: UiMarket, row: any, allowSupplyPatch = false): UiMarket {
   if (!row || typeof row !== "object") return prev;
   const has = (k: string) => Object.prototype.hasOwnProperty.call(row, k);
@@ -598,7 +342,7 @@ function applyMarketDbPatch(prev: UiMarket, row: any, allowSupplyPatch = false):
     }
   }
 
-  return withIrlResolutionFallback(next, next.marketMode, next.sportMeta);
+  return next;
 }
 
 function formatMsToHhMm(ms: number) {
@@ -2198,23 +1942,6 @@ const [liveMicroPayload, setLiveMicroPayload] = useState<{
 const [liveScorePolling, setLiveScorePolling] = useState(false);
 const [liveScoreFailures, setLiveScoreFailures] = useState(0);
 const [liveScoreLastSuccessAt, setLiveScoreLastSuccessAt] = useState<number | null>(null);
-const [trafficLiveCount, setTrafficLiveCount] = useState<number | null>(null);
-const [trafficPolling, setTrafficPolling] = useState(false);
-const [trafficDebugFrameTick, setTrafficDebugFrameTick] = useState(0);
-const [trafficDebugImageUrl, setTrafficDebugImageUrl] = useState<string | null>(null);
-const [trafficDebugFrameAvailable, setTrafficDebugFrameAvailable] = useState<boolean | null>(null);
-const [trafficDebugDetections, setTrafficDebugDetections] = useState<number | null>(null);
-const [trafficDebugFrameWidth, setTrafficDebugFrameWidth] = useState<number | null>(null);
-const [trafficDebugFrameHeight, setTrafficDebugFrameHeight] = useState<number | null>(null);
-const [trafficDebugLineX, setTrafficDebugLineX] = useState<number | null>(null);
-const [trafficDebugLineY, setTrafficDebugLineY] = useState<number | null>(null);
-const [trafficDebugLastTrackId, setTrafficDebugLastTrackId] = useState<number | null>(null);
-const [trafficDebugLastDirection, setTrafficDebugLastDirection] = useState<string | null>(null);
-const [trafficDebugDecisionTrackId, setTrafficDebugDecisionTrackId] = useState<number | null>(null);
-const [trafficDebugDecisionReason, setTrafficDebugDecisionReason] = useState<string | null>(null);
-const [trafficDebugDecisionCounted, setTrafficDebugDecisionCounted] = useState<boolean | null>(null);
-const [trafficDebugTrackDeltaX, setTrafficDebugTrackDeltaX] = useState<number | null>(null);
-const [trafficDebugTrackSamples, setTrafficDebugTrackSamples] = useState<number | null>(null);
 const [persistedTradeScore, setPersistedTradeScore] = useState<{
   home: number;
   away: number;
@@ -2228,7 +1955,6 @@ const scoreLogRef = useRef<{
   lastIgnoredSignature: "",
   lastDisplaySignature: "",
 });
-const trafficFrameProbeInFlightRef = useRef(false);
 
 // Related block (RIGHT column under TradingPanel)
   const [relatedTab, setRelatedTab] = useState<RelatedTab>("related");
@@ -2365,13 +2091,7 @@ if (snap?.posAcc?.shares) {
   setPositionShares(null);
 }
 
-        setMarket(
-          withIrlResolutionFallback(
-            transformed,
-            (supabaseMarket as any).market_mode ?? null,
-            (supabaseMarket as any).sport_meta ?? null,
-          ),
-        );
+        setMarket(transformed);
       } finally {
         setLoading(false);
       }
@@ -2400,8 +2120,6 @@ if (snap?.posAcc?.shares) {
       setActiveLiveSession(null);
       setCreatorProfile(null);
       setPersistedTradeScore(null);
-      setTrafficLiveCount(null);
-      setTrafficPolling(false);
       setFlashResultModalOpen(false);
       setFlashResultPayload(null);
       setFlashRawOutcomeHint(null);
@@ -3353,308 +3071,6 @@ useEffect(() => {
   };
 }, [id, market?.marketMode, sharedSportDisplayStatus, submitting, loadMarket]);
 
-// Refresh traffic debug frame independently from count polling.
-useEffect(() => {
-  if (!market?.publicKey) return;
-
-  const marketMode = String(market.marketMode || "").trim().toLowerCase();
-  const trafficMeta = asObject(market.sportMeta);
-  const trafficType = String(trafficMeta.type || "").trim().toLowerCase();
-  const isTrafficFlashMarket = marketMode === "flash_traffic" || trafficType === "flash_traffic";
-  if (!isTrafficFlashMarket) return;
-
-  const roundId = String(trafficMeta.round_id || trafficMeta.roundId || market.publicKey).trim();
-  if (!roundId) return;
-
-  const resolutionStatus = String(market.resolutionStatus || "").trim().toLowerCase();
-  const isTrafficTerminal =
-    market.resolved === true ||
-    resolutionStatus === "proposed" ||
-    resolutionStatus === "finalized" ||
-    resolutionStatus === "cancelled";
-  if (isTrafficTerminal) return;
-
-  let cancelled = false;
-  const tick = () => {
-    if (cancelled || document.visibilityState !== "visible") return;
-    setTrafficDebugFrameTick((prev) => {
-      const next = prev + 1;
-      console.log("[traffic-preview] image refresh tick", { roundId, tick: next });
-      return next;
-    });
-  };
-
-  tick();
-  const iv = window.setInterval(() => tick(), 500);
-  return () => {
-    cancelled = true;
-    window.clearInterval(iv);
-  };
-}, [market?.marketMode, market?.publicKey, market?.sportMeta, market?.resolutionStatus, market?.resolved]);
-
-useEffect(() => {
-  if (!market?.publicKey) {
-    setTrafficDebugImageUrl(null);
-    setTrafficDebugFrameAvailable(null);
-    trafficFrameProbeInFlightRef.current = false;
-    return;
-  }
-
-  const marketMode = String(market.marketMode || "").trim().toLowerCase();
-  const trafficMeta = asObject(market.sportMeta);
-  const trafficType = String(trafficMeta.type || "").trim().toLowerCase();
-  const isTrafficFlashMarket = marketMode === "flash_traffic" || trafficType === "flash_traffic";
-  if (!isTrafficFlashMarket) {
-    setTrafficDebugImageUrl(null);
-    setTrafficDebugFrameAvailable(null);
-    trafficFrameProbeInFlightRef.current = false;
-    return;
-  }
-
-  const roundId = String(trafficMeta.round_id || trafficMeta.roundId || market.publicKey).trim();
-  if (!roundId) {
-    setTrafficDebugImageUrl(null);
-    setTrafficDebugFrameAvailable(false);
-    trafficFrameProbeInFlightRef.current = false;
-    return;
-  }
-
-  const resolutionStatus = String(market.resolutionStatus || "").trim().toLowerCase();
-  const isTrafficTerminal =
-    market.resolved === true ||
-    resolutionStatus === "proposed" ||
-    resolutionStatus === "finalized" ||
-    resolutionStatus === "cancelled";
-  if (isTrafficTerminal || document.visibilityState !== "visible") {
-    trafficFrameProbeInFlightRef.current = false;
-    return;
-  }
-
-  if (trafficFrameProbeInFlightRef.current) return;
-  trafficFrameProbeInFlightRef.current = true;
-
-  const nextUrl = `/api/traffic/frame?roundId=${encodeURIComponent(roundId)}&ts=${Date.now()}&tick=${trafficDebugFrameTick}`;
-  let cancelled = false;
-  const timeout = window.setTimeout(() => {
-    trafficFrameProbeInFlightRef.current = false;
-  }, 4500);
-  const probe = new window.Image();
-  probe.onload = () => {
-    trafficFrameProbeInFlightRef.current = false;
-    window.clearTimeout(timeout);
-    if (cancelled) return;
-    setTrafficDebugImageUrl(nextUrl);
-    setTrafficDebugFrameAvailable(true);
-    console.log("[traffic-preview] image url updated", { roundId, url: nextUrl });
-  };
-  probe.onerror = () => {
-    trafficFrameProbeInFlightRef.current = false;
-    window.clearTimeout(timeout);
-    if (cancelled) return;
-    setTrafficDebugFrameAvailable((prev) => (prev === true ? true : false));
-  };
-  probe.src = nextUrl;
-
-  return () => {
-    cancelled = true;
-  };
-}, [
-  trafficDebugFrameTick,
-  market?.marketMode,
-  market?.publicKey,
-  market?.sportMeta,
-  market?.resolutionStatus,
-  market?.resolved,
-]);
-
-// Poll live traffic counter for flash traffic markets.
-useEffect(() => {
-  if (!market?.publicKey) {
-    setTrafficLiveCount(null);
-    setTrafficPolling(false);
-    setTrafficDebugImageUrl(null);
-    setTrafficDebugFrameAvailable(null);
-    setTrafficDebugDetections(null);
-    setTrafficDebugFrameWidth(null);
-    setTrafficDebugFrameHeight(null);
-    setTrafficDebugLineX(null);
-    setTrafficDebugLineY(null);
-    setTrafficDebugLastTrackId(null);
-    setTrafficDebugLastDirection(null);
-    setTrafficDebugDecisionTrackId(null);
-    setTrafficDebugDecisionReason(null);
-    setTrafficDebugDecisionCounted(null);
-    setTrafficDebugTrackDeltaX(null);
-    setTrafficDebugTrackSamples(null);
-    return;
-  }
-
-  const marketMode = String(market.marketMode || "").trim().toLowerCase();
-  const trafficMeta = asObject(market.sportMeta);
-  const trafficType = String(trafficMeta.type || "").trim().toLowerCase();
-  const isTrafficFlashMarket = marketMode === "flash_traffic" || trafficType === "flash_traffic";
-  if (!isTrafficFlashMarket) {
-    setTrafficLiveCount(null);
-    setTrafficPolling(false);
-    setTrafficDebugImageUrl(null);
-    setTrafficDebugFrameAvailable(null);
-    setTrafficDebugDetections(null);
-    setTrafficDebugFrameWidth(null);
-    setTrafficDebugFrameHeight(null);
-    setTrafficDebugLineX(null);
-    setTrafficDebugLineY(null);
-    setTrafficDebugLastTrackId(null);
-    setTrafficDebugLastDirection(null);
-    setTrafficDebugDecisionTrackId(null);
-    setTrafficDebugDecisionReason(null);
-    setTrafficDebugDecisionCounted(null);
-    setTrafficDebugTrackDeltaX(null);
-    setTrafficDebugTrackSamples(null);
-    return;
-  }
-
-  const roundId = String(trafficMeta.round_id || trafficMeta.roundId || market.publicKey).trim();
-  if (!roundId) {
-    setTrafficLiveCount(null);
-    setTrafficPolling(false);
-    setTrafficDebugImageUrl(null);
-    setTrafficDebugFrameAvailable(false);
-    setTrafficDebugDetections(null);
-    setTrafficDebugFrameWidth(null);
-    setTrafficDebugFrameHeight(null);
-    setTrafficDebugLineX(null);
-    setTrafficDebugLineY(null);
-    setTrafficDebugLastTrackId(null);
-    setTrafficDebugLastDirection(null);
-    setTrafficDebugDecisionTrackId(null);
-    setTrafficDebugDecisionReason(null);
-    setTrafficDebugDecisionCounted(null);
-    setTrafficDebugTrackDeltaX(null);
-    setTrafficDebugTrackSamples(null);
-    return;
-  }
-
-  const seedCount = firstFiniteNumber([
-    trafficMeta.currentCount,
-    trafficMeta.count,
-    trafficMeta.current_count,
-    trafficMeta.end_count,
-    trafficMeta.start_count,
-  ]);
-  if (seedCount != null) {
-    setTrafficLiveCount(Math.max(0, Math.floor(seedCount)));
-  }
-
-  const resolutionStatus = String(market.resolutionStatus || "").trim().toLowerCase();
-  const isTrafficTerminal =
-    market.resolved === true ||
-    resolutionStatus === "proposed" ||
-    resolutionStatus === "finalized" ||
-    resolutionStatus === "cancelled";
-  if (isTrafficTerminal) {
-    setTrafficPolling(false);
-    return;
-  }
-
-  let cancelled = false;
-  const poll = async () => {
-    if (cancelled || document.visibilityState !== "visible") return;
-    console.log("[traffic-preview] status poll", { roundId });
-    setTrafficPolling(true);
-    try {
-      const params = new URLSearchParams({
-        roundId,
-        marketAddress: market.publicKey,
-      });
-      const res = await fetch(`/api/traffic/live?${params.toString()}`, {
-        cache: "no-store",
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json().catch(() => ({}));
-      const nextCount = Number((json as any)?.currentCount ?? (json as any)?.count);
-      const nextDetections = Number((json as any)?.detectionsLastFrame);
-      const nextFrameWidth = Number((json as any)?.frameWidth);
-      const nextFrameHeight = Number((json as any)?.frameHeight);
-      const nextLineX = Number((json as any)?.countingLineX);
-      const nextLineY = Number((json as any)?.countingLineY);
-      const nextLastTrackId = Number((json as any)?.lastCountedTrackId);
-      const nextLastDirection = String((json as any)?.lastCrossingDirection || "").trim();
-      const nextDecisionTrackId = Number((json as any)?.lastDecisionTrackId);
-      const nextDecisionReason = String((json as any)?.lastDecisionReason || "").trim();
-      const nextDecisionCountedRaw = (json as any)?.lastDecisionCounted;
-      const nextTrackDeltaX = Number((json as any)?.lastTrackDeltaX);
-      const nextTrackSamples = Number((json as any)?.lastTrackSamples);
-      if (cancelled) return;
-      if (Number.isFinite(nextCount)) {
-        setTrafficLiveCount(Math.max(0, Math.floor(nextCount)));
-      }
-      if (Number.isFinite(nextDetections)) {
-        setTrafficDebugDetections(Math.max(0, Math.floor(nextDetections)));
-      }
-      if (Number.isFinite(nextFrameWidth)) {
-        setTrafficDebugFrameWidth(Math.max(0, Math.floor(nextFrameWidth)));
-      } else {
-        setTrafficDebugFrameWidth(null);
-      }
-      if (Number.isFinite(nextFrameHeight)) {
-        setTrafficDebugFrameHeight(Math.max(0, Math.floor(nextFrameHeight)));
-      } else {
-        setTrafficDebugFrameHeight(null);
-      }
-      if (Number.isFinite(nextLineX)) {
-        setTrafficDebugLineX(Math.max(0, Math.floor(nextLineX)));
-      } else {
-        setTrafficDebugLineX(null);
-      }
-      if (Number.isFinite(nextLineY)) {
-        setTrafficDebugLineY(Math.max(0, Math.floor(nextLineY)));
-      } else {
-        setTrafficDebugLineY(null);
-      }
-      if (Number.isFinite(nextLastTrackId)) {
-        setTrafficDebugLastTrackId(Math.floor(nextLastTrackId));
-      } else {
-        setTrafficDebugLastTrackId(null);
-      }
-      setTrafficDebugLastDirection(nextLastDirection || null);
-      if (Number.isFinite(nextDecisionTrackId)) {
-        setTrafficDebugDecisionTrackId(Math.floor(nextDecisionTrackId));
-      } else {
-        setTrafficDebugDecisionTrackId(null);
-      }
-      setTrafficDebugDecisionReason(nextDecisionReason || null);
-      setTrafficDebugDecisionCounted(
-        typeof nextDecisionCountedRaw === "boolean" ? nextDecisionCountedRaw : null,
-      );
-      if (Number.isFinite(nextTrackDeltaX)) {
-        setTrafficDebugTrackDeltaX(Number(nextTrackDeltaX));
-      } else {
-        setTrafficDebugTrackDeltaX(null);
-      }
-      if (Number.isFinite(nextTrackSamples)) {
-        setTrafficDebugTrackSamples(Math.max(0, Math.floor(nextTrackSamples)));
-      } else {
-        setTrafficDebugTrackSamples(null);
-      }
-    } catch {
-      // Best-effort polling, keep last known value on failures.
-    } finally {
-      if (!cancelled) setTrafficPolling(false);
-    }
-  };
-
-  void poll();
-  const iv = window.setInterval(() => {
-    void poll();
-  }, 2_000);
-
-  return () => {
-    cancelled = true;
-    setTrafficPolling(false);
-    window.clearInterval(iv);
-  };
-}, [market?.marketMode, market?.publicKey, market?.sportMeta, market?.resolutionStatus, market?.resolved]);
-
   // Related block
   useEffect(() => {
     if (!market?.publicKey) return;
@@ -4032,26 +3448,20 @@ useEffect(() => {
       flashCryptoTypeTagForUiLock === "flash_crypto_price" ||
       flashCryptoTypeTagForUiLock === "flash_crypto_graduation"
     );
-  const isFlashTrafficForUiLock =
-    !!market &&
-    (
-      market.marketMode === "flash_traffic" ||
-      flashCryptoTypeTagForUiLock === "flash_traffic"
-    );
   const isFlashFootForUiLock = market
     ? isSoccerNextGoalMicroMarket(market.sportMeta, market.question, market.description)
     : false;
 
   // Client-side timer:
-  // - flash crypto + flash traffic + flash foot get 1s precision for immediate UI lock at 00:00
+  // - flash crypto + flash foot get 1s precision for immediate UI lock at 00:00
   // - others keep 15s refresh for lighter UI churn
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
-    const tickMs = isFlashCryptoForUiLock || isFlashTrafficForUiLock || isFlashFootForUiLock ? 1_000 : 15_000;
+    const tickMs = isFlashCryptoForUiLock || isFlashFootForUiLock ? 1_000 : 15_000;
     setNowMs(Date.now());
     const iv = setInterval(() => setNowMs(Date.now()), tickMs);
     return () => clearInterval(iv);
-  }, [isFlashCryptoForUiLock, isFlashTrafficForUiLock, isFlashFootForUiLock]);
+  }, [isFlashCryptoForUiLock, isFlashFootForUiLock]);
   const isSoccerNextGoalMicroForScore = isFlashFootForUiLock;
   const isSportLikeMarketForScore = !!market && (market.marketMode === "sport" || isSoccerNextGoalMicroForScore);
   const scoreStartRawForDisplay = market
@@ -4205,10 +3615,7 @@ useEffect(() => {
       marketMode === "flash_crypto" ||
       typeTag === "flash_crypto_price" ||
       typeTag === "flash_crypto_graduation";
-    const isFlashTraffic =
-      marketMode === "flash_traffic" ||
-      typeTag === "flash_traffic";
-    if (!isFlashCrypto && !isFlashTraffic) return null;
+    if (!isFlashCrypto) return null;
 
     const windowEndMs = (() => {
       const raw = [
@@ -4255,25 +3662,6 @@ useEffect(() => {
       }
     }
 
-    if (winningIndex == null && isFlashTraffic) {
-      const threshold = firstFiniteNumber([
-        sportMeta.threshold,
-        sportMeta.target,
-        sportMeta.target_count,
-      ]);
-      const finalCount = firstFiniteNumber([
-        trafficLiveCount,
-        sportMeta.end_count,
-        sportMeta.current_count,
-        sportMeta.currentCount,
-        sportMeta.start_count,
-      ]);
-      if (threshold != null && threshold > 0 && finalCount != null) {
-        winningIndex = finalCount >= threshold ? 0 : 1;
-        rawVersion = `traffic-count:${Math.floor(finalCount)}:${Math.floor(threshold)}`;
-      }
-    }
-
     if (winningIndex == null) return null;
 
     const winningShares = Math.max(0, Number(normalizedShares[winningIndex] || 0));
@@ -4291,7 +3679,7 @@ useEffect(() => {
       secondaryText,
       resolutionStamp: `${Math.floor(windowEndMs)}:${winningIndex}:${rawVersion}`,
     };
-  }, [market, derived, userSharesForUi, nowMs, flashRawOutcomeHint, trafficLiveCount]);
+  }, [market, derived, userSharesForUi, nowMs, flashRawOutcomeHint]);
 
   useEffect(() => {
     if (!connected || !publicKey || !market || !flashResultCandidate) return;
@@ -4437,9 +3825,6 @@ useEffect(() => {
     cryptoTypeTag === "flash_crypto_graduation";
   const isFlashCryptoGraduationMarket = isFlashCryptoMarket && cryptoTypeTag === "flash_crypto_graduation";
   const isFlashCryptoPriceMarket = isFlashCryptoMarket && !isFlashCryptoGraduationMarket;
-  const isFlashTrafficMarket =
-    market.marketMode === "flash_traffic" ||
-    cryptoTypeTag === "flash_traffic";
   const cryptoMeta = isFlashCryptoMarket ? asObject(market.sportMeta) : {};
   const cryptoSourceType =
     String(cryptoMeta.source_type || "").trim().toLowerCase() === "major" ? "major" : "pump_fun";
@@ -4460,34 +3845,6 @@ useEffect(() => {
     cryptoMeta.remainingToGraduateEnd,
   ]);
   const cryptoDurationMinutes = Number(cryptoMeta.duration_minutes || 0) || null;
-  const trafficMeta = isFlashTrafficMarket ? asObject(market.sportMeta) : {};
-  const trafficRoundId = String(trafficMeta.round_id || trafficMeta.roundId || market.publicKey || "").trim();
-  const trafficDebugFrameSrc =
-    isFlashTrafficMarket && trafficRoundId
-      ? trafficDebugImageUrl
-      : null;
-  const trafficWindowEnd = isFlashTrafficMarket
-    ? String(trafficMeta.window_end || market.endTime || "").trim() || null
-    : null;
-  const trafficWindowEndMs = parseIsoUtc(trafficWindowEnd)?.getTime() ?? NaN;
-  const trafficRemainingSec = Number.isFinite(trafficWindowEndMs)
-    ? Math.max(0, Math.ceil((trafficWindowEndMs - nowMs) / 1000))
-    : null;
-  const trafficRemainingLabel = trafficRemainingSec == null ? "—" : formatCountdownMmSs(trafficRemainingSec);
-  const trafficThresholdRaw = firstFiniteNumber([trafficMeta.threshold]);
-  const trafficThreshold = trafficThresholdRaw == null ? null : Math.max(1, Math.floor(trafficThresholdRaw));
-  const trafficCurrentCountRaw = trafficLiveCount ?? firstFiniteNumber([
-    trafficMeta.current_count,
-    trafficMeta.end_count,
-    trafficMeta.start_count,
-  ]);
-  const trafficCurrentCount =
-    trafficCurrentCountRaw == null ? null : Math.max(0, Math.floor(trafficCurrentCountRaw));
-  const trafficTargetReached =
-    isFlashTrafficMarket &&
-    trafficThreshold != null &&
-    trafficCurrentCount != null &&
-    trafficCurrentCount >= trafficThreshold;
 
   const microLoopSequence = isSoccerNextGoalMicro
     ? extractLoopSequence(market.description, market.sportMeta)
@@ -4510,31 +3867,6 @@ useEffect(() => {
     !!market.proposedProofUrl ||
     !!market.proposedProofImage ||
     !!market.proposedProofNote;
-
-  // IRL immersive mode — top-level derived
-  const trafficIsLive =
-    isFlashTrafficMarket &&
-    !isResolvedOnChain &&
-    !isProposed &&
-    status !== "finalized" &&
-    status !== "cancelled" &&
-    (trafficRemainingSec == null ? !endedByTime : trafficRemainingSec > 0);
-  // Mobile immersive must stay active during live traffic window even if
-  // proposal-related fallback fields are already present in UI state.
-  const trafficIsLiveMobile =
-    isFlashTrafficMarket &&
-    !isResolvedOnChain &&
-    status !== "finalized" &&
-    status !== "cancelled" &&
-    (trafficRemainingSec == null ? !endedByTime : trafficRemainingSec > 0);
-  const trafficIsLiveUi = isMobile ? trafficIsLiveMobile : trafficIsLive;
-  const trafficTimerCritical = trafficRemainingSec != null && trafficRemainingSec <= 10;
-  const trafficTimerUrgent = trafficRemainingSec != null && !trafficTimerCritical && trafficRemainingSec <= 30;
-  const trafficTimerTone = trafficTimerCritical
-    ? "text-red-300 border-red-500/50 bg-red-500/15 animate-pulse"
-    : trafficTimerUrgent
-    ? "text-amber-200 border-amber-400/45 bg-amber-400/12"
-    : "text-pump-green border-pump-green/35 bg-pump-green/10";
 
   const showProposedBox = isProposed && !isResolvedOnChain;
   const showResolvedProofBox = isResolvedOnChain;
@@ -4744,12 +4076,6 @@ const ended = endedByTime;
     (microGoalObserved ||
       microTradingLocked ||
       (market.isBlocked && /live micro|goal observed|goal detected|next goal/.test(blockedReasonLower)));
-  const trafficMetaLocked = isTruthyFlag(trafficMeta.target_reached ?? trafficMeta.trading_locked);
-  const trafficAutoLocked =
-    isFlashTrafficMarket &&
-    (trafficTargetReached ||
-      trafficMetaLocked ||
-      (market.isBlocked && /traffic flash engine|threshold reached|target reached/.test(blockedReasonLower)));
   const microWindowEnded = Number.isFinite(microWindowEndMs) ? nowMs >= microWindowEndMs : endedByTime;
   const flashFootUiTradingClosed =
     isSoccerNextGoalMicro &&
@@ -4761,16 +4087,9 @@ const ended = endedByTime;
     !isResolvedOnChain &&
     !ended &&
     !liveMicroAutoLocked;
-  const showTrafficUiLockState =
-    trafficAutoLocked &&
-    !isProposed &&
-    !isResolvedOnChain &&
-    !ended;
-  const showWindowEndedUiLockState = showCryptoUiLockState || showFootUiLockState || showTrafficUiLockState;
+  const showWindowEndedUiLockState = showCryptoUiLockState || showFootUiLockState;
   const closedPanelTitle = showWindowEndedUiLockState ? "Trading locked" : undefined;
-  const closedPanelMessage = showTrafficUiLockState
-    ? "Target reached. Waiting for settlement / resolution."
-    : showWindowEndedUiLockState
+  const closedPanelMessage = showWindowEndedUiLockState
     ? "Market window ended. Waiting for settlement / resolution."
     : undefined;
   const microHeroState: "active" | "locked" | "resolving" | "ended" | null = (() => {
@@ -4780,14 +4099,13 @@ const ended = endedByTime;
     if (isProposed || microWindowEnded) return "resolving";
     return "active";
   })();
-  const showGenericBlockedBanner = !!market.isBlocked && !liveMicroAutoLocked && !trafficAutoLocked;
+  const showGenericBlockedBanner = !!market.isBlocked && !liveMicroAutoLocked;
   // marketClosed also respects the start_time guard:
   // if match hasn't started, sport-related locks don't apply
   const marketClosed = isResolvedOnChain || isProposed || ended || !!market.isBlocked
     || cryptoUiTradingClosed
-    || trafficAutoLocked
     || flashFootUiTradingClosed
-    || (!isFlashCryptoMarket && !isFlashTrafficMarket && !sportBeforeStart && sportLocked);
+    || (!isFlashCryptoMarket && !sportBeforeStart && sportLocked);
 
   const winningLabel =
     market.winningOutcome != null && Number.isFinite(Number(market.winningOutcome))
@@ -4857,7 +4175,7 @@ const ended = endedByTime;
   const shouldTruncate = fullDescription.length > 300;
 
   const openMobileTrade = (idx: number) => {
-    if (!isMobile && !trafficIsLive) return;
+    if (!isMobile) return;
     setMobileOutcomeIndex(Math.max(0, Math.min(idx, names.length - 1)));
     setMobileDefaultSide("buy"); // ✅ always open on BUY
     setMobileTradeOpen(true);
@@ -4899,158 +4217,26 @@ const ended = endedByTime;
           : null
         : flashResultModalNode}
 
-      {/* ═══ IRL TRAFFIC: Mobile immersive overlay — covers MobileTopBar ═══ */}
-      {isMobile && trafficIsLiveUi && (
-        <div className="fixed inset-x-0 top-0 bottom-14 z-[80] bg-black">
-          <div className="relative w-full h-full overflow-hidden bg-black flex items-center justify-center">
-            {trafficDebugFrameSrc ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={trafficDebugFrameSrc}
-                alt="Traffic camera"
-                className="block w-full h-full object-cover"
-              />
-            ) : (
-              <div className="text-sm text-white/40 animate-pulse">Waiting for camera…</div>
-            )}
-
-            {/* Top overlay — LIVE badge + timer + title */}
-            <div className="absolute top-0 inset-x-0 z-10">
-              <div className="px-4 pt-3 pb-14 bg-gradient-to-b from-black/85 via-black/45 to-transparent">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-600/30 border border-red-500/40">
-                    <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-                    <span className="text-[11px] font-bold text-red-400 tracking-wide">LIVE</span>
-                  </div>
-                  <div className={`rounded-xl border px-2.5 py-1 text-center ${trafficTimerTone}`}>
-                    <div className="text-[9px] uppercase tracking-[0.14em] text-white/70">Time Left</div>
-                    <div className="mt-0.5 text-base font-black tabular-nums leading-none tracking-[0.05em]">
-                      {trafficRemainingLabel}
-                    </div>
-                  </div>
-                </div>
-                <h2 className="text-white font-bold text-[17px] mt-3 leading-snug line-clamp-2 drop-shadow-[0_1px_4px_rgba(0,0,0,0.8)]">
-                  {market.question || "Traffic Market"}
-                </h2>
-              </div>
-            </div>
-
-            {/* Bottom overlay — count + threshold (above YES/NO bar) */}
-            <div className="absolute bottom-[70px] inset-x-0 z-10">
-              <div className="px-4 pb-3 pt-10 bg-gradient-to-t from-black/70 via-black/30 to-transparent">
-                <div className="flex items-center gap-2.5">
-                  {trafficCurrentCount != null && (
-                    <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold backdrop-blur-sm bg-white/10 text-white/90 border border-white/15">
-                      <span className="opacity-60">Count</span>
-                      <span className="tabular-nums">{trafficCurrentCount}{trafficThreshold != null ? ` / ${trafficThreshold}` : ""}</span>
-                    </span>
-                  )}
-                  <span className="text-xs text-white/40 ml-auto">
-                    {formatVol(effectiveVol)} SOL vol
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ═══ IRL TRAFFIC: Desktop immersive — fullscreen camera + YES/NO ═══ */}
-      {!isMobile && trafficIsLive ? (
-        <div className="h-full flex flex-col bg-black">
-          {/* Camera fills available space */}
-          <div className="flex-1 min-h-0 relative overflow-hidden bg-black flex items-center justify-center">
-            {trafficDebugFrameSrc ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={trafficDebugFrameSrc}
-                alt="Traffic camera"
-                className="block w-full h-full object-cover"
-              />
-            ) : (
-              <div className="text-sm text-white/40 animate-pulse">Waiting for camera…</div>
-            )}
-
-            {/* Top overlay — LIVE badge + timer + title */}
-            <div className="absolute top-0 inset-x-0 z-10">
-              <div className="px-6 pt-5 pb-16 bg-gradient-to-b from-black/85 via-black/45 to-transparent">
-                <div className="flex items-center justify-between gap-4">
-                  <div className="flex items-center gap-3">
-                    <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-red-600/30 border border-red-500/40">
-                      <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                      <span className="text-xs font-bold text-red-400 tracking-wide">LIVE</span>
-                    </div>
-                    <h2 className="text-white font-bold text-xl leading-snug line-clamp-1 drop-shadow-[0_1px_4px_rgba(0,0,0,0.8)]">
-                      {market.question || "Traffic Market"}
-                    </h2>
-                  </div>
-                  <div className={`rounded-xl border px-3 py-1.5 text-center ${trafficTimerTone}`}>
-                    <div className="text-[9px] uppercase tracking-[0.14em] text-white/70">Time Left</div>
-                    <div className="mt-0.5 text-lg font-black tabular-nums leading-none tracking-[0.05em]">
-                      {trafficRemainingLabel}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Bottom overlay — count + threshold (above fixed YES/NO bar) */}
-            <div className="absolute bottom-[110px] inset-x-0 z-10">
-              <div className="px-6 pb-3 pt-10 bg-gradient-to-t from-black/70 via-black/30 to-transparent">
-                <div className="flex items-center gap-3">
-                  {trafficCurrentCount != null && (
-                    <span className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-base font-semibold backdrop-blur-sm bg-white/10 text-white/90 border border-white/15">
-                      <span className="opacity-60">Count</span>
-                      <span className="tabular-nums">{trafficCurrentCount}{trafficThreshold != null ? ` / ${trafficThreshold}` : ""}</span>
-                    </span>
-                  )}
-                  <span className="text-sm text-white/40 ml-auto">
-                    {formatVol(effectiveVol)} SOL vol
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Desktop YES/NO bar — fixed above live ticker */}
-          {isBinaryStyle && !marketClosed && (
-            <div className="fixed inset-x-0 bottom-10 z-[65] bg-pump-dark/95 backdrop-blur-md border-t border-white/[0.06] px-6 py-4 flex gap-4 justify-center">
-              <button
-                onClick={() => openMobileTrade(0)}
-                className="flex-1 max-w-xs py-4 rounded-xl bg-pump-green font-bold text-black text-lg active:scale-[0.97] transition"
-              >
-                Buy {names[0] || "Yes"} <span className="opacity-70 ml-1">{(percentages[0] ?? 0).toFixed(0)}¢</span>
-              </button>
-              <button
-                onClick={() => openMobileTrade(1)}
-                className="flex-1 max-w-xs py-4 rounded-xl bg-[#ff5c73] font-bold text-white text-lg active:scale-[0.97] transition"
-              >
-                Buy {names[1] || "No"} <span className="opacity-70 ml-1">{(100 - (percentages[0] ?? 0)).toFixed(0)}¢</span>
-              </button>
-            </div>
-          )}
-        </div>
-      ) : (
-      /*
+      {/*
         SCROLL CONTAINER - Un seul conteneur scrollable qui englobe tout.
         La colonne droite est sticky à l'intérieur.
-      */
+      */}
       <div
         ref={scrollContainerRef}
         className="h-full lg:overflow-y-auto"
       >
         <div className={`max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 lg:py-8 ${
-          isMobile && (isFlashCryptoMarket || trafficIsLiveUi) && isBinaryStyle && !marketClosed ? "pb-24" : ""
-        } ${isMobile && trafficIsLiveUi ? "pt-0" : ""}`}>
+          isMobile && isFlashCryptoMarket && isBinaryStyle && !marketClosed ? "pb-24" : ""
+        }`}>
           {/* Grid 2 colonnes */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 relative">
-            
+
             {/* ════════════════════════════════════════════════════════════
                 LEFT COLUMN - Contenu qui scroll avec la page
                 ════════════════════════════════════════════════════════════ */}
             <div className="lg:col-span-2 space-y-6">
-              {/* Live session banner CTA — hidden when IRL immersive (redundant) */}
-              {activeLiveSession && !trafficIsLiveUi && (
+              {/* Live session banner CTA */}
+              {activeLiveSession && (
                 <Link
                   href={`/live/${activeLiveSession.id}`}
                   className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl border border-red-500/40 bg-red-500/10 hover:bg-red-500/20 transition group"
@@ -5155,115 +4341,13 @@ const ended = endedByTime;
                   </button>
               )}
 
-              {/* ── IRL Traffic: Immersive camera section ─────────── */}
-              {isFlashTrafficMarket && trafficIsLiveUi ? (
-                /* IMMERSIVE CAMERA — LIVE mode */
-                <div className={`relative overflow-hidden rounded-xl bg-black ${
-                  isMobile ? "-mx-4 -mt-6 rounded-none" : ""
-                }`}>
-                  {/* Camera frame — dominant height */}
-                  <div className={`relative w-full ${
-                    isMobile ? "h-[calc(100dvh-180px)]" : "aspect-video"
-                  } overflow-hidden bg-black flex items-center justify-center`}>
-                    {trafficDebugFrameSrc ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={trafficDebugFrameSrc}
-                        alt="Traffic camera"
-                        className="block w-full h-full object-cover"
-                      />
-                    ) : (
-                      <div className="text-sm text-white/40 animate-pulse">Waiting for camera…</div>
-                    )}
-
-                    {/* Top overlay — LIVE badge + title + stats */}
-                    <div className="absolute top-0 inset-x-0 z-10">
-                      <div className={`${isMobile ? "px-4 pt-4 pb-14" : "px-5 pt-4 pb-12"} bg-gradient-to-b from-black/85 via-black/45 to-transparent`}>
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-600/30 border border-red-500/40">
-                            <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-                            <span className="text-[11px] font-bold text-red-400 tracking-wide">LIVE</span>
-                          </div>
-                          <div className={`rounded-xl border px-2.5 py-1 text-center ${trafficTimerTone}`}>
-                            <div className="text-[9px] uppercase tracking-[0.14em] text-white/70">Time Left</div>
-                            <div className="mt-0.5 text-base sm:text-lg font-black tabular-nums leading-none tracking-[0.05em]">
-                              {trafficRemainingLabel}
-                            </div>
-                          </div>
-                        </div>
-                        <h2 className="text-white font-bold text-[17px] sm:text-lg mt-3 leading-snug line-clamp-2 drop-shadow-[0_1px_4px_rgba(0,0,0,0.8)]">
-                          {market.question || "Traffic Market"}
-                        </h2>
-                      </div>
-                    </div>
-
-                    {/* Bottom overlay — count + threshold */}
-                    <div className="absolute bottom-0 inset-x-0 z-10">
-                      <div className={`${isMobile ? "px-4 pb-4 pt-12" : "px-5 pb-4 pt-10"} bg-gradient-to-t from-black/80 via-black/40 to-transparent`}>
-                        <div className="flex items-center gap-2.5">
-                          {trafficCurrentCount != null && (
-                            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold backdrop-blur-sm bg-white/10 text-white/90 border border-white/15">
-                              <span className="opacity-60">Count</span>
-                              <span className="tabular-nums">{trafficCurrentCount}{trafficThreshold != null ? ` / ${trafficThreshold}` : ""}</span>
-                            </span>
-                          )}
-                          <span className="text-xs text-white/40 ml-auto">
-                            {formatVol(effectiveVol)} SOL vol
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ) : isFlashTrafficMarket ? (
-                /* NORMAL TRAFFIC — non-live fallback */
-                <>
-                  <div className="rounded-xl border border-white/12 bg-[linear-gradient(135deg,rgba(20,24,32,0.82),rgba(12,15,20,0.88))] px-3.5 py-2.5 sm:px-4 sm:py-3 shadow-[0_12px_28px_rgba(0,0,0,0.28)]">
-                    <div className="flex items-center justify-between gap-2.5">
-                      <div className="min-w-0">
-                        <div className="truncate text-sm sm:text-base font-semibold text-white">
-                          {market.question || "Traffic Market"}
-                        </div>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        <div className={`rounded-xl border px-2.5 py-1 text-center ${trafficTimerTone}`}>
-                          <div className="text-[9px] uppercase tracking-[0.14em] text-white/70">Time Left</div>
-                          <div className="mt-0.5 text-base sm:text-lg font-black tabular-nums leading-none tracking-[0.05em]">
-                            {trafficRemainingLabel}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="rounded-xl border border-white/10 bg-black/35 px-3 py-2">
-                    <div className="mt-1.5 flex h-[420px] items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-black md:h-[520px]">
-                      {trafficDebugFrameSrc ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={trafficDebugFrameSrc}
-                          alt="Traffic debug frame"
-                          className="block h-full w-full object-cover"
-                        />
-                      ) : null}
-                      {!trafficDebugFrameSrc && trafficDebugFrameAvailable === false && (
-                        <div className="px-3 py-6 text-center text-xs text-white/70">
-                          No debug frame available yet
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </>
-              ) : null}
-
               {/* Market card */}
               <div className={`rounded-xl p-4 md:p-5 transition-all duration-200 ${
                 isFlashCryptoMarket
                   ? "bg-transparent border border-white/[0.06]"
-                  : isMobile && trafficIsLiveUi
-                  ? "bg-transparent border-0 px-0 pt-0"
                   : "bg-black border border-gray-800 hover:border-pump-green/60"
               }`}>
-                <div className={`flex items-start gap-3 ${isMobile && trafficIsLiveUi ? "hidden" : ""}`}>
+                <div className="flex items-start gap-3">
                   {(() => {
                     const hasFeedVideo = !!market.feedVideoUrl;
                     const thumbBoxClass = `relative flex-shrink-0 rounded-xl overflow-hidden bg-pump-dark ${
@@ -5405,7 +4489,6 @@ const ended = endedByTime;
   
                 <div className={`flex items-center gap-4 text-sm text-gray-400 mt-3 pt-3 ${
                   isFlashCryptoMarket ? "border-t border-white/[0.05] hidden md:flex"
-                  : isMobile && trafficIsLiveUi ? "hidden"
                   : "border-t border-gray-800"
                 }`}>
                   <div>
@@ -5432,7 +4515,7 @@ const ended = endedByTime;
                   <div className="ml-auto text-xs text-gray-500 flex items-center gap-2">
                     {/* Blocked badge */}
                     {market.isBlocked && (
-                      liveMicroAutoLocked || trafficAutoLocked ? (
+                      liveMicroAutoLocked ? (
                         <span className="px-2 py-1 rounded-full border border-yellow-500/40 bg-yellow-500/10 text-yellow-300">
                           Locked
                         </span>
@@ -5779,20 +4862,18 @@ const ended = endedByTime;
             <div className="lg:col-span-1">
               <div className="lg:sticky lg:top-6 space-y-4 pb-8">
                 {/* Live micro auto-lock gets dedicated state copy; admin blocks keep the generic banner */}
-                {liveMicroAutoLocked || trafficAutoLocked ? (
+                {liveMicroAutoLocked ? (
                   <div className="rounded-2xl border border-yellow-500/40 bg-yellow-500/10 p-5">
                     <h3 className="text-lg font-bold text-yellow-200 mb-2">
-                      {liveMicroAutoLocked ? "Goal detected" : "Target reached"}
+                      Goal detected
                     </h3>
                     <p className="text-sm text-yellow-100/90">
-                      {liveMicroAutoLocked
-                        ? "Trading has been locked for this market and it will resolve at window end."
-                        : "Trading has been locked for this market because the traffic target was reached. Waiting for normal resolution flow."}
+                      Trading has been locked for this market and it will resolve at window end.
                     </p>
-                    {Number.isFinite(liveMicroAutoLocked ? microWindowEndMs : trafficWindowEndMs) && (
+                    {Number.isFinite(microWindowEndMs) && (
                       <p className="text-xs text-yellow-200/80 mt-3">
                         Window ends at{" "}
-                        {new Date(liveMicroAutoLocked ? microWindowEndMs : trafficWindowEndMs).toLocaleTimeString("en-US", {
+                        {new Date(microWindowEndMs).toLocaleTimeString("en-US", {
                           hour: "2-digit",
                           minute: "2-digit",
                           hour12: false,
@@ -5943,11 +5024,10 @@ const ended = endedByTime;
           </div>
         </div>
       </div>
-      )}
 
       {/* Mobile drawer - FULLSCREEN from top to bottom nav (h-14 = 56px) */}
       {/* ✅ Don't open if blocked (marketClosed includes isBlocked) */}
-      {(isMobile || trafficIsLive) && mobileTradeOpen && !marketClosed && (
+      {isMobile && mobileTradeOpen && !marketClosed && (
         <div className="fixed inset-0 z-[200] pointer-events-none">
           {/* Backdrop: couvre tout l'écran sauf la bottom nav */}
           <button
@@ -5990,26 +5070,6 @@ const ended = endedByTime;
 
       {/* Flash crypto mobile fixed bottom trade bar */}
       {isMobile && isFlashCryptoMarket && isBinaryStyle && !marketClosed && !mobileTradeOpen && (
-        <div className="fixed inset-x-0 bottom-14 z-[150] pointer-events-auto">
-          <div className="bg-pump-dark/95 backdrop-blur-md border-t border-white/[0.06] px-4 py-3 flex gap-3">
-            <button
-              onClick={() => openMobileTrade(0)}
-              className="flex-1 py-3.5 rounded-xl bg-pump-green font-bold text-black text-base active:scale-[0.97] transition"
-            >
-              Buy {names[0] || "Yes"} <span className="opacity-70 ml-1">{(percentages[0] ?? 0).toFixed(0)}¢</span>
-            </button>
-            <button
-              onClick={() => openMobileTrade(1)}
-              className="flex-1 py-3.5 rounded-xl bg-[#ff5c73] font-bold text-white text-base active:scale-[0.97] transition"
-            >
-              Buy {names[1] || "No"} <span className="opacity-70 ml-1">{(100 - (percentages[0] ?? 0)).toFixed(0)}¢</span>
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* IRL Traffic mobile fixed bottom trade bar */}
-      {isMobile && trafficIsLiveUi && isBinaryStyle && !marketClosed && !mobileTradeOpen && (
         <div className="fixed inset-x-0 bottom-14 z-[150] pointer-events-auto">
           <div className="bg-pump-dark/95 backdrop-blur-md border-t border-white/[0.06] px-4 py-3 flex gap-3">
             <button

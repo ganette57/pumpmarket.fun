@@ -21,6 +21,7 @@ import FlashMarketResultModal, {
 } from "@/components/FlashMarketResultModal";
 import {
   StreamPlayer,
+  StreamUnavailable,
   StatusBanner,
   MobileBuySheet,
   formatVol,
@@ -322,9 +323,7 @@ export default function LiveViewerPage() {
   const [showBuyHint, setShowBuyHint] = useState(false);
   const [defaultOutcomeIndex, setDefaultOutcomeIndex] = useState(0);
 
-  // IRL immersive — traffic count + timer
-  const [sportMeta, setSportMeta] = useState<any>(null);
-  const [trafficCount, setTrafficCount] = useState<number | null>(null);
+  // Immersive countdown clock
   const [nowMs, setNowMs] = useState(Date.now());
 
   // Live Activity + toasts
@@ -484,7 +483,6 @@ export default function LiveViewerPage() {
       }
 
       setMarket(transformed);
-      setSportMeta((dbMarket as any).sport_meta ?? null);
     } catch (e) {
       console.error("loadMarket error:", e);
     }
@@ -599,15 +597,6 @@ export default function LiveViewerPage() {
 
   const isLiveImmersive = session?.status === "live" || session?.status === "locked";
 
-  const trafficMeta = useMemo(() => {
-    if (!sportMeta || sportMeta?.type !== "flash_traffic") return null;
-    return sportMeta as {
-      round_id?: string; threshold?: number;
-      window_end?: string; current_count?: number;
-      camera_name?: string;
-    };
-  }, [sportMeta]);
-
   // Clock tick for countdown (only during immersive)
   useEffect(() => {
     if (!isLiveImmersive) return;
@@ -615,33 +604,9 @@ export default function LiveViewerPage() {
     return () => clearInterval(iv);
   }, [isLiveImmersive]);
 
-  // Traffic count polling (display only)
-  useEffect(() => {
-    if (!isLiveImmersive || !trafficMeta?.round_id || !market?.publicKey) return;
-    if (trafficMeta.current_count != null && trafficCount == null) {
-      setTrafficCount(trafficMeta.current_count);
-    }
-    const poll = async () => {
-      try {
-        const res = await fetch(
-          `/api/traffic/live?roundId=${encodeURIComponent(trafficMeta.round_id!)}&marketAddress=${encodeURIComponent(market!.publicKey)}`
-        );
-        if (res.ok) {
-          const d = await res.json();
-          if (typeof d.currentCount === "number") setTrafficCount(d.currentCount);
-        }
-      } catch { /* display-only, silent fail */ }
-    };
-    poll();
-    const iv = setInterval(poll, 500);
-    return () => clearInterval(iv);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLiveImmersive, trafficMeta?.round_id, market?.publicKey]);
-
   // Countdown — drives the giant immersive overlay
   const countdown = useMemo(() => {
-    const endStr = trafficMeta?.window_end
-      ?? (market?.resolutionTime ? new Date(market.resolutionTime * 1000).toISOString() : null);
+    const endStr = market?.resolutionTime ? new Date(market.resolutionTime * 1000).toISOString() : null;
     if (!endStr) return null;
     const endMs = new Date(endStr).getTime();
     if (!Number.isFinite(endMs)) return null;
@@ -649,14 +614,12 @@ export default function LiveViewerPage() {
     const phase: CountdownPhase =
       remSec <= 10 ? "panic" : remSec <= 30 ? "warning" : "normal";
     return { remSec, label: fmtMmSs(remSec), phase, isFinal: remSec <= 5 };
-  }, [trafficMeta?.window_end, market?.resolutionTime, nowMs]);
+  }, [market?.resolutionTime, nowMs]);
 
   // Time-based lock: the market is expired once the countdown reaches 00:00.
   // session.status stays "live" at that point, so this is what actually blocks
   // trades when the timer runs out.
   const expiredByTime = !!countdown && countdown.remSec <= 0;
-
-  const threshold = trafficMeta?.threshold ?? null;
 
   /* ── Host resolve (reuses the existing propose flow) ────────────── */
   async function handleResolveLive(outcomeIndex: number) {
@@ -989,13 +952,8 @@ export default function LiveViewerPage() {
 
   const overlayStats = useMemo(() => {
     const pills: { label: string; value: string; accent?: boolean }[] = [];
-    if (trafficCount != null && threshold != null) {
-      pills.push({ label: "Count", value: `${trafficCount} / ${threshold}` });
-    } else if (trafficCount != null) {
-      pills.push({ label: "Count", value: `${trafficCount}` });
-    }
     return pills;
-  }, [trafficCount, threshold]);
+  }, []);
 
   /* ── Render ────────────────────────────────────────────────────── */
 
@@ -1067,14 +1025,8 @@ export default function LiveViewerPage() {
                 setDefaultOutcomeIndex(idx);
                 setMobileSheetOpen(true);
               }}
-              endIsoOverride={trafficMeta?.window_end ?? null}
-              countText={
-                trafficCount != null && threshold != null
-                  ? `${trafficCount} / ${threshold}`
-                  : trafficCount != null
-                  ? `${trafficCount}`
-                  : null
-              }
+              endIsoOverride={null}
+              countText={null}
               variant="deeplink"
               hostSlot={
                 isHost ? (
@@ -1161,7 +1113,9 @@ export default function LiveViewerPage() {
               <div className="col-span-2 space-y-4">
                 <div className="relative rounded-xl overflow-hidden bg-black">
                   {/* Stream */}
-                  {session.stream_url ? (
+                  {session.status === "disabled" ? (
+                    <StreamUnavailable />
+                  ) : session.stream_url ? (
                     <StreamPlayer url={session.stream_url} />
                   ) : (
                     <div className="relative w-full aspect-video bg-black">
@@ -1332,7 +1286,9 @@ export default function LiveViewerPage() {
 
             <div className="grid grid-cols-3 gap-6">
               <div className="col-span-2 space-y-5">
-                {session.stream_url ? (
+                {session.status === "disabled" ? (
+                  <StreamUnavailable />
+                ) : session.stream_url ? (
                   <StreamPlayer url={session.stream_url} />
                 ) : (
                   <div className="relative w-full aspect-video bg-black rounded-xl overflow-hidden">
