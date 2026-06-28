@@ -10,6 +10,11 @@ import Image from "next/image";
 import CategoryImagePlaceholder from "@/components/CategoryImagePlaceholder";
 import { lamportsToSol } from "@/utils/solana";
 import { fetchPastMarketAddresses, type LiveSession } from "@/lib/liveSessions";
+import {
+  parseStream,
+  providerAttribution,
+  REGION_AVAILABILITY_NOTE,
+} from "@/lib/streamProviders";
 import { supabase } from "@/lib/supabaseClient";
 import { getMarketByAddress } from "@/lib/markets";
 import { buildOddsSeries, downsample } from "@/lib/marketHistory";
@@ -56,16 +61,23 @@ export function StreamPlayer({ url, className }: { url: string; className?: stri
     const ytMatch = url.match(
       /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/live\/)([\w-]+)/
     );
-    if (ytMatch)
+    if (ytMatch) {
       // playsinline=1 → iOS/Phantom webview plays in place (not forced
       // fullscreen) so the user can tap the player; muted autoplay stays
       // for autoplay policy, the user unmutes via the YouTube controls.
       // enablejsapi=1 lets us observe playback state and send playVideo
       // from the CTA without reloading the iframe.
+      // origin=<page origin> is the YouTube-recommended hardening param for
+      // the iframe API (Part 10).
+      const origin =
+        typeof window !== "undefined"
+          ? `&origin=${encodeURIComponent(window.location.origin)}`
+          : "";
       return {
-        embedUrl: `https://www.youtube.com/embed/${ytMatch[1]}?autoplay=1&mute=1&playsinline=1&enablejsapi=1`,
+        embedUrl: `https://www.youtube.com/embed/${ytMatch[1]}?autoplay=1&mute=1&playsinline=1&enablejsapi=1${origin}`,
         isYouTube: true,
       };
+    }
 
     const twitchMatch = url.match(/twitch\.tv\/(\w+)/);
     if (twitchMatch)
@@ -136,6 +148,8 @@ export function StreamPlayer({ url, className }: { url: string; className?: stri
     };
   }, [isYouTube, embedUrl]);
 
+  const attribution = providerAttribution(parseStream(url).provider);
+
   return (
     <div className={className ?? "relative w-full aspect-video bg-black rounded-xl overflow-hidden"}>
       <iframe
@@ -146,6 +160,15 @@ export function StreamPlayer({ url, className }: { url: string; className?: stri
         allowFullScreen
         frameBorder="0"
       />
+      {/* Provider attribution + region note (Parts 9). Small, unobtrusive,
+          pointer-events-none so it never blocks the player's own controls. */}
+      {attribution && (
+        <div className="pointer-events-none absolute bottom-0 inset-x-0 z-[4] px-2 py-0.5 bg-gradient-to-t from-black/55 to-transparent">
+          <p className="text-[9px] leading-tight text-white/55 truncate">
+            {attribution} {REGION_AVAILABILITY_NOTE}
+          </p>
+        </div>
+      )}
       {/* Tap-to-play CTA — rendered AFTER the iframe so mounting/unmounting it
           never reconciles the iframe away. The tap is a real user gesture: we
           send playVideo through the iframe API and dismiss the overlay; if the
@@ -180,6 +203,27 @@ export function StreamPlayer({ url, className }: { url: string; className?: stri
           </span>
         </button>
       )}
+    </div>
+  );
+}
+
+/* ── StreamUnavailable ───────────────────────────────────────────── */
+// Shown in place of the StreamPlayer when a session has been disabled for
+// compliance/moderation (Part 6). Trading + historical data still render
+// normally elsewhere — only the embedded player is withheld.
+export function StreamUnavailable({ className }: { className?: string }) {
+  return (
+    <div
+      className={
+        className ??
+        "relative w-full aspect-video bg-black rounded-xl overflow-hidden flex items-center justify-center"
+      }
+    >
+      <div className="text-center px-6">
+        <div className="text-sm font-semibold text-white/80">
+          This live stream is unavailable.
+        </div>
+      </div>
     </div>
   );
 }
@@ -464,7 +508,9 @@ export function LiveMobileContent({
   return (
     <>
       {/* Stream player — exact stable rendering */}
-      {active && streamUrl ? (
+      {status === "disabled" ? (
+        <StreamUnavailable />
+      ) : active && streamUrl ? (
         <StreamPlayer url={streamUrl} />
       ) : (
         <div className="relative w-full aspect-video bg-black rounded-xl overflow-hidden">
@@ -1703,7 +1749,9 @@ export function MobileImmersiveSlide({
       <div
         className={`absolute inset-x-0 ${STREAM_TOP} aspect-video bg-black`}
       >
-        {active && session.stream_url ? (
+        {session.status === "disabled" ? (
+          <StreamUnavailable className="absolute inset-0 w-full h-full bg-black flex items-center justify-center" />
+        ) : active && session.stream_url ? (
           <StreamPlayer
             url={session.stream_url}
             className="absolute inset-0 w-full h-full bg-black"
@@ -1777,7 +1825,7 @@ export function MobileImmersiveSlide({
             )}
           </div>
 
-          {/* Count pill — for flash_traffic etc. Below LIVE pill. */}
+          {/* Count pill — generic live overlay stat. Below LIVE pill. */}
           {countText && (
             <div className="absolute top-12 left-3 z-20 pointer-events-none">
               <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold bg-black/60 backdrop-blur-md text-white/85 border border-white/10">
@@ -1825,11 +1873,6 @@ export function MobileImmersiveSlide({
                 </span>
               </div>
               <div className="flex items-center gap-2">
-                {volLabel && (
-                  <span className="text-[10px] text-gray-500 font-medium tabular-nums tracking-wider uppercase">
-                    {volLabel} Vol
-                  </span>
-                )}
                 {mergedPastResults.length > 0 && (
                   <button
                     type="button"
@@ -1981,9 +2024,16 @@ export function MobileImmersiveSlide({
               </div>
             </div>
 
-            <h2 className="text-white font-bold text-[16px] leading-snug line-clamp-2 mb-2.5 drop-shadow-[0_1px_4px_rgba(0,0,0,0.7)]">
-              {market?.question || session.title}
-            </h2>
+            <div className="mb-2.5">
+              <h2 className="text-white font-bold text-[16px] leading-snug line-clamp-2 drop-shadow-[0_1px_4px_rgba(0,0,0,0.7)]">
+                {market?.question || session.title}
+              </h2>
+              {volLabel && (
+                <p className="mt-1 text-[10px] text-gray-500 font-medium tabular-nums tracking-wider uppercase">
+                  {volLabel} Vol
+                </p>
+              )}
+            </div>
 
             {derived ? (
               <>

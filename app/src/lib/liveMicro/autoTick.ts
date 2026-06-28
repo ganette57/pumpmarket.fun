@@ -10,7 +10,6 @@ import {
   tickFlashCryptoCampaigns,
   tickFlashCryptoResolutions,
 } from "@/lib/flashCrypto/engine";
-import { tickTrafficFlashResolutions } from "@/lib/traffic/engine";
 
 type AutoTickState = {
   started: boolean;
@@ -114,13 +113,6 @@ async function runTick(reason: "startup" | "interval") {
       log("flash-crypto resolution tick failed", { error: String(e?.message || e) });
     }
 
-    let trafficResolutions = { resolved: 0, errors: [] as string[] };
-    try {
-      trafficResolutions = await tickTrafficFlashResolutions();
-    } catch (e: any) {
-      log("traffic flash resolution tick failed", { error: String(e?.message || e) });
-    }
-
     state.lastSuccessAt = nowIso();
     state.lastError = null;
     state.runCount += 1;
@@ -131,8 +123,7 @@ async function runTick(reason: "startup" | "interval") {
       result.processed > 0 ||
       result.loopProcessed > 0 ||
       cryptoCampaigns.marketsCreated > 0 ||
-      cryptoResolutions.resolved > 0 ||
-      trafficResolutions.resolved > 0;
+      cryptoResolutions.resolved > 0;
     if (shouldLog) {
       log("tick completed", {
         reason,
@@ -141,7 +132,6 @@ async function runTick(reason: "startup" | "interval") {
         cryptoCampaignsProcessed: cryptoCampaigns.campaignsProcessed,
         cryptoMarketsCreated: cryptoCampaigns.marketsCreated,
         cryptoResolved: cryptoResolutions.resolved,
-        trafficResolved: trafficResolutions.resolved,
       });
     }
   } catch (e: any) {

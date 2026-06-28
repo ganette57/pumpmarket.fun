@@ -1,5 +1,7 @@
 // src/lib/liveSessions.ts
 import { supabase } from "@/lib/supabaseClient";
+import { isAllowedStreamUrl, parseStream } from "@/lib/streamProviders";
+import { findBlockedStream } from "@/lib/blockedStreams";
 
 /* -------------------------------------------------------------------------- */
 /*  Types                                                                      */
@@ -11,7 +13,17 @@ export type LiveSessionStatus =
   | "locked"
   | "ended"
   | "resolved"
-  | "cancelled";
+  | "cancelled"
+  | "disabled";
+
+/** Reason codes for an Admin "Disable Live" action (Part 5). */
+export type DisableReason =
+  | "dmca"
+  | "copyright"
+  | "creator_request"
+  | "platform_request"
+  | "terms_violation"
+  | "manual";
 
 export type LiveSession = {
   id: string;
@@ -27,6 +39,12 @@ export type LiveSession = {
   lock_at?: string | null;
   end_at?: string | null;
   ended_at?: string | null;
+  /** Audit trail for an Admin "Disable Live" action (Part 5). Requires the
+   *  20260621_live_compliance_ops migration. Not part of LIVE_SESSION_COLS so
+   *  existing queries keep working before the columns are added. */
+  disabled_at?: string | null;
+  disabled_by?: string | null;
+  disable_reason?: string | null;
   /** Legacy column (no longer written by the queue flow). Kept so older rows
    *  parse cleanly. */
   queued_market_address?: string | null;
@@ -238,6 +256,22 @@ export async function createLiveSession(
   if (!row.market_address) throw new Error("market_address is required");
   if (!row.host_wallet) throw new Error("host_wallet is required");
   if (!row.stream_url) throw new Error("stream_url is required");
+
+  // Part 8 — provider allow-list (YouTube / Twitch / Kick only).
+  const parsed = parseStream(row.stream_url);
+  if (!isAllowedStreamUrl(row.stream_url)) {
+    throw new Error(
+      "Unsupported stream provider. Only YouTube, Twitch and Kick are allowed.",
+    );
+  }
+
+  // Part 7 — reject creation when the stream is on the compliance block-list.
+  const blocked = await findBlockedStream(parsed);
+  if (blocked) {
+    throw new Error(
+      `This stream has been blocked${blocked.reason ? ` (${blocked.reason})` : ""} and cannot be used.`,
+    );
+  }
 
   const { data, error } = await supabase
     .from("live_sessions")

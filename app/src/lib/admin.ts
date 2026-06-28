@@ -69,14 +69,20 @@ function verifySessionToken(token: string | null): string | null {
 }
 
 export async function isAdminRequest(req: Request): Promise<boolean> {
+  return (await adminWalletFromRequest(req)) != null;
+}
+
+/** Returns the verified admin wallet for an authenticated request, else null.
+ *  Used for audit trails (e.g. disabled_by). */
+export async function adminWalletFromRequest(req: Request): Promise<string | null> {
   const cookies = parseCookie(req.headers.get("cookie"));
   const token = cookies[COOKIE_NAME] || null;
 
   const walletFromToken = verifySessionToken(token);
-  if (!walletFromToken) return false;
+  if (!walletFromToken) return null;
 
   const adminWallet = getAdminWallet();
   if (!adminWallet) throw new Error("Missing env: NEXT_PUBLIC_ADMIN_WALLET");
 
-  return walletFromToken === adminWallet;
+  return walletFromToken === adminWallet ? walletFromToken : null;
 }
