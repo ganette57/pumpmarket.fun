@@ -11,7 +11,8 @@ import { getWorldCupSideMarkets } from "../_lib/marketQueries";
 export const dynamic = "force-dynamic";
 
 export default async function WorldCupSideMarketsPage() {
-  const markets = await getWorldCupSideMarkets();
+  // Full list — include ended markets so the Ended / All tabs work.
+  const markets = await getWorldCupSideMarkets(undefined, { includeEnded: true });
 
   return (
     <div className="min-h-screen bg-pump-dark text-white">

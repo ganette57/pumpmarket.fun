@@ -73,14 +73,22 @@ async function fetchSoccerRows(): Promise<any[]> {
  */
 export async function getWorldCupMatchMarkets(
   limit?: number,
+  opts?: { includeEnded?: boolean },
 ): Promise<WorldCupMarket[]> {
   try {
-    const rows = (await fetchSoccerRows())
+    const mapped = (await fetchSoccerRows())
       .filter(isOfficialMatchMarket)
       .filter(isWorldCupMarket)
-      .map((r) => toWorldCupMarket(r))
-      .filter((m) => !m.ended)
-      .sort((a, b) => kickoffMs(a) - kickoffMs(b));
+      .map((r) => toWorldCupMarket(r));
+    // Full-list pages opt in to ended markets so the Ended / All tabs work;
+    // the hub rail keeps the default (upcoming/open only). When ended markets
+    // are included, keep open/upcoming first, then most-recently-ended.
+    const rows = opts?.includeEnded
+      ? mapped.sort((a, b) => {
+          if (a.ended !== b.ended) return a.ended ? 1 : -1;
+          return a.ended ? kickoffMs(b) - kickoffMs(a) : kickoffMs(a) - kickoffMs(b);
+        })
+      : mapped.filter((m) => !m.ended).sort((a, b) => kickoffMs(a) - kickoffMs(b));
     return typeof limit === "number" ? rows.slice(0, limit) : rows;
   } catch {
     return [];
@@ -151,20 +159,32 @@ export async function getOfficialMatchProviderEventIds(): Promise<Set<string>> {
  */
 export async function getWorldCupSideMarkets(
   limit?: number,
+  opts?: { includeEnded?: boolean },
 ): Promise<WorldCupMarket[]> {
   try {
-    const rows = (await fetchSoccerRows())
+    const openSort = (a: WorldCupMarket, b: WorldCupMarket) => {
+      const aLive = isLiveMarket(a);
+      const bLive = isLiveMarket(b);
+      if (aLive !== bLive) return aLive ? -1 : 1;
+      const dateDiff = relevanceDateMs(a) - relevanceDateMs(b);
+      if (dateDiff !== 0) return dateDiff;
+      return b.createdAtMs - a.createdAtMs;
+    };
+    const mapped = (await fetchSoccerRows())
       .filter(isSideMarket)
-      .map((r) => toWorldCupMarket(r, true))
-      .filter((m) => !m.ended)
-      .sort((a, b) => {
-        const aLive = isLiveMarket(a);
-        const bLive = isLiveMarket(b);
-        if (aLive !== bLive) return aLive ? -1 : 1;
-        const dateDiff = relevanceDateMs(a) - relevanceDateMs(b);
-        if (dateDiff !== 0) return dateDiff;
-        return b.createdAtMs - a.createdAtMs;
-      });
+      .map((r) => toWorldCupMarket(r, true));
+    // Full-list page opts in to ended markets so the Ended / All tabs work;
+    // the hub rail keeps the default (open only). Ended markets sort after the
+    // open ones, most-recent first.
+    const rows = opts?.includeEnded
+      ? mapped.sort((a, b) => {
+          if (a.ended !== b.ended) return a.ended ? 1 : -1;
+          if (a.ended) {
+            return relevanceDateMs(b) - relevanceDateMs(a) || b.createdAtMs - a.createdAtMs;
+          }
+          return openSort(a, b);
+        })
+      : mapped.filter((m) => !m.ended).sort(openSort);
     return typeof limit === "number" ? rows.slice(0, limit) : rows;
   } catch {
     return [];

@@ -1873,11 +1873,6 @@ export function MobileImmersiveSlide({
                 </span>
               </div>
               <div className="flex items-center gap-2">
-                {volLabel && (
-                  <span className="text-[10px] text-gray-500 font-medium tabular-nums tracking-wider uppercase">
-                    {volLabel} Vol
-                  </span>
-                )}
                 {mergedPastResults.length > 0 && (
                   <button
                     type="button"
@@ -2029,9 +2024,16 @@ export function MobileImmersiveSlide({
               </div>
             </div>
 
-            <h2 className="text-white font-bold text-[16px] leading-snug line-clamp-2 mb-2.5 drop-shadow-[0_1px_4px_rgba(0,0,0,0.7)]">
-              {market?.question || session.title}
-            </h2>
+            <div className="mb-2.5">
+              <h2 className="text-white font-bold text-[16px] leading-snug line-clamp-2 drop-shadow-[0_1px_4px_rgba(0,0,0,0.7)]">
+                {market?.question || session.title}
+              </h2>
+              {volLabel && (
+                <p className="mt-1 text-[10px] text-gray-500 font-medium tabular-nums tracking-wider uppercase">
+                  {volLabel} Vol
+                </p>
+              )}
+            </div>
 
             {derived ? (
               <>
