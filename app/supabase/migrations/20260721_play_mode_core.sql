@@ -185,12 +185,15 @@ create table if not exists public.play_market_states (
     check (virtual_pool_usd >= 0),
   -- Supply array length must always match the declared outcome count.
   constraint play_market_states_supplies_len
-    check (array_length(outcome_supplies, 1) = outcome_count),
-  -- No negative supplies (Play has no sell, but defend the invariant).
-  constraint play_market_states_supplies_nonneg
-    check (
-      (select coalesce(min(s), 0) from unnest(outcome_supplies) as s) >= 0
-    )
+    check (array_length(outcome_supplies, 1) = outcome_count)
+
+  -- NOTE: "every supply >= 0" is deliberately NOT a CHECK constraint.
+  -- Postgres forbids subqueries in CHECK, and there is no subquery-free
+  -- way to test every element of an array. The invariant holds
+  -- structurally instead: supplies are seeded positive and Play has no
+  -- sell / partial close / transfer, so play_execute_trade only ever
+  -- ADDS to a supply. If a sell is ever introduced, add a BEFORE
+  -- INSERT/UPDATE trigger here at the same time.
 );
 
 create unique index if not exists play_market_states_market_idx
@@ -448,6 +451,9 @@ end $$;
 -- Implied probability of each outcome = supply_i / SUM(supply).
 -- This is the same "share of supply" rule the Real UI already renders
 -- as cents, so Play odds read identically even though the books differ.
+-- WITH ORDINALITY + ORDER BY is required: bare unnest() in a subquery has
+-- no guaranteed output order, and here the array position IS the outcome
+-- index. Getting this wrong would silently mislabel odds.
 create or replace function public.play_implied_probs(supplies_in numeric[])
 returns numeric[]
 language sql
@@ -456,11 +462,12 @@ set search_path = public, pg_temp
 as $$
   select case
     when coalesce((select sum(s) from unnest(supplies_in) as s), 0) <= 0
-      then array(select 1::numeric / greatest(array_length(supplies_in, 1), 1)
+      then array(select round(1::numeric / greatest(array_length(supplies_in, 1), 1), 6)
                  from generate_series(1, array_length(supplies_in, 1)))
     else array(
-      select round(s / (select sum(s2) from unnest(supplies_in) as s2), 6)
-      from unnest(supplies_in) as s
+      select round(u.s / (select sum(s2) from unnest(supplies_in) as s2), 6)
+        from unnest(supplies_in) with ordinality as u(s, ord)
+       order by u.ord
     )
   end;
 $$;
@@ -524,11 +531,21 @@ begin
   returning * into s;
 
   if s.id is null then
-    -- Lost the race to a concurrent caller; read theirs.
+    -- Lost the race to a concurrent caller; read theirs. Re-query by
+    -- coverage rather than by starts_at, so we can never hand back a
+    -- CLOSED season just because its window happens to match.
     select * into s
       from public.play_seasons
-     where starts_at = w_start
+     where status = 'open' and starts_at <= now() and ends_at > now()
      limit 1;
+  end if;
+
+  if s.id is null then
+    -- Neither inserted nor found: a closed season overlaps now() and no
+    -- open one exists. Refuse loudly rather than trading into a closed
+    -- season and mis-attributing everyone's P&L.
+    raise exception 'play: no open season covers now(); run play_rollover_season()'
+      using errcode = '22023';
   end if;
 
   return s;
@@ -588,7 +605,9 @@ declare
   idem      text;
   bal_before numeric(18,2);
   bal_after  numeric(18,2);
-  inserted  boolean := false;
+  -- integer, not boolean: GET DIAGNOSTICS ... = ROW_COUNT yields an
+  -- integer and Postgres has no integer->boolean assignment cast.
+  n_inserted integer := 0;
 begin
   select * into cfg from public.play_settings where id = 1;
   today := (now() at time zone 'UTC')::date;
@@ -617,9 +636,9 @@ begin
   )
   on conflict (account_id, idempotency_key) do nothing;
 
-  get diagnostics inserted = row_count;
+  get diagnostics n_inserted = row_count;
 
-  if inserted then
+  if n_inserted > 0 then
     update public.play_accounts
        set balance_usd     = bal_after,
            last_grant_date = today,
@@ -1229,7 +1248,11 @@ begin
      where id = t.id;
 
     if payout > 0 then
-      -- 7. credit exactly once, guarded by the ledger idempotency key
+      -- 7. Credit exactly once. The PRIMARY idempotency guard is the
+      --    `status = 'open'` filter on the loop above: a second call
+      --    selects no rows and credits nothing. The ledger key below is a
+      --    backstop — if it ever conflicts, the whole settlement aborts,
+      --    which is the correct response to that kind of inconsistency.
       update public.play_accounts
          set balance_usd = balance_usd + payout,
              updated_at  = now()
@@ -1348,16 +1371,36 @@ begin
      set status = 'closed', closed_at = now()
    where id = cur.id;
 
-  -- Open the next weekly window (aligned to Monday 00:00 UTC).
-  w_start := public.play_week_start(now());
+  -- Open the next window. It must start exactly where the closed season
+  -- ended, otherwise the two ranges overlap and the exclusion constraint
+  -- silently rejects the insert. GREATEST also keeps an early/forced
+  -- rollover from creating a season that starts in the past.
+  --
+  -- The END is always snapped back to the Monday 00:00 UTC grid, so an
+  -- off-cycle rollover produces one short season and then re-aligns
+  -- rather than drifting the boundary forever.
+  w_start := greatest(cur.ends_at, public.play_week_start(now()));
 
   insert into public.play_seasons (starts_at, ends_at, status)
-  values (w_start, w_start + interval '7 days', 'open')
+  values (
+    w_start,
+    public.play_week_start(w_start) + interval '7 days',
+    'open'
+  )
   on conflict do nothing
   returning * into nxt;
 
   if nxt.id is null then
-    select * into nxt from public.play_seasons where starts_at = w_start limit 1;
+    select * into nxt
+      from public.play_seasons
+     where status = 'open' and ends_at > now()
+     order by starts_at desc
+     limit 1;
+  end if;
+
+  if nxt.id is null then
+    raise exception 'play: rollover could not open a new season'
+      using errcode = '22023';
   end if;
 
   -- Zero every non-zero bankroll, with a ledger row for each.
