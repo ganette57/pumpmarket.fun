@@ -42,7 +42,7 @@ export default function Header() {
 
   // Check if we're on explorer/search page
   const isOnSearchPage = pathname === '/search' || pathname === '/explorer';
-  const isWorldCup = pathname === '/world-cup' || pathname?.startsWith('/world-cup/');
+  const isLeaderboard = pathname === '/leaderboard' || pathname?.startsWith('/leaderboard/');
 
   // pré-remplir search si on est sur /search?q=
   useEffect(() => {
@@ -102,17 +102,17 @@ export default function Header() {
             </Link>
 
             <nav className="ml-6 hidden md:flex items-center gap-4">
-              {/* World Cup */}
+              {/* Leaderboard */}
               <Link
-                href="/world-cup"
+                href="/leaderboard"
                 className={`inline-flex items-center gap-1.5 border-b pb-0.5 text-sm font-medium transition ${
-                  isWorldCup
+                  isLeaderboard
                     ? 'border-[#EAB54C] text-[#EAB54C]'
                     : 'border-transparent text-[#EAB54C] hover:text-[#F5C76A]'
                 }`}
               >
                 <span aria-hidden="true">🏆</span>
-                World Cup
+                Leaderboard
               </Link>
 
               {/* Live */}

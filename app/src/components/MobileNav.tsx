@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useWallet } from "@solana/wallet-adapter-react";
 
 const MOBILE_HOME_RETAP_EVENT = "home-feed:retap";
@@ -20,17 +20,21 @@ function Item({
   href,
   active,
   icon,
+  label,
   onClick,
 }: {
   href: string;
   active: boolean;
   icon: React.ReactNode;
+  label: string;
   onClick?: (e: React.MouseEvent) => void;
 }) {
   return (
     <Link
       href={href}
       onClick={onClick}
+      aria-label={label}
+      aria-current={active ? "page" : undefined}
       className="flex h-10 w-10 items-center justify-center rounded-xl"
     >
       <Icon active={active}>{icon}</Icon>
@@ -40,7 +44,6 @@ function Item({
 
 export default function MobileNav() {
   const pathname = usePathname();
-  const router = useRouter();
   const { connected, publicKey } = useWallet();
 
   const isActive = (p: string) => pathname === p || pathname?.startsWith(p + "/");
@@ -60,22 +63,12 @@ export default function MobileNav() {
     }
   };
 
-  const handleChampionshipTap = (e: React.MouseEvent) => {
-    // Retap on the championship tab: re-fetch the (server) page data and reset
-    // scroll to the very top so the hero shows again. When navigating in from
-    // elsewhere, Link handles it (the page is force-dynamic, so it fetches
-    // fresh and Next resets scroll on its own).
-    if (isActive("/world-cup")) {
+  const handleLeaderboardTap = (e: React.MouseEvent) => {
+    // Retap on the leaderboard tab while already there: just scroll back to
+    // the top instead of re-navigating to the same route.
+    if (isActive("/leaderboard")) {
       e.preventDefault();
-      router.refresh();
-      // router.refresh() re-renders the server tree and can restore the prior
-      // scroll position, so reset immediately AND again after the refresh
-      // commits (rAF + a short timeout) to reliably land at the absolute top.
-      const toTop = () => window.scrollTo(0, 0);
-      toTop();
-      requestAnimationFrame(toTop);
-      window.setTimeout(toTop, 60);
-      window.setTimeout(toTop, 200);
+      window.scrollTo(0, 0);
     }
   };
 
@@ -85,6 +78,7 @@ export default function MobileNav() {
         {/* Home */}
         <Item
           href="/"
+          label="Home"
           active={isActive("/")}
           onClick={handleHomeTap}
           icon={
@@ -95,11 +89,12 @@ export default function MobileNav() {
           }
         />
 
-        {/* World Cup (replaces Explorer) */}
+        {/* Leaderboard */}
         <Item
-          href="/world-cup"
-          active={isActive("/world-cup")}
-          onClick={handleChampionshipTap}
+          href="/leaderboard"
+          label="Leaderboard"
+          active={isActive("/leaderboard")}
+          onClick={handleLeaderboardTap}
           icon={
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6" />
@@ -132,6 +127,7 @@ export default function MobileNav() {
         {/* Live / streaming */}
         <Item
           href="/live"
+          label="Live"
           active={isActive("/live")}
           icon={
             <svg
@@ -154,6 +150,7 @@ export default function MobileNav() {
         {/* Public profile (falls back to /dashboard when not connected) */}
         <Item
           href={profileHref}
+          label="Profile"
           active={profileActive}
           icon={
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
