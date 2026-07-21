@@ -114,9 +114,37 @@ Truncating payouts means `SUM(payouts) ≤ pool` always. The remainder
 No authoritative amount ever passes through a JS float — TypeScript keeps
 numerics as strings.
 
-**Zero-winner fallback:** if the winning outcome has no user shares, every
-trade settles `lost` with payout 0 and the pool is left in place. Mirrors
-Real, where `claim_winnings` requires `user_shares > 0`.
+### No-winning-positions rule (locked)
+
+If a market finalizes on a valid outcome but **no user holds any Play
+shares on it** — everybody backed a loser — there is nobody to pay
+pro-rata. Rather than strand the pool, the whole market refunds:
+
+| | |
+|---|---|
+| every open trade | → `refunded` |
+| `payout_usd` | = `stake_usd` (exactly) |
+| `realized_pnl_usd` | = `0` |
+| ledger | one idempotent `trade_refund` row per trade |
+| pool | drains to **$0.00** — `SUM(refunds) == SUM(stakes) == pool` |
+| state status | **`finalized`**, not `cancelled` — the Real market did resolve |
+| `settlement_meta.reason` | `"no_winning_positions"` |
+| repeat calls | credit exactly zero |
+
+Seed supply is **never** counted as a user-owned winning share: both the
+zero test and the payout denominator read `play_trades`, never
+`play_market_states.outcome_supplies`.
+
+`settlement_meta` records only the **first** settlement, so a repeat call
+cannot overwrite the audit trail of the run that moved the money.
+
+This is Play-only. Real settlement, claims, refunds and resolution are
+untouched — on-chain, `claim_winnings` still simply requires
+`user_shares > 0`.
+
+`settle_reason` is one of `pro_rata`, `cancelled`, `no_winning_positions`,
+and is returned by `play_settle_market` alongside `no_winning_positions`
+and `refunded_all` booleans.
 
 ---
 
@@ -382,6 +410,7 @@ script aborts on the first failure with the offending values.
 | 6 | all-in works; overspend rejected atomically with no residue |
 | 7 | expired / blocked / proposed / bad-index all rejected |
 | 8 | pro-rata settlement, never mints value, idempotent across 3 calls |
+| 8B | no-winner market: full refund, pool drains, meta preserved, 3x idempotent |
 | 9 | cancellation refunds exactly once at zero P&L |
 | 10 | every balance reconciles against the ledger |
 | 11 | rollover resets bankroll, preserves odds and open positions |
@@ -408,3 +437,112 @@ a real database:
 Both commit routes are already service-role and already fire only after
 on-chain confirmation, so they are the correct trigger point. Settlement
 is idempotent, so the inline call and the sweeper are safe to both run.
+
+---
+
+## 9. Odds calibration — simulation findings
+
+```bash
+node app/scripts/play-odds-simulation.mjs            # full report
+node app/scripts/play-odds-simulation.mjs --show-sql # print the SQL it mirrors
+node app/scripts/play-odds-simulation.mjs --seed 20000 --slope 0.0001
+```
+
+Standalone: no Supabase, no network, no dependencies, no production
+imports. **It changes nothing and recommends only.**
+
+### How it stays aligned with the SQL
+
+1. **Constants are parsed out of the migration**, never retyped — it reads
+   the `play_settings` `DEFAULT` clauses from the `.sql` file and hard-fails
+   if it can't find them. It cannot silently simulate stale numbers.
+2. **`--show-sql` prints the actual SQL bodies** of `play_cost_for_shares`
+   and `play_shares_for_stake` for side-by-side review.
+3. **Arithmetic is exact decimal**, not float64 — fixed-point on `BigInt`
+   at 18 dp with an integer Newton `sqrt`, applying the same `trunc(x, 8)`
+   for shares and `trunc(x, 2)` for money that the SQL does.
+4. `selfCheck()` asserts the invariants the SQL also guarantees and exits
+   non-zero on drift.
+
+The algebra itself is restated once, with the SQL lines quoted directly
+above each function.
+
+### Results at the current constants (seed 5000, base $1.00, slope $0.0002)
+
+**Single trade into a fresh binary book:**
+
+| Stake | Shares | Odds after | Move |
+|---|---|---|---|
+| $100 | 49.88 | 50.24% | +0.24 pts |
+| $500 | 246.95 | 51.20% | +1.20 pts |
+| $1,000 | 488.09 | 52.32% | +2.32 pts |
+| $5,000 | 2,247.45 | 59.17% | +9.17 pts |
+| $10,000 (all-in) | 4,142.14 | **64.64%** | **+14.64 pts** |
+
+**Depth:** at 100 users × $500 on one side the book reaches 79.58% and the
+100th buyer gets 41% of the shares the first did. The curve stays usable —
+it never goes vertical or flat.
+
+**Multi-outcome** books open exactly even (33.33% / 25.00%) and are *less*
+sensitive per dollar, because the stake is measured against `n × seed`.
+
+### ⚠️ Finding: displayed odds are a damped view of sentiment
+
+At a steady 60/40 money split the book displays ~52% → ~55% as volume
+grows, converging near **56%, not 60%**. At 80/20 it displays **65.5%**.
+Two effects stack:
+
+- **seed dilution** — the seed pulls thin books toward 50/50. This *fades*
+  as the pool grows.
+- **slope compression** — each extra dollar on the popular side buys fewer
+  shares, so share-share never equals money-share. This **does not fade**.
+
+Consequence: a trader reading "55%" expects ~1.82x but is paid ~1.67x,
+because payout is parimutuel on the pool while the displayed number is
+supply-weighted including the seed.
+
+This is inherent to the model, not a bug, and it is invisible until the UI
+shows a payout estimate next to a percentage. **The Play UI should show the
+estimated payout multiple as the primary number and treat the percentage as
+sentiment, or compute the displayed percentage from pool share instead of
+supply share.** That is a Phase 2 UI decision, not a constants change.
+
+### Recommendation
+
+| Question | Answer |
+|---|---|
+| Suitable for internal beta? | **Yes — ship as-is.** |
+| Can one user move odds too aggressively? | Borderline. A single all-in moves a fresh binary book **+14.6 pts**. Dramatic, but it is one full day's bankroll and the *second* all-in only adds 6.5 more, so it self-damps. |
+| Do $100 / $500 trades feel responsive? | $500 → +1.20 pts: visible, not silly. **$100 → +0.24 pts, which rounds to no visible change at 0-decimal display.** Consider showing one decimal, or accept that $100 is a "small" bet. |
+| Does the curve become unusable? | **No.** After 100 × $500 it is at 79.6% and still filling at 41% of the opening rate. Degrades smoothly. |
+
+**No constants were changed.** If adjustment is wanted after internal
+testing, two candidates — all figures below are **measured by re-running
+the simulation**, not estimated:
+
+| Config | seed | slope | $100 | $500 | $1,000 | all-in |
+|---|---|---|---|---|---|---|
+| **Current** | `5000` | `0.0002` | +0.24 | +1.20 | +2.32 | **+14.64** |
+| **A — calmer whales** | `10000` | `0.0002` | +0.08 | +0.41 | +0.81 | **+6.57** |
+| **B — punchier bets** | `2500` | `0.0004` | +0.49 | +2.32 | +4.35 | **+21.13** |
+
+*(percentage points of odds movement on a fresh binary book)*
+
+- **A** halves whale impact but makes ordinary trades nearly invisible —
+  a $500 bet barely registers. Pick this only if one user swinging a live
+  market turns out to be the bigger problem.
+- **B** roughly doubles responsiveness across the board, at the cost of a
+  single all-in moving the book **+21 pts**. Pick this if the feed feels
+  static during live events.
+- **Neither makes $100 visible at integer-percent display** (0.08 / 0.24 /
+  0.49 pts all round to 0). That is a display-precision decision, not a
+  constants one.
+
+Reproduce any row with:
+
+```bash
+node app/scripts/play-odds-simulation.mjs --seed 2500 --slope 0.0004
+```
+
+**Awaiting explicit approval before changing seed supply, base price,
+slope or grant amount.** The current values stand until then.
