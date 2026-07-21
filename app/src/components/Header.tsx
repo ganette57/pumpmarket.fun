@@ -232,11 +232,11 @@ export default function Header() {
                   </Link>
 
                   <Link
-                    href="/rewards"
+                    href="/referrals"
                     className="block px-4 py-2 hover:bg-pump-dark"
                     onClick={() => setMenuOpen(false)}
                   >
-                    🏆 Rewards
+                    🤝 Referrals
                   </Link>
 
                   <Link

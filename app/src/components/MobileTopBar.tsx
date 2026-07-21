@@ -109,8 +109,8 @@ const avatarLabel = useMemo(() => {
         🏆 Leaderboard
       </Link>
 
-      <Link href="/rewards" onClick={() => setMenuOpen(false)} className="block px-4 py-3 text-white/90 hover:bg-white/5">
-        🏆 Rewards
+      <Link href="/referrals" onClick={() => setMenuOpen(false)} className="block px-4 py-3 text-white/90 hover:bg-white/5">
+        🤝 Referrals
       </Link>
 
       <Link href="/treasury" onClick={() => setMenuOpen(false)} className="block px-4 py-3 text-white/90 hover:bg-white/5">

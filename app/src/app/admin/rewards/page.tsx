@@ -178,7 +178,8 @@ export default function AdminRewardsPage() {
       <div>
         <h1 className="text-xl font-bold text-white">Rewards — Tasks</h1>
         <p className="text-sm text-gray-400 mt-1">
-          Manage external-link reward tasks shown on /rewards. Admin-gated via session cookie + wallet allowlist.
+          Manage external-link reward tasks. Admin-gated via session cookie + wallet allowlist.
+          These tasks are not surfaced in the public UI right now — the data and API stay live.
         </p>
       </div>
 
@@ -368,7 +369,7 @@ export default function AdminRewardsPage() {
                             onChange={(e) => setDraft({ ...draft, active: e.target.checked })}
                             className="accent-pump-green"
                           />
-                          Active (visible on /rewards)
+                          Active
                         </label>
                         <div className="md:col-span-2 flex items-center justify-end gap-2">
                           <button

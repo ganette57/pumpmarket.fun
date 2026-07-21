@@ -22,7 +22,9 @@ export default function AdminPage() {
         <div className="flex items-center justify-between gap-4">
           <div>
             <h2 className="text-lg font-bold text-white">Rewards — Tasks</h2>
-            <p className="text-sm text-gray-400 mt-1">Create and manage tasks shown on /rewards.</p>
+            <p className="text-sm text-gray-400 mt-1">
+              Create and manage reward tasks. Not surfaced in the public UI right now.
+            </p>
           </div>
           <Link
             href="/admin/rewards"

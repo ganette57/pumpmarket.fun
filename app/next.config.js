@@ -20,6 +20,9 @@ const nextConfig = {
       // Hub root + any remaining child route.
       { source: "/world-cup", destination: "/leaderboard", permanent: true },
       { source: "/world-cup/:path*", destination: "/leaderboard", permanent: true },
+
+      // Rewards became Referrals.
+      { source: "/rewards", destination: "/referrals", permanent: true },
     ];
   },
   images: {
