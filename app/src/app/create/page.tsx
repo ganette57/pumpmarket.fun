@@ -34,7 +34,7 @@ type CreationStep = "idle" | "signing" | "confirming" | "indexing" | "done" | "e
 const RESOLUTION_SOURCES = [
   { value: "official_league", label: "Official league website" },
   { value: "atp_wta", label: "ATP/WTA official scoreboard" },
-  { value: "fifa_uefa", label: "FIFA / UEFA official" },
+  { value: "federation_official", label: "Official federation site" },
   { value: "espn_flashscore", label: "ESPN / Flashscore" },
   { value: "other", label: "Other (specify in notes)" },
 ] as const;

@@ -32,8 +32,11 @@ export default function ReferralsPage() {
 
   useEffect(() => { void load(); }, [load]);
 
-  const referralCode = referral?.code ?? "—";
-  const referralLink = referral?.link ?? "";
+  // getReferralSummary() hands back a generic placeholder code when there is
+  // no wallet. Showing it would offer a copyable link that belongs to nobody,
+  // so the disconnected state renders nothing instead.
+  const referralCode = wallet ? referral?.code ?? "—" : "—";
+  const referralLink = wallet ? referral?.link ?? "" : "";
   const referralInvited = referral?.invited ?? 0;
 
   async function handleCopy() {
