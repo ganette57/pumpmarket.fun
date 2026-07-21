@@ -173,6 +173,11 @@ create table if not exists public.play_market_states (
   virtual_pool_usd      numeric(18,2) not null default 0,
   status                text not null default 'open',
   version               bigint not null default 0,
+  -- Why this market settled the way it did. Empty while open; on
+  -- settlement it records at minimum {"reason": ...} so an operator can
+  -- tell a normal pro-rata payout apart from a whole-market refund
+  -- without re-deriving it from the trade rows.
+  settlement_meta       jsonb not null default '{}'::jsonb,
   created_at            timestamptz not null default now(),
   updated_at            timestamptz not null default now(),
   settled_at            timestamptz,
@@ -1273,9 +1278,25 @@ end $$;
 -- The remainder ("dust") stays in virtual_pool_usd. Play never mints
 -- virtual value.
 --
--- Zero-winner fallback: if the winning outcome has no user shares, every
--- trade settles as 'lost' with payout 0 and the pool is left in place.
--- This mirrors Real, where claim_winnings requires user_shares > 0.
+-- NO-WINNING-POSITIONS RULE
+-- -------------------------
+-- If the market finalizes on a valid outcome but NO user holds any Play
+-- shares on it (everybody backed a loser), there is no one to pay
+-- pro-rata. Rather than strand the pool and mark every trade lost, the
+-- whole market is refunded:
+--
+--   * every open trade -> 'refunded', payout = stake, realized P&L = 0
+--   * one idempotent 'trade_refund' ledger row per trade
+--   * pool drains to 0 (SUM(refunds) == SUM(stakes) == pool)
+--   * state -> 'finalized' (NOT 'cancelled' — the Real market did
+--     resolve) with settlement_meta.reason = 'no_winning_positions'
+--
+-- Seed supply is never treated as a user-owned winning share: the
+-- denominator and this zero test both come from play_trades, never from
+-- play_market_states.outcome_supplies.
+--
+-- This is Play-only. Real settlement, claims and refunds are untouched;
+-- on-chain, claim_winnings still simply requires user_shares > 0.
 -- =====================================================================
 
 create or replace function public.play_settle_market(market_address_in text)
@@ -1301,6 +1322,12 @@ declare
   bal_after     numeric(18,2);
   settled_count integer := 0;
   paid_total    numeric(18,2) := 0;
+  -- True when the whole market refunds instead of paying pro-rata:
+  -- either the market was cancelled, or it finalized with no user-owned
+  -- shares on the winning outcome.
+  refund_all    boolean := false;
+  no_winners    boolean := false;
+  settle_reason text;
 begin
   select market_address, resolution_status, resolved, winning_outcome
     into m
@@ -1344,7 +1371,9 @@ begin
   season     := public.play_current_season();
   final_pool := st.virtual_pool_usd;
 
-  -- 4. aggregate open winning shares (user-held only)
+  -- 4. Aggregate open winning shares. Sourced from play_trades, so the
+  --    seeded supply in play_market_states can never be mistaken for a
+  --    user-owned winning share.
   if winning is not null then
     select coalesce(sum(shares), 0) into total_winning
       from public.play_trades
@@ -1355,6 +1384,16 @@ begin
     total_winning := 0;
   end if;
 
+  -- Decide the settlement mode once, before touching any row.
+  no_winners := (winning is not null and total_winning = 0);
+  refund_all := (winning is null) or no_winners;
+
+  settle_reason := case
+    when winning is null then 'cancelled'
+    when no_winners      then 'no_winning_positions'
+    else 'pro_rata'
+  end;
+
   -- 5..9. Walk every open trade in deterministic order.
   for t in
     select * from public.play_trades
@@ -1363,11 +1402,14 @@ begin
      order by created_at, id
     for update
   loop
-    if winning is null then
+    if refund_all then
+      -- Cancelled market, or finalized with nobody on the winner.
       new_status := 'refunded';
       payout     := t.stake_usd;
       pnl        := 0;
-    elsif t.outcome_index = winning and total_winning > 0 then
+    elsif t.outcome_index = winning then
+      -- total_winning > 0 is guaranteed here: refund_all covers the zero
+      -- case above, so this division is always safe.
       new_status := 'won';
       payout     := trunc(t.shares / total_winning * final_pool, 2);
       pnl        := payout - t.stake_usd;
@@ -1403,9 +1445,9 @@ begin
       )
       values (
         t.account_id, season.id, t.id,
-        case when winning is null then 'trade_refund' else 'trade_payout' end,
+        case when refund_all then 'trade_refund' else 'trade_payout' end,
         payout, bal_before, bal_after,
-        (case when winning is null then 'trade_refund:' else 'trade_payout:' end)
+        (case when refund_all then 'trade_refund:' else 'trade_payout:' end)
           || t.id::text,
         jsonb_build_object(
           'market_address', market_address_in,
@@ -1413,7 +1455,8 @@ begin
           'winning_outcome', winning,
           'shares',         t.shares,
           'final_pool_usd', final_pool,
-          'trade_season_id', t.season_id
+          'trade_season_id', t.season_id,
+          'reason',         settle_reason
         )
       );
 
@@ -1424,11 +1467,31 @@ begin
   end loop;
 
   -- 10. Pool retains only the rounding dust; state becomes terminal.
+  --     On a refund_all settlement SUM(refunds) == SUM(stakes) == pool
+  --     exactly, so the pool drains to 0 and nothing is orphaned.
+  --     Status is 'finalized' whenever the Real market finalized — the
+  --     no-winning-positions case is a payout rule, not a cancellation.
   update public.play_market_states
      set virtual_pool_usd = greatest(final_pool - paid_total, 0),
          status           = case when winning is null then 'cancelled'
                                  else 'finalized' end,
          version          = version + 1,
+         -- Record the FIRST settlement only. A repeat call settles zero
+         -- trades and must not overwrite the audit trail of the run that
+         -- actually moved the money.
+         settlement_meta  = case
+                              when settlement_meta = '{}'::jsonb then
+                                jsonb_build_object(
+                                  'reason',               settle_reason,
+                                  'winning_outcome',      winning,
+                                  'total_winning_shares', total_winning,
+                                  'final_pool_usd',       final_pool,
+                                  'paid_out_usd',         paid_total,
+                                  'trades_settled',       settled_count,
+                                  'settled_at',           now()
+                                )
+                              else settlement_meta
+                            end,
          settled_at       = coalesce(settled_at, now()),
          updated_at       = now()
    where id = st.id
@@ -1440,6 +1503,9 @@ begin
     'market_address',   market_address_in,
     'resolution_status', final_status,
     'winning_outcome',  winning,
+    'reason',           settle_reason,
+    'no_winning_positions', no_winners,
+    'refunded_all',     refund_all,
     'trades_settled',   settled_count,
     'final_pool_usd',   final_pool,
     'paid_out_usd',     paid_total,

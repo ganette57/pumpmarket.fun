@@ -5,7 +5,7 @@
 --
 -- The whole script runs inside a single transaction and ends with
 -- ROLLBACK, so it leaves the database exactly as it found it — including
--- the two synthetic rows it writes into public.markets.
+-- the three synthetic rows it writes into public.markets.
 --
 -- Run against a DEVELOPMENT database only:
 --   psql "$DEV_DATABASE_URL" -f supabase/tests/20260721_play_mode_core_test.sql
@@ -17,7 +17,7 @@
 -- NOTE: the synthetic market INSERTs below use the minimum column set
 -- observed in app/src/lib/markets.ts::indexMarket. If your database has
 -- additional NOT NULL columns without defaults on public.markets, add
--- them to both INSERTs.
+-- them to all three INSERTs.
 -- =====================================================================
 
 \set ON_ERROR_STOP on
@@ -46,6 +46,16 @@ BEGIN
   ) VALUES (
     'PLAYTESTMarket3Outcomes2222222222222222222',
     '[TEST] Three outcome market', 1, '["A","B","C"]'::jsonb,
+    'open', false, now() + interval '7 days'
+  );
+
+  -- Dedicated market for the no-winning-positions rule (test 8B).
+  INSERT INTO public.markets (
+    market_address, question, market_type, outcome_names,
+    resolution_status, resolved, end_date
+  ) VALUES (
+    'PLAYTESTMarketNoWinner3333333333333333333',
+    '[TEST] Nobody backs the winner', 0, '["YES","NO"]'::jsonb,
     'open', false, now() + interval '7 days'
   );
 END $fixtures$;
@@ -571,6 +581,142 @@ END $t8$;
 
 
 -- =====================================================================
+-- 8B. NO WINNING POSITIONS — finalized, but nobody backed the winner
+-- =====================================================================
+-- Locked rule: refund the whole market rather than strand the pool.
+DO $t8b$
+DECLARE
+  mkt   text := 'PLAYTESTMarketNoWinner3333333333333333333';
+  hank  text := 'PLAYTESTWalletHank999999999999999999999';
+  ivy   text := 'PLAYTESTWalletIvy1010101010101010101010';
+  h_acc public.play_accounts;
+  i_acc public.play_accounts;
+  r     jsonb;
+  r2    jsonb;
+  r3    jsonb;
+  st    public.play_market_states;
+  h_before numeric; i_before numeric;
+  h_after  numeric; i_after  numeric;
+  pool_before numeric;
+  seed_supply numeric;
+BEGIN
+  h_acc := public.play_ensure_account(hank);
+  i_acc := public.play_ensure_account(ivy);
+
+  -- BOTH users back outcome 1. Nobody touches outcome 0.
+  PERFORM public.play_execute_trade(hank, mkt, 1, 1200, 'hank-nowin');
+  PERFORM public.play_execute_trade(ivy,  mkt, 1,  800, 'ivy-nowin');
+
+  SELECT * INTO st FROM public.play_market_states WHERE market_address = mkt;
+  pool_before := st.virtual_pool_usd;
+  seed_supply := st.outcome_supplies[1];   -- outcome 0 seed, user-owned = 0
+
+  ASSERT pool_before = 2000,
+    format('pool should be 2000 after 1200+800, is %s', pool_before);
+  ASSERT seed_supply > 0,
+    'outcome 0 must still carry its seed supply (pricing device)';
+
+  SELECT balance_usd INTO h_before FROM public.play_accounts WHERE id = h_acc.id;
+  SELECT balance_usd INTO i_before FROM public.play_accounts WHERE id = i_acc.id;
+
+  -- Finalize on outcome 0 — the outcome NO user holds.
+  UPDATE public.markets
+     SET resolution_status = 'finalized', winning_outcome = 0, resolved = true
+   WHERE market_address = mkt;
+
+  r := public.play_settle_market(mkt);
+
+  -- (1) the rule fired
+  ASSERT (r->>'settled')::boolean = true, 'settlement must run';
+  ASSERT (r->>'reason') = 'no_winning_positions',
+    format('reason should be no_winning_positions, is %s', r->>'reason');
+  ASSERT (r->>'no_winning_positions')::boolean = true, 'flag must be set';
+  ASSERT (r->>'refunded_all')::boolean = true, 'whole market must refund';
+  ASSERT (r->>'total_winning_shares')::numeric = 0,
+    'seed supply must NOT count as user-owned winning shares';
+  ASSERT (r->>'winning_outcome')::integer = 0, 'winning outcome must be preserved';
+
+  -- (2) every stake refunded exactly, (3) realized P&L is zero
+  ASSERT NOT EXISTS (
+    SELECT 1 FROM public.play_trades
+     WHERE market_address = mkt
+       AND (status <> 'refunded'
+            OR payout_usd <> stake_usd
+            OR realized_pnl_usd <> 0)
+  ), 'every trade must be refunded at exactly its stake with zero P&L';
+
+  ASSERT NOT EXISTS (
+    SELECT 1 FROM public.play_trades WHERE market_address = mkt AND status = 'open'
+  ), 'no trade may remain open';
+
+  SELECT balance_usd INTO h_after FROM public.play_accounts WHERE id = h_acc.id;
+  SELECT balance_usd INTO i_after FROM public.play_accounts WHERE id = i_acc.id;
+  ASSERT h_after = h_before + 1200,
+    format('hank must get exactly 1200 back (%s -> %s)', h_before, h_after);
+  ASSERT i_after = i_before + 800,
+    format('ivy must get exactly 800 back (%s -> %s)', i_before, i_after);
+
+  -- Pool fully drained — nothing orphaned.
+  SELECT * INTO st FROM public.play_market_states WHERE market_address = mkt;
+  ASSERT (r->>'paid_out_usd')::numeric = pool_before,
+    format('refunds (%s) must equal the pool (%s)',
+           r->>'paid_out_usd', pool_before);
+  ASSERT st.virtual_pool_usd = 0,
+    format('pool must drain to zero, is %s', st.virtual_pool_usd);
+
+  -- Finalized, not cancelled — the Real market DID resolve.
+  ASSERT st.status = 'finalized',
+    format('state must be finalized, is %s', st.status);
+  ASSERT st.settlement_meta->>'reason' = 'no_winning_positions',
+    format('settlement_meta must explain the reason, is %s', st.settlement_meta::text);
+
+  -- Ledger rows are refunds, not payouts.
+  ASSERT (SELECT count(*) FROM public.play_ledger l
+           JOIN public.play_trades t ON t.id = l.trade_id
+          WHERE t.market_address = mkt AND l.kind = 'trade_refund') = 2,
+    'expected exactly two trade_refund ledger rows';
+  ASSERT NOT EXISTS (
+    SELECT 1 FROM public.play_ledger l
+      JOIN public.play_trades t ON t.id = l.trade_id
+     WHERE t.market_address = mkt AND l.kind = 'trade_payout'
+  ), 'no trade_payout rows may exist for a no-winner settlement';
+
+  -- (5) second and third calls credit nothing
+  r2 := public.play_settle_market(mkt);
+  ASSERT (r2->>'trades_settled')::integer = 0, 'second call must settle 0 trades';
+  ASSERT (r2->>'paid_out_usd')::numeric = 0, 'second call must pay 0';
+  ASSERT (SELECT balance_usd FROM public.play_accounts WHERE id = h_acc.id) = h_after
+     AND (SELECT balance_usd FROM public.play_accounts WHERE id = i_acc.id) = i_after,
+    'second settlement must not change any balance';
+
+  r3 := public.play_settle_market(mkt);
+  ASSERT (r3->>'paid_out_usd')::numeric = 0, 'third call must pay 0';
+  ASSERT (SELECT balance_usd FROM public.play_accounts WHERE id = h_acc.id) = h_after
+     AND (SELECT balance_usd FROM public.play_accounts WHERE id = i_acc.id) = i_after,
+    'third settlement must not change any balance';
+
+  -- The original settlement audit trail survives the repeat calls.
+  SELECT * INTO st FROM public.play_market_states WHERE market_address = mkt;
+  ASSERT (st.settlement_meta->>'trades_settled')::integer = 2,
+    'settlement_meta must still describe the run that moved the money';
+  ASSERT (st.settlement_meta->>'paid_out_usd')::numeric = 2000,
+    'settlement_meta must retain the original paid_out total';
+
+  -- (4) ledger reconciliation for both accounts
+  ASSERT (SELECT balance_usd FROM public.play_accounts WHERE id = h_acc.id)
+       = (SELECT coalesce(sum(amount_usd), 0) FROM public.play_ledger
+           WHERE account_id = h_acc.id),
+    'hank balance must reconcile against the ledger';
+  ASSERT (SELECT balance_usd FROM public.play_accounts WHERE id = i_acc.id)
+       = (SELECT coalesce(sum(amount_usd), 0) FROM public.play_ledger
+           WHERE account_id = i_acc.id),
+    'ivy balance must reconcile against the ledger';
+
+  RAISE NOTICE 'PASS 8B — no-winner markets refund in full, drain the pool, stay idempotent';
+END $t8b$;
+
+
+-- =====================================================================
 -- 9. CANCELLED MARKET — full refund, zero P&L
 -- =====================================================================
 DO $t9$
@@ -661,7 +807,7 @@ BEGIN
      SET resolution_status = 'open', winning_outcome = NULL, resolved = false
    WHERE market_address = mkt;
   UPDATE public.play_market_states
-     SET status = 'open', settled_at = NULL
+     SET status = 'open', settled_at = NULL, settlement_meta = '{}'::jsonb
    WHERE market_address = mkt;
 
   acc := public.play_ensure_account(gina);
@@ -730,7 +876,8 @@ BEGIN
   SELECT count(*) INTO n_tx FROM public.transactions
    WHERE market_address IN (
      'PLAYTESTMarket2Outcomes1111111111111111111',
-     'PLAYTESTMarket3Outcomes2222222222222222222'
+     'PLAYTESTMarket3Outcomes2222222222222222222',
+     'PLAYTESTMarketNoWinner3333333333333333333'
    );
   ASSERT n_tx = 0,
     format('Play wrote %s row(s) into the Real transactions table', n_tx);
@@ -742,7 +889,8 @@ BEGIN
     SELECT 1 FROM public.markets
      WHERE market_address IN (
        'PLAYTESTMarket2Outcomes1111111111111111111',
-       'PLAYTESTMarket3Outcomes2222222222222222222'
+       'PLAYTESTMarket3Outcomes2222222222222222222',
+       'PLAYTESTMarketNoWinner3333333333333333333'
      )
      AND (coalesce(total_volume, 0) <> 0
           OR coalesce(yes_supply, 0) <> 0

@@ -61,10 +61,19 @@ export type PlayMarketState = {
   virtual_pool_usd: string;
   status: PlayMarketStateStatus;
   version: number;
+  /** Empty while open; on settlement records why it settled that way. */
+  settlement_meta: Record<string, unknown>;
   created_at: string;
   updated_at: string;
   settled_at: string | null;
 };
+
+/** Why a market settled the way it did. */
+export type PlaySettleReason =
+  | "pro_rata"
+  | "cancelled"
+  /** Finalized on a valid outcome that no Play user held — whole market refunded. */
+  | "no_winning_positions";
 
 export type PlayTrade = {
   id: string;
@@ -116,10 +125,19 @@ export type PlayTradeResult = {
 
 export type PlaySettlementResult = {
   settled: boolean;
-  reason?: string;
+  /**
+   * On a settled market this is a PlaySettleReason. On a no-op
+   * (`settled: false`, or a market with no Play state) it is a free-text
+   * explanation such as "market not in a terminal state".
+   */
+  reason?: PlaySettleReason | string;
   market_address?: string;
   resolution_status?: string;
   winning_outcome?: number | null;
+  /** True when the market finalized but nobody held the winning outcome. */
+  no_winning_positions?: boolean;
+  /** True when every open trade was refunded rather than paid pro-rata. */
+  refunded_all?: boolean;
   trades_settled: number;
   final_pool_usd?: string;
   paid_out_usd?: string;
