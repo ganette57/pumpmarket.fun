@@ -653,6 +653,143 @@ end $$;
 
 
 -- =====================================================================
+-- 9B. SIGN-IN NONCES — one wallet signature per session, not per action
+-- =====================================================================
+-- The Play API is session-based: a wallet signs ONE challenge, the server
+-- verifies it and issues an httpOnly session cookie. Every subsequent
+-- Play call resolves its identity from that cookie.
+--
+-- This table is the challenge store. It exists to make the sign-in
+-- signature single-use and short-lived:
+--
+--   * nonce is the primary key      -> a nonce can never be issued twice
+--   * consumed_at is set atomically -> a nonce can never be spent twice
+--   * expires_at is checked in SQL  -> a captured challenge dies quickly
+--   * wallet_address is bound       -> a nonce issued for wallet A cannot
+--                                      be redeemed by wallet B
+--
+-- The nonce VALUE is generated in the API route with crypto.randomBytes,
+-- not here, so this migration needs no pgcrypto dependency.
+-- =====================================================================
+
+create table if not exists public.play_auth_nonces (
+  nonce          text primary key,
+  wallet_address text not null,
+  issued_at      timestamptz not null default now(),
+  expires_at     timestamptz not null,
+  consumed_at    timestamptz,
+
+  constraint play_auth_nonces_window check (expires_at > issued_at),
+  constraint play_auth_nonces_len    check (char_length(nonce) between 32 and 128)
+);
+
+create index if not exists play_auth_nonces_wallet_idx
+  on public.play_auth_nonces (wallet_address, issued_at desc);
+
+-- Supports both the purge sweep and the per-wallet outstanding-nonce cap.
+create index if not exists play_auth_nonces_live_idx
+  on public.play_auth_nonces (expires_at) where consumed_at is null;
+
+alter table public.play_auth_nonces enable row level security;
+revoke all on public.play_auth_nonces from anon, authenticated;
+
+-- Max simultaneously outstanding (unconsumed, unexpired) challenges per
+-- wallet. Stops a caller from farming an unbounded pool of valid nonces.
+create or replace function public.play_issue_nonce(
+  wallet_in      text,
+  nonce_in       text,
+  ttl_seconds_in integer default 300
+)
+returns public.play_auth_nonces
+language plpgsql
+security definer
+set search_path = public, pg_temp
+set "TimeZone" = 'UTC'
+as $$
+declare
+  w         text;
+  n_live    integer;
+  row_out   public.play_auth_nonces;
+  ttl       integer;
+begin
+  w := public.play_normalize_wallet(wallet_in);
+  if w is null or char_length(w) not between 32 and 64 then
+    raise exception 'play: wallet_address is required' using errcode = '22023';
+  end if;
+
+  if nonce_in is null or char_length(nonce_in) not between 32 and 128 then
+    raise exception 'play: malformed nonce' using errcode = '22023';
+  end if;
+
+  ttl := least(greatest(coalesce(ttl_seconds_in, 300), 30), 900);
+
+  -- Opportunistic housekeeping: this table is write-heavy and read-once,
+  -- so clearing dead rows on issue keeps it from growing without bound
+  -- and removes the need for a separate cron.
+  delete from public.play_auth_nonces
+   where expires_at < now() - interval '1 hour';
+
+  select count(*) into n_live
+    from public.play_auth_nonces
+   where wallet_address = w
+     and consumed_at is null
+     and expires_at > now();
+
+  if n_live >= 5 then
+    raise exception 'play: too many pending sign-in challenges; try again shortly'
+      using errcode = '22023';
+  end if;
+
+  insert into public.play_auth_nonces (nonce, wallet_address, expires_at)
+  values (nonce_in, w, now() + make_interval(secs => ttl))
+  returning * into row_out;
+
+  return row_out;
+end $$;
+
+
+-- Atomically spends a challenge. Returns the row on success, NULL on any
+-- failure (unknown / wrong wallet / already consumed / expired).
+--
+-- The conditional UPDATE is the entire replay defence: two concurrent
+-- redemptions of the same nonce race on the same row, and exactly one
+-- can match `consumed_at is null`.
+create or replace function public.play_consume_nonce(
+  nonce_in  text,
+  wallet_in text
+)
+returns public.play_auth_nonces
+language plpgsql
+security definer
+set search_path = public, pg_temp
+set "TimeZone" = 'UTC'
+as $$
+declare
+  w       text;
+  row_out public.play_auth_nonces;
+begin
+  w := public.play_normalize_wallet(wallet_in);
+  if w is null or nonce_in is null then
+    return null;
+  end if;
+
+  update public.play_auth_nonces
+     set consumed_at = now()
+   where nonce          = nonce_in
+     and wallet_address = w
+     and consumed_at is null
+     and expires_at   > now()
+  returning * into row_out;
+
+  if row_out.nonce is null then
+    return null;
+  end if;
+
+  return row_out;
+end $$;
+
+
+-- =====================================================================
 -- 10. MARKET STATE
 -- =====================================================================
 
@@ -1447,6 +1584,8 @@ end $$;
 -- =====================================================================
 
 revoke all on function public.play_ensure_account(text)                     from public;
+revoke all on function public.play_issue_nonce(text, text, integer)         from public;
+revoke all on function public.play_consume_nonce(text, text)                from public;
 revoke all on function public.play_ensure_daily_grant(uuid)                 from public;
 revoke all on function public.play_ensure_market_state(text)                from public;
 revoke all on function public.play_current_season()                         from public;
@@ -1458,6 +1597,8 @@ revoke all on function public.play_market_outcome_count(text)               from
 revoke all on function public.play_assert_market_tradable(text)             from public;
 
 grant execute on function public.play_ensure_account(text)                     to service_role;
+grant execute on function public.play_issue_nonce(text, text, integer)         to service_role;
+grant execute on function public.play_consume_nonce(text, text)                to service_role;
 grant execute on function public.play_ensure_daily_grant(uuid)                 to service_role;
 grant execute on function public.play_ensure_market_state(text)                to service_role;
 grant execute on function public.play_current_season()                         to service_role;

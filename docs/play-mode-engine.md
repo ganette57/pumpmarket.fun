@@ -7,7 +7,7 @@ dashboard or leaderboard.
 - Migration: `app/supabase/migrations/20260721_play_mode_core.sql`
 - Tests: `app/supabase/tests/20260721_play_mode_core_test.sql`
 - Server libs: `app/src/lib/playEngine.ts`, `app/src/lib/playAuth.ts`
-- Routes: `app/src/app/api/play/**`
+- Routes: `app/src/app/api/play/**` (incl. `auth/{nonce,verify,logout}`)
 
 ---
 
@@ -26,9 +26,10 @@ Real economic field.
 | Solana / Anchor / wallet transactions | **never called** |
 | Platform fee, creator fee, escrow, claims, refunds | **never touched** |
 
-All four `public.markets` references in the migration are `SELECT`. Play
-money never leaves the `play_*` tables. Phase 1 added only new files — it
-modified zero existing files.
+Every `public.markets` reference in the migration is a `SELECT` (verified
+by grep, not by intent). Play money never leaves the `play_*` tables, and
+Phase 1 modified zero pre-existing files — the whole diff is new
+`play_*` / `api/play/**` files.
 
 ---
 
@@ -121,7 +122,7 @@ Real, where `claim_winnings` requires `user_shares > 0`.
 
 ## 3. Schema
 
-Five tables. **No `play_positions`** — Play has no sell, partial close or
+Six tables. **No `play_positions`** — Play has no sell, partial close or
 cash-out, so a trade never changes size and `play_trades` *is* the
 position. Settlement aggregates through the partial index
 `play_trades_settlement_idx`; a denormalized copy would add a sync hazard
@@ -135,6 +136,7 @@ for nothing.
 | `play_market_states` | the independent virtual economy per market |
 | `play_trades` | immutable buys; also the position ledger |
 | `play_ledger` | append-only audit of every balance mutation |
+| `play_auth_nonces` | single-use sign-in challenges (see §6) |
 
 ### Why `play_market_states` is global per market, not per season
 
@@ -177,10 +179,10 @@ account, verified by test 10.
 
 ### RLS
 
-Enabled on all six tables. `play_settings` and `play_seasons` allow public
+Enabled on all seven tables. `play_settings` and `play_seasons` allow public
 `SELECT` (the UI needs the season countdown; constants aren't secret).
-`play_accounts`, `play_market_states`, `play_trades`, `play_ledger` have
-**zero policies** and are explicitly revoked from `anon` / `authenticated`
+`play_accounts`, `play_market_states`, `play_trades`, `play_ledger`,
+`play_auth_nonces` have **zero policies** and are explicitly revoked from `anon` / `authenticated`
 — server-side only. Every mutating function is `SECURITY DEFINER` with
 `SET search_path = public, pg_temp` and `GRANT EXECUTE … TO service_role`
 only.
@@ -245,57 +247,116 @@ actually in the past, so an accidental call can't wipe a live week.
 
 ---
 
-## 6. API routes
+## 6. Authentication — one signature per session
 
-All Play routes are `POST` — including reads. A signature belongs in a
-body, not in a URL that lands in access logs and browser history.
+**The wallet signs exactly once, at sign-in.** Every subsequent Play call
+resolves its identity from an httpOnly session cookie. Nothing in the
+trading path can ever trigger a Phantom prompt.
 
-| Route | Auth | Notes |
-|---|---|---|
-| `POST /api/play/account` | signed wallet | ensure account + daily grant |
-| `POST /api/play/state` | signed wallet | balance, season, open positions, optional market book |
-| `POST /api/play/quote` | signed wallet | informational, writes nothing |
-| `POST /api/play/trade` | signed wallet | atomic execution |
-| `POST /api/play/history` | signed wallet | scoped server-side to the signer |
-| `POST /api/play/settle` | **admin cookie** | manual settlement (operator tool) |
-| `GET\|POST /api/play/season/rollover` | **admin cookie** | inspect / roll the season |
+This matters for product, not just security: `/api/play/quote` fires on
+every keystroke in the amount field. A per-request signature would make
+Play unusable.
 
-### Signed-wallet authentication
-
-Reuses the ed25519 scheme already running in production for live-session
-host actions (`app/src/app/api/live-sessions/[id]/status/route.ts`) — no
-new dependency, no new concept for the frontend.
-
-The client signs a canonical message with `signMessage()`:
+### The flow
 
 ```
-FUNMARKET_PLAY|<action>|<part>|…|<ts>
+ 1. POST /api/play/auth/nonce   { wallet }
+        -> { nonce, message, expires_at }
+        server stores a single-use, wallet-bound challenge (TTL 5 min)
 
-account   FUNMARKET_PLAY|account|<ts>
-state     FUNMARKET_PLAY|state|<ts>
-history   FUNMARKET_PLAY|history|<ts>
-quote     FUNMARKET_PLAY|quote|<market>|<outcome>|<stake>|<ts>
-trade     FUNMARKET_PLAY|trade|<market>|<outcome>|<stake>|<client_trade_id>|<ts>
+ 2. wallet.signMessage(message)          ← the ONE Phantom prompt
+
+ 3. POST /api/play/auth/verify  { wallet, nonce, signature }
+        -> consumes the nonce ATOMICALLY (single-use)
+        -> rebuilds the message from its OWN stored nonce
+        -> verifies ed25519
+        -> ensures the Play account + daily grant
+        -> Set-Cookie: play_session=v1.<wallet>.<exp>.<hmac>
+                       HttpOnly; SameSite=Lax; Secure(prod); Path=/;
+                       Max-Age=7d
+
+ 4. everything else             reads the cookie. No signature. No prompt.
+
+ 5. POST /api/play/auth/logout  clears the cookie
 ```
 
-and posts `{ wallet, signature, ts, … }`. The server verifies
-`nacl.sign.detached.verify` against the base58 public key with a 2-minute
-drift window. **A wallet address in a body is never identity on its own.**
+The signed message is human-readable and contains only the wallet and the
+nonce:
 
-Action parameters are inside the signed message, so a signature
-authorizing a $10 quote cannot be replayed as a $10,000 trade.
+```
+FunMarket Play — Sign in
 
-> ### ⚠️ Known limitation — must be fixed before public exposure
->
-> There is no server-issued nonce, so a captured signature can be
-> **replayed inside the 2-minute window**. This is contained today:
-> `/api/play/trade` is bound to `client_trade_id` and the unique index
-> makes a replay a no-op returning the original trade; every other route
-> is a read. This matches the security level of the existing live-session
-> routes.
->
-> **A nonce table (issue → sign → consume) is required before Play Mode is
-> exposed to the public.** Tracked as the Phase 1.5 hardening step.
+Wallet: <wallet>
+Nonce: <nonce>
+
+This signature proves you control this wallet.
+It is not a transaction and will not move any funds.
+```
+
+No timestamp or expiry is embedded on purpose: the nonce already carries
+a server-side TTL and is single-use, so a formatted date would add
+nothing but a class of "client and server serialized it differently"
+verification failures. `playSignInMessage()` is exported so the client
+builds the identical string, and the server always rebuilds it from its
+own stored nonce.
+
+### Routes
+
+| Route | Auth |
+|---|---|
+| `POST /api/play/auth/nonce` | none — *is* the start of auth |
+| `POST /api/play/auth/verify` | wallet signature over the nonce |
+| `POST /api/play/auth/logout` | none (clears the cookie) |
+| `POST /api/play/state` | **play_session cookie** |
+| `POST /api/play/quote` | **play_session cookie** |
+| `POST /api/play/trade` | **play_session cookie** |
+| `POST /api/play/history` | **play_session cookie** |
+| `POST /api/play/settle` | **admin cookie** (unchanged) |
+| `GET\|POST /api/play/season/rollover` | **admin cookie** (unchanged) |
+
+All `POST`, including reads — request data belongs in a body, not in a
+URL that lands in access logs and browser history.
+
+**`state`, `quote`, `trade` and `history` never read a wallet address
+from the request body.** The wallet comes from the HMAC-signed session
+token and nowhere else, so a caller cannot trade against, or read, another
+wallet's account by editing a request. `/api/play/account` was removed —
+its job is now `/api/play/auth/verify`.
+
+### Replay and expiry
+
+| Control | Mechanism |
+|---|---|
+| Nonce single-use | `play_consume_nonce` conditional `UPDATE … WHERE consumed_at IS NULL` — two concurrent redemptions race on one row, only one wins |
+| Nonce wallet binding | `AND wallet_address = …` in the same statement |
+| Nonce TTL | `AND expires_at > now()`, 5 minutes, clamped server-side to 30–900 s |
+| Nonce farming | `play_issue_nonce` caps outstanding live challenges at 5 per wallet |
+| Nonce table growth | rows older than 1 h are swept on each issue — no cron needed |
+| Session expiry | signed into the token as `exp` and checked server-side; the cookie's `Max-Age` is a client-side hint and is never trusted |
+| Session forgery | HMAC-SHA256 over `v1.<wallet>.<exp>` with `PLAY_SESSION_SECRET`, compared with `timingSafeEqual` |
+| Trade idempotency | unchanged — `client_trade_id` + unique `(account_id, client_trade_id)` |
+
+**Verify consumes the nonce *before* checking the signature.** Deliberate:
+a stolen or guessed challenge gets exactly one attempt. The cost is that a
+failed signature burns the challenge and the client must request a fresh
+one — the right trade for an auth path.
+
+### Required environment variable
+
+```
+PLAY_SESSION_SECRET=<random string, >= 32 chars>
+```
+
+Deliberately separate from `ADMIN_SESSION_SECRET`: a leaked Play key must
+never be able to mint an admin session, or vice versa. The Play routes
+return 500 with a clear message if it is unset.
+
+> **Remaining limitation (acceptable for a wallet-only internal beta).**
+> The session token is a stateless HMAC, so `logout` expires the browser's
+> copy but does not revoke the token server-side — a copy captured before
+> logout stays valid until its `exp`. Upgrade path if needed: a session
+> table, or a per-account token epoch bumped on logout. Not required for
+> the internal beta and not built.
 
 ---
 
@@ -315,6 +376,7 @@ script aborts on the first failure with the offending values.
 | 1 | pricing round-trip, monotonicity, convexity |
 | 2 | fresh markets open 50/50 and 33/33/33; state creation idempotent |
 | 3 | account dedupe; daily grant idempotent (exactly one ledger row) |
+| 3B | nonces: single-use, wallet-bound, TTL, outstanding cap |
 | 4 | supplies, pool, odds movement, worsening consecutive fills |
 | 5 | duplicate submit returns the original trade, moves no money |
 | 6 | all-in works; overspend rejected atomically with no residue |

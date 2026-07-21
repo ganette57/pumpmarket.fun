@@ -179,6 +179,71 @@ END $t3$;
 
 
 -- =====================================================================
+-- 3B. SIGN-IN NONCES — single use, wallet-bound, TTL, outstanding cap
+-- =====================================================================
+DO $t3b$
+DECLARE
+  alice text := 'PLAYTESTWalletAlice111111111111111111111';
+  mallory text := 'PLAYTESTWalletMallory888888888888888888';
+  n1    public.play_auth_nonces;
+  got   public.play_auth_nonces;
+  failed boolean := false;
+  i     integer;
+BEGIN
+  n1 := public.play_issue_nonce(alice, repeat('a', 64), 300);
+  ASSERT n1.nonce IS NOT NULL, 'nonce must be issued';
+  ASSERT n1.consumed_at IS NULL, 'fresh nonce must be unconsumed';
+  ASSERT n1.expires_at > now(), 'fresh nonce must be in the future';
+  ASSERT n1.wallet_address = alice, 'nonce must be bound to the wallet';
+
+  -- Wrong wallet cannot redeem it.
+  got := public.play_consume_nonce(n1.nonce, mallory);
+  ASSERT got.nonce IS NULL, 'a nonce must not be redeemable by another wallet';
+
+  -- Correct wallet redeems it once.
+  got := public.play_consume_nonce(n1.nonce, alice);
+  ASSERT got.nonce IS NOT NULL, 'the bound wallet must be able to redeem';
+  ASSERT got.consumed_at IS NOT NULL, 'redemption must stamp consumed_at';
+
+  -- REPLAY: the same nonce must never work twice.
+  got := public.play_consume_nonce(n1.nonce, alice);
+  ASSERT got.nonce IS NULL, 'a consumed nonce must never be redeemable again';
+
+  -- Unknown nonce.
+  got := public.play_consume_nonce(repeat('z', 64), alice);
+  ASSERT got.nonce IS NULL, 'an unknown nonce must not redeem';
+
+  -- Expired nonce (TTL is clamped to >= 30s, so expire it by hand).
+  PERFORM public.play_issue_nonce(alice, repeat('b', 64), 300);
+  UPDATE public.play_auth_nonces
+     SET expires_at = now() - interval '1 second'
+   WHERE nonce = repeat('b', 64);
+  got := public.play_consume_nonce(repeat('b', 64), alice);
+  ASSERT got.nonce IS NULL, 'an expired nonce must not redeem';
+
+  -- Outstanding-challenge cap: the 6th live nonce must be refused.
+  FOR i IN 1..5 LOOP
+    PERFORM public.play_issue_nonce(mallory, repeat(i::text, 64), 300);
+  END LOOP;
+  BEGIN
+    PERFORM public.play_issue_nonce(mallory, repeat('c', 64), 300);
+  EXCEPTION WHEN others THEN
+    failed := true;
+  END;
+  ASSERT failed, 'issuing unbounded live nonces for one wallet must be refused';
+
+  -- Malformed nonce is rejected.
+  failed := false;
+  BEGIN
+    PERFORM public.play_issue_nonce(alice, 'short', 300);
+  EXCEPTION WHEN others THEN failed := true; END;
+  ASSERT failed, 'a malformed nonce must be rejected';
+
+  RAISE NOTICE 'PASS 3B — nonces are single-use, wallet-bound, TTL-checked and capped';
+END $t3b$;
+
+
+-- =====================================================================
 -- 4. FIRST TRADE, CONSECUTIVE TRADES, OPPOSING TRADES
 -- =====================================================================
 DO $t4$

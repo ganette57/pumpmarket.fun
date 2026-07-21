@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { verifyPlaySignature } from "@/lib/playAuth";
+import { readPlaySession } from "@/lib/playAuth";
 import {
   executeTrade,
   normalizeStake,
@@ -13,8 +13,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // POST /api/play/trade
+//   { market_address, outcome_index, stake_usd, client_trade_id }
 //
-// Executes a virtual buy. Everything below the signature check happens
+// Executes a virtual buy. Everything below the session check happens
 // inside a single Postgres transaction (play_execute_trade): grant, season
 // check, market gate, market-state row lock, authoritative re-quote,
 // conditional balance debit, supply/pool update, trade row, ledger row.
@@ -22,35 +23,33 @@ export const dynamic = "force-dynamic";
 // Nothing the client sends about price, shares, supply, pool, payout or
 // balance is trusted or even read — those all come from the locked row.
 //
-// Auth: signed wallet over
-//   FUNMARKET_PLAY|trade|<market_address>|<outcome_index>|<stake_usd>|<client_trade_id>|<ts>
+// Auth: the play_session cookie ONLY. The wallet is taken from the signed
+// session token; a `wallet` field in the body is ignored. A user cannot
+// place a trade against another wallet's balance by editing a request.
 //
-// Replay safety: the signature is bound to client_trade_id, and the engine
-// has a unique index on (account_id, client_trade_id). Replaying a captured
+// Idempotency is unchanged by the move to sessions and still rests on
+// client_trade_id: the engine has a unique index on
+// (account_id, client_trade_id), so a double-tapped button or a retried
 // request returns the ORIGINAL trade with `replayed: true` and moves no
-// money — which is also exactly what a double-tapped button does.
+// money.
 export async function POST(req: Request) {
   try {
-    const body = await req.json().catch(() => ({}));
+    const session = readPlaySession(req);
+    if (!session) {
+      return NextResponse.json(
+        { error: "Play session required" },
+        { status: 401 }
+      );
+    }
 
+    const body = await req.json().catch(() => ({}));
     const marketAddress = normalizeMarketAddress(body?.market_address);
     const outcomeIndex = normalizeOutcomeIndex(body?.outcome_index);
     const stakeUsd = normalizeStake(body?.stake_usd);
     const clientTradeId = normalizeClientTradeId(body?.client_trade_id);
 
-    const auth = verifyPlaySignature({
-      wallet: body?.wallet,
-      signature: body?.signature,
-      ts: body?.ts,
-      action: "trade",
-      parts: [marketAddress, outcomeIndex, stakeUsd, clientTradeId],
-    });
-    if (!auth.ok) {
-      return NextResponse.json({ error: auth.error }, { status: auth.status });
-    }
-
     const result = await executeTrade({
-      wallet: auth.wallet,
+      wallet: session.wallet,
       marketAddress,
       outcomeIndex,
       stakeUsd,

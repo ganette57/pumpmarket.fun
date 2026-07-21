@@ -1,122 +1,214 @@
 // app/src/lib/playAuth.ts
 //
-// Signed-wallet authentication for the Play Mode backend.
+// Session-based wallet authentication for the Play Mode backend.
 //
-// This deliberately reuses the ed25519 scheme this repo already runs in
-// production for live-session host actions (see
-// app/src/app/api/live-sessions/[id]/status/route.ts): the caller signs a
-// domain-prefixed message with their Solana wallet and we verify the
-// detached signature against the base58 public key. No new dependency,
-// no new concept for the frontend to learn.
+// The user signs ONCE, at sign-in. Every subsequent Play call (state,
+// quote, trade, history) resolves its identity from an httpOnly session
+// cookie — no wallet prompt, no signature, and no wallet address read
+// from a request body.
 //
-// A wallet address in a request body is NOT identity. It becomes identity
-// only after nacl.sign.detached.verify() succeeds over a message that
-// contains that same wallet, a fresh timestamp, and the parameters of the
-// action being authorized.
+//   1. POST /api/play/auth/nonce   -> server issues a single-use challenge
+//   2. wallet.signMessage(message) -> ONE Phantom prompt, ever
+//   3. POST /api/play/auth/verify  -> server verifies + burns the nonce,
+//                                     then sets the play_session cookie
+//   4. everything else             -> reads the cookie
 //
-// KNOWN LIMITATION (internal beta, documented deliberately)
-// --------------------------------------------------------
-// There is no server-issued nonce, so a captured signature can be
-// replayed inside the MAX_DRIFT_MS window. This is contained:
-//   * /api/play/trade is bound to a client_trade_id, and the engine's
-//     unique (account_id, client_trade_id) index makes a replay a no-op
-//     that returns the original trade and moves no money;
-//   * every other Play route is a read.
-// A nonce table (issue -> sign -> consume) is the Phase 1.5 hardening
-// step and is required before Play Mode is exposed to the public.
+// The session token is a stateless HMAC, matching the convention already
+// used for admin sessions in lib/admin.ts. It is bound to the wallet and
+// carries its own expiry, which is checked server-side — the cookie's own
+// Max-Age is only a client-side hint and is never trusted.
+//
+// This module is Play-only. It does not touch, wrap or alter any existing
+// Real authentication flow.
 
+import crypto from "crypto";
 import nacl from "tweetnacl";
 import bs58 from "bs58";
 
-/** Same replay window the live-session routes already use. */
-const MAX_DRIFT_MS = 2 * 60_000;
+export const PLAY_COOKIE_NAME = "play_session";
 
-const DOMAIN = "FUNMARKET_PLAY";
+/** How long a signed-in session lasts before the wallet must sign again. */
+export const PLAY_SESSION_MAX_AGE_SEC = 7 * 24 * 60 * 60; // 7 days
 
-export type PlayAuthOk = { ok: true; wallet: string };
-export type PlayAuthErr = { ok: false; error: string; status: number };
-export type PlayAuthResult = PlayAuthOk | PlayAuthErr;
+/** How long an unredeemed sign-in challenge stays valid. */
+export const PLAY_NONCE_TTL_SEC = 300; // 5 minutes
 
-/**
- * Canonical message for a Play action. The frontend must build the exact
- * same string and sign it with `signMessage`.
- *
- *   FUNMARKET_PLAY|<action>|<part>|...|<ts>
- *
- * Parts bind the signature to the specific action, so a signature
- * authorizing a $10 quote cannot be replayed as a $10,000 trade.
- */
-export function playMessage(
-  action: string,
-  parts: (string | number)[],
-  ts: number
-): string {
-  return [DOMAIN, action, ...parts.map(String), String(ts)].join("|");
+const TOKEN_VERSION = "v1";
+
+/* -------------------------------------------------------------------------- */
+/*  Secret                                                                     */
+/* -------------------------------------------------------------------------- */
+
+// Deliberately a separate secret from ADMIN_SESSION_SECRET: a leaked Play
+// key must never be able to mint an admin session, or vice versa.
+function getSessionSecret(): string {
+  const s = String(process.env.PLAY_SESSION_SECRET || "").trim();
+  if (!s) throw new Error("Missing env: PLAY_SESSION_SECRET");
+  if (s.length < 32) {
+    throw new Error("PLAY_SESSION_SECRET must be at least 32 characters");
+  }
+  return s;
+}
+
+function hmac(input: string): string {
+  return crypto.createHmac("sha256", getSessionSecret()).update(input).digest("hex");
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Sign-in challenge                                                          */
+/* -------------------------------------------------------------------------- */
+
+/** Cryptographically random, single-use challenge value. */
+export function generateNonce(): string {
+  return crypto.randomBytes(32).toString("hex");
 }
 
 /**
- * Verifies that `signature` is a valid ed25519 signature by `wallet` over
- * the canonical message for this action. Returns the verified wallet on
- * success; never throws.
+ * The exact string the wallet signs.
+ *
+ * Deliberately contains only the wallet and the nonce — no timestamp and
+ * no expiry. The nonce already carries a server-side TTL and is
+ * single-use, so putting a formatted date in here would add nothing but a
+ * class of "client and server serialized the timestamp differently"
+ * verification failures.
+ *
+ * Exported so the client can build the identical string; the server always
+ * rebuilds it from its own stored nonce and never trusts a client-supplied
+ * message.
  */
-export function verifyPlaySignature(input: {
-  wallet?: unknown;
-  signature?: unknown;
-  ts?: unknown;
-  action: string;
-  parts: (string | number)[];
-}): PlayAuthResult {
-  const wallet = String(input.wallet ?? "").trim();
-  const signature = String(input.signature ?? "").trim();
-  const ts = Number(input.ts);
+export function playSignInMessage(args: {
+  wallet: string;
+  nonce: string;
+}): string {
+  return [
+    "FunMarket Play — Sign in",
+    "",
+    `Wallet: ${args.wallet}`,
+    `Nonce: ${args.nonce}`,
+    "",
+    "This signature proves you control this wallet.",
+    "It is not a transaction and will not move any funds.",
+  ].join("\n");
+}
 
-  if (!wallet || !signature || !Number.isFinite(ts)) {
-    return {
-      ok: false,
-      status: 400,
-      error: "Missing required fields: wallet, signature, ts",
-    };
-  }
-
-  // Replay window.
-  if (Math.abs(Date.now() - ts) > MAX_DRIFT_MS) {
-    return {
-      ok: false,
-      status: 400,
-      error: "Timestamp too far from server time (replay protection)",
-    };
-  }
-
-  const message = playMessage(input.action, input.parts, ts);
-  const messageBytes = new TextEncoder().encode(message);
-
+/** Low-level ed25519 detached-signature check. Never throws. */
+export function verifyWalletSignature(args: {
+  wallet: string;
+  message: string;
+  signature: string;
+}): boolean {
   let pubKeyBytes: Uint8Array;
   let sigBytes: Uint8Array;
   try {
-    pubKeyBytes = bs58.decode(wallet);
-    sigBytes = bs58.decode(signature);
+    pubKeyBytes = bs58.decode(args.wallet);
+    sigBytes = bs58.decode(args.signature);
   } catch {
-    return {
-      ok: false,
-      status: 400,
-      error: "Invalid base58 in wallet or signature",
-    };
+    return false;
   }
+  if (pubKeyBytes.length !== 32 || sigBytes.length !== 64) return false;
 
-  if (pubKeyBytes.length !== 32 || sigBytes.length !== 64) {
-    return { ok: false, status: 400, error: "Malformed wallet or signature" };
-  }
-
-  let verified = false;
   try {
-    verified = nacl.sign.detached.verify(messageBytes, sigBytes, pubKeyBytes);
+    return nacl.sign.detached.verify(
+      new TextEncoder().encode(args.message),
+      sigBytes,
+      pubKeyBytes
+    );
   } catch {
-    verified = false;
+    return false;
   }
-
-  if (!verified) {
-    return { ok: false, status: 403, error: "Signature verification failed" };
-  }
-
-  return { ok: true, wallet };
 }
+
+/** Shape check only — does not prove ownership. */
+export function isPlausibleWallet(wallet: unknown): wallet is string {
+  const w = String(wallet ?? "").trim();
+  if (w.length < 32 || w.length > 64) return false;
+  try {
+    return bs58.decode(w).length === 32;
+  } catch {
+    return false;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Session token                                                              */
+/* -------------------------------------------------------------------------- */
+
+export type PlaySession = {
+  wallet: string;
+  /** Unix seconds. */
+  expiresAt: number;
+};
+
+// Format: v1.<wallet>.<expUnix>.<hmac>
+// The wallet is base58 and the expiry is digits, so neither can contain
+// the '.' separator.
+export function createPlaySessionToken(wallet: string): string {
+  const exp = Math.floor(Date.now() / 1000) + PLAY_SESSION_MAX_AGE_SEC;
+  const payload = `${TOKEN_VERSION}.${wallet}.${exp}`;
+  return `${payload}.${hmac(payload)}`;
+}
+
+export function readPlaySessionToken(token: string | null): PlaySession | null {
+  if (!token) return null;
+
+  const parts = token.split(".");
+  if (parts.length !== 4) return null;
+
+  const [version, wallet, expStr, sig] = parts;
+  if (version !== TOKEN_VERSION) return null;
+  if (!wallet || !sig) return null;
+
+  const exp = Number(expStr);
+  if (!Number.isFinite(exp)) return null;
+
+  // Server-side expiry. The cookie's Max-Age is a client-side hint only.
+  if (Math.floor(Date.now() / 1000) >= exp) return null;
+
+  const expected = hmac(`${version}.${wallet}.${expStr}`);
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return null;
+  if (!crypto.timingSafeEqual(a, b)) return null;
+
+  return { wallet, expiresAt: exp };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Cookie plumbing                                                            */
+/* -------------------------------------------------------------------------- */
+
+function parseCookieHeader(header: string | null): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!header) return out;
+  for (const part of header.split(";")) {
+    const [k, ...rest] = part.trim().split("=");
+    if (!k) continue;
+    out[k] = decodeURIComponent(rest.join("=") || "");
+  }
+  return out;
+}
+
+/**
+ * The single entry point every authenticated Play route uses.
+ * Returns the verified wallet, or null when there is no valid session.
+ *
+ * A wallet address present in the request body is IGNORED — it is not
+ * identity and no Play route reads it.
+ */
+export function readPlaySession(req: Request): PlaySession | null {
+  const cookies = parseCookieHeader(req.headers.get("cookie"));
+  return readPlaySessionToken(cookies[PLAY_COOKIE_NAME] || null);
+}
+
+export const PLAY_COOKIE_OPTIONS = {
+  httpOnly: true as const,
+  sameSite: "lax" as const,
+  secure: process.env.NODE_ENV === "production",
+  path: "/",
+  maxAge: PLAY_SESSION_MAX_AGE_SEC,
+};
+
+export const PLAY_COOKIE_CLEAR_OPTIONS = {
+  ...PLAY_COOKIE_OPTIONS,
+  maxAge: 0,
+};

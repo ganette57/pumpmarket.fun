@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { verifyPlaySignature } from "@/lib/playAuth";
+import { readPlaySession } from "@/lib/playAuth";
 import {
   ensureAccount,
   getTrades,
@@ -12,27 +12,24 @@ export const dynamic = "force-dynamic";
 
 const VALID_STATUS: PlayTradeStatus[] = ["open", "won", "lost", "refunded"];
 
-// POST /api/play/history
+// POST /api/play/history   { status?, limit? }
 //
-// The verified wallet's own Play trades. Scoped server-side to the account
-// resolved from the signature — a caller can never read another wallet's
-// history by changing a parameter.
+// The session wallet's own Play trades. The account is resolved from the
+// session cookie, so a caller can never read another wallet's history by
+// changing a parameter — there is no parameter to change.
 //
-// Auth: signed wallet over  FUNMARKET_PLAY|history|<ts>
+// Auth: the play_session cookie.
 export async function POST(req: Request) {
   try {
-    const body = await req.json().catch(() => ({}));
-
-    const auth = verifyPlaySignature({
-      wallet: body?.wallet,
-      signature: body?.signature,
-      ts: body?.ts,
-      action: "history",
-      parts: [],
-    });
-    if (!auth.ok) {
-      return NextResponse.json({ error: auth.error }, { status: auth.status });
+    const session = readPlaySession(req);
+    if (!session) {
+      return NextResponse.json(
+        { error: "Play session required" },
+        { status: 401 }
+      );
     }
+
+    const body = await req.json().catch(() => ({}));
 
     const rawStatus = String(body?.status || "").trim();
     const status = VALID_STATUS.includes(rawStatus as PlayTradeStatus)
@@ -42,7 +39,7 @@ export async function POST(req: Request) {
     const limitRaw = Number(body?.limit);
     const limit = Number.isFinite(limitRaw) ? limitRaw : 50;
 
-    const account = await ensureAccount(auth.wallet);
+    const account = await ensureAccount(session.wallet);
     const trades = await getTrades({ accountId: account.id, status, limit });
 
     return NextResponse.json({ account_id: account.id, trades });

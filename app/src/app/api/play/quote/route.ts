@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { verifyPlaySignature } from "@/lib/playAuth";
+import { readPlaySession } from "@/lib/playAuth";
 import {
   quote,
   normalizeStake,
@@ -11,39 +11,32 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// POST /api/play/quote
+// POST /api/play/quote   { market_address, outcome_index, stake_usd }
 //
 // Informational only. Nothing is written, no money moves, and the returned
 // numbers are NOT binding: /api/play/trade recomputes everything under a
 // row lock. A stale quote can therefore only produce a slightly different
 // fill, never a corrupted one.
 //
-// Auth: signed wallet over
-//   FUNMARKET_PLAY|quote|<market_address>|<outcome_index>|<stake_usd>|<ts>
-//
-// The stake and outcome are inside the signed message so a signature
-// authorizing one quote cannot be replayed against a different one.
+// Auth: the play_session cookie. Called on every amount keystroke, so it
+// must never touch the wallet.
 export async function POST(req: Request) {
   try {
-    const body = await req.json().catch(() => ({}));
+    const session = readPlaySession(req);
+    if (!session) {
+      return NextResponse.json(
+        { error: "Play session required" },
+        { status: 401 }
+      );
+    }
 
+    const body = await req.json().catch(() => ({}));
     const marketAddress = normalizeMarketAddress(body?.market_address);
     const outcomeIndex = normalizeOutcomeIndex(body?.outcome_index);
     const stakeUsd = normalizeStake(body?.stake_usd);
 
-    const auth = verifyPlaySignature({
-      wallet: body?.wallet,
-      signature: body?.signature,
-      ts: body?.ts,
-      action: "quote",
-      parts: [marketAddress, outcomeIndex, stakeUsd],
-    });
-    if (!auth.ok) {
-      return NextResponse.json({ error: auth.error }, { status: auth.status });
-    }
-
     const result = await quote({
-      wallet: auth.wallet,
+      wallet: session.wallet,
       marketAddress,
       outcomeIndex,
       stakeUsd,

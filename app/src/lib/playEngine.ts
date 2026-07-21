@@ -44,6 +44,14 @@ export type PlaySeason = {
   closed_at: string | null;
 };
 
+export type PlayAuthNonce = {
+  nonce: string;
+  wallet_address: string;
+  issued_at: string;
+  expires_at: string;
+  consumed_at: string | null;
+};
+
 export type PlayMarketState = {
   id: string;
   market_address: string;
@@ -209,6 +217,38 @@ export async function ensureAccount(wallet: string): Promise<PlayAccount> {
   });
   if (error) throw toEngineError(error);
   return data as PlayAccount;
+}
+
+/** Stores a freshly generated sign-in challenge for a wallet. */
+export async function issueNonce(args: {
+  wallet: string;
+  nonce: string;
+  ttlSeconds: number;
+}): Promise<PlayAuthNonce> {
+  const { data, error } = await supabaseServer().rpc("play_issue_nonce", {
+    wallet_in: args.wallet,
+    nonce_in: args.nonce,
+    ttl_seconds_in: args.ttlSeconds,
+  });
+  if (error) throw toEngineError(error);
+  return data as PlayAuthNonce;
+}
+
+/**
+ * Atomically spends a challenge. Returns null when the nonce is unknown,
+ * bound to a different wallet, already consumed, or expired.
+ */
+export async function consumeNonce(args: {
+  nonce: string;
+  wallet: string;
+}): Promise<PlayAuthNonce | null> {
+  const { data, error } = await supabaseServer().rpc("play_consume_nonce", {
+    nonce_in: args.nonce,
+    wallet_in: args.wallet,
+  });
+  if (error) throw toEngineError(error);
+  const row = data as PlayAuthNonce | null;
+  return row && row.nonce ? row : null;
 }
 
 export async function ensureDailyGrant(accountId: string): Promise<string> {

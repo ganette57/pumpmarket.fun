@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { verifyPlaySignature } from "@/lib/playAuth";
+import { readPlaySession } from "@/lib/playAuth";
 import {
   ensureAccount,
   ensureDailyGrant,
@@ -13,31 +13,34 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// POST /api/play/state
+// POST /api/play/state   { market_address? }
 //
-// Everything the (future) Play UI needs on load: balance, active season,
-// open positions, and optionally one market's Play book.
+// Everything the Play UI needs on load: balance, active season, open
+// positions, and optionally one market's Play book.
 //
-// POST rather than GET on purpose — the signature belongs in a body, not
-// in a URL that ends up in access logs and browser history.
+// Auth: the play_session cookie. No signature, no wallet prompt. A
+// `wallet` field in the body is ignored — identity comes from the session
+// and nowhere else.
 //
-// Auth: signed wallet over  FUNMARKET_PLAY|state|<ts>
+// Also the daily-grant touchpoint: opening the app on a new UTC day
+// credits the $10,000 bankroll.
 export async function POST(req: Request) {
   try {
-    const body = await req.json().catch(() => ({}));
-
-    const auth = verifyPlaySignature({
-      wallet: body?.wallet,
-      signature: body?.signature,
-      ts: body?.ts,
-      action: "state",
-      parts: [],
-    });
-    if (!auth.ok) {
-      return NextResponse.json({ error: auth.error }, { status: auth.status });
+    const session = readPlaySession(req);
+    if (!session) {
+      return NextResponse.json(
+        { error: "Play session required" },
+        { status: 401 }
+      );
     }
 
-    const account = await ensureAccount(auth.wallet);
+    // Optional: include one market's Play book in the same round trip.
+    const body = await req.json().catch(() => ({}));
+    const marketAddress = body?.market_address
+      ? normalizeMarketAddress(body.market_address)
+      : null;
+
+    const account = await ensureAccount(session.wallet);
     const balance = await ensureDailyGrant(account.id);
     const season = await currentSeason();
     const openTrades = await getTrades({
@@ -46,13 +49,9 @@ export async function POST(req: Request) {
       limit: 200,
     });
 
-    // Optional: include one market's Play book in the same round trip.
-    let marketState = null;
-    if (body?.market_address) {
-      marketState = await getMarketState(
-        normalizeMarketAddress(body.market_address)
-      );
-    }
+    const marketState = marketAddress
+      ? await getMarketState(marketAddress)
+      : null;
 
     return NextResponse.json({
       account: {
@@ -63,6 +62,7 @@ export async function POST(req: Request) {
         is_eligible: account.is_eligible,
       },
       season,
+      session_expires_at: session.expiresAt,
       open_trades: openTrades,
       market_state: marketState,
     });
