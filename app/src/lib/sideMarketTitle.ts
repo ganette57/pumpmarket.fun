@@ -1,7 +1,6 @@
 // app/src/lib/sideMarketTitle.ts
-// Shared helper for composing user soccer side-market titles with their match
-// context. Used at creation time (create page) and for display of older
-// side markets in the World Cup hub.
+// Shared helper for composing user sport side-market titles with their match
+// context. Used at creation time (create page).
 
 /**
  * Prefix a side-market question with its match label:

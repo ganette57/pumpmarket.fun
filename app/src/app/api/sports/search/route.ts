@@ -1,9 +1,6 @@
 import { NextResponse } from "next/server";
 import { listUpcomingMatches } from "@/lib/sportsProviders/fixturesProvider";
-import { listWorldCupSeasonMatchesTheSportsDB } from "@/lib/sportsProviders/theSportsDbProvider";
-import { getOfficialMatchProviderEventIds } from "@/app/world-cup/_lib/marketQueries";
-
-const WORLD_CUP_SEASON = "2026";
+import { getOfficialMatchProviderEventIds } from "@/lib/officialSportMarkets";
 
 // ---------------------------------------------------------------------------
 // In-memory TTL cache (10 min — sits in front of provider's 15 min cache)
@@ -73,29 +70,6 @@ async function handleList(
       days: 7,
       base_date: base_date || undefined,
     });
-  }
-
-  // For soccer, merge in the FULL FIFA World Cup 2026 season so the picker
-  // shows the entire available schedule (not just the next 7 days). Deduped by
-  // provider_event_id and re-sorted chronologically. Same NormalizedMatch
-  // shape, so admin official + user side pickers both benefit. Non-soccer
-  // sports are unaffected.
-  if (requestedSport === "soccer") {
-    try {
-      const wc = await listWorldCupSeasonMatchesTheSportsDB({
-        season: WORLD_CUP_SEASON,
-      });
-      if (wc.length > 0) {
-        const seen = new Set(matches.map((m) => String(m.provider_event_id)));
-        const extra = wc.filter((m) => !seen.has(String(m.provider_event_id)));
-        matches = [...matches, ...extra].sort(
-          (a, b) =>
-            new Date(a.start_time).getTime() - new Date(b.start_time).getTime(),
-        );
-      }
-    } catch {
-      // Keep the generic upcoming list on any failure.
-    }
   }
 
   // Admin-only: remove fixtures that already have an OFFICIAL match market so

@@ -7,6 +7,21 @@ const supabaseHost = process.env.NEXT_PUBLIC_SUPABASE_URL
 const r2Host = process.env.NEXT_PUBLIC_R2_IMAGE_HOST || undefined;
 
 const nextConfig = {
+  async redirects() {
+    return [
+      // The World Cup campaign is over and its public hub is gone. Send the
+      // old entry points somewhere useful rather than 404-ing inbound links.
+      { source: "/world-cup/leaderboard", destination: "/leaderboard", permanent: true },
+      { source: "/world-cup/treasury", destination: "/treasury", permanent: true },
+      // The match / side-market browsers were market lists — the feed is the
+      // generic replacement.
+      { source: "/world-cup/matches", destination: "/", permanent: true },
+      { source: "/world-cup/side-markets", destination: "/", permanent: true },
+      // Hub root + any remaining child route.
+      { source: "/world-cup", destination: "/leaderboard", permanent: true },
+      { source: "/world-cup/:path*", destination: "/leaderboard", permanent: true },
+    ];
+  },
   images: {
     unoptimized: true,
     domains: [supabaseHost, r2Host].filter(Boolean),
