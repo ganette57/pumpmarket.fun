@@ -1,5 +1,11 @@
 // Global Fun Points leaderboard — read-only queries over the Phase 2
-// tables. No writes, no new tables: everything is derived from
+// tables.
+//
+// STATUS: dormant. /leaderboard no longer renders a points ranking, so the
+// only remaining consumer is lib/treasury.ts. Kept intact as the reference
+// implementation for whatever ranking replaces it.
+//
+// No writes, no new tables: everything is derived from
 // fun_points_accounts (the running balance per wallet) and optionally
 // joined to profiles for display name / avatar.
 //

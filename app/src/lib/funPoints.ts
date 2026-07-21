@@ -1,5 +1,12 @@
 // Fun Points / Rewards system — Phase 2 (Supabase-backed)
 //
+// STATUS: Fun Points are no longer surfaced anywhere in the public UI. The
+// ledger still accrues in the background (trade volume + referral bonuses) so
+// referral attribution stays continuous, and getReferralSummary() still backs
+// /referrals with the code / link / referred-wallet count. Everything else
+// here — balances, streaks, daily check-in, tasks, activity feed — is dormant
+// and intentionally unrendered. Nothing was dropped from the database.
+//
 // Read paths use the public anon client (RLS allows SELECT on the relevant
 // tables). All write paths go through server API routes which use the
 // service-role client to call SECURITY DEFINER RPCs — that's how we keep

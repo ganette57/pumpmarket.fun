@@ -6,10 +6,8 @@ import {
   Trophy,
   Target,
   Flag,
-  Users,
   BarChart3,
   Sparkles,
-  Crown,
   ArrowDown,
   ShieldCheck,
 } from "lucide-react";
@@ -23,11 +21,9 @@ import {
   formatUsdApprox,
   formatMilestone,
   formatProgressPct,
-  shortWallet,
   type ChampionshipStats,
   type TradedVolume,
 } from "@/lib/treasury";
-import { formatPoints } from "@/lib/funPoints";
 
 const GREEN = "#00FF87";
 const GREEN_SOFT = "#61ff9a";
@@ -60,10 +56,6 @@ export default function TreasuryPage() {
   const volumeUsd = volume ? formatUsdApprox(volume.usd) : "";
   const currentMilestoneLabel = volume ? formatMilestone(volume.currentMilestone) : "—";
   const nextMilestoneLabel = volume ? formatMilestone(volume.nextMilestone) : "—";
-
-  const topPlayer =
-    stats?.topPlayerName ||
-    (stats?.topPlayerWallet ? shortWallet(stats.topPlayerWallet) : "—");
 
   return (
     <div className="min-h-screen bg-pump-dark px-4 py-6 md:py-10">
@@ -140,32 +132,18 @@ export default function TreasuryPage() {
           </div>
         </section>
 
-        {/* Championship Stats */}
+        {/* Championship Stats — only counts backed by real market data. The
+            player/points metrics that used to sit here came from the Fun
+            Points ledger, which is no longer surfaced publicly. */}
         <section className="space-y-4">
           <SectionTitle icon={<Sparkles className="h-4 w-4 text-pump-green" />} title="Championship Stats" />
 
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <MetricCard
-              icon={<Users className="h-4 w-4 text-pump-green" />}
-              label="Active Players"
-              value={loading ? "—" : formatPoints(stats?.activePlayers ?? 0)}
-            />
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <MetricCard
               icon={<BarChart3 className="h-4 w-4 text-pump-green" />}
               label="Markets"
-              value={loading ? "—" : formatPoints(stats?.markets ?? 0)}
-            />
-            <MetricCard
-              icon={<Sparkles className="h-4 w-4 text-pump-green" />}
-              label="Fun Points Distributed"
-              value={loading ? "—" : formatPoints(stats?.funPointsDistributed ?? 0)}
+              value={loading ? "—" : (stats?.markets ?? 0).toLocaleString("en-US")}
               accent
-            />
-            <MetricCard
-              icon={<Crown className="h-4 w-4 text-[#EAB54C]" />}
-              label="Top Player"
-              value={loading ? "—" : topPlayer}
-              small
             />
           </div>
         </section>
