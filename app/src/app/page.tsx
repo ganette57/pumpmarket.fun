@@ -9,7 +9,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 import MarketCard from "@/components/MarketCard";
 import FeaturedMarketCardFull from "@/components/FeaturedMarketCardFull";
 import FlashMarketCard from "@/components/FlashMarketCard";
-import WorldCupChampionshipHero from "@/components/WorldCupChampionshipHero";
 import CategoryFilters from "@/components/CategoryFilters";
 import type { SelectedCategory } from "@/components/CategoryFilters";
 import { SkeletonCard, SkeletonFeaturedCard } from "@/components/SkeletonCard";
@@ -83,7 +82,6 @@ type FeaturedCarouselMarket = {
 };
 
 type HomeCarouselSlide =
-  | { kind: "championship" }
   | { kind: "flash"; market: FlashMarket }
   | { kind: "featured"; market: FeaturedCarouselMarket };
 type MobileFeedEntry =
@@ -690,13 +688,12 @@ export default function Home() {
       flashSlides.push({ kind: "flash", market });
     }
 
-    // World Cup Championship is always the first slide on the home carousel.
-    const championshipSlide: HomeCarouselSlide = { kind: "championship" };
-    const dynamicBudget = Math.max(0, CAROUSEL_LIMIT - 1);
-    const scopedFlashSlides = flashSlides.slice(0, dynamicBudget);
-    const baseSlides = featuredMarkets.slice(0, Math.max(0, dynamicBudget - scopedFlashSlides.length));
+    // Live flash markets keep their priority at the head of the carousel,
+    // followed by the featured markets that fit in the remaining budget.
+    const scopedFlashSlides = flashSlides.slice(0, CAROUSEL_LIMIT);
+    const baseSlides = featuredMarkets.slice(0, Math.max(0, CAROUSEL_LIMIT - scopedFlashSlides.length));
     const mappedBase = baseSlides.map((market) => ({ kind: "featured" as const, market }));
-    return [championshipSlide, ...scopedFlashSlides, ...mappedBase];
+    return [...scopedFlashSlides, ...mappedBase];
   }, [featuredMarkets, homeLiveCryptoFlashMarkets, homeLiveFlashMarket, homeLiveIrlFlashMarkets]);
 
   // reset index when list changes
@@ -1105,16 +1102,6 @@ export default function Home() {
             >
               <style>{`.md\\:hidden div::-webkit-scrollbar { display: none; }`}</style>
 
-              {/* World Cup hero — always the first card in the mobile feed. */}
-              <div
-                key="wc-hero"
-                className="relative flex h-[100dvh] w-full snap-start snap-always flex-shrink-0 items-center justify-center overflow-hidden bg-black px-3 py-4"
-              >
-                <div className="h-[86vh] max-h-[720px] w-full">
-                  <WorldCupChampionshipHero />
-                </div>
-              </div>
-
               {mobileFeedEntries.map((entry, index) => {
                 const entryKey = mobileFeedEntryKey(entry);
                 if (entry.kind === "flash") {
@@ -1272,9 +1259,7 @@ export default function Home() {
                   >
                     {carouselSlides.map((slide) => {
                       const key =
-                        slide.kind === "championship"
-                          ? "championship"
-                          : slide.kind === "flash"
+                        slide.kind === "flash"
                           ? `flash-${slide.market.liveMicroId}`
                           : `featured-${slide.market.id}`;
                       return (
@@ -1282,9 +1267,7 @@ export default function Home() {
                           key={key}
                           className="w-full flex-shrink-0 h-[400px]"
                         >
-                          {slide.kind === "championship" ? (
-                            <WorldCupChampionshipHero />
-                          ) : slide.kind === "flash" ? (
+                          {slide.kind === "flash" ? (
                             <FlashMarketCard market={slide.market} variant="hero" className="h-full" />
                           ) : (
                             <FeaturedMarketCardFull
