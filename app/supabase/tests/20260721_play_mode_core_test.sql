@@ -14,9 +14,12 @@
 -- failure with the offending values in the message. Success prints a
 -- summary and rolls back.
 --
--- NOTE: the synthetic market INSERTs below use the minimum column set
--- observed in app/src/lib/markets.ts::indexMarket. If your database has
--- additional NOT NULL columns without defaults on public.markets, add
+-- NOTE: the synthetic market INSERTs below cover every NOT NULL column
+-- without a default observed on public.markets in Supabase Dev:
+--   market_address text                        NOT NULL
+--   end_date       timestamp without time zone NOT NULL
+--   creator        text                        NOT NULL
+-- If your database has further NOT NULL columns without defaults, add
 -- them to all three INSERTs.
 -- =====================================================================
 
@@ -28,33 +31,39 @@ BEGIN;
 -- Fixtures
 -- ---------------------------------------------------------------------
 -- Deterministic, obviously-fake base58-shaped addresses and wallets.
+--
+-- `creator` is NOT NULL on public.markets. Play never reads it — no Play
+-- function references the column — so a single shared placeholder is
+-- enough for all three fixtures and keeps them obviously synthetic.
 
 DO $fixtures$
+DECLARE
+  fixture_creator constant text := 'PLAYTESTCreator111111111111111111111111111';
 BEGIN
   INSERT INTO public.markets (
-    market_address, question, market_type, outcome_names,
+    market_address, creator, question, market_type, outcome_names,
     resolution_status, resolved, end_date
   ) VALUES (
-    'PLAYTESTMarket2Outcomes1111111111111111111',
+    'PLAYTESTMarket2Outcomes1111111111111111111', fixture_creator,
     '[TEST] Two outcome market', 0, '["YES","NO"]'::jsonb,
     'open', false, now() + interval '7 days'
   );
 
   INSERT INTO public.markets (
-    market_address, question, market_type, outcome_names,
+    market_address, creator, question, market_type, outcome_names,
     resolution_status, resolved, end_date
   ) VALUES (
-    'PLAYTESTMarket3Outcomes2222222222222222222',
+    'PLAYTESTMarket3Outcomes2222222222222222222', fixture_creator,
     '[TEST] Three outcome market', 1, '["A","B","C"]'::jsonb,
     'open', false, now() + interval '7 days'
   );
 
   -- Dedicated market for the no-winning-positions rule (test 8B).
   INSERT INTO public.markets (
-    market_address, question, market_type, outcome_names,
+    market_address, creator, question, market_type, outcome_names,
     resolution_status, resolved, end_date
   ) VALUES (
-    'PLAYTESTMarketNoWinner3333333333333333333',
+    'PLAYTESTMarketNoWinner3333333333333333333', fixture_creator,
     '[TEST] Nobody backs the winner', 0, '["YES","NO"]'::jsonb,
     'open', false, now() + interval '7 days'
   );
