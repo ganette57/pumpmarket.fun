@@ -232,11 +232,31 @@ BEGIN
   got := public.play_consume_nonce(repeat('z', 64), alice);
   ASSERT got.nonce IS NULL, 'an unknown nonce must not redeem';
 
-  -- Expired nonce (TTL is clamped to >= 30s, so expire it by hand).
+  -- Expired nonce. play_issue_nonce clamps the TTL to >= 30s, so we age
+  -- the row by hand instead of waiting.
+  --
+  -- Both timestamps must move together. play_auth_nonces_window enforces
+  -- `expires_at > issued_at`, so pushing expires_at into the past while
+  -- issued_at stays at now() would violate the constraint rather than
+  -- produce an expired nonce. Backdating issued_at as well yields a row
+  -- that is historically valid — issued 10 minutes ago, a 599s window,
+  -- comfortably inside the function's own 30..900s clamp — and simply
+  -- lapsed one second ago.
   PERFORM public.play_issue_nonce(alice, repeat('b', 64), 300);
   UPDATE public.play_auth_nonces
-     SET expires_at = now() - interval '1 second'
+     SET issued_at  = now() - interval '10 minutes',
+         expires_at = now() - interval '1 second'
    WHERE nonce = repeat('b', 64);
+
+  -- The row satisfies every constraint; play_consume_nonce must still
+  -- reject it, on `expires_at > now()` alone.
+  ASSERT (SELECT expires_at > issued_at FROM public.play_auth_nonces
+           WHERE nonce = repeat('b', 64)),
+    'the expired-nonce fixture must still satisfy play_auth_nonces_window';
+  ASSERT (SELECT expires_at < now() FROM public.play_auth_nonces
+           WHERE nonce = repeat('b', 64)),
+    'the expired-nonce fixture must actually be expired';
+
   got := public.play_consume_nonce(repeat('b', 64), alice);
   ASSERT got.nonce IS NULL, 'an expired nonce must not redeem';
 
