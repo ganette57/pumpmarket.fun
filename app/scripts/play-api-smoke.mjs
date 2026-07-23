@@ -86,6 +86,53 @@ function step(n, t) {
   console.log(`\n${"-".repeat(70)}\n${n}. ${t}\n${"-".repeat(70)}`);
 }
 
+/* --------------------------- money comparison --------------------------- */
+//
+// Supabase returns NUMERIC INCONSISTENTLY across our own code paths:
+//
+//   * lib/playEngine.ensureDailyGrant() does `String(data)`, and a bare
+//     NUMERIC RPC scalar arrives as a JS number, so 10000.00 -> "10000"
+//     (the ".00" is gone);
+//   * play_execute_trade returns balance via jsonb_build_object(), and
+//     to_jsonb(9500.00::numeric) -> JSON number -> JS number 9500.
+//
+// So the same balance can be the string "10000" in one response and the
+// number 9500 in another. Strict `===` between "9500" and 9500, or
+// between "10000" and "10000.00", is a false negative — which is exactly
+// the four failures observed. And Number() equality would drag
+// authoritative money through binary float.
+//
+// toCents() normalizes either form to an exact integer number of cents
+// (BigInt, no float), truncating to 2 dp the same way the SQL engine
+// does. All money comparisons below go through it.
+
+function toCents(x) {
+  if (x === null || x === undefined) return null;
+  const s = String(x).trim();
+  if (!/^-?\d+(\.\d+)?$/.test(s)) return null; // reject anything non-decimal
+  const neg = s.startsWith("-");
+  const [i, f = ""] = (neg ? s.slice(1) : s).split(".");
+  const frac = (f + "00").slice(0, 2); // pad/truncate to cents
+  const cents = BigInt(i) * 100n + BigInt(frac);
+  return neg ? -cents : cents;
+}
+
+/** Exact money equality, tolerant of number-vs-string and trailing zeros. */
+function moneyEq(a, b) {
+  const x = toCents(a);
+  const y = toCents(b);
+  return x !== null && y !== null && x === y;
+}
+
+/** a - b in cents (BigInt), or null if either is unparseable. */
+function moneyDiffCents(a, b) {
+  const x = toCents(a);
+  const y = toCents(b);
+  return x === null || y === null ? null : x - y;
+}
+
+const GRANT_USD = "10000"; // approved daily_grant_usd
+
 let COOKIE = null;
 
 async function post(path, body, { withCookie = true } = {}) {
@@ -179,7 +226,7 @@ step(4, "POST /api/play/auth/verify (fresh nonce, correct signature)");
 
   check("returns 200", r.status === 200, JSON.stringify(r.json));
   check("account created for our wallet", r.json?.account?.wallet_address === WALLET);
-  check("daily grant applied ($10,000)", r.json?.account?.balance_usd === "10000.00",
+  check("daily grant applied ($10,000)", moneyEq(r.json?.account?.balance_usd, GRANT_USD),
         `balance_usd = ${r.json?.account?.balance_usd}`);
   check("an active season is returned", !!r.json?.season?.id);
 
@@ -203,16 +250,24 @@ let balanceBefore;
   const r = await post("/api/play/state", { market_address: MARKET });
   check("returns 200", r.status === 200, JSON.stringify(r.json));
   balanceBefore = r.json?.account?.balance_usd;
-  check("balance is present", !!balanceBefore);
-  check("no second grant on repeat call", balanceBefore === "10000.00",
-        `balance_usd = ${balanceBefore}`);
+  check("balance is present", balanceBefore !== undefined && balanceBefore !== null);
+  // Fresh throwaway wallet -> exactly one grant today, no second grant.
+  check("balance is the single daily grant, no double-grant",
+        moneyEq(balanceBefore, GRANT_USD), `balance_usd = ${balanceBefore}`);
   check("open_trades is an array", Array.isArray(r.json?.open_trades));
-  check("market_state created on first touch", !!r.json?.market_state?.id,
-        JSON.stringify(r.json?.market_state));
+
+  // NOTE: /state does NOT create the Play market state. The state is
+  // ensured on the first /quote or /trade (play_ensure_market_state runs
+  // inside those, not inside /state). It is also GLOBAL per market, so on
+  // a re-run against the same --market it may already exist here. Either
+  // way we make no market_state assertion at this point — it is verified
+  // right after /quote, below.
   if (r.json?.market_state) {
     const ms = r.json.market_state;
-    console.log(`        outcomes=${ms.outcome_count} pool=$${ms.virtual_pool_usd} ` +
-                `supplies=[${ms.outcome_supplies}] v=${ms.version}`);
+    console.log(`        (market already had Play state from a prior run) ` +
+                `v=${ms.version} pool=$${ms.virtual_pool_usd}`);
+  } else {
+    console.log(`        (no Play market state yet — expected before any quote/trade)`);
   }
 }
 
@@ -230,12 +285,28 @@ let quotedShares;
   check("returns implied probs before and after",
         Array.isArray(q?.implied_probs) && Array.isArray(q?.implied_probs_after));
   check("returns an estimated payout", q?.estimated_payout_usd !== undefined);
-  check("quote wrote nothing (no money moved)", true);
   if (q) {
     console.log(`        stake=$${q.stake_usd} shares=${q.shares} ` +
                 `avg=$${q.avg_price_usd}\n` +
                 `        odds ${q.implied_probs} -> ${q.implied_probs_after}\n` +
                 `        est payout=$${q.estimated_payout_usd} (${q.estimated_multiple}x)`);
+  }
+
+  // Quote ensures the Play market state exists but must move NO money and
+  // create NO trade. Verify both via a follow-up /state.
+  const s = await post("/api/play/state", { market_address: MARKET });
+  check("market state exists after /quote (ensured, not on /state)",
+        !!s.json?.market_state?.id, JSON.stringify(s.json?.market_state));
+  check("quote moved no money (balance unchanged)",
+        moneyEq(s.json?.account?.balance_usd, balanceBefore),
+        `${balanceBefore} -> ${s.json?.account?.balance_usd}`);
+  check("quote created no trade (open_trades still empty)",
+        Array.isArray(s.json?.open_trades) && s.json.open_trades.length === 0,
+        `open_trades = ${JSON.stringify(s.json?.open_trades)}`);
+  if (s.json?.market_state) {
+    const ms = s.json.market_state;
+    console.log(`        market_state: outcomes=${ms.outcome_count} ` +
+                `pool=$${ms.virtual_pool_usd} supplies=[${ms.outcome_supplies}] v=${ms.version}`);
   }
 }
 
@@ -256,8 +327,8 @@ let tradeId, balanceAfter;
   balanceAfter = r.json?.balance_usd;
   check("trade row returned", !!tradeId);
   check("balance debited by exactly the stake",
-        Number(balanceBefore) - Number(balanceAfter) === Number(STAKE),
-        `${balanceBefore} -> ${balanceAfter}`);
+        moneyDiffCents(balanceBefore, balanceAfter) === toCents(STAKE),
+        `${balanceBefore} -> ${balanceAfter} (stake ${STAKE})`);
   check("market state version incremented", Number(r.json?.market_state?.version) >= 1);
 
   /* double-click / retry */
@@ -265,7 +336,7 @@ let tradeId, balanceAfter;
   check("double submit -> 200 replayed", r2.status === 200 && r2.json?.replayed === true,
         `got ${r2.status} replayed=${r2.json?.replayed}`);
   check("double submit returns the SAME trade", r2.json?.trade?.id === tradeId);
-  check("double submit moved no money", r2.json?.balance_usd === balanceAfter,
+  check("double submit moved no money", moneyEq(r2.json?.balance_usd, balanceAfter),
         `${balanceAfter} -> ${r2.json?.balance_usd}`);
 }
 
@@ -290,7 +361,7 @@ step(9, "POST /api/play/history");
   const t = rows.find((x) => x.id === tradeId);
   if (t) {
     check("status is open", t.status === "open");
-    check("stake matches", Number(t.stake_usd) === Number(STAKE));
+    check("stake matches", moneyEq(t.stake_usd, STAKE));
     check("season_id stamped at trade time", !!t.season_id);
     check("trade_date stamped at trade time", !!t.trade_date);
     console.log(`        trade ${t.id}\n        outcome=${t.outcome_index} ` +
@@ -308,7 +379,7 @@ step(10, "Overspend is rejected");
   check("stake above balance -> 400", r.status === 400, `got ${r.status} ${JSON.stringify(r.json)}`);
   const after = await post("/api/play/state", {});
   check("balance unchanged after the failed trade",
-        after.json?.account?.balance_usd === balanceAfter,
+        moneyEq(after.json?.account?.balance_usd, balanceAfter),
         `${balanceAfter} -> ${after.json?.account?.balance_usd}`);
 }
 

@@ -452,8 +452,8 @@ signs exactly like Phantom) and asserts:
 | 2 | `/auth/nonce` returns nonce + message + expiry |
 | 3 | bad signature → 403, **and burns the nonce** (good signature after → 401) |
 | 4 | `/auth/verify` → 200, account created, $10,000 granted, `HttpOnly` + `SameSite=Lax` cookie set; replayed nonce → 401 |
-| 5 | `/state` → balance, season, open trades, market state created on first touch; **no second grant** |
-| 6 | `/quote` → shares, odds before/after, estimated payout; writes nothing |
+| 5 | `/state` → balance (single daily grant, **no second grant**), season, open trades. `/state` does **not** create the Play market state |
+| 6 | `/quote` → shares, odds before/after, estimated payout; **ensures the market state but moves no money and creates no trade** (verified by a follow-up `/state`) |
 | 7 | `/trade` → 201; balance debited by exactly the stake; **double submit → 200 `replayed:true`, same trade id, no money moved** |
 | 8 | a `wallet` field in the body is **ignored** — identity is session-only |
 | 9 | `/history` → our trade appears exactly once with `season_id` + `trade_date` |
