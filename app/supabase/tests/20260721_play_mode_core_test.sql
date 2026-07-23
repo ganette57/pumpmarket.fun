@@ -513,6 +513,11 @@ DECLARE
   dust     numeric;
   d_bal_1  numeric; d_bal_2 numeric;
   n_won integer; n_lost integer;
+  -- deep-idempotency snapshots
+  ver_after     bigint;
+  upd_after     timestamptz;
+  meta_after    jsonb;
+  ledger_after  integer;
 BEGIN
   PERFORM public.play_ensure_account(dave);
   PERFORM public.play_ensure_account(erin);
@@ -589,23 +594,65 @@ BEGIN
   SELECT balance_usd INTO d_bal_2 FROM public.play_accounts WHERE wallet_address = dave;
   ASSERT d_bal_2 > d_bal_1, 'winner balance must increase';
 
-  -- ---- DOUBLE SETTLEMENT ----
+  -- ---- DEEP IDEMPOTENCY: pro-rata settled three times ----
+  -- Snapshot everything the repeat calls must NOT touch.
+  SELECT version, updated_at, settlement_meta
+    INTO ver_after, upd_after, meta_after
+    FROM public.play_market_states WHERE market_address = mkt;
+  SELECT count(*) INTO ledger_after FROM public.play_ledger;
+
+  ASSERT (meta_after->>'reason') = 'pro_rata',
+    format('first settlement meta must be pro_rata, is %s', meta_after->>'reason');
+
+  -- Second call.
   r2 := public.play_settle_market(mkt);
+  ASSERT (r2->>'already_settled')::boolean = true,
+    'second call must report already_settled = true';
   ASSERT (r2->>'trades_settled')::integer = 0,
-    format('second settlement must settle 0 trades, settled %s',
-           (r2->>'trades_settled')::integer);
+    format('second call must settle 0 trades, settled %s', r2->>'trades_settled');
   ASSERT (r2->>'paid_out_usd')::numeric = 0,
-    'second settlement must pay out exactly zero';
+    'second call must pay out exactly zero';
+  -- It must report the ORIGINAL settlement, NOT a recomputed one.
+  ASSERT (r2->>'reason') = 'pro_rata',
+    format('repeat call must preserve reason pro_rata, got %s', r2->>'reason');
+  ASSERT (r2->>'winning_outcome')::integer = 0,
+    format('repeat call must preserve winning_outcome 0, got %s', r2->>'winning_outcome');
+  ASSERT (r2->>'final_pool_usd')::numeric = pool,
+    format('repeat call must preserve final_pool_usd %s, got %s', pool, r2->>'final_pool_usd');
+  ASSERT (r2->>'original_paid_out_usd')::numeric = (meta_after->>'paid_out_usd')::numeric,
+    'repeat call must expose the original paid_out from persisted meta';
 
+  -- Nothing about the market state may have moved.
+  ASSERT (SELECT version    FROM public.play_market_states WHERE market_address = mkt) = ver_after,
+    'second call must NOT bump version';
+  ASSERT (SELECT updated_at FROM public.play_market_states WHERE market_address = mkt) = upd_after,
+    'second call must NOT change updated_at';
+  ASSERT (SELECT settlement_meta FROM public.play_market_states WHERE market_address = mkt) = meta_after,
+    'second call must NOT change settlement_meta';
+  ASSERT (SELECT count(*) FROM public.play_ledger) = ledger_after,
+    'second call must NOT write ledger rows';
   ASSERT (SELECT balance_usd FROM public.play_accounts WHERE wallet_address = dave) = d_bal_2,
-    'second settlement must not change any balance';
+    'second call must NOT change any balance';
 
-  -- Third call for good measure.
+  -- Third call — identical guarantees.
   PERFORM public.play_settle_market(mkt);
+  ASSERT (SELECT version    FROM public.play_market_states WHERE market_address = mkt) = ver_after,
+    'third call must NOT bump version';
+  ASSERT (SELECT updated_at FROM public.play_market_states WHERE market_address = mkt) = upd_after,
+    'third call must NOT change updated_at';
+  ASSERT (SELECT settlement_meta FROM public.play_market_states WHERE market_address = mkt) = meta_after,
+    'third call must NOT change settlement_meta';
+  ASSERT (SELECT count(*) FROM public.play_ledger) = ledger_after,
+    'third call must NOT write ledger rows';
   ASSERT (SELECT balance_usd FROM public.play_accounts WHERE wallet_address = dave) = d_bal_2,
-    'third settlement must still not change any balance';
+    'third call must NOT change any balance';
 
-  RAISE NOTICE 'PASS 8 — settlement pays pro-rata, never mints value, and is idempotent';
+  -- Trade rows are frozen too: statuses and payouts unchanged.
+  ASSERT (SELECT count(*) FROM public.play_trades
+           WHERE market_address = mkt AND status = 'open') = 0,
+    'no trade may revert to open across repeat settlements';
+
+  RAISE NOTICE 'PASS 8 — pro-rata settlement is a true no-op on repeat (version/updated_at/meta/ledger/balances frozen)';
 END $t8$;
 
 
@@ -710,19 +757,46 @@ BEGIN
      WHERE t.market_address = mkt AND l.kind = 'trade_payout'
   ), 'no trade_payout rows may exist for a no-winner settlement';
 
-  -- (5) second and third calls credit nothing
-  r2 := public.play_settle_market(mkt);
-  ASSERT (r2->>'trades_settled')::integer = 0, 'second call must settle 0 trades';
-  ASSERT (r2->>'paid_out_usd')::numeric = 0, 'second call must pay 0';
-  ASSERT (SELECT balance_usd FROM public.play_accounts WHERE id = h_acc.id) = h_after
-     AND (SELECT balance_usd FROM public.play_accounts WHERE id = i_acc.id) = i_after,
-    'second settlement must not change any balance';
+  -- (5) DEEP IDEMPOTENCY: no-winner settlement called three times.
+  -- Snapshot the frozen state.
+  DECLARE
+    ver0 bigint; upd0 timestamptz; meta0 jsonb; led0 integer;
+  BEGIN
+    SELECT version, updated_at, settlement_meta INTO ver0, upd0, meta0
+      FROM public.play_market_states WHERE market_address = mkt;
+    SELECT count(*) INTO led0 FROM public.play_ledger;
 
-  r3 := public.play_settle_market(mkt);
-  ASSERT (r3->>'paid_out_usd')::numeric = 0, 'third call must pay 0';
-  ASSERT (SELECT balance_usd FROM public.play_accounts WHERE id = h_acc.id) = h_after
-     AND (SELECT balance_usd FROM public.play_accounts WHERE id = i_acc.id) = i_after,
-    'third settlement must not change any balance';
+    r2 := public.play_settle_market(mkt);
+    ASSERT (r2->>'already_settled')::boolean = true, 'second call: already_settled';
+    ASSERT (r2->>'trades_settled')::integer = 0, 'second call must settle 0 trades';
+    ASSERT (r2->>'paid_out_usd')::numeric = 0, 'second call must pay 0';
+    -- Original reason preserved, NOT recomputed.
+    ASSERT (r2->>'reason') = 'no_winning_positions',
+      format('repeat must preserve reason no_winning_positions, got %s', r2->>'reason');
+    ASSERT (r2->>'winning_outcome')::integer = 0,
+      'repeat must preserve winning_outcome 0';
+    ASSERT (r2->>'original_paid_out_usd')::numeric = 2000,
+      'repeat must expose original paid_out 2000 from meta';
+
+    r3 := public.play_settle_market(mkt);
+    ASSERT (r3->>'already_settled')::boolean = true, 'third call: already_settled';
+    ASSERT (r3->>'paid_out_usd')::numeric = 0, 'third call must pay 0';
+    ASSERT (r3->>'reason') = 'no_winning_positions',
+      'third call must still preserve the original reason';
+
+    -- version / updated_at / meta / ledger / balances all frozen.
+    ASSERT (SELECT version FROM public.play_market_states WHERE market_address = mkt) = ver0,
+      'repeat calls must NOT bump version';
+    ASSERT (SELECT updated_at FROM public.play_market_states WHERE market_address = mkt) = upd0,
+      'repeat calls must NOT change updated_at';
+    ASSERT (SELECT settlement_meta FROM public.play_market_states WHERE market_address = mkt) = meta0,
+      'repeat calls must NOT change settlement_meta';
+    ASSERT (SELECT count(*) FROM public.play_ledger) = led0,
+      'repeat calls must NOT write ledger rows';
+    ASSERT (SELECT balance_usd FROM public.play_accounts WHERE id = h_acc.id) = h_after
+       AND (SELECT balance_usd FROM public.play_accounts WHERE id = i_acc.id) = i_after,
+      'repeat calls must NOT change any balance';
+  END;
 
   -- The original settlement audit trail survives the repeat calls.
   SELECT * INTO st FROM public.play_market_states WHERE market_address = mkt;
@@ -754,8 +828,10 @@ DECLARE
   frank text := 'PLAYTESTWalletFrank6666666666666666666666';
   acc   public.play_accounts;
   r     jsonb;
+  r2    jsonb;
   bal_before numeric;
   bal_after  numeric;
+  ver0 bigint; upd0 timestamptz; meta0 jsonb; led0 integer;
 BEGIN
   acc := public.play_ensure_account(frank);
   PERFORM public.play_ensure_daily_grant(acc.id);
@@ -770,6 +846,9 @@ BEGIN
 
   r := public.play_settle_market(mkt);
   ASSERT (r->>'settled')::boolean = true, 'cancelled market must settle';
+  ASSERT (r->>'reason') = 'cancelled',
+    format('first call reason must be cancelled, got %s', r->>'reason');
+  ASSERT (r->>'already_settled')::boolean = false, 'first call: already_settled = false';
 
   SELECT balance_usd INTO bal_after FROM public.play_accounts WHERE id = acc.id;
   ASSERT bal_after = bal_before + 1000,
@@ -781,12 +860,36 @@ BEGIN
        AND (status <> 'refunded' OR realized_pnl_usd <> 0 OR payout_usd <> stake_usd)
   ), 'every trade on a cancelled market must refund the stake at zero P&L';
 
-  -- Repeat: refunds must not double-credit.
+  -- DEEP IDEMPOTENCY: cancellation settled three times.
+  SELECT version, updated_at, settlement_meta INTO ver0, upd0, meta0
+    FROM public.play_market_states WHERE market_address = mkt;
+  SELECT count(*) INTO led0 FROM public.play_ledger;
+  ASSERT (SELECT status FROM public.play_market_states WHERE market_address = mkt) = 'cancelled',
+    'cancelled market Play state must be cancelled';
+
+  r2 := public.play_settle_market(mkt);
+  ASSERT (r2->>'already_settled')::boolean = true, 'second call: already_settled';
+  ASSERT (r2->>'trades_settled')::integer = 0, 'second call must settle 0 trades';
+  ASSERT (r2->>'paid_out_usd')::numeric = 0, 'second call must pay 0';
+  ASSERT (r2->>'reason') = 'cancelled',
+    format('repeat must preserve reason cancelled, got %s', r2->>'reason');
+
+  -- Third call.
   PERFORM public.play_settle_market(mkt);
+
+  -- Everything frozen across both repeats.
+  ASSERT (SELECT version FROM public.play_market_states WHERE market_address = mkt) = ver0,
+    'repeat cancellation calls must NOT bump version';
+  ASSERT (SELECT updated_at FROM public.play_market_states WHERE market_address = mkt) = upd0,
+    'repeat cancellation calls must NOT change updated_at';
+  ASSERT (SELECT settlement_meta FROM public.play_market_states WHERE market_address = mkt) = meta0,
+    'repeat cancellation calls must NOT change settlement_meta';
+  ASSERT (SELECT count(*) FROM public.play_ledger) = led0,
+    'repeat cancellation calls must NOT write ledger rows';
   ASSERT (SELECT balance_usd FROM public.play_accounts WHERE id = acc.id) = bal_after,
     'repeated cancellation settlement must not double-refund';
 
-  RAISE NOTICE 'PASS 9 — cancellation refunds exactly once at zero P&L';
+  RAISE NOTICE 'PASS 9 — cancellation refunds once and is a true no-op on repeat';
 END $t9$;
 
 

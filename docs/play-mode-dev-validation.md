@@ -16,10 +16,16 @@ Supabase project.
 
 | | |
 |---|---|
-| Migration | `app/supabase/migrations/20260721_play_mode_core.sql` |
+| Base migration | `app/supabase/migrations/20260721_play_mode_core.sql` |
+| Follow-up migration | `app/supabase/migrations/20260722_play_settle_idempotent.sql` |
 | Test suite | `app/supabase/tests/20260721_play_mode_core_test.sql` |
 | API smoke test | `app/scripts/play-api-smoke.mjs` |
-| Branch | `feat/play-real-mvp` @ `1ee1269d` |
+| Branch | `feat/play-real-mvp` |
+
+**If Dev already has the base migration applied** (the 7 tables and 17
+functions exist), you do **not** re-run the base file. Apply only the
+follow-up — see §3.1. A brand-new database applies both, in filename
+order; they end at the same function definition.
 
 The migration is **additive and idempotent**. It creates `play_*` objects
 only. It contains no `DROP`, no `ALTER` of any existing table, and every
@@ -142,6 +148,36 @@ psql "$DEV_DATABASE_URL" -v ON_ERROR_STOP=1 \
 > The Supabase **web SQL Editor** cannot run `\i` or `\set`. If you must
 > use it, paste the file contents directly and delete any `\`-prefixed
 > lines. `psql` is strongly preferred.
+
+---
+
+## 3.1 Apply the settlement-idempotency fix to an already-migrated Dev
+
+Dev already has the base migration installed, so it also has the **old**
+`play_settle_market`. Replace it with the follow-up migration. It is a
+single `create or replace function` plus its `grant` — additive, touches
+no table, and is safe to run any number of times.
+
+```bash
+cd app
+psql "$DEV_DATABASE_URL" -v ON_ERROR_STOP=1 \
+  -f supabase/migrations/20260722_play_settle_idempotent.sql
+```
+
+Web SQL Editor alternative: open the file, paste its contents, run. It has
+no `\`-prefixed lines, so it pastes cleanly.
+
+Confirm the new definition is in place (the fixed body contains the guard):
+
+```sql
+select pg_get_functiondef('public.play_settle_market(text)'::regprocedure)
+       like '%IDEMPOTENCY GUARD%' as has_fix;
+-- expected: t
+```
+
+This does **not** disturb any already-settled market: it only redefines
+the function. Existing `play_market_states`, `play_trades` and
+`play_ledger` rows are untouched.
 
 ---
 
@@ -340,9 +376,9 @@ PASS 4 — supplies, pool, odds and fills behave correctly
 PASS 5 — duplicate submit returns the original trade and moves no money
 PASS 6 — all-in works, overspend is rejected atomically
 PASS 7 — expired / blocked / proposed / bad-index all rejected
-PASS 8 — settlement pays pro-rata, never mints value, and is idempotent
+PASS 8 — pro-rata settlement is a true no-op on repeat (version/updated_at/meta/ledger/balances frozen)
 PASS 8B — no-winner markets refund in full, drain the pool, stay idempotent
-PASS 9 — cancellation refunds exactly once at zero P&L
+PASS 9 — cancellation refunds once and is a true no-op on repeat
 PASS 10 — every balance reconciles against the ledger
 PASS 11 — rollover resets bankroll, preserves odds and open positions
 PASS 12 — no Play write reached any Real economic field
@@ -489,11 +525,48 @@ curl -sS -X POST http://localhost:3000/api/play/settle \
   -d '{"market_address":"<MARKET_ADDRESS>"}' | jq
 ```
 
-Expect `settled:true`, `reason:"pro_rata"`, `trades_settled > 0`,
+**First call** (moves the money):
+
+```json
+{ "settled": true, "already_settled": false, "reason": "pro_rata",
+  "winning_outcome": 1, "trades_settled": 3,
+  "final_pool_usd": "1900.00", "paid_out_usd": "1900.00", "dust_usd": "0.00" }
+```
+
+Expect `already_settled:false`, `trades_settled > 0`,
 `paid_out_usd <= final_pool_usd`, `dust_usd >= 0`.
 
-**Run it twice more.** The 2nd and 3rd calls must return
-`trades_settled: 0` and `paid_out_usd: 0`, and no balance may change.
+**Run it twice more — it must be a TRUE no-op.** The 2nd and 3rd calls
+return:
+
+```json
+{ "settled": true, "already_settled": true, "reason": "pro_rata",
+  "winning_outcome": 1, "final_pool_usd": "1900.00",
+  "original_paid_out_usd": "1900.00", "original_trades_settled": 3,
+  "trades_settled": 0, "paid_out_usd": 0,
+  "settlement_meta": { "reason": "pro_rata", ... } }
+```
+
+Read the schema carefully — the two groups mean different things:
+
+| Field | Meaning |
+|---|---|
+| `trades_settled`, `paid_out_usd` | what **THIS** invocation moved — always `0` on a repeat |
+| `reason`, `winning_outcome`, `final_pool_usd`, `original_paid_out_usd`, `original_trades_settled`, `settlement_meta` | the **ORIGINAL** settlement, read from persisted state |
+
+A repeat call reports the original `reason` (`pro_rata` here) — **not** a
+recomputed one. Verify with SQL that the market state did not move:
+
+```sql
+select version, updated_at, settlement_meta->>'reason' as reason,
+       settlement_meta->>'paid_out_usd' as original_paid_out
+  from public.play_market_states
+ where market_address = '<MARKET_ADDRESS>';
+-- version and updated_at MUST be identical before and after the repeat
+-- calls; settlement_meta MUST still describe the first settlement.
+
+select count(*) from public.play_ledger;   -- unchanged across repeats
+```
 
 **No-winning-positions path** — finalize on an outcome nobody bought:
 

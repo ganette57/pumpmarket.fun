@@ -1368,6 +1368,42 @@ begin
   -- 3. lock
   select * into st from public.play_market_states where id = st.id for update;
 
+  -- 3b. IDEMPOTENCY GUARD — true no-op if already settled.
+  --
+  -- If this market's Play state is already terminal, a prior call settled
+  -- it. Return WITHOUT touching a single row: no version bump, no
+  -- updated_at, no settled_at, no settlement_meta rewrite, no ledger, no
+  -- balance change, no trade change.
+  --
+  -- Critically, we must NOT fall through to the recompute below. After the
+  -- first settlement there are zero OPEN trades and the pool has drained,
+  -- so recomputing would evaluate `no_winners := (winning is not null and
+  -- total_winning = 0)` as true and mislabel a finalized pro-rata market
+  -- as 'no_winning_positions' with zeroed totals. Instead we report the
+  -- ORIGINAL settlement straight from the persisted settlement_meta, and
+  -- flag the current invocation as having moved nothing.
+  if st.status <> 'open' then
+    return jsonb_build_object(
+      'settled',                true,
+      'already_settled',        true,
+      'market_address',         market_address_in,
+      'resolution_status',      final_status,
+      -- The ORIGINAL settlement (persisted). settlement_meta is set on the
+      -- first settlement; the status fallback covers only a terminal state
+      -- with empty meta, which the normal path never produces.
+      'reason',                 coalesce(st.settlement_meta->>'reason', st.status),
+      'winning_outcome',        nullif(st.settlement_meta->>'winning_outcome','')::integer,
+      'final_pool_usd',         nullif(st.settlement_meta->>'final_pool_usd','')::numeric,
+      'original_paid_out_usd',  nullif(st.settlement_meta->>'paid_out_usd','')::numeric,
+      'original_trades_settled',nullif(st.settlement_meta->>'trades_settled','')::integer,
+      'settlement_meta',        st.settlement_meta,
+      -- THIS invocation moved nothing:
+      'trades_settled',         0,
+      'paid_out_usd',           0,
+      'market_state',           to_jsonb(st)
+    );
+  end if;
+
   season     := public.play_current_season();
   final_pool := st.virtual_pool_usd;
 
@@ -1497,9 +1533,13 @@ begin
    where id = st.id
   returning * into st;
 
-  -- 11.
+  -- 11. First settlement — THIS invocation moved the money, so the
+  --     current-invocation totals and the original settlement totals are
+  --     one and the same. already_settled is false to disambiguate from
+  --     the repeat-call response shape.
   return jsonb_build_object(
     'settled',          true,
+    'already_settled',  false,
     'market_address',   market_address_in,
     'resolution_status', final_status,
     'winning_outcome',  winning,

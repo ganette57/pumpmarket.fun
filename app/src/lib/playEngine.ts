@@ -131,6 +131,15 @@ export type PlaySettlementResult = {
    * explanation such as "market not in a terminal state".
    */
   reason?: PlaySettleReason | string;
+  /**
+   * false on the settlement that actually moved the money; true on any
+   * later call against an already-terminal market. On a repeat call
+   * `trades_settled` and `paid_out_usd` describe THIS invocation (both 0),
+   * while `reason` / `winning_outcome` / `final_pool_usd` /
+   * `original_paid_out_usd` / `original_trades_settled` / `settlement_meta`
+   * describe the ORIGINAL settlement, read from persisted state.
+   */
+  already_settled?: boolean;
   market_address?: string;
   resolution_status?: string;
   winning_outcome?: number | null;
@@ -138,11 +147,17 @@ export type PlaySettlementResult = {
   no_winning_positions?: boolean;
   /** True when every open trade was refunded rather than paid pro-rata. */
   refunded_all?: boolean;
+  /** Money moved by THIS invocation (0 on a repeat call). */
   trades_settled: number;
   final_pool_usd?: string;
+  /** Money moved by THIS invocation (0 on a repeat call). */
   paid_out_usd?: string;
   dust_usd?: string;
   total_winning_shares?: string;
+  /** Repeat-call only: the original settlement's totals, from persisted meta. */
+  original_paid_out_usd?: string;
+  original_trades_settled?: number;
+  settlement_meta?: Record<string, unknown>;
   market_state?: PlayMarketState;
 };
 
