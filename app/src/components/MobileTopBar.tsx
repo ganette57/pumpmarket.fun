@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { useWallet } from "@solana/wallet-adapter-react";
+import ModeSwitch from "@/components/mode/ModeSwitch";
 
 export default function MobileTopBar({ showSearch }: { showSearch: boolean }) {
   const router = useRouter();
@@ -74,6 +75,9 @@ const avatarLabel = useMemo(() => {
     </span>
   </div>
 </Link>
+
+         {/* Play / Real mode */}
+         <ModeSwitch size="sm" variant="header" className="shrink-0" />
 
          {/* Menu button */}
 <div className="shrink-0 relative" ref={menuRef}>

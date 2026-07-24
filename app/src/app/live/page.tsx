@@ -34,6 +34,7 @@ import {
   MobileImmersiveSlide,
 } from "@/components/LiveMobileContent";
 import LiveHostControls from "@/components/LiveHostControls";
+import ModeSwitch from "@/components/mode/ModeSwitch";
 import FlashMarketResultModal, {
   type FlashMarketResultState,
 } from "@/components/FlashMarketResultModal";
@@ -328,6 +329,9 @@ function MobileTabs({
             Feed
           </button>
         </div>
+
+        {/* Play / Real mode — the Live page has no global header on mobile */}
+        <ModeSwitch size="sm" variant="overlay" />
 
         <button
           type="button"

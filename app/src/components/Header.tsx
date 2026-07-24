@@ -6,6 +6,7 @@ import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { getProfile } from '@/lib/profiles';
+import ModeSwitch from '@/components/mode/ModeSwitch';
 
 // --- Hook pour fermer le menu avatar quand on clique en dehors ---
 function useClickOutside(ref: React.RefObject<HTMLDivElement>, onClose: () => void) {
@@ -153,6 +154,9 @@ export default function Header() {
 
           {/* Right side */}
           <div className="ml-auto flex items-center gap-3 shrink-0">
+            {/* Play / Real mode */}
+            <ModeSwitch size="md" variant="header" />
+
             {/* Create */}
             <Link
               href="/create"

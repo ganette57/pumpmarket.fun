@@ -1,6 +1,7 @@
 // src/app/layout.tsx
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
+import { cookies } from "next/headers";
 import "./globals.css";
 
 import { WalletContextProvider } from "@/components/WalletProvider";
@@ -8,6 +9,8 @@ import AppShell from "@/components/AppShell";
 import LiveBuysTicker from "@/components/LiveBuysTicker";
 import GeoGateController from "@/components/GeoGateController";
 import ReferralCapture from "@/components/ReferralCapture";
+import { ModeProvider } from "@/components/mode/ModeProvider";
+import { FM_MODE_COOKIE, parseTradingMode } from "@/lib/tradingMode";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -27,19 +30,30 @@ export const metadata: Metadata = {
 
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  // Read the trading mode on the SERVER so the first paint already shows the
+  // correct PLAY/REAL state. Reading it on the client instead would render
+  // the default first and then correct itself — a visible flash and a
+  // hydration mismatch.
+  //
+  // Note: cookies() opts the app out of static prerendering. That is an
+  // accepted trade for a correct first paint; see docs/play-mode-ui.md.
+  const initialMode = parseTradingMode(cookies().get(FM_MODE_COOKIE)?.value);
+
   return (
     <html lang="en">
       <body className={inter.className}>
-        <WalletContextProvider>
-          <AppShell>
-          <GeoGateController />
-          <ReferralCapture />
-            {children}
+        <ModeProvider initialMode={initialMode}>
+          <WalletContextProvider>
+            <AppShell>
+            <GeoGateController />
+            <ReferralCapture />
+              {children}
 
-            {/* Single ticker: bottom-14 on mobile (above nav), bottom-0 on desktop */}
-            <LiveBuysTicker variant="breaking" className="bottom-14 md:bottom-0" />
-          </AppShell>
-        </WalletContextProvider>
+              {/* Single ticker: bottom-14 on mobile (above nav), bottom-0 on desktop */}
+              <LiveBuysTicker variant="breaking" className="bottom-14 md:bottom-0" />
+            </AppShell>
+          </WalletContextProvider>
+        </ModeProvider>
       </body>
     </html>
   );

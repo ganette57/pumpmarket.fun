@@ -16,6 +16,7 @@ import HomeFeedItem from "@/components/HomeFeedItem";
 import FeedTradeSheet from "@/components/FeedTradeSheet";
 import HomeFeedActionRail from "@/components/HomeFeedActionRail";
 import HomeFeedCommentsSheet from "@/components/HomeFeedCommentsSheet";
+import ModeSwitch from "@/components/mode/ModeSwitch";
 import { isSportSubcategory } from "@/utils/categories";
 import { getProfiles, type Profile } from "@/lib/profiles";
 import type { FlashMarket } from "@/lib/flashMarkets/types";
@@ -1084,6 +1085,10 @@ export default function Home() {
                   <img src="/logo4.png" alt="FunMarket" className="h-10 w-10 object-contain" />
                   <span className="font-semibold text-white text-sm drop-shadow-lg">FunMarket</span>
                 </Link>
+
+                {/* Play / Real mode — the mobile feed has no MobileTopBar */}
+                <ModeSwitch size="sm" variant="overlay" className="pointer-events-auto ml-auto mr-2" />
+
                 <Link
                   href="/search"
                   className="pointer-events-auto h-9 w-9 flex items-center justify-center rounded-full bg-black/40 backdrop-blur-sm border border-white/15"
