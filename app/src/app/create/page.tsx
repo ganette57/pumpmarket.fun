@@ -17,6 +17,7 @@ import CategoryImagePlaceholder from "@/components/CategoryImagePlaceholder";
 import FeedVideoUpload from "@/components/FeedVideoUpload";
 
 import { useProgram } from "@/hooks/useProgram";
+import { useTradingMode } from "@/components/mode/ModeProvider";
 import { isOfficialFixtureAdmin, getAdminWallets } from "@/lib/adminClient";
 import { withMatchPrefix } from "@/lib/sideMarketTitle";
 import { indexMarket } from "@/lib/markets";
@@ -699,6 +700,8 @@ export default function CreateMarketPage() {
   const { connection } = useConnection();
   const router = useRouter();
   const program = useProgram();
+  // Play mode leaves this page fully visible but blocks submission.
+  const { isPlay: isPlayMode } = useTradingMode();
 
   const [loading, setLoading] = useState(false);
   const [creationStep, setCreationStep] = useState<CreationStep>("idle");
@@ -1056,6 +1059,9 @@ export default function CreateMarketPage() {
   }
 
   async function handleCreateMarket() {
+    // Guard the handler too, not just the button: creation is on-chain and
+    // must never run while the app is in Play mode.
+    if (isPlayMode) return;
     if (!canSubmit || !publicKey || !program) return;
     if (!signTransaction) {
       setCreationError("Wallet cannot sign transactions");
@@ -1975,17 +1981,24 @@ export default function CreateMarketPage() {
           </div>
         )}
 
-        {/* Submit */}
+        {/* Submit — market creation is a Real-mode action only. The whole
+            page stays visible and unchanged in Play mode; only this button
+            is disabled, with a one-line explanation. */}
         <button
           onClick={handleCreateMarket}
-          disabled={!canSubmit || loading}
+          disabled={!canSubmit || loading || isPlayMode}
           aria-busy={loading}
           className={`w-full py-4 rounded-lg font-bold text-lg transition ${
-            canSubmit && !loading ? "btn-pump glow-green" : "bg-gray-700 text-gray-500 cursor-not-allowed"
+            canSubmit && !loading && !isPlayMode ? "btn-pump glow-green" : "bg-gray-700 text-gray-500 cursor-not-allowed"
           }`}
         >
           {loading ? "Processing..." : isSportsMarket ? "Create Sports Market 🏆" : "Launch Market 🚀"}
         </button>
+        {isPlayMode && (
+          <p className="mt-2 text-center text-sm text-gray-400">
+            Market creation is available in Real mode.
+          </p>
+        )}
       </div>
     </div>
   );

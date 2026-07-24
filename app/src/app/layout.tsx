@@ -10,6 +10,7 @@ import LiveBuysTicker from "@/components/LiveBuysTicker";
 import GeoGateController from "@/components/GeoGateController";
 import ReferralCapture from "@/components/ReferralCapture";
 import { ModeProvider } from "@/components/mode/ModeProvider";
+import { PlaySessionProvider } from "@/components/play/PlaySessionProvider";
 import { FM_MODE_COOKIE, parseTradingMode } from "@/lib/tradingMode";
 
 const inter = Inter({ subsets: ["latin"] });
@@ -44,14 +45,18 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className={inter.className}>
         <ModeProvider initialMode={initialMode}>
           <WalletContextProvider>
-            <AppShell>
-            <GeoGateController />
-            <ReferralCapture />
-              {children}
+            {/* Inside the wallet provider: the Play session signs with the
+                connected wallet (temporary identity until Privy). */}
+            <PlaySessionProvider>
+              <AppShell>
+              <GeoGateController />
+              <ReferralCapture />
+                {children}
 
-              {/* Single ticker: bottom-14 on mobile (above nav), bottom-0 on desktop */}
-              <LiveBuysTicker variant="breaking" className="bottom-14 md:bottom-0" />
-            </AppShell>
+                {/* Single ticker: bottom-14 on mobile (above nav), bottom-0 on desktop */}
+                <LiveBuysTicker variant="breaking" className="bottom-14 md:bottom-0" />
+              </AppShell>
+            </PlaySessionProvider>
           </WalletContextProvider>
         </ModeProvider>
       </body>
