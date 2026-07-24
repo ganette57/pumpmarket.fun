@@ -11,6 +11,7 @@ import GeoGateController from "@/components/GeoGateController";
 import ReferralCapture from "@/components/ReferralCapture";
 import { ModeProvider } from "@/components/mode/ModeProvider";
 import { PlaySessionProvider } from "@/components/play/PlaySessionProvider";
+import { MarketSnapshotProvider } from "@/components/mode/MarketSnapshotProvider";
 import { FM_MODE_COOKIE, parseTradingMode } from "@/lib/tradingMode";
 
 const inter = Inter({ subsets: ["latin"] });
@@ -48,6 +49,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             {/* Inside the wallet provider: the Play session signs with the
                 connected wallet (temporary identity until Privy). */}
             <PlaySessionProvider>
+              <MarketSnapshotProvider>
               <AppShell>
               <GeoGateController />
               <ReferralCapture />
@@ -56,6 +58,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 {/* Single ticker: bottom-14 on mobile (above nav), bottom-0 on desktop */}
                 <LiveBuysTicker variant="breaking" className="bottom-14 md:bottom-0" />
               </AppShell>
+              </MarketSnapshotProvider>
             </PlaySessionProvider>
           </WalletContextProvider>
         </ModeProvider>

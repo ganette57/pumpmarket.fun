@@ -150,6 +150,19 @@ export type PlayQuoteView = {
   state_version: number;
 };
 
+export type PlayMarketSnapshotView = {
+  market_address: string;
+  outcome_count: number;
+  supplies: string[];
+  probabilities: number[];
+  virtual_pool_usd: string;
+  status: string;
+  version: number;
+  /** No Play trades yet — this is the backend-defined opening book. */
+  seeded: boolean;
+  updated_at: string | null;
+};
+
 export type PlayTradeResponse = {
   replayed: boolean;
   trade: {
@@ -280,6 +293,18 @@ export const playClient = {
         shares: decimal(raw.trade?.shares),
       },
     };
+  },
+
+  /**
+   * Batch Play book for feed cards. Public — no session required, because
+   * odds are public market data (the Real supplies are already shown to
+   * signed-out visitors). Returns nothing user-scoped.
+   */
+  async marketSnapshots(addresses: string[]) {
+    const raw = await post<{
+      snapshots: Record<string, PlayMarketSnapshotView>;
+    }>("/api/play/markets", { market_addresses: addresses });
+    return raw.snapshots ?? {};
   },
 
   history(args?: { status?: string; limit?: number }) {

@@ -17,6 +17,11 @@ import FeedTradeSheet from "@/components/FeedTradeSheet";
 import HomeFeedActionRail from "@/components/HomeFeedActionRail";
 import HomeFeedCommentsSheet from "@/components/HomeFeedCommentsSheet";
 import ModeSwitch from "@/components/mode/ModeSwitch";
+import { useTradingMode } from "@/components/mode/ModeProvider";
+import {
+  useMarketSnapshotActions,
+  type MarketSnapshot,
+} from "@/components/mode/MarketSnapshotProvider";
 import { isSportSubcategory } from "@/utils/categories";
 import { getProfiles, type Profile } from "@/lib/profiles";
 import type { FlashMarket } from "@/lib/flashMarkets/types";
@@ -364,6 +369,8 @@ function StatusFilterDropdown({
 }
 
 export default function Home() {
+  const { isPlay: isPlayMode } = useTradingMode();
+  const { publishRealSnapshots } = useMarketSnapshotActions();
   const [featuredClassicMarkets, setFeaturedClassicMarkets] = useState<Market[]>([]);
   const [openClassicMarkets, setOpenClassicMarkets] = useState<Market[]>([]);
   const [resolvedClassicMarkets, setResolvedClassicMarkets] = useState<Market[]>([]);
@@ -993,9 +1000,49 @@ export default function Home() {
     []
   );
 
-  /** After a successful buy, update the local market supplies so the feed reflects the new state */
+  /**
+   * After a successful buy, update the local market supplies so the feed
+   * reflects the new state.
+   *
+   * REAL ONLY. A Play trade must never mutate Real supplies — that was the
+   * cross-mode contamination this phase fixes. Play refreshes itself by
+   * invalidating its own snapshot (see FeedTradeSheet).
+   */
+  /**
+   * Publish the Real economics the feed already loaded into the mode-keyed
+   * snapshot store. No extra request: Real keeps its existing data source
+   * and formulas. This also registers which markets are on screen, so a
+   * switch to Play knows exactly which Play books to fetch.
+   */
+  useEffect(() => {
+    const all = [...featuredClassicMarkets, ...openClassicMarkets];
+    if (all.length === 0) return;
+
+    const snaps: MarketSnapshot[] = all.map((m) => {
+      const supplies =
+        m.outcomeSupplies && m.outcomeSupplies.length >= 2
+          ? m.outcomeSupplies.map(Number)
+          : [m.yesSupply || 0, m.noSupply || 0];
+      const total = supplies.reduce((a, b) => a + b, 0);
+      return {
+        mode: "real" as const,
+        marketAddress: m.publicKey,
+        supplies: supplies.map(String),
+        probabilities:
+          total > 0
+            ? supplies.map((s) => s / total)
+            : supplies.map(() => 1 / Math.max(supplies.length, 1)),
+        volume: String(m.totalVolume ?? 0),
+        status: m.resolved ? "resolved" : "open",
+      };
+    });
+
+    publishRealSnapshots(snaps);
+  }, [featuredClassicMarkets, openClassicMarkets, publishRealSnapshots]);
+
   const handleFeedBuySuccess = useCallback(
     (outcomeIndex: number, deltaShares: number) => {
+      if (isPlayMode) return;
       if (!tradeSheetMarket) return;
       const pk = tradeSheetMarket.publicKey;
 
@@ -1015,7 +1062,7 @@ export default function Home() {
       setOpenClassicMarkets(updateMarketList);
       setFeaturedClassicMarkets(updateMarketList);
     },
-    [tradeSheetMarket]
+    [tradeSheetMarket, isPlayMode]
   );
 
   // ------- RENDER -------

@@ -376,6 +376,121 @@ export async function getTrades(args: {
   return (data || []) as unknown as PlayTrade[];
 }
 
+/** Public per-market Play book for the feed. No user-scoped data. */
+export type PlayMarketSnapshot = {
+  market_address: string;
+  outcome_count: number;
+  supplies: string[];
+  /** 0..1, mirrors SQL play_implied_probs (supply_i / SUM(supply)). */
+  probabilities: number[];
+  virtual_pool_usd: string;
+  status: PlayMarketStateStatus;
+  version: number;
+  /** True when no Play state row exists yet — this is the opening book. */
+  seeded: boolean;
+  updated_at: string | null;
+};
+
+/**
+ * Batch Play snapshots for a list of markets.
+ *
+ * Markets that have never been touched in Play have no play_market_states
+ * row. Rather than omit them (which would leave the feed blank or, worse,
+ * tempt a Real fallback), we synthesize the SAME opening book the engine
+ * would create on first interaction: an equal seed on every outcome, read
+ * from play_settings. So a fresh 2-outcome market reports 50/50 and a
+ * 3-outcome market 33/33/33 — backend-defined, never client-invented.
+ *
+ * Only normalization happens here (supply / total). All real pricing —
+ * shares for a stake, payouts — stays in Postgres.
+ */
+export async function getPlayMarketSnapshots(
+  addresses: string[]
+): Promise<Record<string, PlayMarketSnapshot>> {
+  if (addresses.length === 0) return {};
+  const supa = supabaseServer();
+
+  const [settingsRes, statesRes, marketsRes] = await Promise.all([
+    supa
+      .from("play_settings")
+      .select("initial_supply_per_outcome")
+      .eq("id", 1)
+      .maybeSingle(),
+    supa
+      .from("play_market_states")
+      .select(
+        "market_address,outcome_count,outcome_supplies,virtual_pool_usd,status,version,updated_at"
+      )
+      .in("market_address", addresses),
+    supa
+      .from("markets")
+      .select("market_address,outcome_names,market_type")
+      .in("market_address", addresses),
+  ]);
+
+  if (statesRes.error) throw toEngineError(statesRes.error);
+
+  const seed = String(settingsRes.data?.initial_supply_per_outcome ?? "5000");
+
+  // Outcome count for markets with no Play state yet.
+  const outcomeCount = new Map<string, number>();
+  for (const m of marketsRes.data || []) {
+    const names = (m as any).outcome_names;
+    const n = Array.isArray(names) ? names.length : 0;
+    outcomeCount.set(
+      String((m as any).market_address),
+      n >= 2 ? n : Number((m as any).market_type) === 0 ? 2 : 0
+    );
+  }
+
+  const probabilities = (supplies: string[]): number[] => {
+    const nums = supplies.map((s) => Number(s) || 0);
+    const total = nums.reduce((a, b) => a + b, 0);
+    if (total <= 0) return nums.map(() => 1 / Math.max(nums.length, 1));
+    return nums.map((s) => s / total);
+  };
+
+  const out: Record<string, PlayMarketSnapshot> = {};
+
+  for (const row of statesRes.data || []) {
+    const addr = String((row as any).market_address);
+    const supplies = ((row as any).outcome_supplies || []).map((s: unknown) =>
+      String(s)
+    );
+    out[addr] = {
+      market_address: addr,
+      outcome_count: Number((row as any).outcome_count) || supplies.length,
+      supplies,
+      probabilities: probabilities(supplies),
+      virtual_pool_usd: String((row as any).virtual_pool_usd ?? "0"),
+      status: ((row as any).status || "open") as PlayMarketStateStatus,
+      version: Number((row as any).version) || 0,
+      seeded: false,
+      updated_at: (row as any).updated_at ?? null,
+    };
+  }
+
+  for (const addr of addresses) {
+    if (out[addr]) continue;
+    const n = outcomeCount.get(addr) ?? 0;
+    if (n < 2) continue; // unknown market — omit rather than invent
+    const supplies = Array.from({ length: n }, () => seed);
+    out[addr] = {
+      market_address: addr,
+      outcome_count: n,
+      supplies,
+      probabilities: probabilities(supplies),
+      virtual_pool_usd: "0",
+      status: "open",
+      version: 0,
+      seeded: true,
+      updated_at: null,
+    };
+  }
+
+  return out;
+}
+
 export async function getMarketState(
   marketAddress: string
 ): Promise<PlayMarketState | null> {

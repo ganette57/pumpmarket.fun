@@ -13,6 +13,7 @@ import { triggerHaptic } from "@/utils/haptics";
 import { useTradingMode } from "@/components/mode/ModeProvider";
 import { usePlaySession } from "@/components/play/PlaySessionProvider";
 import { PlayApiError, formatUsd, playClient, toCents } from "@/lib/playClient";
+import { useMarketSnapshotActions } from "@/components/mode/MarketSnapshotProvider";
 
 interface FeedTradeSheetProps {
   open: boolean;
@@ -54,6 +55,7 @@ export default function FeedTradeSheet({
 
   const { isPlay } = useTradingMode();
   const play = usePlaySession();
+  const { invalidate: invalidateSnapshot } = useMarketSnapshotActions();
 
   const [selectedOutcome, setSelectedOutcome] = useState(0);
   const [amount, setAmount] = useState<number>(0);
@@ -212,9 +214,15 @@ export default function FeedTradeSheet({
       });
 
       play.applyBalance(res.balance_usd);
+
+      // Refresh ONLY the Play book for this market. The Real snapshot is
+      // untouched — a Play trade must not move Real supplies or volume.
+      invalidateSnapshot("play", market.publicKey);
+
       setSuccess(true);
       triggerHaptic("success");
-      onBuySuccess?.(safeOutcome, Number(res.trade.shares) || 0);
+      // Intentionally NOT calling onBuySuccess: that optimistically mutates
+      // the Real feed state. Play refreshes through its own snapshot above.
       setTimeout(() => onClose(), 800);
     } catch (e) {
       if (e instanceof PlayApiError) {
@@ -239,8 +247,8 @@ export default function FeedTradeSheet({
     selectedOutcome,
     outcomeNames.length,
     play,
-    onBuySuccess,
     onClose,
+    invalidateSnapshot,
   ]);
 
   /* ---------------------------------------------------------------------- */

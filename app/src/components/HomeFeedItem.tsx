@@ -8,6 +8,10 @@ import { lamportsToSol } from "@/utils/solana";
 import { triggerHaptic } from "@/utils/haptics";
 import MobileFeedVideoBackground from "@/components/MobileFeedVideoBackground";
 import {
+  useMarketSnapshot,
+  type MarketSnapshot,
+} from "@/components/mode/MarketSnapshotProvider";
+import {
   LiveActivityDrawer,
   LiveChartDrawer,
 } from "@/components/LiveMobileContent";
@@ -109,17 +113,55 @@ export default function HomeFeedItem({
       ? market.outcomeNames
       : ["YES", "NO"];
 
-  const supplies =
+  // Mode-specific economics come from a snapshot keyed by market AND mode.
+  // The Real values the feed already loaded are passed as the fallback and
+  // are used ONLY while Real is active — Play never borrows them.
+  const realSupplies =
     market.outcomeSupplies && market.outcomeSupplies.length >= 2
       ? market.outcomeSupplies.map(Number)
       : [market.yesSupply || 0, market.noSupply || 0];
 
-  const totalSupply = supplies.reduce((a, b) => a + b, 0);
-  const percents = supplies.map((s) =>
-    totalSupply > 0 ? ((s / totalSupply) * 100).toFixed(0) : "50"
+  const realFallback = useMemo<MarketSnapshot>(
+    () => ({
+      mode: "real" as const,
+      marketAddress: market.publicKey,
+      supplies: realSupplies.map(String),
+      probabilities: (() => {
+        const t = realSupplies.reduce((a, b) => a + b, 0);
+        return t > 0
+          ? realSupplies.map((s) => s / t)
+          : realSupplies.map(() => 1 / Math.max(realSupplies.length, 1));
+      })(),
+      volume: String(market.totalVolume ?? 0),
+      status: market.resolved ? "resolved" : "open",
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [market.publicKey, market.totalVolume, market.resolved, realSupplies.join(",")]
   );
 
-  const volSol = lamportsToSol(market.totalVolume);
+  const { snapshot, mode } = useMarketSnapshot(market.publicKey, realFallback);
+
+  const isPlayMode = mode === "play";
+
+  const percents = snapshot
+    ? snapshot.probabilities.map((p) => (p * 100).toFixed(0))
+    : realSupplies.map(() => "—");
+
+  /**
+   * Volume label. Real keeps lamports -> SOL exactly as before. Play shows
+   * its own virtual pool in USD; a Real SOL figure must never appear while
+   * Play is active.
+   */
+  const volumeLabel = (() => {
+    if (isPlayMode) {
+      if (!snapshot) return "—";
+      const usd = Number(snapshot.volume) || 0;
+      return usd >= 1000
+        ? `$${(usd / 1000).toFixed(1)}k`
+        : `$${usd.toFixed(usd < 100 ? 2 : 0)}`;
+    }
+    return `${lamportsToSol(Number(snapshot?.volume ?? market.totalVolume)).toFixed(2)} SOL`;
+  })();
 
   return (
     <div
@@ -274,9 +316,7 @@ export default function HomeFeedItem({
           {/* volume */}
           <div className="flex items-center gap-1 flex-shrink-0">
             <TrendingUp className="w-3 h-3 text-pump-green" />
-            <span className="font-semibold text-white/90">
-              {volSol.toFixed(2)} SOL
-            </span>
+            <span className="font-semibold text-white/90">{volumeLabel}</span>
           </div>
 
           {/* time */}
