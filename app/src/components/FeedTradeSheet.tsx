@@ -30,8 +30,17 @@ interface FeedTradeSheetProps {
     noSupply?: number;
   } | null;
   defaultOutcomeIndex?: number;
-  /** Called after a successful buy with the outcome index and number of shares bought */
-  onBuySuccess?: (outcomeIndex: number, deltaShares: number) => void;
+  /**
+   * Called after a successful REAL buy. `costSol` is the authoritative
+   * volume delta — the same SOL amount recorded to markets.total_volume via
+   * applyTradeToMarketInSupabase — so the feed can reconcile Real volume.
+   * The Play path never calls this (it refreshes via its own snapshot).
+   */
+  onBuySuccess?: (
+    outcomeIndex: number,
+    deltaShares: number,
+    costSol: number
+  ) => void;
 }
 
 function clampInt(n: number, min: number, max: number) {
@@ -342,7 +351,9 @@ export default function FeedTradeSheet({
 
       setSuccess(true);
       triggerHaptic("success");
-      onBuySuccess?.(safeOutcome, approxShares);
+      // effectiveAmount is the SOL spent — the authoritative total_volume
+      // delta the feed reconciles against.
+      onBuySuccess?.(safeOutcome, approxShares, effectiveAmount);
       setTimeout(() => {
         onClose();
       }, 800);

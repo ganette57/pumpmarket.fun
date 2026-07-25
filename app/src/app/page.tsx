@@ -24,6 +24,8 @@ import {
 } from "@/components/mode/MarketSnapshotProvider";
 import { isSportSubcategory } from "@/utils/categories";
 import { getProfiles, type Profile } from "@/lib/profiles";
+import { getMarketByAddress } from "@/lib/markets";
+import { solToLamports } from "@/utils/solana";
 import type { FlashMarket } from "@/lib/flashMarkets/types";
 
 type Market = {
@@ -1040,13 +1042,41 @@ export default function Home() {
     publishRealSnapshots(snaps);
   }, [featuredClassicMarkets, openClassicMarkets, publishRealSnapshots]);
 
+  // Per-market epoch guard for authoritative Real reconciles. A refetch only
+  // applies if it is still the latest for that market, so a delayed response
+  // from an earlier trade can never overwrite a newer one.
+  const realReconcileEpochRef = useRef<Map<string, number>>(new Map());
+
+  /**
+   * After a successful REAL buy, update the feed's Real economics.
+   *
+   * REAL ONLY. A Play trade never reaches here (isPlayMode guard + the Play
+   * path no longer calls onBuySuccess), so Real and Play never cross.
+   *
+   * Optimistic then authoritative:
+   *  1. Bump supplies (odds) AND totalVolume immediately, with no lag. The
+   *     volume delta is exactly what the backend records
+   *     (applyTradeToMarketInSupabase adds the same solToLamports(costSol)),
+   *     so it is not a guess.
+   *  2. Refetch the authoritative markets row and reconcile supplies +
+   *     total_volume, epoch-guarded — folding in concurrent trades and
+   *     correcting the approximate optimistic share count.
+   *
+   * The updated lists feed the Real-snapshot publish effect above, so the
+   * mode-keyed snapshot (and HomeFeedItem's volumeLabel) picks up the new
+   * Real volume with no extra plumbing. Play is untouched.
+   */
   const handleFeedBuySuccess = useCallback(
-    (outcomeIndex: number, deltaShares: number) => {
+    (outcomeIndex: number, deltaShares: number, costSol: number) => {
       if (isPlayMode) return;
       if (!tradeSheetMarket) return;
       const pk = tradeSheetMarket.publicKey;
+      const deltaVolumeLamports = solToLamports(
+        Number.isFinite(costSol) && costSol > 0 ? costSol : 0
+      );
 
-      const updateMarketList = (list: Market[]) =>
+      // Stage 1 — optimistic supplies + volume.
+      const applyOptimistic = (list: Market[]) =>
         list.map((m) => {
           if (m.publicKey !== pk) return m;
           const updated = { ...m };
@@ -1056,11 +1086,51 @@ export default function Home() {
           }
           if (outcomeIndex === 0) updated.yesSupply = (updated.yesSupply || 0) + deltaShares;
           if (outcomeIndex === 1) updated.noSupply = (updated.noSupply || 0) + deltaShares;
+          updated.totalVolume = (updated.totalVolume || 0) + deltaVolumeLamports;
           return updated;
         });
 
-      setOpenClassicMarkets(updateMarketList);
-      setFeaturedClassicMarkets(updateMarketList);
+      setOpenClassicMarkets(applyOptimistic);
+      setFeaturedClassicMarkets(applyOptimistic);
+
+      // Stage 2 — authoritative reconcile.
+      const epoch = (realReconcileEpochRef.current.get(pk) || 0) + 1;
+      realReconcileEpochRef.current.set(pk, epoch);
+
+      void (async () => {
+        try {
+          const row = await getMarketByAddress(pk);
+          if (!row) return;
+          // Superseded by a newer trade on this market — drop this response.
+          if (realReconcileEpochRef.current.get(pk) !== epoch) return;
+
+          const authSupplies: number[] | undefined = Array.isArray(
+            row.outcome_supplies
+          )
+            ? row.outcome_supplies.map((x: any) => Number(x) || 0)
+            : undefined;
+          const authVolume = Number(row.total_volume || 0);
+          const authYes = Number(row.yes_supply || 0);
+          const authNo = Number(row.no_supply || 0);
+
+          const applyAuthoritative = (list: Market[]) =>
+            list.map((m) => {
+              if (m.publicKey !== pk) return m;
+              return {
+                ...m,
+                totalVolume: authVolume,
+                outcomeSupplies: authSupplies ?? m.outcomeSupplies,
+                yesSupply: authSupplies ? authSupplies[0] ?? authYes : authYes,
+                noSupply: authSupplies ? authSupplies[1] ?? authNo : authNo,
+              };
+            });
+
+          setOpenClassicMarkets(applyAuthoritative);
+          setFeaturedClassicMarkets(applyAuthoritative);
+        } catch {
+          // Keep the optimistic value on failure — never revert to stale.
+        }
+      })();
     },
     [tradeSheetMarket, isPlayMode]
   );
