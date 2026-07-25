@@ -18,6 +18,7 @@ import TradingPanel from "@/components/TradingPanel";
 import PlayTradingPanel from "@/components/PlayTradingPanel";
 import OddsHistoryChart from "@/components/OddsHistoryChart";
 import MarketActivityTab from "@/components/MarketActivity";
+import { useTradingMode } from "@/components/mode/ModeProvider";
 import {
   useMarketSnapshot,
   useMarketSnapshotActions,
@@ -3005,6 +3006,44 @@ if (snap?.posAcc?.shares) {
     };
   }, [market]);
 
+  // ---- Mode-aware DISPLAY economics (hooks — must stay above every early
+  //      return so hook order never changes between renders) --------------
+  // Only the page's DISPLAYED odds and volume become mode-aware, via the
+  // shared MarketSnapshotProvider (no second store). The Real TradingPanel
+  // still receives derived.supplies, so Real execution is untouched.
+  const { isPlay: isPlayTrading } = useTradingMode();
+  const { publishRealSnapshots } = useMarketSnapshotActions();
+  const snapshotKey = market?.publicKey ?? id ?? "";
+
+  const realDisplayFallback = useMemo<MarketSnapshot>(() => {
+    const sup = derived?.supplies ?? [];
+    const total = sup.reduce((a, b) => a + b, 0);
+    return {
+      mode: "real" as const,
+      marketAddress: snapshotKey,
+      supplies: sup.map(String),
+      probabilities:
+        total > 0
+          ? sup.map((s) => s / total)
+          : sup.map(() => 1 / Math.max(sup.length, 1)),
+      volume: String(Number((market as any)?.totalVolume ?? 0)),
+      status: market?.resolved ? "resolved" : "open",
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshotKey, derived, (market as any)?.totalVolume, market?.resolved]);
+
+  // Register this market + publish its Real snapshot so the provider can
+  // fetch the Play book when the user switches to Play.
+  useEffect(() => {
+    if (!snapshotKey || !derived) return;
+    publishRealSnapshots([realDisplayFallback]);
+  }, [snapshotKey, derived, realDisplayFallback, publishRealSnapshots]);
+
+  const { snapshot: modeSnapshot } = useMarketSnapshot(
+    snapshotKey,
+    realDisplayFallback
+  );
+
   const userSharesForUi = useMemo(() => {
     const len = derived?.names?.length ?? 0;
     const out = Array(len).fill(0);
@@ -3811,43 +3850,12 @@ useEffect(() => {
 
   const { marketType, names, supplies, percentages: realPercentages, isBinaryStyle, missingOutcomes } = derived;
 
-  // ---- Mode-aware DISPLAY economics ------------------------------------
-  // `supplies` above stays REAL and is what the Real TradingPanel receives.
-  // Only the page's DISPLAYED odds and volume become mode-aware, via the
-  // shared MarketSnapshotProvider (no second store). In Real mode this is
-  // behaviourally identical to before (realPercentages / SOL volume).
-  const marketAddr = market.publicKey;
-  const { publishRealSnapshots } = useMarketSnapshotActions();
-  const realDisplayFallback = useMemo<MarketSnapshot>(() => {
-    const total = supplies.reduce((a, b) => a + b, 0);
-    return {
-      mode: "real" as const,
-      marketAddress: marketAddr,
-      supplies: supplies.map(String),
-      probabilities:
-        total > 0
-          ? supplies.map((s) => s / total)
-          : supplies.map(() => 1 / Math.max(supplies.length, 1)),
-      volume: String(Number((market as any)?.totalVolume ?? 0)),
-      status: market?.resolved ? "resolved" : "open",
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [marketAddr, supplies.join(","), (market as any)?.totalVolume, market?.resolved]);
-
-  // Register this market + publish its Real snapshot so the provider can
-  // fetch the Play book when the user switches to Play.
-  useEffect(() => {
-    publishRealSnapshots([realDisplayFallback]);
-  }, [realDisplayFallback, publishRealSnapshots]);
-
-  const { snapshot: modeSnapshot, mode: tradingMode } = useMarketSnapshot(
-    marketAddr,
-    realDisplayFallback
-  );
-  const isPlayTrading = tradingMode === "play";
-
-  // Odds shown across the page (outcome tiles, quick-buy bars). Real panel
-  // still receives `supplies`, so this never touches Real execution.
+  // Odds shown across the page (outcome tiles, quick-buy bars). `supplies`
+  // above stays REAL and is what the Real TradingPanel receives, so this
+  // display-only override never touches Real execution. In Real mode it is
+  // behaviourally identical (realPercentages). Hooks that back this live at
+  // the top of the component (see modeSnapshot / isPlayTrading), above every
+  // early return, to keep hook order stable.
   const percentages =
     isPlayTrading && modeSnapshot
       ? modeSnapshot.probabilities.map((p) => p * 100)
