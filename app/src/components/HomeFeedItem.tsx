@@ -377,6 +377,7 @@ export default function HomeFeedItem({
         names={drawerNames}
         percentages={null}
         question={market.question}
+        playPlaceholder={isPlayMode}
       />
       <LiveActivityDrawer
         open={activityOpen}
