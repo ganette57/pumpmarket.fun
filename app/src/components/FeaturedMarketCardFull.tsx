@@ -9,6 +9,10 @@ import CategoryImagePlaceholder from './CategoryImagePlaceholder';
 import { lamportsToSol } from '@/utils/solana';
 import OddsHistoryFromTrades from '@/components/OddsHistoryFromTrades';
 import { useInViewOnce } from '@/hooks/useInViewOnce';
+import {
+  useMarketSnapshot,
+  type MarketSnapshot,
+} from '@/components/mode/MarketSnapshotProvider';
 
 interface FeaturedMarket {
   id: string;
@@ -63,13 +67,56 @@ export default function FeaturedMarketCardFull({ market, liveSessionId, creatorP
     return [Number(market.yesSupply || 0), Number(market.noSupply || 0)];
   }, [market.outcomeSupplies, market.yesSupply, market.noSupply, outcomes]);
 
-  const totalSupply = supplies.reduce((sum, s) => sum + (s || 0), 0);
-  const percentages = supplies.map((s) =>
-    totalSupply > 0 ? ((s || 0) / totalSupply) * 100 : 100 / supplies.length
+  // `supplies` above stays REAL and continues to feed the odds-history chart
+  // untouched (charts are out of this phase's scope). Everything the CARD
+  // itself renders — percentages, per-outcome shares, volume — comes from
+  // the mode-aware snapshot instead. market.id is the on-chain address, the
+  // snapshot key (see page.tsx: id === market.publicKey).
+  const realFallback = useMemo<MarketSnapshot>(
+    () => {
+      const t = supplies.reduce((sum, s) => sum + (s || 0), 0);
+      return {
+        mode: 'real' as const,
+        marketAddress: market.id,
+        supplies: supplies.map(String),
+        probabilities:
+          t > 0
+            ? supplies.map((s) => (s || 0) / t)
+            : supplies.map(() => 1 / Math.max(supplies.length, 1)),
+        volume: String(market.volume ?? 0),
+        status: 'open',
+      };
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [market.id, market.volume, supplies.join(',')]
   );
 
-  const volSol = lamportsToSol(market.volume);
-  const volLabel = volSol >= 1000 ? `${(volSol / 1000).toFixed(1)}k` : volSol.toFixed(2);
+  const { snapshot, mode } = useMarketSnapshot(market.id, realFallback);
+  const isPlayMode = mode === 'play';
+
+  // Percentages (0..100) and per-outcome shares for the CARD, from the snapshot.
+  const displayPercentages = snapshot
+    ? snapshot.probabilities.map((p) => p * 100)
+    : percentagesFromReal();
+  function percentagesFromReal() {
+    const t = supplies.reduce((sum, s) => sum + (s || 0), 0);
+    return supplies.map((s) => (t > 0 ? ((s || 0) / t) * 100 : 100 / supplies.length));
+  }
+  // Play supplies are fractional; round for the "N shares" subtitle so it
+  // stays clean. Real supplies are already whole numbers.
+  const displaySupplies = snapshot
+    ? snapshot.supplies.map((s) => Math.round(Number(s) || 0))
+    : supplies;
+
+  const volLabel = (() => {
+    if (isPlayMode) {
+      if (!snapshot) return '—';
+      const usd = Number(snapshot.volume) || 0;
+      return usd >= 1000 ? `$${(usd / 1000).toFixed(1)}k` : `$${usd.toFixed(usd < 100 ? 2 : 0)}`;
+    }
+    const volSol = lamportsToSol(Number(snapshot?.volume ?? market.volume));
+    return `${volSol >= 1000 ? `${(volSol / 1000).toFixed(1)}k` : volSol.toFixed(2)} SOL`;
+  })();
 
   const showLiveBadge = !!market.isLive || !!liveSessionId;
 
@@ -165,7 +212,7 @@ export default function FeaturedMarketCardFull({ market, liveSessionId, creatorP
               <div className="flex items-center gap-5 text-sm text-gray-400 mb-8">
                 <div className="flex items-center gap-2">
                   <TrendingUp className="w-4 h-4 text-pump-green" />
-                  <span className="font-semibold text-white">{volLabel} SOL</span>
+                  <span className="font-semibold text-white">{volLabel}</span>
                   <span className="text-gray-500">Vol</span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -197,12 +244,12 @@ export default function FeaturedMarketCardFull({ market, liveSessionId, creatorP
                           isYes ? 'text-pump-green' : 'text-red-400'
                         }`}
                       >
-                        {percentages[index]?.toFixed(0)}%
+                        {displayPercentages[index]?.toFixed(0)}%
                       </span>
 
                       {/* Shares - subtle */}
                       <span className="text-sm text-gray-500 flex-shrink-0">
-                        {(supplies[index] || 0).toLocaleString()} shares
+                        {(displaySupplies[index] || 0).toLocaleString()} shares
                       </span>
                     </div>
                   );
@@ -277,7 +324,7 @@ export default function FeaturedMarketCardFull({ market, liveSessionId, creatorP
                   </h2>
 
                   <div className="mt-2 text-xs text-gray-400 flex items-center gap-3">
-                    <span className="text-white font-medium">{volLabel} SOL</span>
+                    <span className="text-white font-medium">{volLabel}</span>
                     <span className="text-gray-600">•</span>
                     <span>{market.daysLeft}d left</span>
                   </div>
@@ -307,12 +354,12 @@ export default function FeaturedMarketCardFull({ market, liveSessionId, creatorP
                           isYes ? 'text-pump-green' : 'text-red-400'
                         }`}
                       >
-                        {percentages[index]?.toFixed(0)}%
+                        {displayPercentages[index]?.toFixed(0)}%
                       </span>
 
                       {/* Shares */}
                       <span className="text-xs text-gray-500 flex-shrink-0">
-                        {(supplies[index] || 0).toLocaleString()} shares
+                        {(displaySupplies[index] || 0).toLocaleString()} shares
                       </span>
                     </div>
                   );

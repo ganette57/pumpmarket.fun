@@ -1017,16 +1017,28 @@ export default function Home() {
    * switch to Play knows exactly which Play books to fetch.
    */
   useEffect(() => {
-    const all = [...featuredClassicMarkets, ...openClassicMarkets];
+    // All three lists, so every card the mobile feed OR the desktop grid can
+    // render (open, featured, and resolved via the All/Resolved filters) is
+    // registered — otherwise those addresses would have no Play snapshot to
+    // fetch and would show a neutral placeholder in Play mode.
+    const all = [
+      ...featuredClassicMarkets,
+      ...openClassicMarkets,
+      ...resolvedClassicMarkets,
+    ];
     if (all.length === 0) return;
 
-    const snaps: MarketSnapshot[] = all.map((m) => {
+    const seen = new Set<string>();
+    const snaps: MarketSnapshot[] = [];
+    for (const m of all) {
+      if (seen.has(m.publicKey)) continue;
+      seen.add(m.publicKey);
       const supplies =
         m.outcomeSupplies && m.outcomeSupplies.length >= 2
           ? m.outcomeSupplies.map(Number)
           : [m.yesSupply || 0, m.noSupply || 0];
       const total = supplies.reduce((a, b) => a + b, 0);
-      return {
+      snaps.push({
         mode: "real" as const,
         marketAddress: m.publicKey,
         supplies: supplies.map(String),
@@ -1036,11 +1048,16 @@ export default function Home() {
             : supplies.map(() => 1 / Math.max(supplies.length, 1)),
         volume: String(m.totalVolume ?? 0),
         status: m.resolved ? "resolved" : "open",
-      };
-    });
+      });
+    }
 
     publishRealSnapshots(snaps);
-  }, [featuredClassicMarkets, openClassicMarkets, publishRealSnapshots]);
+  }, [
+    featuredClassicMarkets,
+    openClassicMarkets,
+    resolvedClassicMarkets,
+    publishRealSnapshots,
+  ]);
 
   // Per-market epoch guard for authoritative Real reconciles. A refetch only
   // applies if it is still the latest for that market, so a delayed response
