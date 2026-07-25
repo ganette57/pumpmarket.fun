@@ -502,3 +502,207 @@ export async function getMarketState(
   if (error) throw toEngineError(error);
   return (data as PlayMarketState) ?? null;
 }
+
+/* -------------------------------------------------------------------------- */
+/*  Play chart history                                                         */
+/* -------------------------------------------------------------------------- */
+
+/** One point on the Play probability/price chart. index-stable per outcome. */
+export type PlayHistoryPoint = {
+  /** ISO timestamp of the event (opening book, or a trade). */
+  t: string;
+  /** 0 = opening book, then the trade sequence number (1..N). */
+  seq: number;
+  /** Implied probability per outcome, 0..100, ordered by outcome index. */
+  pct: number[];
+  /** Cumulative virtual pool USD after this point (decimal string). */
+  pool_usd: string;
+};
+
+export type PlayMarketHistory = {
+  market_address: string;
+  outcome_count: number;
+  outcome_names: string[];
+  status: PlayMarketStateStatus;
+  /** Authoritative play_market_states.version (change signal), 0 if untouched. */
+  version: number;
+  /** True when there are no Play trades yet — the chart is the opening book only. */
+  seeded: boolean;
+  points: PlayHistoryPoint[];
+};
+
+/** Hard ceiling on trade rows scanned per market — bounds a pathological read. */
+const PLAY_HISTORY_MAX_TRADES = 5000;
+/** Default number of points returned after downsampling. */
+const PLAY_HISTORY_MAX_POINTS = 500;
+
+/** supply_i / SUM(supply) * 100, mirrors SQL play_implied_probs. Even split on empty. */
+function playPctFromSupplies(supplies: number[]): number[] {
+  const total = supplies.reduce((a, b) => a + (b > 0 ? b : 0), 0);
+  if (total <= 0) return supplies.map(() => 100 / Math.max(supplies.length, 1));
+  return supplies.map((s) => Number((((s > 0 ? s : 0) / total) * 100).toFixed(4)));
+}
+
+/**
+ * Stride downsample that always keeps the first and last point. Play history
+ * is small in practice (buy-only, flash markets), so this only trips on the
+ * rare long-lived market. Never smooths values — it drops whole points.
+ */
+function downsampleHistory(
+  points: PlayHistoryPoint[],
+  maxPoints: number
+): PlayHistoryPoint[] {
+  if (points.length <= maxPoints || maxPoints < 2) return points;
+  const step = Math.ceil(points.length / maxPoints);
+  const out: PlayHistoryPoint[] = [];
+  for (let i = 0; i < points.length; i += step) out.push(points[i]);
+  const last = points[points.length - 1];
+  if (out[out.length - 1] !== last) out.push(last);
+  return out;
+}
+
+/**
+ * Authoritative Play probability history for one market, reconstructed from
+ * the append-only play_trades ledger.
+ *
+ * WHY REPLAY IS AUTHORITATIVE, NOT DERIVED
+ * ----------------------------------------
+ * Play is BUY-ONLY. play_execute_trade only ever ADDS `shares` to the bought
+ * outcome's supply (see 20260721_play_mode_core.sql) — there is no sell,
+ * partial close or transfer, and settlement bumps the version without touching
+ * supplies. So the full outcome-supply vector at every version is exactly:
+ *
+ *     opening_seed  +  Σ shares per outcome, in created_at order
+ *
+ * The opening seed is recovered EXACTLY from persisted state when a market has
+ * been touched (current supply − Σ its trade shares), and falls back to
+ * play_settings.initial_supply_per_outcome (the same seed getPlayMarketSnapshots
+ * uses) for an untouched market. No client math, no Real data, no fabrication:
+ * the last replayed point reconciles to play_market_states.outcome_supplies.
+ *
+ * Idempotency: play_trades is unique on (account_id, client_trade_id), so a
+ * replayed submit never adds a second row and therefore never a second point.
+ */
+export async function getPlayMarketHistory(
+  marketAddress: string,
+  opts?: { maxPoints?: number }
+): Promise<PlayMarketHistory> {
+  const addr = normalizeMarketAddress(marketAddress);
+  const supa = supabaseServer();
+  const maxPoints = Math.min(
+    Math.max(opts?.maxPoints ?? PLAY_HISTORY_MAX_POINTS, 2),
+    PLAY_HISTORY_MAX_POINTS
+  );
+
+  const [settingsRes, stateRes, marketRes, tradesRes] = await Promise.all([
+    supa
+      .from("play_settings")
+      .select("initial_supply_per_outcome")
+      .eq("id", 1)
+      .maybeSingle(),
+    supa
+      .from("play_market_states")
+      .select(
+        "outcome_count,outcome_supplies,virtual_pool_usd,status,version,created_at"
+      )
+      .eq("market_address", addr)
+      .maybeSingle(),
+    supa
+      .from("markets")
+      .select("outcome_names,market_type,created_at")
+      .eq("market_address", addr)
+      .maybeSingle(),
+    supa
+      .from("play_trades")
+      .select("created_at,outcome_index,shares,stake_usd")
+      .eq("market_address", addr)
+      .order("created_at", { ascending: true })
+      .limit(PLAY_HISTORY_MAX_TRADES),
+  ]);
+
+  if (stateRes.error) throw toEngineError(stateRes.error);
+  if (tradesRes.error) throw toEngineError(tradesRes.error);
+
+  const state = (stateRes.data as any) ?? null;
+  const marketRow = (marketRes.data as any) ?? null;
+  const trades = ((tradesRes.data as any[]) || []).filter(Boolean);
+
+  const names: string[] = Array.isArray(marketRow?.outcome_names)
+    ? marketRow.outcome_names.map((n: unknown) => String(n))
+    : [];
+
+  const outcomeCount =
+    Number(state?.outcome_count) ||
+    names.length ||
+    (Number(marketRow?.market_type) === 0 ? 2 : 0);
+
+  const baseResult: PlayMarketHistory = {
+    market_address: addr,
+    outcome_count: outcomeCount >= 2 ? outcomeCount : 0,
+    outcome_names: names,
+    status: ((state?.status as PlayMarketStateStatus) || "open"),
+    version: Number(state?.version) || 0,
+    seeded: !state,
+    points: [],
+  };
+
+  // Unknown market (no state, no outcome metadata) — nothing to draw.
+  if (outcomeCount < 2) return baseResult;
+
+  const seed = Number(settingsRes.data?.initial_supply_per_outcome ?? 5000) || 0;
+
+  // Opening supplies: recover the EXACT seed from persisted state where we can,
+  // otherwise fall back to the configured seed (equal on every outcome).
+  const opening = new Array<number>(outcomeCount).fill(seed);
+  if (state && Array.isArray(state.outcome_supplies)) {
+    const cur = state.outcome_supplies.map((s: unknown) => Number(s) || 0);
+    const bought = new Array<number>(outcomeCount).fill(0);
+    for (const tr of trades) {
+      const i = Number(tr.outcome_index);
+      if (i >= 0 && i < outcomeCount) bought[i] += Number(tr.shares) || 0;
+    }
+    for (let i = 0; i < outcomeCount; i++) {
+      opening[i] = Math.max(0, (cur[i] ?? seed) - (bought[i] ?? 0));
+    }
+  }
+
+  const points: PlayHistoryPoint[] = [];
+  const supplies = [...opening];
+  // Money accumulates in integer cents — never a binary float.
+  let poolCents = 0;
+  const centsToStr = (c: number) => (c / 100).toFixed(2);
+
+  const openingT =
+    (state?.created_at as string) ||
+    (marketRow?.created_at as string) ||
+    (trades[0]?.created_at as string) ||
+    new Date().toISOString();
+
+  points.push({
+    t: openingT,
+    seq: 0,
+    pct: playPctFromSupplies(supplies),
+    pool_usd: "0.00",
+  });
+
+  let seq = 0;
+  for (const tr of trades) {
+    const i = Number(tr.outcome_index);
+    const sh = Number(tr.shares) || 0;
+    if (i >= 0 && i < outcomeCount) supplies[i] += sh;
+    poolCents += Math.round((Number(tr.stake_usd) || 0) * 100);
+    seq += 1;
+    points.push({
+      t: String(tr.created_at),
+      seq,
+      pct: playPctFromSupplies(supplies),
+      pool_usd: centsToStr(poolCents),
+    });
+  }
+
+  return {
+    ...baseResult,
+    seeded: trades.length === 0,
+    points: downsampleHistory(points, maxPoints),
+  };
+}

@@ -17,6 +17,7 @@ import CommentsSection from "@/components/CommentsSection";
 import TradingPanel from "@/components/TradingPanel";
 import PlayTradingPanel from "@/components/PlayTradingPanel";
 import OddsHistoryChart from "@/components/OddsHistoryChart";
+import PlayOddsChart from "@/components/play/PlayOddsChart";
 import MarketActivityTab from "@/components/MarketActivity";
 import { useTradingMode } from "@/components/mode/ModeProvider";
 import {
@@ -4802,10 +4803,14 @@ const ended = endedByTime;
               <div className="bg-black border border-gray-800 rounded-xl p-5 md:p-6">
 
                 {isPlayTrading ? (
-                  // Play chart is a later phase. Show a neutral placeholder
-                  // rather than the Real (SOL) history mislabelled as Play.
-                  <div className="text-sm text-gray-500 border border-gray-800 rounded-lg p-6 text-center">
-                    Play chart coming next
+                  // Play history — authoritative Play probabilities over time,
+                  // reconstructed from play_trades. Never the Real (SOL) book.
+                  <div className="py-1 md:py-2">
+                    <PlayOddsChart
+                      marketAddress={market.publicKey}
+                      outcomeNames={names}
+                      height={isMobile ? 240 : 320}
+                    />
                   </div>
                 ) : filteredOddsPoints.length ? (
                   <>

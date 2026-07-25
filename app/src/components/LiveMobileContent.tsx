@@ -18,6 +18,7 @@ import {
 import { supabase } from "@/lib/supabaseClient";
 import { getMarketByAddress } from "@/lib/markets";
 import { buildOddsSeries, downsample } from "@/lib/marketHistory";
+import PlayOddsChart from "@/components/play/PlayOddsChart";
 import CommentsSection from "@/components/CommentsSection";
 
 // Reuse the trade page's odds chart, lazy-loaded so recharts is only fetched
@@ -941,11 +942,13 @@ export function LiveChartDrawer({
       closeLabel="Close chart"
     >
       {playPlaceholder ? (
-        <div className="h-[260px] flex flex-col items-center justify-center text-center gap-1">
-          <p className="text-sm text-gray-400">Play chart coming next</p>
-          <p className="text-xs text-gray-600">
-            Your Play odds history will appear here soon.
-          </p>
+        <div className="rounded-xl bg-black/40 border border-white/[0.06] p-2">
+          <PlayOddsChart
+            marketAddress={marketAddress}
+            outcomeNames={chartNames}
+            height={260}
+            enabled={open}
+          />
         </div>
       ) : !hasData ? (
         <div className="h-[260px] flex flex-col items-center justify-center text-center gap-1">

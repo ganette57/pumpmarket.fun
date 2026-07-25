@@ -163,6 +163,27 @@ export type PlayMarketSnapshotView = {
   updated_at: string | null;
 };
 
+export type PlayHistoryPointView = {
+  /** ISO timestamp. */
+  t: string;
+  /** 0 = opening book, then trade sequence 1..N. */
+  seq: number;
+  /** Implied probability per outcome, 0..100, index-stable. */
+  pct: number[];
+  /** Cumulative virtual pool USD (decimal string). */
+  pool_usd: string;
+};
+
+export type PlayMarketHistoryView = {
+  market_address: string;
+  outcome_count: number;
+  outcome_names: string[];
+  status: string;
+  version: number;
+  seeded: boolean;
+  points: PlayHistoryPointView[];
+};
+
 export type PlayTradeResponse = {
   replayed: boolean;
   trade: {
@@ -312,5 +333,29 @@ export const playClient = {
       "/api/play/history",
       args ?? {}
     );
+  },
+
+  /**
+   * Authoritative Play probability history for one market's chart. Public —
+   * no session required (odds are public market data). Returns index-stable
+   * per-outcome percentages over time, never Real data. pool_usd is kept as a
+   * decimal string.
+   */
+  async marketHistory(marketAddress: string, opts?: { maxPoints?: number }) {
+    const raw = await post<{ history: PlayMarketHistoryView }>(
+      "/api/play/markets/history",
+      {
+        market_address: marketAddress,
+        ...(opts?.maxPoints ? { max_points: opts.maxPoints } : {}),
+      }
+    );
+    const h = raw.history;
+    return {
+      ...h,
+      points: (h?.points ?? []).map((p) => ({
+        ...p,
+        pool_usd: decimal(p.pool_usd),
+      })),
+    } as PlayMarketHistoryView;
   },
 };
