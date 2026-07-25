@@ -1,0 +1,152 @@
+"use client";
+
+// src/components/play/useLiveMarketEconomics.ts
+//
+// Mode-aware economics for a single Live market, built ENTIRELY on the
+// existing MarketSnapshotProvider — no Live-specific store, no second cache.
+//
+// It answers "what odds / volume / status should this Live surface show in
+// the CURRENT mode?" and nothing else. It never signs, never trades, never
+// touches the Real Solana path.
+//
+// REAL SAFETY
+// -----------
+// Call sites keep their existing Real rendering path untouched by only
+// consuming the PLAY branch of the result (`isPlay` / `percentages` /
+// `volumeLabel` / `perSide`) when `isPlay` is true, and passing their
+// original Real values otherwise. The Real values returned here are provided
+// for convenience but are byte-identical to the current inline formatting, so
+// a call site may use them in either mode if it prefers.
+//
+// PLAY ISOLATION
+// --------------
+// In Play mode the numbers come from the Play snapshot only. When the Play
+// book has not arrived yet, the hook returns a NEUTRAL placeholder (an even
+// split, no volume) — never the Real book. This is the whole point of the
+// phase: Play must never borrow Real economics.
+
+import { useEffect, useMemo } from "react";
+import {
+  useMarketSnapshot,
+  useMarketSnapshotActions,
+  type MarketSnapshot,
+} from "@/components/mode/MarketSnapshotProvider";
+import { formatUsd } from "@/lib/playClient";
+import { formatVol } from "@/components/LiveMobileContent";
+
+export type LiveEconomics = {
+  /** True when the active mode is Play. */
+  isPlay: boolean;
+  /** 0..100 per outcome. Real: the real book. Play: the play book (or an
+   *  even-split placeholder while the play book loads — never real numbers). */
+  percentages: number[];
+  /** Total volume label incl. currency ("12.34 SOL" / "$1,234"), or null. */
+  volumeLabel: string | null;
+  /** Approximate per-outcome volume label, or null when there is no volume. */
+  perSide: (idx: number) => string | null;
+  /** Effective market status for the active mode ("open" | "resolved" | …). */
+  status: string;
+  /** Play mode but the Play book has not arrived — gate trading/economics. */
+  playPending: boolean;
+};
+
+export function useLiveMarketEconomics(input: {
+  address: string | null | undefined;
+  /** Real per-outcome percentages already computed by the page (0..100). */
+  realPercentages: number[];
+  /** Real total volume in lamports (markets.total_volume). */
+  realVolumeLamports: number;
+  /** Real market status ("open" | "resolved" | …). */
+  realStatus: string;
+  /** Number of outcomes — used only for the Play loading placeholder. */
+  outcomeCount: number;
+}): LiveEconomics {
+  const {
+    address,
+    realPercentages,
+    realVolumeLamports,
+    realStatus,
+    outcomeCount,
+  } = input;
+  const { publishRealSnapshots } = useMarketSnapshotActions();
+
+  // The Real snapshot we hand the provider. Registering the address lets the
+  // provider fetch the Play book when the user switches to Play — exactly the
+  // Market Detail pattern, so there is no second fetch and no second store.
+  const realFallback = useMemo<MarketSnapshot>(
+    () => ({
+      mode: "real",
+      marketAddress: address ?? "",
+      supplies: [],
+      probabilities: realPercentages.map((p) => (Number(p) || 0) / 100),
+      volume: String(Math.max(0, Math.floor(Number(realVolumeLamports) || 0))),
+      status: realStatus,
+    }),
+    [address, realPercentages, realVolumeLamports, realStatus]
+  );
+
+  useEffect(() => {
+    if (!address) return;
+    publishRealSnapshots([realFallback]);
+  }, [address, realFallback, publishRealSnapshots]);
+
+  const { snapshot, mode } = useMarketSnapshot(address ?? "", realFallback);
+  const isPlay = mode === "play";
+
+  return useMemo<LiveEconomics>(() => {
+    if (!isPlay) {
+      // REAL — identical to the current inline SOL formatting.
+      const vol = Number(realVolumeLamports) || 0;
+      return {
+        isPlay: false,
+        percentages: realPercentages,
+        volumeLabel: vol > 0 ? `${formatVol(vol)} SOL` : null,
+        perSide: (idx) =>
+          vol > 0
+            ? `${formatVol((vol * (realPercentages[idx] ?? 0)) / 100)} SOL`
+            : null,
+        status: realStatus,
+        playPending: false,
+      };
+    }
+
+    // PLAY — never borrow Real numbers.
+    if (!snapshot || snapshot.mode !== "play") {
+      const n = Math.max(outcomeCount, 0);
+      const even = 100 / Math.max(outcomeCount, 1);
+      return {
+        isPlay: true,
+        percentages: Array.from({ length: n }, () => even),
+        volumeLabel: null,
+        perSide: () => null,
+        status: "open",
+        playPending: true,
+      };
+    }
+
+    const probs = snapshot.probabilities.map((p) => (Number(p) || 0) * 100);
+    const poolUsd = snapshot.volume; // decimal USD string
+    const poolNum = Number(poolUsd) || 0;
+    const hasVol = poolNum > 0;
+    return {
+      isPlay: true,
+      percentages: probs,
+      volumeLabel: hasVol ? formatUsd(poolUsd, { compact: true }) : null,
+      perSide: (idx) =>
+        hasVol
+          ? formatUsd(String((poolNum * (probs[idx] ?? 0)) / 100), {
+              compact: true,
+            })
+          : null,
+      status: snapshot.status || "open",
+      playPending: false,
+    };
+  }, [
+    isPlay,
+    snapshot,
+    realPercentages,
+    realVolumeLamports,
+    realStatus,
+    outcomeCount,
+  ]);
+}

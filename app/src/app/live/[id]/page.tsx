@@ -10,6 +10,10 @@ import { BN } from "@coral-xyz/anchor";
 
 import { useProgram } from "@/hooks/useProgram";
 import TradingPanel from "@/components/TradingPanel";
+import PlayTradingPanel from "@/components/PlayTradingPanel";
+import { useTradingMode } from "@/components/mode/ModeProvider";
+import { useLiveMarketEconomics } from "@/components/play/useLiveMarketEconomics";
+import PlayLiveBuySheet from "@/components/play/PlayLiveBuySheet";
 import CommentsSection from "@/components/CommentsSection";
 import HostControls from "@/components/LiveHostControls";
 import LiveDesktopHostPanel, {
@@ -300,6 +304,7 @@ export default function LiveViewerPage() {
   const { connection } = useConnection();
   const program = useProgram();
   const isMobile = useIsMobile(1024);
+  const { isPlay } = useTradingMode();
 
   const [session, setSession] = useState<LiveSession | null>(null);
   const [market, setMarket] = useState<UiMarket | null>(null);
@@ -520,6 +525,10 @@ export default function LiveViewerPage() {
   // back to no modal when no user position exists (the result panel already
   // shows "Market resolved").
   useEffect(() => {
+    // Play must never show the Real win/lose modal — it reads on-chain Real
+    // shares. The shared "Market resolved" panel is the neutral fallback until
+    // a Play-specific result modal ships (later phase).
+    if (isPlay) return;
     const nowSettled =
       !!market?.resolved || market?.resolutionStatus === "proposed";
     if (nowSettled && !prevSettledRef.current) {
@@ -545,6 +554,7 @@ export default function LiveViewerPage() {
     }
     prevSettledRef.current = nowSettled;
   }, [
+    isPlay,
     market?.resolved,
     market?.resolutionStatus,
     market?.proposedOutcome,
@@ -567,6 +577,19 @@ export default function LiveViewerPage() {
     const percentages = supplies.map((s) => (totalSupply > 0 ? (s / totalSupply) * 100 : 100 / (supplies.length || 1)));
     return { names, supplies, percentages, totalSupply };
   }, [market]);
+
+  // Mode-aware economics for this Live market. Real path is untouched — the
+  // page only consumes the Play branch (eco.percentages / eco.volumeLabel)
+  // when eco.isPlay is true, and keeps its Real `derived`/formatVol otherwise.
+  const eco = useLiveMarketEconomics({
+    address: market?.publicKey ?? null,
+    realPercentages: derived?.percentages ?? [],
+    realVolumeLamports: market?.totalVolume ?? 0,
+    realStatus: market?.resolved ? "resolved" : "open",
+    outcomeCount: derived?.names.length ?? 0,
+  });
+  const displayPercentages =
+    eco.isPlay && derived ? eco.percentages : derived?.percentages ?? [];
 
   const userSharesForUi = useMemo(() => {
     const len = derived?.names?.length ?? 0;
@@ -1015,9 +1038,15 @@ export default function LiveViewerPage() {
               }
               derived={
                 derived
-                  ? { names: derived.names, percentages: derived.percentages }
+                  ? { names: derived.names, percentages: displayPercentages }
                   : null
               }
+              economics={
+                eco.isPlay
+                  ? { volumeLabel: eco.volumeLabel, perSide: eco.perSide }
+                  : undefined
+              }
+              isPlay={isPlay}
               active={true}
               sessionLocked={sessionLocked || expiredByTime}
               onOutcomeTap={(idx) => {
@@ -1075,8 +1104,9 @@ export default function LiveViewerPage() {
               } : null}
               derived={derived ? {
                 names: derived.names,
-                percentages: derived.percentages,
+                percentages: displayPercentages,
               } : null}
+              volumeLabel={eco.isPlay ? eco.volumeLabel : undefined}
               sessionLocked={sessionLocked}
               onOutcomeTap={(idx) => {
                 if (!sessionLocked) {
@@ -1173,9 +1203,11 @@ export default function LiveViewerPage() {
                               <span className="tabular-nums">{s.value}</span>
                             </span>
                           ))}
-                          {market && (
+                          {market && (eco.isPlay ? !!eco.volumeLabel : true) && (
                             <span className="text-xs text-white/40 ml-auto">
-                              {formatVol(market.totalVolume)} SOL vol
+                              {eco.isPlay
+                                ? `${eco.volumeLabel} vol`
+                                : `${formatVol(market.totalVolume)} SOL vol`}
                             </span>
                           )}
                         </div>
@@ -1212,7 +1244,7 @@ export default function LiveViewerPage() {
               {/* ── RIGHT — trading panel ─────────────────────── */}
               <div className="col-span-1">
                 <div className="sticky top-6 space-y-4 pb-8">
-                  {market && derived && (
+                  {market && derived && !isPlay && (
                     <TradingPanel
                       mode="desktop"
                       market={{
@@ -1229,6 +1261,15 @@ export default function LiveViewerPage() {
                       onTrade={(s, idx, side, cost) => void handleTrade(s, idx, side, cost)}
                       marketBalanceLamports={marketBalanceLamports}
                       userHoldings={userSharesForUi}
+                      marketClosed={!!marketClosed || expiredByTime}
+                    />
+                  )}
+                  {market && derived && isPlay && (
+                    <PlayTradingPanel
+                      marketAddress={market.publicKey}
+                      outcomeNames={derived.names}
+                      layout="desktop"
+                      playStatus={eco.status}
                       marketClosed={!!marketClosed || expiredByTime}
                     />
                   )}
@@ -1266,7 +1307,16 @@ export default function LiveViewerPage() {
                     refreshKey={session?.market_address ?? null}
                   />
 
-                  <LiveActivity trades={recentTrades} />
+                  {isPlay ? (
+                    <div className="rounded-xl border border-gray-800/40 bg-pump-dark/30 p-4 text-center">
+                      <p className="text-sm text-gray-400">Play activity coming next</p>
+                      <p className="text-xs text-gray-600 mt-1">
+                        Your Play trades will appear here soon.
+                      </p>
+                    </div>
+                  ) : (
+                    <LiveActivity trades={recentTrades} />
+                  )}
                 </div>
               </div>
             </div>
@@ -1303,8 +1353,12 @@ export default function LiveViewerPage() {
                       <p className="text-xs text-gray-500">
                         Host: {session.host_wallet.slice(0, 6)}...{session.host_wallet.slice(-4)}
                       </p>
-                      {market && (
-                        <p className="text-xs text-gray-500">{formatVol(market.totalVolume)} SOL vol</p>
+                      {market && (eco.isPlay ? !!eco.volumeLabel : true) && (
+                        <p className="text-xs text-gray-500">
+                          {eco.isPlay
+                            ? `${eco.volumeLabel} vol`
+                            : `${formatVol(market.totalVolume)} SOL vol`}
+                        </p>
                       )}
                     </div>
                   </div>
@@ -1330,7 +1384,7 @@ export default function LiveViewerPage() {
 
               <div className="col-span-1">
                 <div className="sticky top-6 space-y-4 pb-8">
-                  {market && derived && (
+                  {market && derived && !isPlay && (
                     <TradingPanel
                       mode="desktop"
                       market={{
@@ -1350,6 +1404,15 @@ export default function LiveViewerPage() {
                       marketClosed={!!marketClosed || expiredByTime}
                     />
                   )}
+                  {market && derived && isPlay && (
+                    <PlayTradingPanel
+                      marketAddress={market.publicKey}
+                      outcomeNames={derived.names}
+                      layout="desktop"
+                      playStatus={eco.status}
+                      marketClosed={!!marketClosed || expiredByTime}
+                    />
+                  )}
 
                   {sessionLocked && (
                     <div className="rounded-xl border border-gray-800/40 bg-pump-dark/30 p-4 text-center">
@@ -1359,7 +1422,16 @@ export default function LiveViewerPage() {
                     </div>
                   )}
 
-                  <LiveActivity trades={recentTrades} />
+                  {isPlay ? (
+                    <div className="rounded-xl border border-gray-800/40 bg-pump-dark/30 p-4 text-center">
+                      <p className="text-sm text-gray-400">Play activity coming next</p>
+                      <p className="text-xs text-gray-600 mt-1">
+                        Your Play trades will appear here soon.
+                      </p>
+                    </div>
+                  ) : (
+                    <LiveActivity trades={recentTrades} />
+                  )}
                 </div>
               </div>
             </div>
@@ -1367,8 +1439,11 @@ export default function LiveViewerPage() {
         )
       )}
 
-      {/* Mobile bottom sheet */}
-      {isMobile && market && derived && (
+      {/* Mobile bottom sheet — mode-branched. Real keeps the exact validated
+          MobileBuySheet + Solana handleTrade. Play uses the same visual shell
+          (PlayLiveBuySheet) with USD and no Solana tx. Only one is mounted, so
+          switching mode resets the sheet's amount/quote/error state. */}
+      {isMobile && market && derived && !isPlay && (
         <MobileBuySheet
           open={mobileSheetOpen}
           onClose={() => setMobileSheetOpen(false)}
@@ -1379,6 +1454,47 @@ export default function LiveViewerPage() {
           sessionLocked={sessionLocked || expiredByTime}
           defaultOutcomeIndex={defaultOutcomeIndex}
           keepNavbar
+        />
+      )}
+      {isMobile && market && derived && isPlay && (
+        <PlayLiveBuySheet
+          open={mobileSheetOpen}
+          onClose={() => setMobileSheetOpen(false)}
+          marketAddress={market.publicKey}
+          outcomeNames={derived.names}
+          defaultOutcomeIndex={defaultOutcomeIndex}
+          sessionLocked={sessionLocked || expiredByTime}
+          playStatus={eco.status}
+          keepNavbar
+          onTraded={({ outcomeName, shares }) => {
+            // Reuse the existing Live BUY toast (SOL cost omitted → no SOL
+            // shown for Play). Play data only; never touches Real state.
+            const key = Date.now();
+            setBuyToasts((prev) =>
+              [
+                ...prev,
+                {
+                  id: `play-${key}`,
+                  created_at: new Date().toISOString(),
+                  user_address: publicKey?.toBase58() ?? "",
+                  is_buy: true,
+                  is_yes:
+                    derived.names.length === 2
+                      ? derived.names.indexOf(outcomeName) === 0
+                      : null,
+                  shares,
+                  cost: 0,
+                  outcome_index: derived.names.indexOf(outcomeName),
+                  outcome_name: outcomeName,
+                  _key: key,
+                },
+              ].slice(-3)
+            );
+            setTimeout(
+              () => setBuyToasts((prev) => prev.filter((t) => t._key !== key)),
+              2500
+            );
+          }}
         />
       )}
 

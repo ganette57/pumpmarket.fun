@@ -492,6 +492,7 @@ export function LiveMobileContent({
   onOutcomeTap,
   active = true,
   thumbnailUrl,
+  volumeLabel,
 }: {
   streamUrl: string;
   title: string;
@@ -504,6 +505,8 @@ export function LiveMobileContent({
   /** When false, show thumbnail instead of stream (perf: only active slide streams) */
   active?: boolean;
   thumbnailUrl?: string;
+  /** Play-mode volume label; absent → the existing Real SOL rendering. */
+  volumeLabel?: string | null;
 }) {
   return (
     <>
@@ -570,7 +573,11 @@ export function LiveMobileContent({
                 {market.question}
               </Link>
               <p className="text-[11px] text-gray-500">
-                {formatVol(market.totalVolume)} SOL Vol
+                {volumeLabel !== undefined
+                  ? volumeLabel
+                    ? `${volumeLabel} Vol`
+                    : ""
+                  : `${formatVol(market.totalVolume)} SOL Vol`}
               </p>
             </div>
           </div>
@@ -864,6 +871,7 @@ export function LiveChartDrawer({
   names,
   percentages,
   question,
+  playPlaceholder,
 }: {
   open: boolean;
   onClose: () => void;
@@ -871,6 +879,8 @@ export function LiveChartDrawer({
   names: string[] | null;
   percentages: number[] | null;
   question?: string | null;
+  /** Play mode: show a neutral placeholder instead of the Real odds chart. */
+  playPlaceholder?: boolean;
 }) {
   const chartNames = useMemo(() => names?.slice(0, 2) ?? [], [names]);
   const chartPct = percentages?.slice(0, 2);
@@ -882,7 +892,8 @@ export function LiveChartDrawer({
   const [loadingHistory, setLoadingHistory] = useState(false);
 
   useEffect(() => {
-    if (!open || !marketAddress || outcomesCount <= 0) return;
+    // Play never loads the Real trade history.
+    if (!open || !marketAddress || outcomesCount <= 0 || playPlaceholder) return;
     let cancelled = false;
     setLoadingHistory(true);
     (async () => {
@@ -915,7 +926,7 @@ export function LiveChartDrawer({
     return () => {
       cancelled = true;
     };
-  }, [open, marketAddress, outcomesCount]);
+  }, [open, marketAddress, outcomesCount, playPlaceholder]);
 
   if (!open) return null;
 
@@ -929,7 +940,14 @@ export function LiveChartDrawer({
       subtitle={question}
       closeLabel="Close chart"
     >
-      {!hasData ? (
+      {playPlaceholder ? (
+        <div className="h-[260px] flex flex-col items-center justify-center text-center gap-1">
+          <p className="text-sm text-gray-400">Play chart coming next</p>
+          <p className="text-xs text-gray-600">
+            Your Play odds history will appear here soon.
+          </p>
+        </div>
+      ) : !hasData ? (
         <div className="h-[260px] flex flex-col items-center justify-center text-center gap-1">
           <p className="text-sm text-gray-400">No chart data yet</p>
           <p className="text-xs text-gray-600">
@@ -975,18 +993,22 @@ export function LiveActivityDrawer({
   marketAddress,
   names,
   question,
+  playPlaceholder,
 }: {
   open: boolean;
   onClose: () => void;
   marketAddress: string | null;
   names: string[] | null;
   question?: string | null;
+  /** Play mode: show a neutral placeholder instead of Real trade activity. */
+  playPlaceholder?: boolean;
 }) {
   const [rows, setRows] = useState<LiveActivityRow[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!open || !marketAddress) return;
+    // Play never loads the Real trade activity.
+    if (!open || !marketAddress || playPlaceholder) return;
     let cancelled = false;
     setLoading(true);
     (async () => {
@@ -1019,7 +1041,7 @@ export function LiveActivityDrawer({
     return () => {
       cancelled = true;
     };
-  }, [open, marketAddress]);
+  }, [open, marketAddress, playPlaceholder]);
 
   if (!open) return null;
 
@@ -1031,7 +1053,14 @@ export function LiveActivityDrawer({
       subtitle={question}
       closeLabel="Close activity"
     >
-      {loading && rows.length === 0 ? (
+      {playPlaceholder ? (
+        <div className="h-[200px] flex flex-col items-center justify-center text-center gap-1">
+          <p className="text-sm text-gray-400">Play activity coming next</p>
+          <p className="text-xs text-gray-600">
+            Your Play trades will appear here soon.
+          </p>
+        </div>
+      ) : loading && rows.length === 0 ? (
         <div className="h-[220px] flex items-center justify-center">
           <span className="w-6 h-6 rounded-full border-2 border-pump-green/40 border-t-pump-green animate-spin" />
         </div>
@@ -1399,6 +1428,21 @@ export type MobileImmersiveSlideMarket = {
   publicKey?: string;
 };
 
+/**
+ * Mode-aware volume labels. When PROVIDED (Play mode), the slide renders these
+ * pre-formatted strings instead of its internal SOL calculation. When ABSENT
+ * (Real mode / the default), the slide's existing SOL rendering is untouched —
+ * this is how the production-validated Real Live path stays byte-identical.
+ * Percentages are always passed via `derived.percentages`, so odds are already
+ * mode-aware without any change here.
+ */
+export type LiveSlideEconomics = {
+  /** Total volume incl. currency ("$1,234"), or null to hide the row. */
+  volumeLabel: string | null;
+  /** Approximate per-outcome volume label, or null. */
+  perSide?: (idx: number) => string | null;
+};
+
 export function MobileImmersiveSlide({
   session,
   market,
@@ -1414,6 +1458,8 @@ export function MobileImmersiveSlide({
   resolution,
   onCreateNextMarket,
   queuedNext,
+  economics,
+  isPlay,
 }: {
   session: LiveSession;
   market: MobileImmersiveSlideMarket | null;
@@ -1446,6 +1492,10 @@ export function MobileImmersiveSlide({
     title?: string | null;
     durationMin?: number | null;
   } | null;
+  /** Play-mode volume labels; absent → the existing Real SOL rendering. */
+  economics?: LiveSlideEconomics;
+  /** Play mode: chart/activity HUD drawers show neutral placeholders. */
+  isPlay?: boolean;
 }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
   // HUD drawers — local to the slide so toggling them never touches the
@@ -1729,6 +1779,11 @@ export function MobileImmersiveSlide({
     const pct = derived?.percentages?.[idx] ?? 0;
     return `${formatVol((market.totalVolume * pct) / 100)} SOL`;
   };
+
+  // Mode-aware volume: Play passes `economics`, Real leaves it undefined and
+  // keeps the SOL calculation above untouched.
+  const effVolLabel = economics ? economics.volumeLabel : volLabel;
+  const effPerSide = economics?.perSide ?? perSideSol;
 
   // Higher-percentage side — drives the Momentum strip placeholder label.
   // Pure render computation (no state / effect / timer).
@@ -2028,9 +2083,9 @@ export function MobileImmersiveSlide({
               <h2 className="text-white font-bold text-[16px] leading-snug line-clamp-2 drop-shadow-[0_1px_4px_rgba(0,0,0,0.7)]">
                 {market?.question || session.title}
               </h2>
-              {volLabel && (
+              {effVolLabel && (
                 <p className="mt-1 text-[10px] text-gray-500 font-medium tabular-nums tracking-wider uppercase">
-                  {volLabel} Vol
+                  {effVolLabel} Vol
                 </p>
               )}
             </div>
@@ -2102,13 +2157,13 @@ export function MobileImmersiveSlide({
                 </div>
 
                 {/* Per-side approximate volume row */}
-                {volLabel && (
+                {effVolLabel && (
                   <div className="flex items-center justify-between mt-2 px-1">
                     <span className="text-[11px] text-pump-green/75 font-semibold tabular-nums">
-                      {perSideSol(0)}
+                      {effPerSide(0)}
                     </span>
                     <span className="text-[11px] text-[#ff5c73]/75 font-semibold tabular-nums">
-                      {perSideSol(1)}
+                      {effPerSide(1)}
                     </span>
                   </div>
                 )}
@@ -2404,6 +2459,7 @@ export function MobileImmersiveSlide({
         names={derived?.names ?? null}
         percentages={derived?.percentages ?? null}
         question={market?.question ?? session.title}
+        playPlaceholder={isPlay}
       />
       <LiveActivityDrawer
         open={activityOpen}
@@ -2411,6 +2467,7 @@ export function MobileImmersiveSlide({
         marketAddress={market?.publicKey ?? null}
         names={derived?.names ?? null}
         question={market?.question ?? session.title}
+        playPlaceholder={isPlay}
       />
       <LiveChatDrawer
         open={chatOpen}

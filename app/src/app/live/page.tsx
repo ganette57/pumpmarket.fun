@@ -35,6 +35,9 @@ import {
 } from "@/components/LiveMobileContent";
 import LiveHostControls from "@/components/LiveHostControls";
 import ModeSwitch from "@/components/mode/ModeSwitch";
+import { useTradingMode } from "@/components/mode/ModeProvider";
+import { useLiveMarketEconomics } from "@/components/play/useLiveMarketEconomics";
+import PlayLiveBuySheet from "@/components/play/PlayLiveBuySheet";
 import FlashMarketResultModal, {
   type FlashMarketResultState,
 } from "@/components/FlashMarketResultModal";
@@ -370,6 +373,16 @@ function MobileLiveTradeSlide({
   const tradingLocked =
     session.status === "locked" || !!market?.resolved || !!market?.isBlocked;
 
+  // Mode-aware economics for THIS live market. Real is untouched (economics
+  // left undefined below when not Play); Play reads the Play book only.
+  const eco = useLiveMarketEconomics({
+    address: market?.publicKey ?? null,
+    realPercentages: display.percentages,
+    realVolumeLamports: market?.totalVolume ?? 0,
+    realStatus: market?.resolved ? "resolved" : "open",
+    outcomeCount: display.names.length,
+  });
+
   return (
     <section className="relative h-full snap-start bg-black">
       <MobileImmersiveSlide
@@ -386,9 +399,18 @@ function MobileLiveTradeSlide({
         }
         derived={
           market
-            ? { names: display.names, percentages: display.percentages }
+            ? {
+                names: display.names,
+                percentages: eco.isPlay ? eco.percentages : display.percentages,
+              }
             : null
         }
+        economics={
+          eco.isPlay
+            ? { volumeLabel: eco.volumeLabel, perSide: eco.perSide }
+            : undefined
+        }
+        isPlay={eco.isPlay}
         active={active}
         sessionLocked={tradingLocked}
         onOutcomeTap={(idx) => onOutcomeTap(session, idx)}
@@ -418,6 +440,7 @@ export default function LivePage() {
   const { setVisible } = useWalletModal();
   const router = useRouter();
   const isMobile = useIsMobile(1024);
+  const { isPlay } = useTradingMode();
 
   const [desktopTab, setDesktopTab] = useState<DesktopTab>("live");
   const [mobileTab, setMobileTab] = useState<MobileTab>("live");
@@ -980,6 +1003,18 @@ export default function LivePage() {
     (tradeMarket.resolutionTime != null &&
       Date.now() >= tradeMarket.resolutionTime * 1000);
 
+  // Play status for the market whose Quick Trade sheet is open — used only to
+  // gate the Play sheet. Never feeds Real. (Hook is called unconditionally;
+  // a null address makes it inert.)
+  const tradeMarketDisplay = tradeMarket ? deriveOutcomeDisplay(tradeMarket) : null;
+  const tradeEco = useLiveMarketEconomics({
+    address: tradeMarket?.publicKey ?? null,
+    realPercentages: tradeMarketDisplay?.percentages ?? [],
+    realVolumeLamports: tradeMarket?.totalVolume ?? 0,
+    realStatus: tradeMarket?.resolved ? "resolved" : "open",
+    outcomeCount: tradeMarketDisplay?.names.length ?? 0,
+  });
+
   const handleTrade = useCallback(
     async (
       shares: number,
@@ -1194,6 +1229,10 @@ export default function LivePage() {
 
   useEffect(() => {
     if (!isMobile || !activeFeedSession || !activeFeedSnapshot) return;
+    // Play must never show the Real win/lose modal — it reads on-chain Real
+    // shares. The shared "Market resolved" card remains the neutral fallback
+    // until a Play-specific result modal ships (later phase).
+    if (isPlay) return;
     const sid = activeFeedSession.id;
     const isHostViewer =
       !!publicKey && publicKey.toBase58() === activeFeedSession.host_wallet;
@@ -1262,6 +1301,7 @@ export default function LivePage() {
     };
   }, [
     isMobile,
+    isPlay,
     publicKey,
     fetchViewerShares,
     activeFeedSession,
@@ -1438,8 +1478,11 @@ export default function LivePage() {
           </div>
         )}
 
-        {/* Shared stable MobileBuySheet */}
-        {mobileTradeOpen && tradeSession && tradeMarket && (
+        {/* Quick Trade sheet — mode-branched. Real keeps the exact validated
+            MobileBuySheet + Solana handleTrade. Play uses the same visual
+            shell (PlayLiveBuySheet) with USD, no Solana tx. Only one is ever
+            mounted, so switching mode clears the sheet's input/quote state. */}
+        {mobileTradeOpen && tradeSession && tradeMarket && !isPlay && (
           <MobileBuySheet
             open={mobileTradeOpen}
             onClose={() => setMobileTradeOpen(false)}
@@ -1454,6 +1497,29 @@ export default function LivePage() {
               void handleTrade(shares, outcomeIndex, side, costSol)
             }
             keepNavbar
+          />
+        )}
+        {mobileTradeOpen && tradeSession && tradeMarket && isPlay && (
+          <PlayLiveBuySheet
+            open={mobileTradeOpen}
+            onClose={() => setMobileTradeOpen(false)}
+            marketAddress={tradeMarket.publicKey}
+            outcomeNames={deriveOutcomeDisplay(tradeMarket).names}
+            defaultOutcomeIndex={mobileTradeOutcomeIndex}
+            sessionLocked={tradeClosed}
+            playStatus={tradeEco.status}
+            keepNavbar
+            onTraded={({ outcomeName, shares }) => {
+              const toastKey = Date.now();
+              setLastBuyToast({ outcome: outcomeName, shares, key: toastKey });
+              setTimeout(
+                () =>
+                  setLastBuyToast((prev) =>
+                    prev?.key === toastKey ? null : prev
+                  ),
+                2500
+              );
+            }}
           />
         )}
 
