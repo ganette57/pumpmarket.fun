@@ -68,11 +68,19 @@ export function useLiveMarketEconomics(input: {
     realStatus,
     outcomeCount,
   } = input;
-  const { publishRealSnapshots } = useMarketSnapshotActions();
+  const { publishRealSnapshots, watchPlayMarket } = useMarketSnapshotActions();
 
   // The Real snapshot we hand the provider. Registering the address lets the
   // provider fetch the Play book when the user switches to Play — exactly the
   // Market Detail pattern, so there is no second fetch and no second store.
+  //
+  // STABLE IDENTITY: callers pass `realPercentages` from an inline
+  // deriveOutcomeDisplay(), i.e. a NEW array every render. Keying this memo on
+  // the array's *content* (pctKey) rather than its reference keeps realFallback
+  // stable when the numbers are stable, so the publish effect below does not
+  // fire on every render. (The provider also guards with an equality check, so
+  // this is defence-in-depth against the "Maximum update depth" loop.)
+  const pctKey = realPercentages.join(",");
   const realFallback = useMemo<MarketSnapshot>(
     () => ({
       mode: "real",
@@ -82,13 +90,22 @@ export function useLiveMarketEconomics(input: {
       volume: String(Math.max(0, Math.floor(Number(realVolumeLamports) || 0))),
       status: realStatus,
     }),
-    [address, realPercentages, realVolumeLamports, realStatus]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [address, pctKey, realVolumeLamports, realStatus]
   );
 
   useEffect(() => {
     if (!address) return;
     publishRealSnapshots([realFallback]);
   }, [address, realFallback, publishRealSnapshots]);
+
+  // Keep this Play market synced across clients while mounted. The provider
+  // only actually polls when the app is in Play mode and the tab is visible,
+  // and stops when this unwatch runs (unmount / market change).
+  useEffect(() => {
+    if (!address) return;
+    return watchPlayMarket(address);
+  }, [address, watchPlayMarket]);
 
   const { snapshot, mode } = useMarketSnapshot(address ?? "", realFallback);
   const isPlay = mode === "play";
@@ -141,10 +158,11 @@ export function useLiveMarketEconomics(input: {
       status: snapshot.status || "open",
       playPending: false,
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     isPlay,
     snapshot,
-    realPercentages,
+    pctKey,
     realVolumeLamports,
     realStatus,
     outcomeCount,
