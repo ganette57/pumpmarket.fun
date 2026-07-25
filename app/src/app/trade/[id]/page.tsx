@@ -15,8 +15,14 @@ import MarketActions from "@/components/MarketActions";
 import CreatorSocialLinks from "@/components/CreatorSocialLinks";
 import CommentsSection from "@/components/CommentsSection";
 import TradingPanel from "@/components/TradingPanel";
+import PlayTradingPanel from "@/components/PlayTradingPanel";
 import OddsHistoryChart from "@/components/OddsHistoryChart";
 import MarketActivityTab from "@/components/MarketActivity";
+import {
+  useMarketSnapshot,
+  useMarketSnapshotActions,
+  type MarketSnapshot,
+} from "@/components/mode/MarketSnapshotProvider";
 import ResolutionPanel from "@/components/ResolutionPanel";
 import MarketCard from "@/components/MarketCard";
 import BlockedMarketBanner from "@/components/BlockedMarketBanner";
@@ -3803,7 +3809,57 @@ useEffect(() => {
     );
   }
 
-  const { marketType, names, supplies, percentages, isBinaryStyle, missingOutcomes } = derived;
+  const { marketType, names, supplies, percentages: realPercentages, isBinaryStyle, missingOutcomes } = derived;
+
+  // ---- Mode-aware DISPLAY economics ------------------------------------
+  // `supplies` above stays REAL and is what the Real TradingPanel receives.
+  // Only the page's DISPLAYED odds and volume become mode-aware, via the
+  // shared MarketSnapshotProvider (no second store). In Real mode this is
+  // behaviourally identical to before (realPercentages / SOL volume).
+  const marketAddr = market.publicKey;
+  const { publishRealSnapshots } = useMarketSnapshotActions();
+  const realDisplayFallback = useMemo<MarketSnapshot>(() => {
+    const total = supplies.reduce((a, b) => a + b, 0);
+    return {
+      mode: "real" as const,
+      marketAddress: marketAddr,
+      supplies: supplies.map(String),
+      probabilities:
+        total > 0
+          ? supplies.map((s) => s / total)
+          : supplies.map(() => 1 / Math.max(supplies.length, 1)),
+      volume: String(Number((market as any)?.totalVolume ?? 0)),
+      status: market?.resolved ? "resolved" : "open",
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [marketAddr, supplies.join(","), (market as any)?.totalVolume, market?.resolved]);
+
+  // Register this market + publish its Real snapshot so the provider can
+  // fetch the Play book when the user switches to Play.
+  useEffect(() => {
+    publishRealSnapshots([realDisplayFallback]);
+  }, [realDisplayFallback, publishRealSnapshots]);
+
+  const { snapshot: modeSnapshot, mode: tradingMode } = useMarketSnapshot(
+    marketAddr,
+    realDisplayFallback
+  );
+  const isPlayTrading = tradingMode === "play";
+
+  // Odds shown across the page (outcome tiles, quick-buy bars). Real panel
+  // still receives `supplies`, so this never touches Real execution.
+  const percentages =
+    isPlayTrading && modeSnapshot
+      ? modeSnapshot.probabilities.map((p) => p * 100)
+      : realPercentages;
+
+  const playVolumeLabel = (() => {
+    if (!modeSnapshot) return "—";
+    const usd = Number(modeSnapshot.volume) || 0;
+    return usd >= 1000
+      ? `$${(usd / 1000).toFixed(1)}k`
+      : `$${usd.toFixed(usd < 100 ? 2 : 0)}`;
+  })();
 
 
   const nowSec = Math.floor(nowMs / 1000);
@@ -4494,7 +4550,7 @@ const ended = endedByTime;
                   <div>
                     <span className="text-xs text-gray-400">Vol</span>{" "}
                     <span className={`font-semibold text-white ${isFlashCryptoMarket ? "text-sm" : "text-base md:text-lg"}`}>
-                      {formatVol(effectiveVol)} SOL
+                      {isPlayTrading ? playVolumeLabel : `${formatVol(effectiveVol)} SOL`}
                     </span>
                   </div>
   
@@ -4736,8 +4792,14 @@ const ended = endedByTime;
 
               {/* Odds history */}
               <div className="bg-black border border-gray-800 rounded-xl p-5 md:p-6">
-  
-                {filteredOddsPoints.length ? (
+
+                {isPlayTrading ? (
+                  // Play chart is a later phase. Show a neutral placeholder
+                  // rather than the Real (SOL) history mislabelled as Play.
+                  <div className="text-sm text-gray-500 border border-gray-800 rounded-lg p-6 text-center">
+                    Play chart coming next
+                  </div>
+                ) : filteredOddsPoints.length ? (
                   <>
                     <div className="py-1 md:py-2">
                       <OddsHistoryChart
@@ -4810,11 +4872,19 @@ const ended = endedByTime;
                 {bottomTab === "discussion" ? (
                   <CommentsSection marketId={market.publicKey} />
                 ) : bottomTab === "activity" ? (
-                  <MarketActivityTab
-                    marketDbId={market.dbId}
-                    marketAddress={market.publicKey}
-                    outcomeNames={names}
-                  />
+                  isPlayTrading ? (
+                    // Play activity is a later phase; never show Real (SOL)
+                    // activity as if it were Play.
+                    <div className="mt-4 text-sm text-gray-500 border border-gray-800 rounded-lg p-6 text-center">
+                      Play activity coming next
+                    </div>
+                  ) : (
+                    <MarketActivityTab
+                      marketDbId={market.dbId}
+                      marketAddress={market.publicKey}
+                      outcomeNames={names}
+                    />
+                  )
                 ) : (
                   <div className="mt-4">
                     {isSoccerNextGoalMicro && (
@@ -4888,30 +4958,42 @@ const ended = endedByTime;
                     blockedAt={market.blockedAt}
                   />
                 ) : !isMobile && !ended ? (
-                  <TradingPanel
-                    mode="desktop"
-                    market={{
-                      resolved: market.resolved,
-                      marketType: market.marketType,
-                      outcomeNames: names,
-                      outcomeSupplies: supplies,
-                      bLamports: market.bLamports,
-                      yesSupply:
-                        names.length >= 2 ? supplies[0] || 0 : market.yesSupply || 0,
-                      noSupply:
-                        names.length >= 2 ? supplies[1] || 0 : market.noSupply || 0,
-                    }}
-                    connected={connected}
-                    submitting={submitting}
-                    onTrade={(s, outcomeIndex, side, costSol) =>
-                      void handleTrade(s, outcomeIndex, side, costSol)
-                    }
-                    marketBalanceLamports={marketBalanceLamports}
-                    userHoldings={userSharesForUi}
-                    marketClosed={marketClosed}
-                    marketClosedTitle={closedPanelTitle}
-                    marketClosedMessage={closedPanelMessage}
-                  />
+                  isPlayTrading ? (
+                    <PlayTradingPanel
+                      layout="desktop"
+                      marketAddress={market.publicKey}
+                      outcomeNames={names}
+                      playStatus={modeSnapshot?.status}
+                      marketClosed={marketClosed}
+                      marketClosedTitle={closedPanelTitle}
+                      marketClosedMessage={closedPanelMessage}
+                    />
+                  ) : (
+                    <TradingPanel
+                      mode="desktop"
+                      market={{
+                        resolved: market.resolved,
+                        marketType: market.marketType,
+                        outcomeNames: names,
+                        outcomeSupplies: supplies,
+                        bLamports: market.bLamports,
+                        yesSupply:
+                          names.length >= 2 ? supplies[0] || 0 : market.yesSupply || 0,
+                        noSupply:
+                          names.length >= 2 ? supplies[1] || 0 : market.noSupply || 0,
+                      }}
+                      connected={connected}
+                      submitting={submitting}
+                      onTrade={(s, outcomeIndex, side, costSol) =>
+                        void handleTrade(s, outcomeIndex, side, costSol)
+                      }
+                      marketBalanceLamports={marketBalanceLamports}
+                      userHoldings={userSharesForUi}
+                      marketClosed={marketClosed}
+                      marketClosedTitle={closedPanelTitle}
+                      marketClosedMessage={closedPanelMessage}
+                    />
+                  )
                 ) : null}
   
                 <ResolutionPanel
@@ -5039,30 +5121,45 @@ const ended = endedByTime;
           {/* Drawer: du haut de l'écran jusqu'à la bottom nav, sans coins arrondis */}
           <div className={`absolute inset-x-0 top-0 ${isMobile ? "bottom-14" : "bottom-0"} pointer-events-auto`}>
             <div className="h-full border-b border-gray-800 bg-pump-dark shadow-2xl overflow-hidden">
-              <TradingPanel
-                mode="drawer"
-                title="Trade"
-                defaultSide={mobileDefaultSide}
-                defaultOutcomeIndex={mobileOutcomeIndex}
-                onClose={() => setMobileTradeOpen(false)}
-                market={{
-                  resolved: market.resolved,
-                  marketType: market.marketType,
-                  outcomeNames: names,
-                  outcomeSupplies: supplies,
-                  bLamports: market.bLamports,
-                  yesSupply: names.length >= 2 ? supplies[0] || 0 : market.yesSupply || 0,
-                  noSupply: names.length >= 2 ? supplies[1] || 0 : market.noSupply || 0,
-                }}
-                connected={connected}
-                submitting={submitting}
-                onTrade={(s, outcomeIndex, side, costSol) => void handleTrade(s, outcomeIndex, side, costSol)}
-                marketBalanceLamports={marketBalanceLamports}
-                userHoldings={userSharesForUi}
-                marketClosed={marketClosed}
-                marketClosedTitle={closedPanelTitle}
-                marketClosedMessage={closedPanelMessage}
-              />
+              {isPlayTrading ? (
+                <PlayTradingPanel
+                  layout="drawer"
+                  title="Trade"
+                  marketAddress={market.publicKey}
+                  outcomeNames={names}
+                  defaultOutcomeIndex={mobileOutcomeIndex}
+                  onClose={() => setMobileTradeOpen(false)}
+                  playStatus={modeSnapshot?.status}
+                  marketClosed={marketClosed}
+                  marketClosedTitle={closedPanelTitle}
+                  marketClosedMessage={closedPanelMessage}
+                />
+              ) : (
+                <TradingPanel
+                  mode="drawer"
+                  title="Trade"
+                  defaultSide={mobileDefaultSide}
+                  defaultOutcomeIndex={mobileOutcomeIndex}
+                  onClose={() => setMobileTradeOpen(false)}
+                  market={{
+                    resolved: market.resolved,
+                    marketType: market.marketType,
+                    outcomeNames: names,
+                    outcomeSupplies: supplies,
+                    bLamports: market.bLamports,
+                    yesSupply: names.length >= 2 ? supplies[0] || 0 : market.yesSupply || 0,
+                    noSupply: names.length >= 2 ? supplies[1] || 0 : market.noSupply || 0,
+                  }}
+                  connected={connected}
+                  submitting={submitting}
+                  onTrade={(s, outcomeIndex, side, costSol) => void handleTrade(s, outcomeIndex, side, costSol)}
+                  marketBalanceLamports={marketBalanceLamports}
+                  userHoldings={userSharesForUi}
+                  marketClosed={marketClosed}
+                  marketClosedTitle={closedPanelTitle}
+                  marketClosedMessage={closedPanelMessage}
+                />
+              )}
             </div>
           </div>
         </div>
