@@ -5096,7 +5096,11 @@ const ended = endedByTime;
                                 {m.question}
                               </div>
                               <div className="text-xs text-gray-500 truncate">
-                                {(m.category || "other").toString()} • {vol} SOL
+                                {/* Related is a list of OTHER markets. In Play we
+                                    don't have their Play volume here, so hide the
+                                    Real SOL figure rather than mislabel it. */}
+                                {(m.category || "other").toString()}
+                                {!isPlayTrading && ` • ${vol} SOL`}
                               </div>
                             </div>
   
