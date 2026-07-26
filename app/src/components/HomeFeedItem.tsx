@@ -385,6 +385,7 @@ export default function HomeFeedItem({
         marketAddress={market.publicKey}
         names={drawerNames}
         question={market.question}
+        isPlay={isPlayMode}
       />
     </div>
   );

@@ -14,6 +14,7 @@ import PlayTradingPanel from "@/components/PlayTradingPanel";
 import { useTradingMode } from "@/components/mode/ModeProvider";
 import { useLiveMarketEconomics } from "@/components/play/useLiveMarketEconomics";
 import PlayLiveBuySheet from "@/components/play/PlayLiveBuySheet";
+import PlayActivity from "@/components/play/PlayActivity";
 import CommentsSection from "@/components/CommentsSection";
 import HostControls from "@/components/LiveHostControls";
 import LiveDesktopHostPanel, {
@@ -1308,12 +1309,12 @@ export default function LiveViewerPage() {
                   />
 
                   {isPlay ? (
-                    <div className="rounded-xl border border-gray-800/40 bg-pump-dark/30 p-4 text-center">
-                      <p className="text-sm text-gray-400">Play activity coming next</p>
-                      <p className="text-xs text-gray-600 mt-1">
-                        Your Play trades will appear here soon.
-                      </p>
-                    </div>
+                    <PlayActivity
+                      marketAddress={market?.publicKey ?? null}
+                      outcomeNames={derived?.names ?? null}
+                      variant="panel"
+                      limit={30}
+                    />
                   ) : (
                     <LiveActivity trades={recentTrades} />
                   )}
@@ -1423,12 +1424,12 @@ export default function LiveViewerPage() {
                   )}
 
                   {isPlay ? (
-                    <div className="rounded-xl border border-gray-800/40 bg-pump-dark/30 p-4 text-center">
-                      <p className="text-sm text-gray-400">Play activity coming next</p>
-                      <p className="text-xs text-gray-600 mt-1">
-                        Your Play trades will appear here soon.
-                      </p>
-                    </div>
+                    <PlayActivity
+                      marketAddress={market?.publicKey ?? null}
+                      outcomeNames={derived?.names ?? null}
+                      variant="panel"
+                      limit={30}
+                    />
                   ) : (
                     <LiveActivity trades={recentTrades} />
                   )}

@@ -19,6 +19,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { getMarketByAddress } from "@/lib/markets";
 import { buildOddsSeries, downsample } from "@/lib/marketHistory";
 import PlayOddsChart from "@/components/play/PlayOddsChart";
+import PlayActivity from "@/components/play/PlayActivity";
 import CommentsSection from "@/components/CommentsSection";
 
 // Reuse the trade page's odds chart, lazy-loaded so recharts is only fetched
@@ -996,22 +997,22 @@ export function LiveActivityDrawer({
   marketAddress,
   names,
   question,
-  playPlaceholder,
+  isPlay,
 }: {
   open: boolean;
   onClose: () => void;
   marketAddress: string | null;
   names: string[] | null;
   question?: string | null;
-  /** Play mode: show a neutral placeholder instead of Real trade activity. */
-  playPlaceholder?: boolean;
+  /** Play mode: render authoritative Play activity instead of Real trades. */
+  isPlay?: boolean;
 }) {
   const [rows, setRows] = useState<LiveActivityRow[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     // Play never loads the Real trade activity.
-    if (!open || !marketAddress || playPlaceholder) return;
+    if (!open || !marketAddress || isPlay) return;
     let cancelled = false;
     setLoading(true);
     (async () => {
@@ -1044,7 +1045,7 @@ export function LiveActivityDrawer({
     return () => {
       cancelled = true;
     };
-  }, [open, marketAddress, playPlaceholder]);
+  }, [open, marketAddress, isPlay]);
 
   if (!open) return null;
 
@@ -1052,17 +1053,18 @@ export function LiveActivityDrawer({
     <LiveBottomDrawer
       open={open}
       onClose={onClose}
-      title="Live Activity"
+      title={isPlay ? "Play Activity" : "Live Activity"}
       subtitle={question}
       closeLabel="Close activity"
     >
-      {playPlaceholder ? (
-        <div className="h-[200px] flex flex-col items-center justify-center text-center gap-1">
-          <p className="text-sm text-gray-400">Play activity coming next</p>
-          <p className="text-xs text-gray-600">
-            Your Play trades will appear here soon.
-          </p>
-        </div>
+      {isPlay ? (
+        <PlayActivity
+          marketAddress={marketAddress}
+          outcomeNames={names}
+          variant="drawer"
+          enabled={open}
+          limit={30}
+        />
       ) : loading && rows.length === 0 ? (
         <div className="h-[220px] flex items-center justify-center">
           <span className="w-6 h-6 rounded-full border-2 border-pump-green/40 border-t-pump-green animate-spin" />
@@ -2470,7 +2472,7 @@ export function MobileImmersiveSlide({
         marketAddress={market?.publicKey ?? null}
         names={derived?.names ?? null}
         question={market?.question ?? session.title}
-        playPlaceholder={isPlay}
+        isPlay={isPlay}
       />
       <LiveChatDrawer
         open={chatOpen}

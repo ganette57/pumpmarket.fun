@@ -184,6 +184,29 @@ export type PlayMarketHistoryView = {
   points: PlayHistoryPointView[];
 };
 
+/** One public Play trade in a market activity list. Nothing user-scoped. */
+export type PlayActivityRowView = {
+  id: string;
+  outcome_index: number;
+  outcome_name: string | null;
+  /** Play is buy-only — there is no sell path in the engine. */
+  side: "buy";
+  shares: string;
+  stake_usd: string;
+  created_at: string;
+  /** Already truncated by the server ("abcd…wxyz") or the neutral "Player". */
+  trader_label: string;
+  status: string;
+};
+
+export type PlayMarketActivityView = {
+  market_address: string;
+  outcome_names: string[];
+  rows: PlayActivityRowView[];
+  /** Opaque cursor for the next (older) page — null when exhausted. */
+  next_before: string | null;
+};
+
 export type PlayTradeResponse = {
   replayed: boolean;
   trade: {
@@ -357,5 +380,38 @@ export const playClient = {
         pool_usd: decimal(p.pool_usd),
       })),
     } as PlayMarketHistoryView;
+  },
+
+  /**
+   * Authoritative PUBLIC Play trade activity for one market, newest first.
+   * Public — no session required (who traded a market is public in both
+   * modes). The server already truncated the wallet and stripped every
+   * account-scoped field, so this is the whole safe row.
+   *
+   * Money and share counts stay decimal strings, as everywhere else here.
+   */
+  async marketActivity(
+    marketAddress: string,
+    opts?: { limit?: number; before?: string }
+  ) {
+    const raw = await post<{ activity: PlayMarketActivityView }>(
+      "/api/play/markets/activity",
+      {
+        market_address: marketAddress,
+        ...(opts?.limit ? { limit: opts.limit } : {}),
+        ...(opts?.before ? { before: opts.before } : {}),
+      }
+    );
+    const a = raw.activity;
+    return {
+      market_address: String(a?.market_address ?? marketAddress),
+      outcome_names: Array.isArray(a?.outcome_names) ? a.outcome_names : [],
+      rows: (a?.rows ?? []).map((r) => ({
+        ...r,
+        shares: decimal(r.shares),
+        stake_usd: decimal(r.stake_usd),
+      })),
+      next_before: a?.next_before ?? null,
+    } as PlayMarketActivityView;
   },
 };

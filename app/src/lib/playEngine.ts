@@ -706,3 +706,187 @@ export async function getPlayMarketHistory(
     points: downsampleHistory(points, maxPoints),
   };
 }
+
+/* -------------------------------------------------------------------------- */
+/*  Play market activity (public feed)                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * ONE public Play trade, as shown in an activity list.
+ *
+ * This is a deliberately narrow projection of play_trades. What is NOT here is
+ * the point: no account_id, no client_trade_id (the idempotency key), no
+ * season/date attribution, no balance, no ledger. `trader_label` is already
+ * truncated server-side, so a full Play wallet never reaches the browser.
+ */
+export type PlayMarketActivityRow = {
+  /** play_trades.id — the row's own PK. Used as a list key / page cursor. */
+  id: string;
+  outcome_index: number;
+  outcome_name: string | null;
+  /** Play is buy-only; there is no sell path in play_execute_trade. */
+  side: "buy";
+  shares: string;
+  stake_usd: string;
+  created_at: string;
+  /** "abcd…wxyz" from the Play wallet, or "Player" when unavailable. */
+  trader_label: string;
+  status: PlayTradeStatus;
+};
+
+export type PlayMarketActivity = {
+  market_address: string;
+  outcome_names: string[];
+  rows: PlayMarketActivityRow[];
+  /** Cursor for the next (older) page — null when the list is exhausted. */
+  next_before: string | null;
+};
+
+/** Default rows per activity read. */
+const PLAY_ACTIVITY_DEFAULT_LIMIT = 30;
+/** Hard ceiling — a caller cannot ask for the whole ledger. */
+const PLAY_ACTIVITY_MAX_LIMIT = 100;
+
+const ACTIVITY_COLS =
+  "id,account_id,outcome_index,outcome_name,stake_usd,shares,status,created_at";
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Cursors are opaque to callers but must be safe to interpolate into a
+ * PostgREST filter, so both halves are validated, not just parsed.
+ */
+function parseActivityCursor(raw: string): { createdAt: string; id: string } {
+  const [ts, id] = String(raw).split("|");
+  const at = new Date(String(ts));
+  if (Number.isNaN(at.getTime()) || !UUID_RE.test(String(id))) {
+    throw new PlayEngineError("before is not a valid activity cursor");
+  }
+  return { createdAt: at.toISOString(), id: String(id) };
+}
+
+/** "abcd…wxyz" — the same shape the Real activity surfaces already display. */
+function shortWallet(wallet: unknown): string {
+  const s = String(wallet ?? "").trim();
+  if (!s) return "Player";
+  return s.length <= 10 ? s : `${s.slice(0, 4)}…${s.slice(-4)}`;
+}
+
+/**
+ * Authoritative public activity for one Play market: the newest trades from
+ * the append-only play_trades ledger.
+ *
+ * WHY EVERY STATUS COUNTS AS ACTIVITY
+ * -----------------------------------
+ * play_execute_trade only ever INSERTs on success, inside the same transaction
+ * that debits the account — a rejected or rolled-back trade leaves no row at
+ * all. And (account_id, client_trade_id) is unique, so a replayed submit
+ * returns the ORIGINAL row instead of adding a second one. So every row in this
+ * table is a trade that really happened, whatever it later settled to
+ * ('open' | 'won' | 'lost' | 'refunded'). Filtering by status would hide real
+ * history on a resolved market, so we do not filter.
+ *
+ * Ordering is (created_at desc, id desc): the id tiebreak makes two trades
+ * sharing a timestamp deterministic, which is what stops rows shuffling
+ * between refetches.
+ *
+ * Wallets are resolved server-side through play_accounts and TRUNCATED here.
+ * The browser never receives a full Play wallet, an account id or an
+ * idempotency key from this path.
+ */
+export async function getPlayMarketActivity(
+  marketAddress: string,
+  opts?: { limit?: number; before?: string }
+): Promise<PlayMarketActivity> {
+  const addr = normalizeMarketAddress(marketAddress);
+  const supa = supabaseServer();
+
+  const limit = Math.min(
+    Math.max(Math.floor(Number(opts?.limit) || PLAY_ACTIVITY_DEFAULT_LIMIT), 1),
+    PLAY_ACTIVITY_MAX_LIMIT
+  );
+
+  let tradesQ = supa
+    .from("play_trades")
+    .select(ACTIVITY_COLS)
+    .eq("market_address", addr)
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(limit);
+
+  // Keyset pagination on the FULL sort key ("<created_at>|<id>"), not on the
+  // timestamp alone: two trades can share a created_at, and a timestamp-only
+  // cursor would silently skip whichever of them straddles the page boundary.
+  if (opts?.before) {
+    const cursor = parseActivityCursor(opts.before);
+    tradesQ = tradesQ.or(
+      `created_at.lt.${cursor.createdAt},` +
+        `and(created_at.eq.${cursor.createdAt},id.lt.${cursor.id})`
+    );
+  }
+
+  const [tradesRes, marketRes] = await Promise.all([
+    tradesQ,
+    supa
+      .from("markets")
+      .select("outcome_names")
+      .eq("market_address", addr)
+      .maybeSingle(),
+  ]);
+
+  if (tradesRes.error) throw toEngineError(tradesRes.error);
+
+  const trades = ((tradesRes.data as any[]) || []).filter(Boolean);
+
+  const names: string[] = Array.isArray((marketRes.data as any)?.outcome_names)
+    ? (marketRes.data as any).outcome_names.map((n: unknown) => String(n))
+    : [];
+
+  // Resolve wallets in one batched read, then truncate. Never returned raw.
+  const accountIds = Array.from(
+    new Set(trades.map((t) => String(t.account_id)).filter(Boolean))
+  );
+  const labelByAccount = new Map<string, string>();
+  if (accountIds.length > 0) {
+    const { data: accounts, error: accountsError } = await supa
+      .from("play_accounts")
+      .select("id,wallet_address")
+      .in("id", accountIds);
+    if (accountsError) throw toEngineError(accountsError);
+    for (const a of accounts || []) {
+      labelByAccount.set(
+        String((a as any).id),
+        shortWallet((a as any).wallet_address)
+      );
+    }
+  }
+
+  const rows: PlayMarketActivityRow[] = trades.map((t) => {
+    const idx = Number(t.outcome_index);
+    return {
+      id: String(t.id),
+      outcome_index: Number.isFinite(idx) ? idx : 0,
+      outcome_name:
+        (t.outcome_name != null ? String(t.outcome_name) : null) ??
+        (names[idx] != null ? String(names[idx]) : null),
+      side: "buy",
+      shares: String(t.shares ?? "0"),
+      stake_usd: String(t.stake_usd ?? "0"),
+      created_at: String(t.created_at),
+      trader_label: labelByAccount.get(String(t.account_id)) ?? "Player",
+      status: (String(t.status || "open") as PlayTradeStatus),
+    };
+  });
+
+  const last = rows[rows.length - 1];
+
+  return {
+    market_address: addr,
+    outcome_names: names,
+    rows,
+    // A short page means the ledger is exhausted for this market.
+    next_before:
+      rows.length === limit && last ? `${last.created_at}|${last.id}` : null,
+  };
+}

@@ -18,6 +18,7 @@ import TradingPanel from "@/components/TradingPanel";
 import PlayTradingPanel from "@/components/PlayTradingPanel";
 import OddsHistoryChart from "@/components/OddsHistoryChart";
 import PlayOddsChart from "@/components/play/PlayOddsChart";
+import PlayActivity from "@/components/play/PlayActivity";
 import MarketActivityTab from "@/components/MarketActivity";
 import { useTradingMode } from "@/components/mode/ModeProvider";
 import {
@@ -4886,10 +4887,15 @@ const ended = endedByTime;
                   <CommentsSection marketId={market.publicKey} />
                 ) : bottomTab === "activity" ? (
                   isPlayTrading ? (
-                    // Play activity is a later phase; never show Real (SOL)
-                    // activity as if it were Play.
-                    <div className="mt-4 text-sm text-gray-500 border border-gray-800 rounded-lg p-6 text-center">
-                      Play activity coming next
+                    // Authoritative Play trades for this market. Never the
+                    // Real (SOL) transactions — those stay on the Real branch.
+                    <div className="mt-4">
+                      <PlayActivity
+                        marketAddress={market.publicKey}
+                        outcomeNames={names}
+                        variant="card"
+                        limit={50}
+                      />
                     </div>
                   ) : (
                     <MarketActivityTab
