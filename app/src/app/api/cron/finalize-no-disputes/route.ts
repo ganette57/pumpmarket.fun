@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { Connection, Keypair, PublicKey, Transaction } from "@solana/web3.js";
 import { AnchorProvider, Program, Idl } from "@coral-xyz/anchor";
 import idl from "@/idl/funmarket_pump.json";
+import { settlePlayForMarket } from "@/lib/playSettlement";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -226,7 +227,19 @@ export async function GET(req: Request) {
 
         if (updErr) throw updErr;
 
-        results.push({ market: marketAddr, ok: true, txSig });
+        // Play settlement — same contract as the admin path: only after the
+        // Real row is terminal, never throws, never fails the Real result.
+        // This cron is disabled by default, but it is a real finalization
+        // path, so it is wired too rather than left to reintroduce the bug
+        // the day someone sets ENABLE_CRON_FINALIZE.
+        const play = await settlePlayForMarket(marketAddr, {
+          expectedWinningOutcome: wo,
+        });
+        if (play.needs_attention) {
+          console.error("[cron/finalize-no-disputes] play settlement:", play);
+        }
+
+        results.push({ market: marketAddr, ok: true, txSig, play_settlement: play });
       } catch (e: any) {
         results.push({ market: marketAddr, ok: false, step, error: String(e?.message || e) });
       }

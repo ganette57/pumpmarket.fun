@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { isAdminRequest } from "@/lib/admin";
+import { settlePlayForMarket } from "@/lib/playSettlement";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -73,7 +74,23 @@ export async function POST(req: Request) {
 
     if (error) return jsonError("DB update failed", 500);
 
-    return NextResponse.json({ ok: true, market, winning_outcome: winningOutcome, tx_sig: txSig });
+    // Play settlement — AFTER the Real row is terminal, never before.
+    // The engine re-reads the row we just wrote, so it settles on the same
+    // authoritative outcome. It cannot throw and cannot change `ok`: Real
+    // has already finalized on-chain and must not be reported as failed
+    // because the virtual economy had a bad day. Failures come back in
+    // `play_settlement` with needs_attention set, and the admin UI shows it.
+    const playSettlement = await settlePlayForMarket(market, {
+      expectedWinningOutcome: winningOutcome,
+    });
+
+    return NextResponse.json({
+      ok: true,
+      market,
+      winning_outcome: winningOutcome,
+      tx_sig: txSig,
+      play_settlement: playSettlement,
+    });
   } catch (e: unknown) {
     console.error("approve commit route error:", e);
     return jsonError((e as { message?: string })?.message || "Failed", 500);

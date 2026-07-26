@@ -179,10 +179,12 @@ export default function PlayProfileView({ wallet }: { wallet: string }) {
     return src.slice(0, 2).toUpperCase();
   }, [identity.display_name, wallet]);
 
-  // Balance is owner-only. The live session value wins when we have it — it
-  // is the same authoritative number, refreshed after every trade.
+  // Balance is owner-only. The API value wins: it is read from play_accounts
+  // at request time, and the hook refetches on return-to-tab, so a settlement
+  // payout credited while the user was away is included. The session value is
+  // the fallback for the window before the first response lands.
   const ownerBalance = isOwnProfile
-    ? (authenticated ? sessionBalanceUsd : null) ?? profile?.balance_usd ?? null
+    ? profile?.balance_usd ?? (authenticated ? sessionBalanceUsd : null)
     : null;
 
   const positions = profile?.positions ?? [];

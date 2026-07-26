@@ -209,6 +209,28 @@ async function postJSON<T>(url: string, body: object): Promise<T> {
   return j as T;
 }
 
+/* ========= Play settlement (post-finalization) ========= */
+
+// The commit routes settle the Play side AFTER the Real row is terminal and
+// report the result here. Real success is never conditional on it — but a
+// Play failure must never read as a clean success either, so the operator
+// line below carries the warning and the retry instruction.
+type CommitResponse = {
+  play_settlement?: {
+    status: string;
+    message: string;
+    needs_attention: boolean;
+  };
+};
+
+/** "" when Play is fine, or a visible warning to append to the success line. */
+function playNote(res: CommitResponse | null | undefined): string {
+  const p = res?.play_settlement;
+  if (!p) return "";
+  if (!p.needs_attention) return ` · Play: ${p.message}`;
+  return ` — ⚠ Real finalized, but PLAY SETTLEMENT NEEDS ATTENTION: ${p.message} Re-run this action to retry (it is idempotent).`;
+}
+
 function parseAnchorEnum(v: unknown): string {
   if (!v) return "unknown";
   if (typeof v === "string") return v.toLowerCase();
@@ -908,14 +930,14 @@ export default function AdminOverviewPage() {
       setFlowMsg("Committing to DB...");
 
       const finalWo = wo ?? (onchainState.proposedOutcome ?? drawerMarket.proposed_winning_outcome ?? 0);
-      await postJSON("/api/admin/market/approve/commit", {
+      const commitRes = await postJSON<CommitResponse>("/api/admin/market/approve/commit", {
         market: marketAddr,
         winning_outcome: finalWo,
         tx_sig: txSig,
       });
 
       setFlowStep("done");
-      setFlowMsg(`Approved! tx=${shortAddr(txSig)}`);
+      setFlowMsg(`Approved! tx=${shortAddr(txSig)}${playNote(commitRes)}`);
 
       setTimeout(() => {
         closeDrawer();
@@ -960,13 +982,13 @@ export default function AdminOverviewPage() {
         setFlowStep("committing");
         setFlowMsg("Market already cancelled on-chain. Syncing DB...");
 
-        await postJSON("/api/admin/market/cancel/commit", {
+        const syncRes = await postJSON<CommitResponse>("/api/admin/market/cancel/commit", {
           market: marketAddr,
           tx_sig: "already_cancelled_onchain",
         });
 
         setFlowStep("done");
-        setFlowMsg("DB synced with on-chain state!");
+        setFlowMsg(`DB synced with on-chain state!${playNote(syncRes)}`);
 
         setTimeout(() => {
           closeDrawer();
@@ -1011,13 +1033,13 @@ export default function AdminOverviewPage() {
       setFlowStep("committing");
       setFlowMsg("Committing to DB...");
 
-      await postJSON("/api/admin/market/cancel/commit", {
+      const cancelRes = await postJSON<CommitResponse>("/api/admin/market/cancel/commit", {
         market: marketAddr,
         tx_sig: txSig,
       });
 
       setFlowStep("done");
-      setFlowMsg(`Cancelled! tx=${shortAddr(txSig)}`);
+      setFlowMsg(`Cancelled! tx=${shortAddr(txSig)}${playNote(cancelRes)}`);
 
       setTimeout(() => {
         closeDrawer();
@@ -1057,14 +1079,14 @@ export default function AdminOverviewPage() {
         setFlowStep("committing");
         setFlowMsg("Market already cancelled on-chain. Syncing DB...");
   
-        await postJSON("/api/admin/market/cancel/commit", {
+        const sync24Res = await postJSON<CommitResponse>("/api/admin/market/cancel/commit", {
           market: marketAddr,
           tx_sig: "already_cancelled_onchain",
           reason: "no_proposal_24h",
         });
-  
+
         setFlowStep("done");
-        setFlowMsg("DB synced with on-chain state!");
+        setFlowMsg(`DB synced with on-chain state!${playNote(sync24Res)}`);
   
         setTimeout(() => {
           closeDrawer();
@@ -1107,14 +1129,14 @@ export default function AdminOverviewPage() {
       setFlowStep("committing");
       setFlowMsg("Committing to DB...");
   
-      await postJSON("/api/admin/market/cancel/commit", {
+      const refundRes = await postJSON<CommitResponse>("/api/admin/market/cancel/commit", {
         market: marketAddr,
         tx_sig: txSig,
         reason: "no_proposal_24h",
       });
-  
+
       setFlowStep("done");
-      setFlowMsg(`Refunded! tx=${shortAddr(txSig)}`);
+      setFlowMsg(`Refunded! tx=${shortAddr(txSig)}${playNote(refundRes)}`);
   
       setTimeout(() => {
         closeDrawer();

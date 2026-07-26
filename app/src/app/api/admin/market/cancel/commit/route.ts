@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { isAdminRequest } from "@/lib/admin";
+import { settlePlayForMarket } from "@/lib/playSettlement";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,6 +39,21 @@ export async function POST(req: Request) {
 
     const supabase = supabaseAdmin();
 
+    // Play refund — attempted on EVERY success path below, including the
+    // already-cancelled ones, so a cancel whose Play half failed the first
+    // time is repaired simply by re-running the same admin action. The
+    // engine is idempotent, so the repeat calls cost one no-op query and can
+    // never double-refund. No winning outcome is expected on a cancel: the
+    // engine refunds every open stake at cost and writes realized_pnl 0.
+    //
+    // It cannot throw and never changes `ok` — the on-chain cancel has
+    // already landed. Failures surface in `play_settlement`.
+    const okWithPlay = async (payload: Record<string, unknown>) =>
+      NextResponse.json({
+        ...payload,
+        play_settlement: await settlePlayForMarket(market),
+      });
+
     // Fetch current state
     const { data: cur, error: curErr } = await supabase
       .from("markets")
@@ -54,12 +70,12 @@ export async function POST(req: Request) {
     if (cur.cancelled === true || status === "cancelled") {
       // If already cancelled with same tx_sig, just return success (idempotent)
       if (cur.cancel_tx === txSig) {
-        return NextResponse.json({ 
-          ok: true, 
-          market, 
-          tx_sig: txSig, 
+        return okWithPlay({
+          ok: true,
+          market,
+          tx_sig: txSig,
           reason,
-          note: "Already committed (idempotent)" 
+          note: "Already committed (idempotent)"
         });
       }
       
@@ -75,22 +91,22 @@ export async function POST(req: Request) {
 
         if (error) return jsonError("DB update failed", 500);
 
-        return NextResponse.json({ 
-          ok: true, 
-          market, 
-          tx_sig: txSig, 
+        return okWithPlay({
+          ok: true,
+          market,
+          tx_sig: txSig,
           reason,
-          note: "Updated cancel_tx on already cancelled market" 
+          note: "Updated cancel_tx on already cancelled market"
         });
       }
 
       // Already cancelled with different tx - this is fine, tx succeeded on-chain
-      return NextResponse.json({ 
-        ok: true, 
-        market, 
-        tx_sig: txSig, 
+      return okWithPlay({
+        ok: true,
+        market,
+        tx_sig: txSig,
         reason,
-        note: "Market already cancelled, on-chain tx valid" 
+        note: "Market already cancelled, on-chain tx valid"
       });
     }
 
@@ -127,7 +143,7 @@ export async function POST(req: Request) {
 
     if (error) return jsonError("DB update failed", 500);
 
-    return NextResponse.json({ ok: true, market, tx_sig: txSig, reason });
+    return okWithPlay({ ok: true, market, tx_sig: txSig, reason });
   } catch (e: unknown) {
     console.error("cancel commit route error:", e);
     return jsonError((e as { message?: string })?.message || "Failed", 500);

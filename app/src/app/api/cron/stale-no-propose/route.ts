@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { Connection, Keypair, PublicKey, Transaction } from "@solana/web3.js";
 import { AnchorProvider, Program, Idl } from "@coral-xyz/anchor";
 import idl from "@/idl/funmarket_pump.json";
+import { settlePlayForMarket } from "@/lib/playSettlement";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -271,7 +272,14 @@ export async function GET(req: Request) {
 
         if (updErr) throw updErr;
 
-        results.push({ market: marketAddr, ok: true, txSig });
+        // Play refund — the cancellation counterpart. Same contract: after
+        // the terminal row, never throws, never fails the Real result.
+        const play = await settlePlayForMarket(marketAddr);
+        if (play.needs_attention) {
+          console.error("[cron/stale-no-propose] play settlement:", play);
+        }
+
+        results.push({ market: marketAddr, ok: true, txSig, play_settlement: play });
       } catch (e: any) {
         results.push({ market: marketAddr, ok: false, step, error: String(e?.message || e) });
       }
