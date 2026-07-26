@@ -2,27 +2,35 @@
 
 // src/components/play/PlayLeaderboardView.tsx
 //
-// The Play face of /leaderboard. Same route, same shell, same visual language
-// as the Real page — a different body.
+// The Play face of /leaderboard: a competitive ladder — hero, top-three
+// podium, "Your rank" card, full standings.
 //
 // It sits on the far side of an outer `isPlay ? … : …` branch in
 // src/app/leaderboard/page.tsx, so the Real leaderboard is not merely hidden
 // here: it is UNMOUNTED. No Real read runs in Play mode, and none of this
 // component's state can survive a switch back to Real.
 //
-// WHAT IS RANKED
-// --------------
-// Authoritative REALIZED P&L only — the sum of play_trades.realized_pnl_usd
-// over settled rows, computed server-side. An open position contributes
-// nothing: no quoted valuation is ever dressed up as profit here, exactly as
-// on the Play profile.
+// WHAT IS RANKED — unchanged by this design pass
+// ----------------------------------------------
+// Authoritative REALIZED profit only: the sum of play_trades.realized_pnl_usd
+// over settled rows, computed server-side in getPlayLeaderboard. An open
+// position contributes nothing. This file reads that response and formats it;
+// it computes no ranking, no P&L and no win rate of its own.
+//
+// COPY
+// ----
+// The UI says "Profit", not "realized PnL", and "Picks", not "settled grouped
+// positions". The numbers behind those words are exactly the same ones the API
+// returns — the plainer label describes the same quantity, it does not soften
+// it. The hero's small print still states the one rule a player could
+// otherwise get wrong: open positions do not count yet.
 //
 // WHAT IS NOT HERE
 // ----------------
-// No SOL, no balance, no account id, no rewards or prize copy, no season
-// competition, no badges. Every row links to /profile/[wallet], which in Play
-// mode already renders the public Play profile — so the mode carries across
-// the navigation with no reload and no query parameter.
+// No SOL, no balance, no account id, no prize or rewards promise, no season
+// countdown, no badges. Every card and row links to /profile/[wallet], which
+// in Play mode already renders the public Play profile — so the mode carries
+// across the navigation with no reload and no query parameter.
 
 import Link from "next/link";
 import { Trophy } from "lucide-react";
@@ -48,14 +56,14 @@ function shortAddr(addr: string) {
 }
 
 /** "+$4,699.98" / "-$2,000.00" / "$0.00". Sign is decided in exact cents. */
-function formatPnl(v: string): string {
+function formatProfit(v: string): string {
   const c = toCents(v);
   if (c === null) return "$0.00";
   const body = formatUsd(v);
   return c > BigInt(0) ? `+${body}` : body;
 }
 
-function pnlToneClass(v: string): string {
+function profitToneClass(v: string): string {
   const c = toCents(v);
   if (c === null || c === BigInt(0)) return "text-gray-400";
   return c > BigInt(0) ? "text-pump-green" : "text-[#ff5c73]";
@@ -82,44 +90,70 @@ function initialsOf(row: PlayLeaderboardRowView): string {
   return (row.username?.trim() || row.wallet_address).slice(0, 2).toUpperCase();
 }
 
+/* -------------------------------------------------------------------------- */
+/*  Medals                                                                     */
+/* -------------------------------------------------------------------------- */
+
 /**
- * Top three get a medal tint. This is the whole of the "podium" — the Real
- * page has no podium section to mirror, and inventing one would be a redesign
- * of a page this phase is not meant to redesign.
+ * Restrained metal tints. Enough to read the top three at a glance, short of
+ * the casino-gold treatment the rest of FunMarket deliberately avoids — the
+ * page stays black-and-green, and the medals are accents on it.
  */
-function rankToneClass(rank: number): string {
-  if (rank === 1) return "border-[#f5c451]/50 bg-[#f5c451]/10 text-[#f5c451]";
-  if (rank === 2) return "border-gray-400/40 bg-gray-400/10 text-gray-300";
-  if (rank === 3) return "border-[#cd7f32]/50 bg-[#cd7f32]/10 text-[#cd7f32]";
-  return "border-gray-800 bg-white/[0.03] text-gray-500";
+type Medal = { chip: string; ring: string; glow: string; label: string };
+
+const MEDALS: Record<1 | 2 | 3, Medal> = {
+  1: {
+    chip: "border-[#f5c451]/45 bg-[#f5c451]/12 text-[#f5c451]",
+    ring: "border-[#f5c451]/60",
+    glow: "shadow-[0_0_40px_-12px_rgba(245,196,81,0.45)]",
+    label: "text-[#f5c451]",
+  },
+  2: {
+    chip: "border-[#cbd5e1]/35 bg-[#cbd5e1]/10 text-[#cbd5e1]",
+    ring: "border-[#cbd5e1]/45",
+    glow: "shadow-[0_0_30px_-14px_rgba(203,213,225,0.35)]",
+    label: "text-[#cbd5e1]",
+  },
+  3: {
+    chip: "border-[#cd7f32]/45 bg-[#cd7f32]/14 text-[#d08b45]",
+    ring: "border-[#cd7f32]/50",
+    glow: "shadow-[0_0_30px_-14px_rgba(205,127,50,0.35)]",
+    label: "text-[#d08b45]",
+  },
+};
+
+function medalFor(rank: number): Medal | null {
+  return rank === 1 || rank === 2 || rank === 3 ? MEDALS[rank] : null;
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Row pieces                                                                 */
+/*  Shared pieces                                                              */
 /* -------------------------------------------------------------------------- */
 
-function RankBadge({ rank }: { rank: number }) {
+function Avatar({
+  row,
+  size,
+  ringClass,
+}: {
+  row: PlayLeaderboardRowView;
+  size: "sm" | "md" | "lg";
+  ringClass?: string;
+}) {
+  const box =
+    size === "lg"
+      ? "h-16 w-16 text-lg md:h-20 md:w-20 md:text-xl"
+      : size === "md"
+        ? "h-11 w-11 text-xs md:h-14 md:w-14 md:text-sm"
+        : "h-9 w-9 text-[11px]";
   return (
     <span
-      className={`inline-flex h-7 min-w-[1.75rem] shrink-0 items-center justify-center rounded-lg border px-1.5 text-xs font-bold tabular-nums ${rankToneClass(
-        rank
-      )}`}
+      className={`flex ${box} shrink-0 items-center justify-center overflow-hidden rounded-full border-2 bg-[#0e1116] font-bold text-white ${
+        ringClass ?? "border-white/15"
+      }`}
     >
-      {rank}
-    </span>
-  );
-}
-
-function Avatar({ row }: { row: PlayLeaderboardRowView }) {
-  return (
-    <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-pump-green/40 bg-gray-900 text-[11px] font-bold text-white">
       {row.avatar_url ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={row.avatar_url}
-          alt=""
-          className="h-full w-full object-cover"
-        />
+        <img src={row.avatar_url} alt="" className="h-full w-full object-cover" />
       ) : (
         initialsOf(row)
       )}
@@ -127,107 +161,208 @@ function Avatar({ row }: { row: PlayLeaderboardRowView }) {
   );
 }
 
-/**
- * One player. A single <Link> per row — never a link inside a link — so the
- * whole row is clickable on both breakpoints with no nested-anchor warning.
- * Grid on desktop, stacked card on mobile.
- */
-function PlayerRow({
+/** Username primary + wallet secondary — and the wallet ALONE when unnamed. */
+function Identity({
   row,
-  highlight,
+  align = "left",
+  nameClass,
 }: {
   row: PlayLeaderboardRowView;
-  highlight?: boolean;
+  align?: "left" | "center";
+  nameClass?: string;
 }) {
-  const name = displayName(row);
+  const named = hasUsername(row);
+  return (
+    <span className={`block min-w-0 ${align === "center" ? "text-center" : ""}`}>
+      <span
+        className={`block truncate font-semibold text-white ${nameClass ?? "text-sm"}`}
+        title={displayName(row)}
+      >
+        {displayName(row)}
+      </span>
+      {named && (
+        <span className="mt-0.5 block truncate font-mono text-[11px] text-gray-500">
+          {shortAddr(row.wallet_address)}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** One "1,234 · Label" pair. The unit of every stat strip on this page. */
+function Stat({
+  value,
+  label,
+  valueClass,
+}: {
+  value: string;
+  label: string;
+  valueClass?: string;
+}) {
+  return (
+    <span className="flex min-w-0 flex-col items-center gap-0.5">
+      <span
+        className={`max-w-full truncate text-sm font-bold tabular-nums ${
+          valueClass ?? "text-white"
+        }`}
+      >
+        {value}
+      </span>
+      {/* nowrap + a smaller mobile size: "Win rate" must not break onto two
+          lines inside the narrow side-by-side podium cards. */}
+      <span className="whitespace-nowrap text-[9px] uppercase tracking-wider text-gray-500 md:text-[10px]">
+        {label}
+      </span>
+    </span>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Podium                                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Top three, as cards rather than table rows.
+ *
+ * Desktop lays them out #2 · #1 · #3 with `items-end`, so the taller first
+ * card rises out of the row on its own — no absolute positioning, and it
+ * degrades to a plain stack the moment the grid is dropped.
+ *
+ * Mobile stacks them in rank order (#1 first), which is why the DOM order is
+ * rank order and the desktop arrangement is pure CSS `order`. Nothing scrolls
+ * sideways.
+ */
+function Podium({ rows, ownWallet }: { rows: PlayLeaderboardRowView[]; ownWallet: string | null }) {
+  const top = rows.slice(0, 3);
+  if (top.length === 0) return null;
+
+  // With one or two players the desktop grid would leave a hole. Centre what
+  // exists instead of rendering an empty column.
+  const gridCols =
+    top.length === 3
+      ? "md:grid-cols-3"
+      : top.length === 2
+        ? "md:grid-cols-2 md:max-w-2xl md:mx-auto"
+        : "md:grid-cols-1 md:max-w-sm md:mx-auto";
+
+  const desktopOrder = ["md:order-2", "md:order-1", "md:order-3"];
+
+  // Mobile is a two-column grid: #1 spans it in full, #2 and #3 share the row
+  // beneath. That keeps the champion dominant without pushing the standings
+  // three full cards down the page, and nothing scrolls sideways.
+  const spanFor = (rank: number) =>
+    rank === 1 || top.length <= 2 ? "col-span-2" : "col-span-1";
+
+  return (
+    <div
+      className={`grid grid-cols-2 items-end gap-3 md:gap-4 ${gridCols} ${
+        top.length === 3 ? "md:items-end" : ""
+      }`}
+    >
+      {top.map((row, i) => (
+        <PodiumCard
+          key={row.wallet_address}
+          row={row}
+          orderClass={`${spanFor(row.rank)} md:col-span-1 ${
+            top.length === 3 ? desktopOrder[i] : ""
+          }`}
+          isOwn={!!ownWallet && row.wallet_address === ownWallet}
+        />
+      ))}
+    </div>
+  );
+}
+
+function PodiumCard({
+  row,
+  orderClass,
+  isOwn,
+}: {
+  row: PlayLeaderboardRowView;
+  orderClass: string;
+  isOwn: boolean;
+}) {
+  const medal = medalFor(row.rank);
+  const first = row.rank === 1;
+
   return (
     <Link
       href={`/profile/${row.wallet_address}`}
-      className={`block border-b border-gray-800/60 px-3 py-3 transition last:border-0 hover:bg-white/[0.03] ${
-        highlight ? "bg-pump-green/[0.06]" : ""
-      }`}
+      className={`group relative flex flex-col items-center rounded-2xl border bg-[#0c0e12] px-4 transition
+        hover:-translate-y-0.5 hover:border-white/20 hover:bg-[#101319]
+        ${first ? "py-6 md:py-8" : "py-5 md:py-6"}
+        ${isOwn ? "border-pump-green/40" : "border-white/10"}
+        ${medal?.glow ?? ""} ${orderClass}`}
     >
-      {/* Desktop / tablet: Rank · Player · Realized PnL · Picks · Wins · Win Rate */}
-      <div className="hidden items-center gap-3 md:grid md:grid-cols-[auto_minmax(0,1fr)_7.5rem_4rem_4rem_5rem]">
-        <RankBadge rank={row.rank} />
+      {/* Rank chip, straddling the top edge */}
+      <span
+        className={`absolute -top-3 inline-flex h-7 items-center justify-center rounded-full border px-3 text-xs font-extrabold tabular-nums
+          ${medal?.chip ?? "border-white/15 bg-[#0c0e12] text-gray-400"}`}
+      >
+        #{row.rank}
+      </span>
 
-        <span className="flex min-w-0 items-center gap-2.5">
-          <Avatar row={row} />
-          <span className="min-w-0">
-            <span className="block truncate text-sm font-semibold text-white" title={name}>
-              {name}
-            </span>
-            {/* The wallet is the fallback NAME when there is no profile — only
-                show it as a second line when it would not just repeat it. */}
-            {hasUsername(row) && (
-              <span className="block truncate font-mono text-[11px] text-gray-500">
-                {shortAddr(row.wallet_address)}
-              </span>
-            )}
-          </span>
-        </span>
+      <Avatar
+        row={row}
+        size={first ? "lg" : "md"}
+        ringClass={medal?.ring}
+      />
 
-        <span
-          className={`text-right text-sm font-bold tabular-nums ${pnlToneClass(
-            row.realized_pnl_usd
-          )}`}
-        >
-          {formatPnl(row.realized_pnl_usd)}
-        </span>
-        <span className="text-right text-sm tabular-nums text-white/85">
-          {row.picks}
-        </span>
-        <span className="text-right text-sm tabular-nums text-white/85">
-          {row.wins}
-        </span>
-        <span className="text-right text-sm tabular-nums text-gray-400">
-          {formatWinRate(row.win_rate)}
-        </span>
+      {/* Fixed height so a named player and an unnamed one produce the same
+          card. Without it the second (wallet) line would make #2 taller than
+          #3 and the podium would sit crooked under `items-end`. */}
+      <div
+        className={`mt-3 flex w-full items-start justify-center ${
+          first ? "min-h-[3.25rem]" : "min-h-[2.75rem]"
+        }`}
+      >
+        <Identity
+          row={row}
+          align="center"
+          nameClass={first ? "text-base md:text-lg" : "text-sm"}
+        />
       </div>
 
-      {/* Mobile: #rank avatar name / PnL / wins · picks */}
-      <div className="md:hidden">
-        <div className="flex items-center gap-2.5">
-          <RankBadge rank={row.rank} />
-          <Avatar row={row} />
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-sm font-semibold text-white">
-              {name}
-            </span>
-            {hasUsername(row) && (
-              <span className="block truncate font-mono text-[11px] text-gray-500">
-                {shortAddr(row.wallet_address)}
-              </span>
-            )}
-          </span>
-          <span
-            className={`shrink-0 text-sm font-bold tabular-nums ${pnlToneClass(
-              row.realized_pnl_usd
-            )}`}
-          >
-            {formatPnl(row.realized_pnl_usd)}
-          </span>
-        </div>
-        <div className="mt-1 pl-[4.25rem] text-[11px] text-gray-500">
-          {row.wins} {row.wins === 1 ? "win" : "wins"} · {row.picks}{" "}
-          {row.picks === 1 ? "pick" : "picks"} ·{" "}
-          {formatWinRate(row.win_rate)} win rate
-        </div>
+      <div
+        className={`mt-3 max-w-full truncate tabular-nums font-extrabold ${profitToneClass(
+          row.realized_pnl_usd
+        )} ${
+          first ? "text-xl md:text-2xl lg:text-3xl" : "text-base md:text-lg lg:text-xl"
+        }`}
+      >
+        {formatProfit(row.realized_pnl_usd)}
+      </div>
+      <div className="text-[10px] uppercase tracking-wider text-gray-500">
+        Profit
+      </div>
+
+      <div className="mt-4 grid w-full grid-cols-3 gap-1 border-t border-white/[0.06] pt-3">
+        <Stat value={String(row.wins)} label="Wins" />
+        <Stat value={String(row.picks)} label="Picks" />
+        <Stat value={formatWinRate(row.win_rate)} label="Win rate" />
       </div>
     </Link>
   );
 }
 
-function HeaderRow() {
+/* -------------------------------------------------------------------------- */
+/*  Standings                                                                  */
+/* -------------------------------------------------------------------------- */
+
+const GRID =
+  "grid-cols-[2.5rem_minmax(0,1fr)_7rem_3.5rem_3.5rem_4.5rem] gap-3";
+
+function StandingsHeader() {
   return (
-    <div className="hidden grid-cols-[auto_minmax(0,1fr)_7.5rem_4rem_4rem_5rem] items-center gap-3 border-b border-gray-800 px-3 py-2 text-[11px] uppercase tracking-wide text-gray-500 md:grid">
-      <span className="w-7">#</span>
+    <div
+      className={`hidden ${GRID} items-center border-b border-white/[0.07] px-4 py-2.5 text-[10px] font-medium uppercase tracking-wider text-gray-500 md:grid`}
+    >
+      <span>Rank</span>
       <span>Player</span>
-      <span className="text-right">Realized PnL</span>
-      {/* The Play profile's "Picks" counts EVERY position including open ones;
-          this column counts settled positions only, because that is what the
-          ranking is built from. The titles say so on hover. */}
-      <span className="text-right" title="Settled positions (market + outcome)">
+      <span className="text-right">Profit</span>
+      {/* Same word the Play profile uses, counted over SETTLED positions here
+          because that is what the ranking is built from. */}
+      <span className="text-right" title="Settled picks (market + outcome)">
         Picks
       </span>
       <span className="text-right">Wins</span>
@@ -235,6 +370,155 @@ function HeaderRow() {
         Win rate
       </span>
     </div>
+  );
+}
+
+/**
+ * One player. A single <Link> per row — never a link inside a link — so the
+ * whole row is clickable on both breakpoints with no nested-anchor warning.
+ */
+function StandingsRow({
+  row,
+  isOwn,
+}: {
+  row: PlayLeaderboardRowView;
+  isOwn: boolean;
+}) {
+  const medal = medalFor(row.rank);
+
+  return (
+    <Link
+      href={`/profile/${row.wallet_address}`}
+      className={`group block border-b border-white/[0.05] px-4 transition last:border-0
+        hover:bg-white/[0.035] ${isOwn ? "bg-pump-green/[0.07]" : ""}`}
+    >
+      {/* Desktop / tablet */}
+      <div className={`hidden ${GRID} items-center py-3 md:grid`}>
+        <span
+          className={`inline-flex h-7 w-7 items-center justify-center rounded-lg border text-xs font-bold tabular-nums
+            ${medal?.chip ?? "border-white/10 bg-white/[0.03] text-gray-400"}`}
+        >
+          {row.rank}
+        </span>
+
+        <span className="flex min-w-0 items-center gap-3">
+          <Avatar row={row} size="sm" ringClass={medal?.ring} />
+          <Identity row={row} />
+        </span>
+
+        <span
+          className={`text-right text-sm font-bold tabular-nums ${profitToneClass(
+            row.realized_pnl_usd
+          )}`}
+        >
+          {formatProfit(row.realized_pnl_usd)}
+        </span>
+        <span className="text-right text-sm tabular-nums text-white/80">
+          {row.picks}
+        </span>
+        <span className="text-right text-sm tabular-nums text-white/80">
+          {row.wins}
+        </span>
+        <span className="text-right text-sm tabular-nums text-gray-400">
+          {formatWinRate(row.win_rate)}
+        </span>
+      </div>
+
+      {/* Mobile: rank + player + profit on line one, stats on line two */}
+      <div className="py-3 md:hidden">
+        <div className="flex items-center gap-3">
+          <span
+            className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border text-xs font-bold tabular-nums
+              ${medal?.chip ?? "border-white/10 bg-white/[0.03] text-gray-400"}`}
+          >
+            {row.rank}
+          </span>
+          <Avatar row={row} size="sm" ringClass={medal?.ring} />
+          <span className="min-w-0 flex-1">
+            <Identity row={row} />
+          </span>
+          <span
+            className={`shrink-0 text-sm font-bold tabular-nums ${profitToneClass(
+              row.realized_pnl_usd
+            )}`}
+          >
+            {formatProfit(row.realized_pnl_usd)}
+          </span>
+        </div>
+        <div className="mt-1.5 pl-[4.75rem] text-[11px] text-gray-500">
+          {row.wins} {row.wins === 1 ? "win" : "wins"} · {row.picks}{" "}
+          {row.picks === 1 ? "pick" : "picks"} · {formatWinRate(row.win_rate)} win
+          rate
+        </div>
+      </div>
+    </Link>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Your rank                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The player's own standing. `viewer` is produced server-side from the Play
+ * session cookie, so this card appears only for a signed-in player who has a
+ * ranked result — never for a wallet a visitor merely typed. It carries the
+ * same public stats as any other row and NEVER a balance.
+ */
+function YourRankCard({ viewer }: { viewer: PlayLeaderboardRowView | null }) {
+  if (!viewer) {
+    return (
+      <div className="rounded-2xl border border-white/10 bg-[#0c0e12] px-5 py-4">
+        <div className="text-[10px] font-medium uppercase tracking-wider text-gray-500">
+          Your rank
+        </div>
+        <p className="mt-1.5 text-sm font-semibold text-white">
+          You&apos;re not ranked yet.
+        </p>
+        <p className="mt-0.5 text-xs text-gray-400">
+          Settle your first Play market to enter the leaderboard.
+        </p>
+      </div>
+    );
+  }
+
+  const medal = medalFor(viewer.rank);
+
+  return (
+    <Link
+      href={`/profile/${viewer.wallet_address}`}
+      className="block rounded-2xl border border-pump-green/30 bg-pump-green/[0.04] px-5 py-4 transition hover:border-pump-green/50 hover:bg-pump-green/[0.07]"
+    >
+      <div className="text-[10px] font-medium uppercase tracking-wider text-pump-green/80">
+        Your rank
+      </div>
+
+      {/* Stacks on mobile — rank + identity, then the stat strip — so a long
+          name never has to fight three numbers for the same 375px row. */}
+      <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+        <span className="flex min-w-0 flex-1 items-center gap-3">
+          <span
+            className={`shrink-0 text-2xl font-extrabold tabular-nums ${
+              medal?.label ?? "text-white"
+            }`}
+          >
+            #{viewer.rank}
+          </span>
+          <Avatar row={viewer} size="sm" ringClass={medal?.ring} />
+          <Identity row={viewer} />
+        </span>
+
+        <span className="flex shrink-0 items-center justify-between gap-4 border-t border-white/[0.06] pt-3 sm:justify-end sm:gap-6 sm:border-0 sm:pt-0">
+          <Stat
+            value={formatProfit(viewer.realized_pnl_usd)}
+            label="Profit"
+            valueClass={profitToneClass(viewer.realized_pnl_usd)}
+          />
+          <Stat value={String(viewer.wins)} label="Wins" />
+          <Stat value={String(viewer.picks)} label="Picks" />
+        </span>
+      </div>
+    </Link>
   );
 }
 
@@ -254,112 +538,147 @@ export default function PlayLeaderboardView() {
 
   // "Me" is the wallet the server proved from the Play session cookie. The
   // connected wallet is only the fallback for highlighting when there is no
-  // Play session yet — it can never produce a `viewer` row on its own, because
-  // that row comes from the server or not at all.
+  // Play session yet — it can never produce a `viewer` card on its own,
+  // because that comes from the server or not at all.
   const ownWallet = viewer?.wallet_address ?? connectedWallet;
 
-  // The viewer's own row is repeated below the table only when it is not
-  // already visible in it. It carries the same public stats as any other row —
-  // rank, P&L, picks, wins — and never a balance.
-  const viewerOutsideTable =
-    viewer != null &&
-    !rows.some((r) => r.wallet_address === viewer.wallet_address);
+  const hasRows = rows.length > 0;
+
+  // The podium already IS the ranking for the first three, so the standings
+  // list carries on from #4 rather than reprinting them. With three players or
+  // fewer the podium is the whole ladder and no table renders at all.
+  const standings = rows.slice(3);
 
   return (
-    <div className="min-h-screen bg-pump-dark px-4 py-6 md:py-10">
-      <div className="mx-auto w-full max-w-4xl space-y-6">
-        {/* Hero — same shape as the Real page's */}
-        <header className="flex items-start gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-pump-green/30 bg-pump-green/10">
-            <Trophy className="h-5 w-5 text-pump-green" />
-          </div>
-          <div className="min-w-0">
-            <h1 className="text-2xl font-extrabold tracking-tight text-white md:text-3xl">
+    <div className="min-h-screen bg-black">
+      {/* Ambient green wash behind the hero — the same accent the rest of Play
+          uses, kept to a single soft band rather than a full gradient sheet. */}
+      <div className="relative">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-0 h-64 bg-gradient-to-b from-pump-green/[0.09] via-pump-green/[0.02] to-transparent"
+        />
+
+        <div className="relative mx-auto w-full max-w-5xl px-4 pb-16 pt-8 md:pt-12">
+          {/* HERO */}
+          <header className="text-center">
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <span className="inline-flex items-center gap-2 rounded-full border border-pump-green/25 bg-pump-green/[0.08] px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-pump-green">
+                <Trophy className="h-3.5 w-3.5" />
+                Play
+              </span>
+              {/* Scale of the field, so the count never depends on the
+                  standings table existing. */}
+              {leaderboard && leaderboard.total_players > 0 && (
+                <span className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-gray-400">
+                  {leaderboard.total_players.toLocaleString()}{" "}
+                  {leaderboard.total_players === 1 ? "player" : "players"}
+                </span>
+              )}
+            </div>
+
+            <h1 className="mt-4 text-3xl font-extrabold uppercase leading-none tracking-tight text-white md:text-5xl">
               Play leaderboard
             </h1>
-            <p className="mt-1 text-sm text-gray-400">
-              Ranked by realized PnL on settled Play markets. Open positions
-              don&apos;t count.
+
+            <p className="mt-3 text-base font-semibold text-white/90 md:text-lg">
+              Trade. Climb. Take the top spot.
             </p>
+            <p className="mx-auto mt-1.5 max-w-md text-sm leading-relaxed text-gray-400">
+              Climb the ranks with every settled win. Only realized profit
+              counts.
+            </p>
+            <p className="mt-2 text-[11px] text-gray-600">
+              Open positions are excluded until the market settles.
+            </p>
+          </header>
+
+          {/* BODY */}
+          <div className="mt-10 md:mt-12">
+            {error ? (
+              <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-white/10 bg-[#0c0e12] px-5 py-16 text-center">
+                <p className="text-sm text-gray-400">
+                  Couldn&apos;t load the leaderboard.
+                </p>
+                <button
+                  onClick={refresh}
+                  className="rounded-full border border-white/15 px-4 py-1.5 text-xs font-semibold text-gray-200 transition hover:border-pump-green/60 hover:text-pump-green"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : pending ? (
+              <div className="space-y-8">
+                {/* Podium skeleton — same three-up rhythm as the real thing */}
+                <div className="flex flex-col gap-3 md:grid md:grid-cols-3 md:items-end md:gap-4">
+                  <div className="h-[232px] animate-pulse rounded-2xl border border-white/10 bg-[#0c0e12] md:order-1" />
+                  <div className="h-[272px] animate-pulse rounded-2xl border border-white/10 bg-[#0c0e12] md:order-2" />
+                  <div className="h-[232px] animate-pulse rounded-2xl border border-white/10 bg-[#0c0e12] md:order-3" />
+                </div>
+                <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#0c0e12]">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <div
+                      key={i}
+                      className="h-[58px] animate-pulse border-b border-white/[0.05] last:border-0"
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : !hasRows ? (
+              <div className="rounded-2xl border border-white/10 bg-[#0c0e12] px-5 py-16 text-center">
+                <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-pump-green/25 bg-pump-green/[0.08]">
+                  <Trophy className="h-7 w-7 text-pump-green" />
+                </div>
+                <h2 className="text-lg font-bold text-white">
+                  No settled Play results yet.
+                </h2>
+                <p className="mx-auto mt-1.5 max-w-sm text-sm leading-relaxed text-gray-400">
+                  Finish a Play market to claim the first spot.
+                </p>
+                <Link
+                  href="/"
+                  className="mt-6 inline-flex h-10 items-center justify-center rounded-full bg-pump-green px-6 text-sm font-bold text-black transition hover:bg-pump-green/90"
+                >
+                  Browse markets
+                </Link>
+              </div>
+            ) : (
+              <div className="space-y-8">
+                <Podium rows={rows} ownWallet={ownWallet} />
+
+                <YourRankCard viewer={viewer} />
+
+                {standings.length > 0 && (
+                  <section>
+                    <div className="mb-3 flex items-baseline justify-between gap-3">
+                      <h2 className="text-sm font-bold uppercase tracking-wider text-white">
+                        Top players
+                      </h2>
+                      {leaderboard &&
+                        leaderboard.total_players > rows.length && (
+                          <span className="text-[11px] tabular-nums text-gray-500">
+                            Top {rows.length} of{" "}
+                            {leaderboard.total_players.toLocaleString()}
+                          </span>
+                        )}
+                    </div>
+
+                    <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#0c0e12]">
+                      <StandingsHeader />
+                      {standings.map((row) => (
+                        <StandingsRow
+                          key={row.wallet_address}
+                          row={row}
+                          isOwn={!!ownWallet && row.wallet_address === ownWallet}
+                        />
+                      ))}
+                    </div>
+                  </section>
+                )}
+              </div>
+            )}
           </div>
-        </header>
-
-        <section className="rounded-2xl border border-pump-border bg-pump-gray">
-          {error ? (
-            <div className="flex flex-col items-center justify-center gap-2 px-5 py-14 text-center">
-              <p className="text-sm text-gray-400">
-                Couldn&apos;t load the Play leaderboard.
-              </p>
-              <button
-                onClick={refresh}
-                className="rounded-lg border border-gray-700 px-3 py-1.5 text-xs font-semibold text-gray-300 transition hover:border-gray-500"
-              >
-                Retry
-              </button>
-            </div>
-          ) : pending ? (
-            <div className="space-y-2 p-3">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <div
-                  key={i}
-                  className="h-[60px] animate-pulse rounded-xl border border-gray-800 bg-[#05070b]"
-                />
-              ))}
-            </div>
-          ) : rows.length === 0 ? (
-            <div className="px-5 py-14 text-center">
-              <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-pump-green/30 bg-pump-green/10">
-                <Trophy className="h-6 w-6 text-pump-green" />
-              </div>
-              <h2 className="text-base font-semibold text-white">
-                No settled Play results yet
-              </h2>
-              <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-gray-400">
-                Players appear here once a market they picked resolves. Make a
-                pick and wait for it to settle.
-              </p>
-              <Link
-                href="/"
-                className="mt-5 inline-flex h-10 items-center justify-center rounded-full bg-pump-green px-5 text-sm font-bold text-black transition hover:bg-pump-green/90"
-              >
-                Browse markets
-              </Link>
-            </div>
-          ) : (
-            <>
-              <HeaderRow />
-              <div>
-                {rows.map((r) => (
-                  <PlayerRow
-                    key={r.wallet_address}
-                    row={r}
-                    highlight={!!ownWallet && r.wallet_address === ownWallet}
-                  />
-                ))}
-              </div>
-            </>
-          )}
-        </section>
-
-        {/* Your rank — only when the connected player is off the visible page. */}
-        {viewerOutsideTable && viewer && (
-          <section className="rounded-2xl border border-pump-green/30 bg-pump-gray">
-            <div className="border-b border-gray-800 px-3 py-2 text-[11px] uppercase tracking-wide text-gray-500">
-              Your rank
-            </div>
-            <PlayerRow row={viewer} highlight />
-          </section>
-        )}
-
-        {rows.length > 0 && leaderboard && (
-          <p className="text-center text-[11px] text-gray-600">
-            {leaderboard.total_players.toLocaleString()} ranked{" "}
-            {leaderboard.total_players === 1 ? "player" : "players"}
-            {leaderboard.total_players > rows.length
-              ? ` · showing top ${rows.length}`
-              : ""}
-          </p>
-        )}
+        </div>
       </div>
     </div>
   );
