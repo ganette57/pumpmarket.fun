@@ -249,6 +249,35 @@ export type PlayProfileView = {
   truncated: boolean;
 };
 
+/** One ranked player on the public Play leaderboard. */
+export type PlayLeaderboardRowView = {
+  rank: number;
+  wallet_address: string;
+  /** profiles.display_name — the same identity Real Mode shows. */
+  username: string | null;
+  avatar_url: string | null;
+  /** SUM(realized_pnl_usd) over settled trades. Signed decimal string. */
+  realized_pnl_usd: string;
+  /** Settled grouped (market, outcome) positions — never raw buys. */
+  picks: number;
+  wins: number;
+  losses: number;
+  /** wins / (wins + losses) as a 0..1 decimal string. Refunds excluded. */
+  win_rate: string;
+  total_settled_stake_usd: string;
+};
+
+export type PlayLeaderboardView = {
+  period: "all";
+  rows: PlayLeaderboardRowView[];
+  /** Eligible players before the limit — may exceed rows.length. */
+  total_players: number;
+  /** The caller's own row when a Play session is present and ranked. */
+  viewer: PlayLeaderboardRowView | null;
+  truncated: boolean;
+  generated_at: string;
+};
+
 export type PlayTradeResponse = {
   replayed: boolean;
   trade: {
@@ -454,6 +483,37 @@ export const playClient = {
           r.realized_pnl_usd == null ? null : decimal(r.realized_pnl_usd),
       })),
     } as PlayProfileView;
+  },
+
+  /**
+   * The public Play leaderboard, ranked by authoritative realized P&L.
+   *
+   * Public — no session required. When a Play session cookie IS present the
+   * response also carries `viewer`: the caller's own row and rank, with the
+   * same public stats as any other row and no balance.
+   *
+   * Money and win rate stay decimal strings, as everywhere else here.
+   */
+  async leaderboard(opts?: { limit?: number }) {
+    const raw = await post<{ leaderboard: PlayLeaderboardView }>(
+      "/api/play/leaderboard",
+      opts?.limit ? { limit: opts.limit } : {}
+    );
+    const l = raw.leaderboard;
+    const row = (r: PlayLeaderboardRowView): PlayLeaderboardRowView => ({
+      ...r,
+      realized_pnl_usd: decimal(r.realized_pnl_usd),
+      win_rate: decimal(r.win_rate),
+      total_settled_stake_usd: decimal(r.total_settled_stake_usd),
+    });
+    return {
+      period: "all",
+      rows: (l?.rows ?? []).map(row),
+      total_players: Number(l?.total_players) || 0,
+      viewer: l?.viewer ? row(l.viewer) : null,
+      truncated: !!l?.truncated,
+      generated_at: String(l?.generated_at ?? ""),
+    } as PlayLeaderboardView;
   },
 
   /**

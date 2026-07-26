@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Trophy } from "lucide-react";
+import LeaderboardByMode from "@/components/leaderboard/LeaderboardByMode";
 
 // Leaderboard shell.
 //
@@ -9,6 +10,11 @@ import { Trophy } from "lucide-react";
 // performance exists yet, so this page deliberately shows nothing rather than
 // a ranking we cannot stand behind. The ranking queries are still in
 // src/lib/leaderboard.ts, unused, for whatever replaces them.
+//
+// That paragraph still describes REAL MODE exactly, and RealLeaderboardShell
+// below is that page verbatim. Play Mode does have a ranking it can stand
+// behind — authoritative realized P&L on settled Play markets — so the client
+// gate swaps in PlayLeaderboardView there. One route, two views, no reload.
 
 export const metadata: Metadata = {
   title: "Leaderboard — FunMarket",
@@ -16,6 +22,11 @@ export const metadata: Metadata = {
 };
 
 export default function LeaderboardPage() {
+  return <LeaderboardByMode real={<RealLeaderboardShell />} />;
+}
+
+/** The Real leaderboard, unchanged. Everything below this line is production. */
+function RealLeaderboardShell() {
   return (
     <div className="min-h-screen bg-pump-dark px-4 py-6 md:py-10">
       <div className="mx-auto w-full max-w-4xl space-y-6">

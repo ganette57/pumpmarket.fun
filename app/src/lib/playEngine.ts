@@ -1326,3 +1326,318 @@ function msOf(iso: string): number {
   const t = new Date(iso).getTime();
   return Number.isFinite(t) ? t : 0;
 }
+
+/* -------------------------------------------------------------------------- */
+/*  Leaderboard                                                                */
+/* -------------------------------------------------------------------------- */
+
+export type PlayLeaderboardRow = {
+  /** 1-based position in the fully-ordered ranking. */
+  rank: number;
+  wallet_address: string;
+  /** profiles.display_name — the SAME identity Real Mode shows. */
+  username: string | null;
+  avatar_url: string | null;
+  /** SUM(realized_pnl_usd) over settled trades. Signed decimal string. */
+  realized_pnl_usd: string;
+  /** Settled grouped (market, outcome) positions. */
+  picks: number;
+  wins: number;
+  losses: number;
+  /** wins / (wins + losses), 0..1 as a decimal string. Refunds excluded. */
+  win_rate: string;
+  /** SUM(stake_usd) over settled trades. */
+  total_settled_stake_usd: string;
+};
+
+export type PlayLeaderboard = {
+  /** Only "all" exists today — see the period note below. */
+  period: "all";
+  rows: PlayLeaderboardRow[];
+  /** Eligible players BEFORE the limit was applied. */
+  total_players: number;
+  /** The caller's own row when a Play session is present and ranked. */
+  viewer: PlayLeaderboardRow | null;
+  /** True when the settled-trade scan hit its ceiling and totals are partial. */
+  truncated: boolean;
+  generated_at: string;
+};
+
+const PLAY_LEADERBOARD_DEFAULT_LIMIT = 50;
+const PLAY_LEADERBOARD_MAX_LIMIT = 100;
+
+/**
+ * Ceiling on SETTLED trade rows scanned for one leaderboard build. Play is
+ * buy-only on a $10,000 daily bankroll and only settled rows are read, so this
+ * is orders of magnitude above the real ledger. `truncated` reports when it
+ * bites, and the scan is ordered newest-settled-first so the cap drops the
+ * oldest history rather than an arbitrary slice.
+ */
+const PLAY_LEADERBOARD_MAX_TRADES = 50_000;
+
+const LEADERBOARD_COLS =
+  "account_id,market_address,outcome_index,status,stake_usd,realized_pnl_usd";
+
+/**
+ * The public Play leaderboard, ranked by AUTHORITATIVE REALIZED P&L.
+ *
+ * WHAT IS RANKED
+ * --------------
+ * SUM(play_trades.realized_pnl_usd) over rows whose status is not 'open',
+ * grouped by account. realized_pnl_usd is written by play_settle_market in the
+ * same transaction that moves the money (won → payout − stake, lost → −stake,
+ * refunded → 0). This function only ever SUMS that column.
+ *
+ * It never ranks on balance, deposits, daily grants, open-position value,
+ * snapshot probabilities, chart points or an estimated payout. A player
+ * sitting on a huge open position ranks exactly where their SETTLED results
+ * put them, which is the whole point of the metric.
+ *
+ * GROUPING — identical to the Play profile
+ * ----------------------------------------
+ * Picks/wins/losses are counted over grouped (market_address, outcome_index)
+ * positions, the same key getPlayProfile uses. Three buys on the same outcome
+ * are ONE pick; YES and NO on the same market are TWO picks, because they are
+ * two independent bets. Win rate is therefore never computed from raw buys.
+ *
+ * A group's status follows the profile's precedence (won > lost > refunded).
+ * Open rows are filtered out at the query, so a group here is settled by
+ * construction — and in practice a group can never be mixed anyway, since
+ * settlement closes every open row of a market in one transaction and the
+ * market state then refuses further trades.
+ *
+ * ELIGIBILITY
+ * -----------
+ * A player is ranked once they hold at least one WON or LOST group. Refund-only
+ * players (cancelled markets, or a market nobody won) have a real P&L of
+ * exactly zero and no competitive result, so they are not ranked; their profile
+ * still exists and still shows those refunds.
+ *
+ * ORDERING (total, deterministic)
+ * -------------------------------
+ *   1. realized P&L desc   2. wins desc   3. settled picks desc
+ *   4. wallet_address asc  — a unique final key, so the order is total and
+ *      two identical requests can never disagree.
+ * Negative players are ranked below zero and positive ones rather than hidden.
+ *
+ * PERIOD
+ * ------
+ * All Time only. play_trades DOES carry an authoritative settled_at, so a
+ * period cut is possible later; it is deliberately not shipped here because
+ * the Real leaderboard exposes no period control to mirror, and a filter no UI
+ * offers is a filter nobody can verify.
+ *
+ * PRIVACY
+ * -------
+ * The projection carries no balance, no play_accounts UUID, no client_trade_id,
+ * no ledger row, no season attribution and no session data. account_id is used
+ * internally to resolve the wallet and is never returned.
+ */
+export async function getPlayLeaderboard(opts?: {
+  limit?: number;
+  /** Wallet proven by the session cookie — never a client-supplied field. */
+  viewerWallet?: string | null;
+}): Promise<PlayLeaderboard> {
+  const supa = supabaseServer();
+
+  const limit = Math.min(
+    Math.max(
+      Math.floor(Number(opts?.limit) || PLAY_LEADERBOARD_DEFAULT_LIMIT),
+      1
+    ),
+    PLAY_LEADERBOARD_MAX_LIMIT
+  );
+
+  const generatedAt = new Date().toISOString();
+
+  const empty: PlayLeaderboard = {
+    period: "all",
+    rows: [],
+    total_players: 0,
+    viewer: null,
+    truncated: false,
+    generated_at: generatedAt,
+  };
+
+  // Settled rows only. Open positions carry null P&L by CHECK constraint and
+  // are excluded here at the source, not filtered out later.
+  const { data: tradeRows, error: tradesError } = await supa
+    .from("play_trades")
+    .select(LEADERBOARD_COLS)
+    .neq("status", "open")
+    .order("settled_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(PLAY_LEADERBOARD_MAX_TRADES);
+
+  if (tradesError) throw toEngineError(tradesError);
+
+  const trades = ((tradeRows as any[]) || []).filter(Boolean);
+  if (trades.length === 0) return empty;
+
+  type Agg = {
+    pnlCents: number;
+    stakeCents: number;
+    /** group key → status counts, so picks are positions, never buys. */
+    groups: Map<string, Record<PlayTradeStatus, number>>;
+  };
+
+  const byAccount = new Map<string, Agg>();
+
+  for (const t of trades) {
+    const accountId = String(t.account_id ?? "");
+    const addr = String(t.market_address ?? "");
+    const idx = Number(t.outcome_index);
+    if (!accountId || !addr || !Number.isInteger(idx) || idx < 0) continue;
+
+    // Settled only, enforced HERE and not merely by the query's .neq filter.
+    // An open row carries null P&L, so it could never move the ranking — but
+    // it would otherwise still create a pick and add its stake, which is
+    // exactly the unrealized value this metric exists to exclude.
+    const status = String(t.status || "") as PlayTradeStatus;
+    if (status !== "won" && status !== "lost" && status !== "refunded") continue;
+
+    let a = byAccount.get(accountId);
+    if (!a) {
+      a = { pnlCents: 0, stakeCents: 0, groups: new Map() };
+      byAccount.set(accountId, a);
+    }
+
+    a.pnlCents += decimalToCents(t.realized_pnl_usd) ?? 0;
+    a.stakeCents += decimalToCents(t.stake_usd) ?? 0;
+
+    const key = `${addr}|${idx}`;
+    let counts = a.groups.get(key);
+    if (!counts) {
+      counts = { open: 0, won: 0, lost: 0, refunded: 0 };
+      a.groups.set(key, counts);
+    }
+    counts[status] += 1;
+  }
+
+  // Wallets in one batched read. account_id never leaves this function.
+  const accountIds = Array.from(byAccount.keys());
+  const walletByAccount = new Map<string, string>();
+  if (accountIds.length > 0) {
+    const { data: accounts, error: accountsError } = await supa
+      .from("play_accounts")
+      .select("id,wallet_address")
+      .in("id", accountIds);
+    if (accountsError) throw toEngineError(accountsError);
+    for (const acc of accounts || []) {
+      const id = String((acc as any).id ?? "");
+      const w = String((acc as any).wallet_address ?? "");
+      if (id && w) walletByAccount.set(id, w);
+    }
+  }
+
+  type Ranked = Omit<PlayLeaderboardRow, "rank">;
+  const ranked: Ranked[] = [];
+
+  for (const [accountId, a] of Array.from(byAccount.entries())) {
+    const wallet = walletByAccount.get(accountId);
+    if (!wallet) continue; // orphan account row — never rank an unknown player
+
+    let wins = 0;
+    let losses = 0;
+    for (const counts of Array.from(a.groups.values())) {
+      // Profile precedence: won > lost > refunded. Refunded groups count as
+      // settled picks but never as a win or a loss.
+      if (counts.won > 0) wins += 1;
+      else if (counts.lost > 0) losses += 1;
+    }
+
+    // Eligibility: a decided result is required. Refund-only players are not
+    // ranked — a refund is a returned stake, not a competitive outcome.
+    if (wins + losses === 0) continue;
+
+    ranked.push({
+      wallet_address: wallet,
+      username: null,
+      avatar_url: null,
+      realized_pnl_usd: centsToDecimal(a.pnlCents),
+      picks: a.groups.size,
+      wins,
+      losses,
+      win_rate: ratioToDecimal(wins, wins + losses),
+      total_settled_stake_usd: centsToDecimal(a.stakeCents),
+    });
+  }
+
+  if (ranked.length === 0) {
+    return { ...empty, truncated: trades.length >= PLAY_LEADERBOARD_MAX_TRADES };
+  }
+
+  // Total, deterministic order. Every comparison below is on exact integers or
+  // on a unique string, so the sort is stable without relying on Array#sort
+  // stability guarantees.
+  const pnlCentsOf = new Map(
+    ranked.map((r) => [r.wallet_address, decimalToCents(r.realized_pnl_usd) ?? 0])
+  );
+  ranked.sort((x, y) => {
+    const px = pnlCentsOf.get(x.wallet_address) ?? 0;
+    const py = pnlCentsOf.get(y.wallet_address) ?? 0;
+    if (px !== py) return py - px;
+    if (x.wins !== y.wins) return y.wins - x.wins;
+    if (x.picks !== y.picks) return y.picks - x.picks;
+    return x.wallet_address < y.wallet_address ? -1 : 1;
+  });
+
+  const viewerWallet = opts?.viewerWallet ?? null;
+  const viewerIndex = viewerWallet
+    ? ranked.findIndex((r) => r.wallet_address === viewerWallet)
+    : -1;
+
+  // Identity for exactly the rows that will be serialized: the visible page
+  // plus the viewer's own row when it falls outside it.
+  const visible = ranked.slice(0, limit);
+  const needIdentity = new Set(visible.map((r) => r.wallet_address));
+  if (viewerIndex >= 0) needIdentity.add(ranked[viewerIndex].wallet_address);
+
+  const identityByWallet = new Map<
+    string,
+    { display_name: string | null; avatar_url: string | null }
+  >();
+  if (needIdentity.size > 0) {
+    // Best effort: a profile read failure must never break the ranking —
+    // rows fall back to the truncated wallet the UI already renders.
+    const { data: profileRows } = await supa
+      .from("profiles")
+      .select("wallet_address,display_name,avatar_url")
+      .in("wallet_address", Array.from(needIdentity));
+    for (const p of profileRows || []) {
+      identityByWallet.set(String((p as any).wallet_address), {
+        display_name: (p as any).display_name ?? null,
+        avatar_url: (p as any).avatar_url ?? null,
+      });
+    }
+  }
+
+  const withIdentity = (r: Ranked, rank: number): PlayLeaderboardRow => {
+    const id = identityByWallet.get(r.wallet_address);
+    return {
+      ...r,
+      rank,
+      username: id?.display_name ?? null,
+      avatar_url: id?.avatar_url ?? null,
+    };
+  };
+
+  return {
+    period: "all",
+    rows: visible.map((r, i) => withIdentity(r, i + 1)),
+    total_players: ranked.length,
+    viewer:
+      viewerIndex >= 0
+        ? withIdentity(ranked[viewerIndex], viewerIndex + 1)
+        : null,
+    truncated: trades.length >= PLAY_LEADERBOARD_MAX_TRADES,
+    generated_at: generatedAt,
+  };
+}
+
+/** wins/decided as a 4-dp decimal string. "0.0000" when nothing is decided. */
+function ratioToDecimal(numerator: number, denominator: number): string {
+  if (denominator <= 0) return "0.0000";
+  const scaled = Math.round((numerator / denominator) * 10_000);
+  return `${Math.floor(scaled / 10_000)}.${String(scaled % 10_000).padStart(4, "0")}`;
+}
