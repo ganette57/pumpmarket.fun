@@ -369,8 +369,98 @@ step(9, "POST /api/play/history");
   }
 }
 
-/* 10 — insufficient balance */
-step(10, "Overspend is rejected");
+/* 10 — profile: grouping, P&L, and the owner-only balance */
+step(10, "POST /api/play/profile (grouped positions + privacy)");
+{
+  // A SECOND buy on the SAME outcome must aggregate into ONE position, and a
+  // buy on a DIFFERENT outcome must stay a SEPARATE position.
+  const OTHER = OUTCOME === 0 ? 1 : 0;
+  await post("/api/play/trade", {
+    market_address: MARKET, outcome_index: OUTCOME,
+    stake_usd: STAKE, client_trade_id: randomUUID(),
+  });
+  const otherBuy = await post("/api/play/trade", {
+    market_address: MARKET, outcome_index: OTHER,
+    stake_usd: STAKE, client_trade_id: randomUUID(),
+  });
+  check("second outcome bought (setup)", otherBuy.status === 201,
+        `got ${otherBuy.status} ${JSON.stringify(otherBuy.json)}`);
+
+  const r = await post("/api/play/profile", { wallet: WALLET });
+  check("returns 200", r.status === 200, JSON.stringify(r.json));
+  const p = r.json?.profile || {};
+  const positions = p.positions || [];
+
+  check("owner sees a balance", p.is_owner === true && p.balance_usd != null,
+        `is_owner=${p.is_owner} balance=${p.balance_usd}`);
+  check("identity fields are present",
+        "username" in p && "avatar_url" in p, JSON.stringify(Object.keys(p)));
+  check("raw trade count counts every buy", p.trade_count === 3,
+        `trade_count = ${p.trade_count}`);
+
+  const mine = positions.filter((x) => x.market_address === MARKET);
+  check("three buys collapse into TWO positions on this market",
+        mine.length === 2, `got ${mine.length}: ${JSON.stringify(mine.map((x) => x.outcome_index))}`);
+  check("position_count is the GROUPED count, not the raw one",
+        p.position_count === positions.length && p.position_count < p.trade_count,
+        `position_count=${p.position_count} trade_count=${p.trade_count}`);
+
+  const same = mine.find((x) => x.outcome_index === OUTCOME);
+  const opposite = mine.find((x) => x.outcome_index === OTHER);
+  check("same-outcome buys aggregate their stake",
+        !!same && moneyDiffCents(same.total_stake_usd, STAKE) === toCents(STAKE),
+        `total_stake_usd = ${same?.total_stake_usd} (2 x ${STAKE})`);
+  check("same-outcome group reports 2 buys", same?.trade_count === 2,
+        `trade_count = ${same?.trade_count}`);
+  check("the opposite outcome stays a SEPARATE position",
+        !!opposite && moneyEq(opposite.total_stake_usd, STAKE),
+        `total_stake_usd = ${opposite?.total_stake_usd}`);
+
+  check("open positions carry NO realized P&L",
+        mine.every((x) => x.status === "open" && x.realized_pnl_usd === null &&
+                          x.payout_usd === null),
+        JSON.stringify(mine.map((x) => [x.status, x.realized_pnl_usd, x.payout_usd])));
+  check("total realized P&L excludes open positions",
+        moneyEq(p.realized_pnl_usd, "0"), `realized_pnl_usd = ${p.realized_pnl_usd}`);
+  check("positions carry the market title", mine.every((x) => "market_title" in x));
+
+  // Nothing account-scoped or internal may cross the wire.
+  const leaked = JSON.stringify(r.json).match(
+    /account_id|client_trade_id|privy_user_id|entry_supply|quoted_cost_usd|season_id|balance_before/
+  );
+  check("no internal ids / ledger / session fields exposed", leaked === null,
+        `leaked: ${leaked?.[0]}`);
+
+  /* PUBLIC read of the SAME wallet — no cookie */
+  const pub = await post("/api/play/profile", { wallet: WALLET }, { withCookie: false });
+  check("public read returns 200 (profiles are public by wallet)", pub.status === 200);
+  check("public read does NOT leak the balance",
+        pub.json?.profile?.balance_usd === null && pub.json?.profile?.is_owner === false,
+        `balance=${pub.json?.profile?.balance_usd} is_owner=${pub.json?.profile?.is_owner}`);
+  check("public read still shows the performance record",
+        (pub.json?.profile?.positions || []).length === positions.length);
+
+  /* ANOTHER wallet's profile, read WITH our cookie — the body must not
+     grant ownership of someone else's account. */
+  const stranger = bs58.encode(Buffer.from(nacl.sign.keyPair().publicKey));
+  const other = await post("/api/play/profile", { wallet: stranger });
+  check("a body wallet cannot claim ownership of another account",
+        other.json?.profile?.is_owner === false &&
+          other.json?.profile?.balance_usd === null,
+        `is_owner=${other.json?.profile?.is_owner} balance=${other.json?.profile?.balance_usd}`);
+  check("an unknown wallet returns a valid, zeroed profile",
+        other.status === 200 &&
+          (other.json?.profile?.positions || []).length === 0 &&
+          other.json?.profile?.trade_count === 0,
+        JSON.stringify(other.json?.profile));
+
+  /* refresh the balance the later steps compare against */
+  const s = await post("/api/play/state", {});
+  balanceAfter = s.json?.account?.balance_usd;
+}
+
+/* 11 — insufficient balance */
+step(11, "Overspend is rejected");
 {
   const r = await post("/api/play/trade", {
     market_address: MARKET, outcome_index: OUTCOME,
@@ -383,8 +473,8 @@ step(10, "Overspend is rejected");
         `${balanceAfter} -> ${after.json?.account?.balance_usd}`);
 }
 
-/* 11 — logout */
-step(11, "POST /api/play/auth/logout");
+/* 12 — logout */
+step(12, "POST /api/play/auth/logout");
 {
   const r = await post("/api/play/auth/logout", {});
   check("returns 200", r.status === 200);

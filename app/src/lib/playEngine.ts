@@ -1005,3 +1005,324 @@ export async function getPlayMarketActivity(
       rows.length === limit && last ? `${last.created_at}|${last.id}` : null,
   };
 }
+
+/* -------------------------------------------------------------------------- */
+/*  Play profile (grouped positions + realized P&L)                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * ONE grouped Play position: everything a wallet bought on a single
+ * (market_address, outcome_index), collapsed into one row.
+ *
+ * Play is buy-only, so a "position" really is just the sum of its buys —
+ * there is no partial close to net off and no cost basis to re-derive.
+ */
+export type PlayProfilePosition = {
+  market_address: string;
+  /** markets.question. Null when the market row is gone/unreadable. */
+  market_title: string | null;
+  outcome_index: number;
+  outcome_name: string | null;
+  /** SUM(stake_usd) over the group, exact. */
+  total_stake_usd: string;
+  /** SUM(shares) over the group, exact to 8 dp. */
+  total_shares: string;
+  /** How many individual buys were collapsed into this row. */
+  trade_count: number;
+  status: PlayTradeStatus;
+  /** SUM(payout_usd) over SETTLED trades. Null while nothing has settled. */
+  payout_usd: string | null;
+  /** SUM(realized_pnl_usd) over SETTLED trades. Null while none has settled. */
+  realized_pnl_usd: string | null;
+  first_trade_at: string;
+  last_trade_at: string;
+};
+
+export type PlayProfile = {
+  wallet_address: string;
+  /** profiles.display_name — the SAME identity Real Mode shows. */
+  username: string | null;
+  avatar_url: string | null;
+  bio: string | null;
+  /** True when the request carried a Play session for THIS wallet. */
+  is_owner: boolean;
+  /** Owner-only. Always null for a public viewer — see the route header. */
+  balance_usd: string | null;
+  /** SUM(realized_pnl_usd) over settled trades only. "0.00" when none. */
+  realized_pnl_usd: string;
+  /** Raw buys — every play_trades row. */
+  trade_count: number;
+  /** Grouped (market, outcome) positions — what the UI labels "Picks". */
+  position_count: number;
+  positions: PlayProfilePosition[];
+  /** True when the ledger read hit its ceiling and totals are partial. */
+  truncated: boolean;
+};
+
+/**
+ * Ceiling on trade rows scanned for ONE profile. Play is buy-only on a
+ * $10,000 daily bankroll, so a real account is orders of magnitude below
+ * this; the cap exists so a pathological account cannot turn the profile
+ * into an unbounded read. `truncated` reports when it bites.
+ */
+const PLAY_PROFILE_MAX_TRADES = 2000;
+
+/** Wallets are compared and queried exactly as play_normalize_wallet stores them. */
+export function normalizeWallet(input: unknown): string {
+  const s = String(input ?? "").trim();
+  if (s.length < 32 || s.length > 64) {
+    throw new PlayEngineError("wallet is missing or malformed");
+  }
+  return s;
+}
+
+/** "1234.56789012" → 123456789012 units at 8 dp. Null when unparseable. */
+function decimalToUnits8(v: unknown): number | null {
+  const s = String(v ?? "").trim();
+  if (!/^-?\d+(\.\d+)?$/.test(s)) return null;
+  const neg = s.startsWith("-");
+  const [whole, frac = ""] = (neg ? s.slice(1) : s).split(".");
+  const units = Number(whole) * 1e8 + Number((frac + "00000000").slice(0, 8));
+  if (!Number.isSafeInteger(units)) return null;
+  return neg ? -units : units;
+}
+
+/** 123456789012 units → "1234.56789012". */
+function units8ToDecimal(units: number): string {
+  const neg = units < 0;
+  const abs = Math.abs(Math.round(units));
+  const whole = Math.floor(abs / 1e8);
+  const frac = String(abs % 1e8).padStart(8, "0");
+  return `${neg ? "-" : ""}${whole}.${frac}`;
+}
+
+/**
+ * The status of a GROUP of buys on one outcome.
+ *
+ * In practice every trade in a group shares a status: settlement walks all
+ * of a market's open rows in one transaction and the state then becomes
+ * terminal, so no later buy can join a settled group. This is the defensive
+ * rule for the mixed case anyway: an unsettled buy dominates (the position
+ * is still live), and among settled rows a win dominates a loss dominates a
+ * refund. It never invents a status that no trade actually has.
+ */
+function groupStatus(counts: Record<PlayTradeStatus, number>): PlayTradeStatus {
+  if (counts.open > 0) return "open";
+  if (counts.won > 0) return "won";
+  if (counts.lost > 0) return "lost";
+  return "refunded";
+}
+
+/**
+ * A wallet's Play profile: identity, grouped positions and authoritative
+ * realized P&L.
+ *
+ * WHY P&L IS READ, NEVER DERIVED
+ * ------------------------------
+ * play_settle_market writes realized_pnl_usd on every trade it settles, in
+ * the same transaction that moves the money (20260722_play_settle_idempotent.sql):
+ * won → payout − stake, lost → −stake, refunded → 0. This function only ever
+ * SUMS that column. It never multiplies a stake by a current probability and
+ * never treats an open position's quote as profit — an open trade carries
+ * null P&L by CHECK constraint and is excluded from every total here.
+ *
+ * GROUPING
+ * --------
+ * The key is (market_address, outcome_index). Buying YES and NO on the same
+ * market yields two rows, never one merged row, because they are two
+ * independent bets with independent outcomes.
+ *
+ * PRIVACY
+ * -------
+ * `viewerWallet` is the wallet proven by the Play session cookie, not a
+ * client-supplied field. balance_usd is populated only when it matches the
+ * requested wallet. The projection carries no account id, no client_trade_id,
+ * no ledger row and no session data.
+ */
+export async function getPlayProfile(
+  walletAddress: string,
+  opts?: { viewerWallet?: string | null }
+): Promise<PlayProfile> {
+  const wallet = normalizeWallet(walletAddress);
+  const isOwner = !!opts?.viewerWallet && opts.viewerWallet === wallet;
+  const supa = supabaseServer();
+
+  const [profileRes, accountRes] = await Promise.all([
+    supa
+      .from("profiles")
+      .select("wallet_address,display_name,avatar_url,bio")
+      .eq("wallet_address", wallet)
+      .maybeSingle(),
+    supa
+      .from("play_accounts")
+      .select("id,balance_usd")
+      .eq("wallet_address", wallet)
+      .maybeSingle(),
+  ]);
+
+  if (accountRes.error) throw toEngineError(accountRes.error);
+
+  const identity = (profileRes.data as any) ?? null;
+  const account = (accountRes.data as any) ?? null;
+
+  const base: PlayProfile = {
+    wallet_address: wallet,
+    username: identity?.display_name ?? null,
+    avatar_url: identity?.avatar_url ?? null,
+    bio: identity?.bio ?? null,
+    is_owner: isOwner,
+    // No Play account yet: the owner has no balance to show, and a public
+    // viewer never gets one regardless.
+    balance_usd: isOwner && account ? decimalOrZero(account.balance_usd) : null,
+    realized_pnl_usd: "0.00",
+    trade_count: 0,
+    position_count: 0,
+    positions: [],
+    truncated: false,
+  };
+
+  // Never played — a valid, complete profile with zeroed Play stats.
+  if (!account?.id) return base;
+
+  const { data: tradeRows, error: tradesError } = await supa
+    .from("play_trades")
+    .select(
+      "market_address,outcome_index,outcome_name,stake_usd,shares,status," +
+        "payout_usd,realized_pnl_usd,created_at"
+    )
+    .eq("account_id", account.id)
+    .order("created_at", { ascending: false })
+    .limit(PLAY_PROFILE_MAX_TRADES);
+
+  if (tradesError) throw toEngineError(tradesError);
+
+  const trades = ((tradeRows as any[]) || []).filter(Boolean);
+  if (trades.length === 0) return base;
+
+  type Group = {
+    market_address: string;
+    outcome_index: number;
+    outcome_name: string | null;
+    stakeCents: number;
+    shareUnits: number;
+    payoutCents: number;
+    pnlCents: number;
+    settledCount: number;
+    tradeCount: number;
+    counts: Record<PlayTradeStatus, number>;
+    firstAt: string;
+    lastAt: string;
+  };
+
+  const groups = new Map<string, Group>();
+  let totalPnlCents = 0;
+
+  for (const t of trades) {
+    const addr = String(t.market_address ?? "");
+    const idx = Number(t.outcome_index);
+    if (!addr || !Number.isInteger(idx) || idx < 0) continue;
+
+    const key = `${addr}|${idx}`;
+    let g = groups.get(key);
+    if (!g) {
+      g = {
+        market_address: addr,
+        outcome_index: idx,
+        outcome_name: t.outcome_name != null ? String(t.outcome_name) : null,
+        stakeCents: 0,
+        shareUnits: 0,
+        payoutCents: 0,
+        pnlCents: 0,
+        settledCount: 0,
+        tradeCount: 0,
+        counts: { open: 0, won: 0, lost: 0, refunded: 0 },
+        firstAt: String(t.created_at),
+        lastAt: String(t.created_at),
+      };
+      groups.set(key, g);
+    }
+
+    if (g.outcome_name == null && t.outcome_name != null) {
+      g.outcome_name = String(t.outcome_name);
+    }
+
+    g.stakeCents += decimalToCents(t.stake_usd) ?? 0;
+    g.shareUnits += decimalToUnits8(t.shares) ?? 0;
+    g.tradeCount += 1;
+
+    const status = (String(t.status || "open") as PlayTradeStatus);
+    if (status in g.counts) g.counts[status] += 1;
+    else g.counts.open += 1;
+
+    // Settled rows carry BOTH money fields by CHECK constraint; open rows
+    // carry neither, so an open position contributes nothing to any total.
+    if (status !== "open") {
+      g.settledCount += 1;
+      g.payoutCents += decimalToCents(t.payout_usd) ?? 0;
+      const pnl = decimalToCents(t.realized_pnl_usd) ?? 0;
+      g.pnlCents += pnl;
+      totalPnlCents += pnl;
+    }
+
+    const at = String(t.created_at);
+    if (msOf(at) < msOf(g.firstAt)) g.firstAt = at;
+    if (msOf(at) > msOf(g.lastAt)) g.lastAt = at;
+  }
+
+  // Market titles + fallback outcome names, in one batched read.
+  const addresses = Array.from(new Set(Array.from(groups.values()).map((g) => g.market_address)));
+  const titles = new Map<string, string | null>();
+  const outcomeNames = new Map<string, string[]>();
+  if (addresses.length > 0) {
+    const { data: marketRows } = await supa
+      .from("markets")
+      .select("market_address,question,outcome_names")
+      .in("market_address", addresses);
+    for (const m of marketRows || []) {
+      const addr = String((m as any).market_address);
+      titles.set(addr, (m as any).question ?? null);
+      const names = (m as any).outcome_names;
+      if (Array.isArray(names)) outcomeNames.set(addr, names.map((n) => String(n)));
+    }
+  }
+
+  const positions: PlayProfilePosition[] = Array.from(groups.values())
+    .map((g) => ({
+      market_address: g.market_address,
+      market_title: titles.get(g.market_address) ?? null,
+      outcome_index: g.outcome_index,
+      outcome_name:
+        g.outcome_name ?? outcomeNames.get(g.market_address)?.[g.outcome_index] ?? null,
+      total_stake_usd: centsToDecimal(g.stakeCents),
+      total_shares: units8ToDecimal(g.shareUnits),
+      trade_count: g.tradeCount,
+      status: groupStatus(g.counts),
+      payout_usd: g.settledCount > 0 ? centsToDecimal(g.payoutCents) : null,
+      realized_pnl_usd: g.settledCount > 0 ? centsToDecimal(g.pnlCents) : null,
+      first_trade_at: g.firstAt,
+      last_trade_at: g.lastAt,
+    }))
+    // Newest activity first — same ordering language as every Play surface.
+    .sort((a, b) => msOf(b.last_trade_at) - msOf(a.last_trade_at));
+
+  return {
+    ...base,
+    realized_pnl_usd: centsToDecimal(totalPnlCents),
+    trade_count: trades.length,
+    position_count: positions.length,
+    positions,
+    truncated: trades.length === PLAY_PROFILE_MAX_TRADES,
+  };
+}
+
+/** Canonical decimal string for a backend NUMERIC, or "0.00" when absent. */
+function decimalOrZero(v: unknown): string {
+  const cents = decimalToCents(v);
+  return cents === null ? "0.00" : centsToDecimal(cents);
+}
+
+/** Epoch ms for an ISO timestamp; 0 when unparseable so ordering stays total. */
+function msOf(iso: string): number {
+  const t = new Date(iso).getTime();
+  return Number.isFinite(t) ? t : 0;
+}

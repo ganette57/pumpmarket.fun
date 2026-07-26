@@ -21,6 +21,8 @@ import MarketCard from "@/components/MarketCard";
 import EditProfileModal from "@/components/EditProfileModal";
 import FollowListModal from "@/components/FollowListModal";
 import ActivityList from "@/components/ActivityList";
+import { useTradingMode } from "@/components/mode/ModeProvider";
+import PlayProfileView from "@/components/play/PlayProfileView";
 import { UserPlus, Check, Pencil } from "lucide-react";
 
 type DbMarketRow = {
@@ -44,7 +46,27 @@ function shortAddr(addr: string) {
   return `${addr.slice(0, 4)}…${addr.slice(-4)}`;
 }
 
+/**
+ * ONE route, two views.
+ *
+ * The branch is a mount/unmount, not a CSS hide: in Play mode the Real
+ * profile below is not rendered at all, so no Real query runs and no Real row
+ * can linger; switching back re-mounts it clean. Both branches key off the
+ * same /profile/[wallet] URL, so the header wallet link, the profile icon and
+ * every existing deep link keep working in both modes, with no reload and no
+ * second route.
+ */
 export default function PublicProfilePage() {
+  const { isPlay } = useTradingMode();
+  const params = useParams<{ wallet: string }>();
+  const wallet = String(params?.wallet || "").trim();
+
+  if (isPlay) return <PlayProfileView wallet={wallet} />;
+  return <RealProfilePage />;
+}
+
+/** The Real profile, unchanged. Everything below this line is production. */
+function RealProfilePage() {
   const params = useParams<{ wallet: string }>();
   const wallet = String(params?.wallet || "").trim();
   const { publicKey, connected } = useWallet();

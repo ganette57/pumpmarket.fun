@@ -214,6 +214,41 @@ export type PlayMarketActivityView = {
   next_before: string | null;
 };
 
+/** One grouped (market, outcome) Play position on a profile. */
+export type PlayProfilePositionView = {
+  market_address: string;
+  market_title: string | null;
+  outcome_index: number;
+  outcome_name: string | null;
+  total_stake_usd: string;
+  total_shares: string;
+  /** Individual buys collapsed into this row. */
+  trade_count: number;
+  status: "open" | "won" | "lost" | "refunded";
+  /** Null while nothing in the group has settled. */
+  payout_usd: string | null;
+  /** Null while nothing in the group has settled — NEVER a quoted value. */
+  realized_pnl_usd: string | null;
+  first_trade_at: string;
+  last_trade_at: string;
+};
+
+export type PlayProfileView = {
+  wallet_address: string;
+  /** profiles.display_name — the same identity Real Mode shows. */
+  username: string | null;
+  avatar_url: string | null;
+  bio: string | null;
+  is_owner: boolean;
+  /** Owner-only; null for a public viewer. */
+  balance_usd: string | null;
+  realized_pnl_usd: string;
+  trade_count: number;
+  position_count: number;
+  positions: PlayProfilePositionView[];
+  truncated: boolean;
+};
+
 export type PlayTradeResponse = {
   replayed: boolean;
   trade: {
@@ -387,6 +422,38 @@ export const playClient = {
         pool_usd: decimal(p.pool_usd),
       })),
     } as PlayMarketHistoryView;
+  },
+
+  /**
+   * One wallet's Play profile: identity, grouped positions, realized P&L.
+   *
+   * Public by wallet — no session required for the performance record. The
+   * CURRENT BALANCE is the exception: the server releases balance_usd only
+   * when the session cookie proves the caller owns this wallet, so a public
+   * read returns `balance_usd: null, is_owner: false`.
+   *
+   * Money stays a decimal string, as everywhere else here.
+   */
+  async profile(wallet: string) {
+    const raw = await post<{ profile: PlayProfileView }>("/api/play/profile", {
+      wallet,
+    });
+    const p = raw.profile;
+    return {
+      ...p,
+      // Null is meaningful here (owner-only / not settled) and must survive
+      // normalization — decimal() would turn it into "0".
+      balance_usd: p?.balance_usd == null ? null : decimal(p.balance_usd),
+      realized_pnl_usd: decimal(p?.realized_pnl_usd),
+      positions: (p?.positions ?? []).map((r) => ({
+        ...r,
+        total_stake_usd: decimal(r.total_stake_usd),
+        total_shares: decimal(r.total_shares),
+        payout_usd: r.payout_usd == null ? null : decimal(r.payout_usd),
+        realized_pnl_usd:
+          r.realized_pnl_usd == null ? null : decimal(r.realized_pnl_usd),
+      })),
+    } as PlayProfileView;
   },
 
   /**
