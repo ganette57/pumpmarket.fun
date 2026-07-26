@@ -161,6 +161,13 @@ export type PlayMarketSnapshotView = {
   /** No Play trades yet — this is the backend-defined opening book. */
   seeded: boolean;
   updated_at: string | null;
+  /**
+   * ACTUAL cumulative USD staked per outcome, index-stable, one entry per
+   * outcome ("0.00" where nobody bought). Not `virtual_pool_usd × probability`
+   * — that is a different quantity, because `supplies` include the seeded
+   * opening book no user paid for.
+   */
+  stake_by_outcome_usd: string[];
 };
 
 export type PlayHistoryPointView = {

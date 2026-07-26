@@ -67,6 +67,12 @@ export type MarketSnapshot = {
   /** Play only: no trades yet, showing the backend opening book. */
   seeded?: boolean;
   updatedAt?: string | null;
+  /**
+   * PLAY ONLY: actual cumulative USD staked per outcome, index-stable.
+   * Undefined in Real — Real has no equivalent authoritative aggregation on
+   * this surface, so Real call sites keep their existing display.
+   */
+  stakeByOutcomeUsd?: string[];
 };
 
 type Entry =
@@ -110,7 +116,8 @@ function sameSnapshot(a?: MarketSnapshot, b?: MarketSnapshot): boolean {
     !!a.seeded !== !!b.seeded ||
     (a.updatedAt ?? null) !== (b.updatedAt ?? null) ||
     a.supplies.length !== b.supplies.length ||
-    a.probabilities.length !== b.probabilities.length
+    a.probabilities.length !== b.probabilities.length ||
+    (a.stakeByOutcomeUsd?.length ?? -1) !== (b.stakeByOutcomeUsd?.length ?? -1)
   ) {
     return false;
   }
@@ -119,6 +126,15 @@ function sameSnapshot(a?: MarketSnapshot, b?: MarketSnapshot): boolean {
   }
   for (let i = 0; i < a.probabilities.length; i++) {
     if (a.probabilities[i] !== b.probabilities[i]) return false;
+  }
+  // Staked-per-outcome must take part in equality, or a poll that only moved
+  // stake would be treated as "no change" and never reach the UI.
+  const aStake = a.stakeByOutcomeUsd;
+  const bStake = b.stakeByOutcomeUsd;
+  if (aStake && bStake) {
+    for (let i = 0; i < aStake.length; i++) {
+      if (aStake[i] !== bStake[i]) return false;
+    }
   }
   return true;
 }
@@ -137,6 +153,7 @@ function buildPlaySnapshot(
     status: s.status ?? "open",
     seeded: !!s.seeded,
     updatedAt: s.updated_at,
+    stakeByOutcomeUsd: s.stake_by_outcome_usd ?? [],
   };
 }
 

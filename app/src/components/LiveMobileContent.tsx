@@ -1779,6 +1779,9 @@ export function MobileImmersiveSlide({
   // Approximate per-side volume from share-percentage × total volume.
   // Not a perfect mapping (volume is trade-flow, percentages are state)
   // but it carries the right visual weight per side.
+  //
+  // REAL ONLY — and still an approximation. Play no longer comes through
+  // here: it passes exact cumulative stakes via `economics.perSide`.
   const perSideSol = (idx: number): string | null => {
     if (!market?.totalVolume || market.totalVolume <= 0) return null;
     const pct = derived?.percentages?.[idx] ?? 0;
@@ -1789,6 +1792,13 @@ export function MobileImmersiveSlide({
   // keeps the SOL calculation above untouched.
   const effVolLabel = economics ? economics.volumeLabel : volLabel;
   const effPerSide = economics?.perSide ?? perSideSol;
+
+  // Show the per-side row when there is a total-volume label OR a per-side
+  // value to show. The second case is what lets a traded-nothing Play market
+  // read "$0.00 / $0.00" instead of hiding the row. Real is unaffected: with
+  // no volume `perSideSol` returns null for both sides, so the row stays
+  // hidden exactly as before.
+  const hasPerSide = effPerSide(0) != null || effPerSide(1) != null;
 
   // Higher-percentage side — drives the Momentum strip placeholder label.
   // Pure render computation (no state / effect / timer).
@@ -2161,8 +2171,9 @@ export function MobileImmersiveSlide({
                   </div>
                 </div>
 
-                {/* Per-side approximate volume row */}
-                {effVolLabel && (
+                {/* Per-side money row. Play: actual cumulative stake per
+                    outcome. Real: the legacy volume × probability estimate. */}
+                {(effVolLabel || hasPerSide) && (
                   <div className="flex items-center justify-between mt-2 px-1">
                     <span className="text-[11px] text-pump-green/75 font-semibold tabular-nums">
                       {effPerSide(0)}

@@ -42,7 +42,14 @@ export type LiveEconomics = {
   percentages: number[];
   /** Total volume label incl. currency ("12.34 SOL" / "$1,234"), or null. */
   volumeLabel: string | null;
-  /** Approximate per-outcome volume label, or null when there is no volume. */
+  /**
+   * Money shown under one outcome.
+   *
+   * PLAY: the ACTUAL cumulative stake on that outcome, from the authoritative
+   * play_trades sums carried on the snapshot.
+   * REAL: unchanged legacy approximation (total volume × probability) — see
+   * the note on the Real branch below.
+   */
   perSide: (idx: number) => string | null;
   /** Effective market status for the active mode ("open" | "resolved" | …). */
   status: string;
@@ -113,6 +120,16 @@ export function useLiveMarketEconomics(input: {
   return useMemo<LiveEconomics>(() => {
     if (!isPlay) {
       // REAL — identical to the current inline SOL formatting.
+      //
+      // KNOWN LIMITATION, DELIBERATELY LEFT: `perSide` here is still
+      // volume × probability, which approximates but does not equal the
+      // cumulative SOL actually spent per outcome. Fixing it authoritatively
+      // needs a per-outcome SUM(cost) over `transactions`, which no Live
+      // surface currently loads (the Live page holds only the last N
+      // recentTrades, not the full history). That is a Real backend change,
+      // and Real is production-validated, so it is out of scope here. Play is
+      // now exact; Real keeps the legacy approximation until that aggregation
+      // exists.
       const vol = Number(realVolumeLamports) || 0;
       return {
         isPlay: false,
@@ -145,16 +162,21 @@ export function useLiveMarketEconomics(input: {
     const poolUsd = snapshot.volume; // decimal USD string
     const poolNum = Number(poolUsd) || 0;
     const hasVol = poolNum > 0;
+    // ACTUAL cumulative stake per outcome, straight from the authoritative
+    // play_trades sums on the snapshot. Never pool × probability: the supplies
+    // behind those probabilities include the seeded opening book that nobody
+    // paid for, so that product is not what anyone staked.
+    const stakes = snapshot.stakeByOutcomeUsd;
     return {
       isPlay: true,
       percentages: probs,
       volumeLabel: hasVol ? formatUsd(poolUsd, { compact: true }) : null,
-      perSide: (idx) =>
-        hasVol
-          ? formatUsd(String((poolNum * (probs[idx] ?? 0)) / 100), {
-              compact: true,
-            })
-          : null,
+      perSide: (idx) => {
+        // No stakes array yet (snapshot from an older payload) — show nothing
+        // rather than fall back to a number that would be wrong.
+        if (!stakes) return null;
+        return formatUsd(stakes[idx] ?? "0", { compact: true });
+      },
       status: snapshot.status || "open",
       playPending: false,
     };

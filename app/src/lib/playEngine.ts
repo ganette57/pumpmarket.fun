@@ -389,7 +389,102 @@ export type PlayMarketSnapshot = {
   /** True when no Play state row exists yet — this is the opening book. */
   seeded: boolean;
   updated_at: string | null;
+  /**
+   * ACTUAL cumulative USD staked per outcome — SUM(play_trades.stake_usd)
+   * grouped by outcome_index, index-stable and always outcome_count long
+   * ("0.00" for outcomes nobody bought).
+   *
+   * This is NOT derivable from the other fields. `supplies` are virtual
+   * shares (they include the seeded opening book, which no user paid for)
+   * and `virtual_pool_usd` is the market total, so `total × probability`
+   * answers a different question than "what did people actually stake on
+   * this outcome". The UI needs the latter; only the trade ledger has it.
+   */
+  stake_by_outcome_usd: string[];
 };
+
+/**
+ * Ceiling on trade rows scanned for the staked-per-outcome sums in ONE batch
+ * snapshot call. Mirrors the chart replay's PLAY_HISTORY_MAX_TRADES ceiling.
+ * Play is buy-only with no partial closes, so rows accrue slowly; if a batch
+ * ever exceeded this the sums would undercount, hence the explicit cap rather
+ * than an unbounded read.
+ */
+const PLAY_STAKE_MAX_TRADES = 5000;
+
+/**
+ * SUM(stake_usd) per (market_address, outcome_index), in EXACT integer cents.
+ *
+ * stake_usd is numeric(18,2); parsing it into a binary float and adding would
+ * drift, so each value is converted to cents by string surgery and summed as
+ * an integer. Returns a per-address sparse map — callers pad to outcome_count.
+ *
+ * Idempotency needs no handling here: play_trades is unique on
+ * (account_id, client_trade_id), so a replayed submit never inserted a second
+ * row and therefore can never be counted twice.
+ */
+function sumStakeCentsByOutcome(
+  rows: Array<{
+    market_address?: unknown;
+    outcome_index?: unknown;
+    stake_usd?: unknown;
+  }>,
+  addresses: string[]
+): Map<string, Map<number, number>> {
+  const out = new Map<string, Map<number, number>>();
+  for (const addr of addresses) out.set(addr, new Map());
+
+  for (const r of rows) {
+    const addr = String(r?.market_address ?? "");
+    const byOutcome = out.get(addr);
+    if (!byOutcome) continue; // not a requested market — ignore
+
+    const idx = Number(r?.outcome_index);
+    if (!Number.isInteger(idx) || idx < 0) continue;
+
+    const cents = decimalToCents(r?.stake_usd);
+    if (cents === null) continue;
+
+    byOutcome.set(idx, (byOutcome.get(idx) ?? 0) + cents);
+  }
+  return out;
+}
+
+/** "800.00" | 800 → 80000 cents, exactly. Null when unparseable. */
+function decimalToCents(v: unknown): number | null {
+  const s = String(v ?? "").trim();
+  if (!/^-?\d+(\.\d+)?$/.test(s)) return null;
+  const neg = s.startsWith("-");
+  const [whole, frac = ""] = (neg ? s.slice(1) : s).split(".");
+  const cents = Number(whole) * 100 + Number((frac + "00").slice(0, 2));
+  if (!Number.isFinite(cents)) return null;
+  return neg ? -cents : cents;
+}
+
+/** Integer cents → "1234.56". */
+function centsToDecimal(cents: number): string {
+  const neg = cents < 0;
+  const abs = Math.abs(Math.round(cents));
+  return `${neg ? "-" : ""}${Math.floor(abs / 100)}.${String(abs % 100).padStart(
+    2,
+    "0"
+  )}`;
+}
+
+/**
+ * Pads a sparse per-outcome cents map into a dense, index-stable decimal array
+ * of exactly `count` entries. Outcomes nobody bought read "0.00" — they are
+ * real zeros, not missing data.
+ */
+function denseStakeArray(
+  byOutcome: Map<number, number> | undefined,
+  count: number
+): string[] {
+  const n = Math.max(0, count);
+  return Array.from({ length: n }, (_, i) =>
+    centsToDecimal(byOutcome?.get(i) ?? 0)
+  );
+}
 
 /**
  * Batch Play snapshots for a list of markets.
@@ -410,7 +505,7 @@ export async function getPlayMarketSnapshots(
   if (addresses.length === 0) return {};
   const supa = supabaseServer();
 
-  const [settingsRes, statesRes, marketsRes] = await Promise.all([
+  const [settingsRes, statesRes, marketsRes, stakesRes] = await Promise.all([
     supa
       .from("play_settings")
       .select("initial_supply_per_outcome")
@@ -426,9 +521,24 @@ export async function getPlayMarketSnapshots(
       .from("markets")
       .select("market_address,outcome_names,market_type")
       .in("market_address", addresses),
+    // Actual staked-per-outcome. Summed in Node because this PostgREST has
+    // aggregate functions disabled (PGRST123), so `stake_usd.sum()` with a
+    // GROUP BY is not available. The rows are three narrow columns and never
+    // leave the server — only the summed array is serialized.
+    supa
+      .from("play_trades")
+      .select("market_address,outcome_index,stake_usd")
+      .in("market_address", addresses)
+      .limit(PLAY_STAKE_MAX_TRADES),
   ]);
 
   if (statesRes.error) throw toEngineError(statesRes.error);
+  if (stakesRes.error) throw toEngineError(stakesRes.error);
+
+  const stakeCents = sumStakeCentsByOutcome(
+    (stakesRes.data as any[]) || [],
+    addresses
+  );
 
   const seed = String(settingsRes.data?.initial_supply_per_outcome ?? "5000");
 
@@ -457,9 +567,10 @@ export async function getPlayMarketSnapshots(
     const supplies = ((row as any).outcome_supplies || []).map((s: unknown) =>
       String(s)
     );
+    const count = Number((row as any).outcome_count) || supplies.length;
     out[addr] = {
       market_address: addr,
-      outcome_count: Number((row as any).outcome_count) || supplies.length,
+      outcome_count: count,
       supplies,
       probabilities: probabilities(supplies),
       virtual_pool_usd: String((row as any).virtual_pool_usd ?? "0"),
@@ -467,6 +578,7 @@ export async function getPlayMarketSnapshots(
       version: Number((row as any).version) || 0,
       seeded: false,
       updated_at: (row as any).updated_at ?? null,
+      stake_by_outcome_usd: denseStakeArray(stakeCents.get(addr), count),
     };
   }
 
@@ -485,6 +597,9 @@ export async function getPlayMarketSnapshots(
       version: 0,
       seeded: true,
       updated_at: null,
+      // Untouched market: the seeded book is virtual liquidity nobody paid
+      // for, so every outcome is a real $0.00 of user stake.
+      stake_by_outcome_usd: denseStakeArray(undefined, n),
     };
   }
 
