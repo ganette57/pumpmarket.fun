@@ -194,10 +194,13 @@ function Stat({
   value,
   label,
   valueClass,
+  compact,
 }: {
   value: string;
   label: string;
   valueClass?: string;
+  /** For the narrow side-by-side podium cards — see the label note below. */
+  compact?: boolean;
 }) {
   return (
     <span className="flex min-w-0 flex-col items-center gap-0.5">
@@ -208,9 +211,16 @@ function Stat({
       >
         {value}
       </span>
-      {/* nowrap + a smaller mobile size: "Win rate" must not break onto two
-          lines inside the narrow side-by-side podium cards. */}
-      <span className="whitespace-nowrap text-[9px] uppercase tracking-wider text-gray-500 md:text-[10px]">
+      {/* nowrap, because "Win rate" breaking onto two lines inside a podium
+          card looks broken. It is the widest label by some way, so on a 320px
+          screen — where a side card gives each stat ~35px — it is also dropped
+          a point smaller, letting it bleed into the neighbouring column's
+          slack instead of colliding with its text. */}
+      <span
+        className={`whitespace-nowrap uppercase tracking-wider text-gray-500 md:text-[10px] ${
+          compact ? "text-[8px]" : "text-[9px]"
+        }`}
+      >
         {label}
       </span>
     </span>
@@ -247,11 +257,21 @@ function Podium({ rows, ownWallet }: { rows: PlayLeaderboardRowView[]; ownWallet
 
   const desktopOrder = ["md:order-2", "md:order-1", "md:order-3"];
 
-  // Mobile is a two-column grid: #1 spans it in full, #2 and #3 share the row
-  // beneath. That keeps the champion dominant without pushing the standings
+  // Mobile is a two-column grid: #1 straddles both columns and #2/#3 share the
+  // row beneath. That keeps the champion dominant without pushing the standings
   // three full cards down the page, and nothing scrolls sideways.
+  //
+  // The straddling card is then reined back in to ~88% (capped at 400px) and
+  // centred: at the full column width it read as a heavy slab against the
+  // paired cards below it. It stays comfortably wider than #2/#3 — ~253px vs
+  // ~138px at 320px, ~302px vs ~166px at 375px — so the hierarchy is intact
+  // and the narrowest supported phone still gets a card, not a strip.
+  //
+  // Every constraint is reset at md, so tablet and desktop are untouched.
   const spanFor = (rank: number) =>
-    rank === 1 || top.length <= 2 ? "col-span-2" : "col-span-1";
+    rank === 1 || top.length <= 2
+      ? "col-span-2 mx-auto w-[88%] max-w-[400px] md:mx-0 md:w-auto md:max-w-none"
+      : "col-span-1";
 
   return (
     <div
@@ -288,7 +308,7 @@ function PodiumCard({
   return (
     <Link
       href={`/profile/${row.wallet_address}`}
-      className={`group relative flex flex-col items-center rounded-2xl border bg-[#0c0e12] px-4 transition
+      className={`group relative flex flex-col items-center rounded-2xl border bg-[#0c0e12] px-3 transition md:px-4
         hover:-translate-y-0.5 hover:border-white/20 hover:bg-[#101319]
         ${first ? "py-6 md:py-8" : "py-5 md:py-6"}
         ${isOwn ? "border-pump-green/40" : "border-white/10"}
@@ -337,9 +357,13 @@ function PodiumCard({
       </div>
 
       <div className="mt-4 grid w-full grid-cols-3 gap-1 border-t border-white/[0.06] pt-3">
-        <Stat value={String(row.wins)} label="Wins" />
-        <Stat value={String(row.picks)} label="Picks" />
-        <Stat value={formatWinRate(row.win_rate)} label="Win rate" />
+        <Stat value={String(row.wins)} label="Wins" compact={!first} />
+        <Stat value={String(row.picks)} label="Picks" compact={!first} />
+        <Stat
+          value={formatWinRate(row.win_rate)}
+          label="Win rate"
+          compact={!first}
+        />
       </div>
     </Link>
   );
