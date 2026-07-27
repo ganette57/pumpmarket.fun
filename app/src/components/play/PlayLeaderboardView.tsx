@@ -33,7 +33,7 @@
 // across the navigation with no reload and no query parameter.
 
 import Link from "next/link";
-import { Trophy } from "lucide-react";
+import { Medal, Trophy } from "lucide-react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { usePlayLeaderboard } from "@/components/play/usePlayLeaderboard";
 import {
@@ -99,9 +99,9 @@ function initialsOf(row: PlayLeaderboardRowView): string {
  * the casino-gold treatment the rest of FunMarket deliberately avoids — the
  * page stays black-and-green, and the medals are accents on it.
  */
-type Medal = { chip: string; ring: string; glow: string; label: string };
+type MedalStyle = { chip: string; ring: string; glow: string; label: string };
 
-const MEDALS: Record<1 | 2 | 3, Medal> = {
+const MEDALS: Record<1 | 2 | 3, MedalStyle> = {
   1: {
     chip: "border-[#f5c451]/45 bg-[#f5c451]/12 text-[#f5c451]",
     ring: "border-[#f5c451]/60",
@@ -122,8 +122,33 @@ const MEDALS: Record<1 | 2 | 3, Medal> = {
   },
 };
 
-function medalFor(rank: number): Medal | null {
+function medalFor(rank: number): MedalStyle | null {
   return rank === 1 || rank === 2 || rank === 3 ? MEDALS[rank] : null;
+}
+
+/**
+ * The weekly prize ladder.
+ *
+ * PRIZE IS NOT PROFIT. Profit is the player's realized result on settled
+ * markets — the metric the ranking is computed from, and the only number on
+ * this page that comes from the API. Prize is a fixed cash reward for the
+ * final weekly placement, declared here and nowhere else. They are rendered as
+ * separate elements everywhere they appear together so the two can never be
+ * read as one figure.
+ *
+ * Presentation only: nothing here is ranked on, summed, or sent anywhere, and
+ * the leaderboard response is untouched by it.
+ */
+const PRIZES: Record<1 | 2 | 3, string> = {
+  1: "$25",
+  2: "$15",
+  3: "$10",
+};
+
+const PRIZE_POOL = "$50";
+
+function prizeFor(rank: number): string | null {
+  return rank === 1 || rank === 2 || rank === 3 ? PRIZES[rank] : null;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -234,20 +259,34 @@ function Stat({
 /**
  * Top three, as cards rather than table rows.
  *
- * Desktop lays them out #2 · #1 · #3 with `items-end`, so the taller first
- * card rises out of the row on its own — no absolute positioning, and it
- * degrades to a plain stack the moment the grid is dropped.
+ * ONE CARD SIZE. All three use the same component with no size branch: same
+ * padding, avatar, name block, profit type and stat strip. The hierarchy is
+ * carried entirely by position, medal tint, border, glow and prize — never by
+ * making the champion bigger. That also means the three cards are guaranteed
+ * to measure identically at every breakpoint, rather than lining up by luck.
  *
- * Mobile stacks them in rank order (#1 first), which is why the DOM order is
- * rank order and the desktop arrangement is pure CSS `order`. Nothing scrolls
- * sideways.
+ * Three layouts, one DOM order (rank order — the desktop arrangement is pure
+ * CSS `order`, so the markup always reads #1, #2, #3):
+ *
+ *   < 360px   one column, stacked #1 · #2 · #3. Two columns at 320px leave
+ *             ~138px per card, which is too narrow to read.
+ *   ≥ 360px   two columns: #1 centred on the first row at exactly one column's
+ *             width, #2 and #3 side by side beneath it. The narrowest case
+ *             here is ~158px, which still holds the profit, the prize chip
+ *             and the three stats.
+ *   ≥ md      three columns, #2 · #1 · #3, with #1 lifted by a bottom margin
+ *             against `items-end`.
+ *
+ * The lift is margin, not `translate-y`: the card already spends its transform
+ * on `hover:-translate-y-0.5`, and a second translate would fight it and drop
+ * the card on hover.
  */
 function Podium({ rows, ownWallet }: { rows: PlayLeaderboardRowView[]; ownWallet: string | null }) {
   const top = rows.slice(0, 3);
   if (top.length === 0) return null;
 
-  // With one or two players the desktop grid would leave a hole. Centre what
-  // exists instead of rendering an empty column.
+  // With one or two players a three-column grid would leave a hole. Centre
+  // what exists instead of rendering an empty column.
   const gridCols =
     top.length === 3
       ? "md:grid-cols-3"
@@ -257,36 +296,47 @@ function Podium({ rows, ownWallet }: { rows: PlayLeaderboardRowView[]; ownWallet
 
   const desktopOrder = ["md:order-2", "md:order-1", "md:order-3"];
 
-  // Mobile is a two-column grid: #1 straddles both columns and #2/#3 share the
-  // row beneath. That keeps the champion dominant without pushing the standings
-  // three full cards down the page, and nothing scrolls sideways.
-  //
-  // The straddling card is then reined back in to ~88% (capped at 400px) and
-  // centred: at the full column width it read as a heavy slab against the
-  // paired cards below it. It stays comfortably wider than #2/#3 — ~253px vs
-  // ~138px at 320px, ~302px vs ~166px at 375px — so the hierarchy is intact
-  // and the narrowest supported phone still gets a card, not a strip.
-  //
-  // Every constraint is reset at md, so tablet and desktop are untouched.
-  const spanFor = (rank: number) =>
-    rank === 1 || top.length <= 2
-      ? "col-span-2 mx-auto w-[88%] max-w-[400px] md:mx-0 md:w-auto md:max-w-none"
-      : "col-span-1";
+  // The paired mobile row only makes sense for a full podium. With one or two
+  // players it would strand an empty column, so those stay stacked until md.
+  const full = top.length === 3;
+
+  /**
+   * #1 spans both mobile columns so it can be centred on its own row, but is
+   * then held to EXACTLY one column's width — half the row minus half the
+   * gap — so it measures the same as #2 and #3 rather than filling the row.
+   * All of it is dropped at md, where the three-column grid sizes the cards.
+   */
+  const firstOnMobile = full
+    ? "min-[360px]:col-span-2 min-[360px]:mx-auto " +
+      "min-[360px]:w-[calc((100%-0.75rem)/2)] " +
+      "md:mx-0 md:w-auto md:col-span-1"
+    : "";
+
+  // Stacked cards are capped and centred rather than run to the full width of
+  // the page, which reads as a slab on a phone.
+  const stackedWidth = full ? "" : "mx-auto w-full max-w-[400px] md:mx-0 md:max-w-none";
 
   return (
     <div
-      className={`grid grid-cols-2 items-end gap-3 md:gap-4 ${gridCols} ${
-        top.length === 3 ? "md:items-end" : ""
-      }`}
+      className={`grid grid-cols-1 items-end gap-3 md:gap-4 ${
+        full ? "min-[360px]:grid-cols-2" : ""
+      } ${gridCols}`}
     >
       {top.map((row, i) => (
         <PodiumCard
           key={row.wallet_address}
           row={row}
-          orderClass={`${spanFor(row.rank)} md:col-span-1 ${
-            top.length === 3 ? desktopOrder[i] : ""
-          }`}
           isOwn={!!ownWallet && row.wallet_address === ownWallet}
+          layoutClass={[
+            row.rank === 1 ? firstOnMobile : "",
+            stackedWidth,
+            // Only the full three-up podium lifts its champion; with one or
+            // two players there is no row for it to rise out of.
+            row.rank === 1 && full ? "md:mb-6" : "",
+            full ? desktopOrder[i] : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
         />
       ))}
     </div>
@@ -295,24 +345,24 @@ function Podium({ rows, ownWallet }: { rows: PlayLeaderboardRowView[]; ownWallet
 
 function PodiumCard({
   row,
-  orderClass,
+  layoutClass,
   isOwn,
 }: {
   row: PlayLeaderboardRowView;
-  orderClass: string;
+  layoutClass: string;
   isOwn: boolean;
 }) {
   const medal = medalFor(row.rank);
-  const first = row.rank === 1;
+  const prize = prizeFor(row.rank);
 
   return (
     <Link
       href={`/profile/${row.wallet_address}`}
-      className={`group relative flex flex-col items-center rounded-2xl border bg-[#0c0e12] px-3 transition md:px-4
+      className={`group relative flex flex-col items-center rounded-2xl border bg-[#0c0e12] px-3 py-5 transition
         hover:-translate-y-0.5 hover:border-white/20 hover:bg-[#101319]
-        ${first ? "py-6 md:py-8" : "py-5 md:py-6"}
+        md:px-4 md:py-6
         ${isOwn ? "border-pump-green/40" : "border-white/10"}
-        ${medal?.glow ?? ""} ${orderClass}`}
+        ${medal?.glow ?? ""} ${layoutClass}`}
     >
       {/* Rank chip, straddling the top edge */}
       <span
@@ -322,33 +372,20 @@ function PodiumCard({
         #{row.rank}
       </span>
 
-      <Avatar
-        row={row}
-        size={first ? "lg" : "md"}
-        ringClass={medal?.ring}
-      />
+      <Avatar row={row} size="md" ringClass={medal?.ring} />
 
       {/* Fixed height so a named player and an unnamed one produce the same
-          card. Without it the second (wallet) line would make #2 taller than
-          #3 and the podium would sit crooked under `items-end`. */}
-      <div
-        className={`mt-3 flex w-full items-start justify-center ${
-          first ? "min-h-[3.25rem]" : "min-h-[2.75rem]"
-        }`}
-      >
-        <Identity
-          row={row}
-          align="center"
-          nameClass={first ? "text-base md:text-lg" : "text-sm"}
-        />
+          card — without it the second (wallet) line would make one card taller
+          than its neighbour and the podium would sit crooked. */}
+      <div className="mt-3 flex min-h-[2.75rem] w-full items-start justify-center">
+        <Identity row={row} align="center" nameClass="text-sm" />
       </div>
 
+      {/* PROFIT — the player's own result, from the API. */}
       <div
-        className={`mt-3 max-w-full truncate tabular-nums font-extrabold ${profitToneClass(
+        className={`mt-2 max-w-full truncate text-lg font-extrabold tabular-nums md:text-xl ${profitToneClass(
           row.realized_pnl_usd
-        )} ${
-          first ? "text-xl md:text-2xl lg:text-3xl" : "text-base md:text-lg lg:text-xl"
-        }`}
+        )}`}
       >
         {formatProfit(row.realized_pnl_usd)}
       </div>
@@ -356,16 +393,74 @@ function PodiumCard({
         Profit
       </div>
 
+      {/* PRIZE — a separate thing entirely: the cash reward for finishing the
+          week in this position. Deliberately a bordered chip in the medal tint
+          rather than more plain numerals, so it can never be misread as part
+          of the profit figure directly above it. */}
+      {prize && (
+        <span
+          className={`mt-3 inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] font-bold tabular-nums
+            ${medal?.chip ?? "border-white/15 text-gray-300"}`}
+        >
+          <Medal className="h-3 w-3" aria-hidden />
+          {prize} Prize
+        </span>
+      )}
+
       <div className="mt-4 grid w-full grid-cols-3 gap-1 border-t border-white/[0.06] pt-3">
-        <Stat value={String(row.wins)} label="Wins" compact={!first} />
-        <Stat value={String(row.picks)} label="Picks" compact={!first} />
-        <Stat
-          value={formatWinRate(row.win_rate)}
-          label="Win rate"
-          compact={!first}
-        />
+        <Stat value={String(row.wins)} label="Wins" compact />
+        <Stat value={String(row.picks)} label="Picks" compact />
+        <Stat value={formatWinRate(row.win_rate)} label="Win rate" compact />
       </div>
     </Link>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Prize pool                                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The weekly prize ladder, stated once above the podium.
+ *
+ * Static copy — it declares what the competition pays, and reads nothing from
+ * the leaderboard response. The disclaimer is deliberately plain: it says
+ * prizes follow a verification step and stops there, promising no automatic or
+ * on-chain payout, because no such mechanism exists in this codebase.
+ */
+function PrizePool() {
+  return (
+    <section className="rounded-2xl border border-white/10 bg-[#0c0e12] px-4 py-4 md:px-5">
+      <div className="flex flex-col items-center gap-3 text-center sm:flex-row sm:justify-between sm:text-left">
+        <div>
+          <div className="text-[10px] font-medium uppercase tracking-wider text-gray-500">
+            This week&apos;s prizes
+          </div>
+          <div className="mt-0.5 flex items-center justify-center gap-2 sm:justify-start">
+            <Trophy className="h-4 w-4 text-pump-green" aria-hidden />
+            <span className="text-lg font-extrabold tabular-nums text-white">
+              {PRIZE_POOL} prize pool
+            </span>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          {([1, 2, 3] as const).map((rank) => (
+            <span
+              key={rank}
+              className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-bold tabular-nums ${MEDALS[rank].chip}`}
+            >
+              <Medal className="h-3.5 w-3.5" aria-hidden />
+              {rank === 1 ? "1st" : rank === 2 ? "2nd" : "3rd"} {PRIZES[rank]}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <p className="mt-3 border-t border-white/[0.06] pt-3 text-center text-[11px] leading-relaxed text-gray-500 sm:text-left">
+        Weekly prizes are awarded after leaderboard results are verified.
+      </p>
+    </section>
   );
 }
 
@@ -589,7 +684,7 @@ export default function PlayLeaderboardView() {
             <div className="flex flex-wrap items-center justify-center gap-2">
               <span className="inline-flex items-center gap-2 rounded-full border border-pump-green/25 bg-pump-green/[0.08] px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-pump-green">
                 <Trophy className="h-3.5 w-3.5" />
-                Play
+                Free-to-play competition
               </span>
               {/* Scale of the field, so the count never depends on the
                   standings table existing. */}
@@ -606,14 +701,14 @@ export default function PlayLeaderboardView() {
             </h1>
 
             <p className="mt-3 text-base font-semibold text-white/90 md:text-lg">
-              Trade. Climb. Take the top spot.
+              Play for free. Climb the leaderboard. Win real prizes.
             </p>
             <p className="mx-auto mt-1.5 max-w-md text-sm leading-relaxed text-gray-400">
-              Climb the ranks with every settled win. Only realized profit
-              counts.
+              Make your picks, earn profit on settled markets, and finish the
+              week on top.
             </p>
             <p className="mt-2 text-[11px] text-gray-600">
-              Open positions are excluded until the market settles.
+              Open positions do not count until the market settles.
             </p>
           </header>
 
@@ -668,6 +763,8 @@ export default function PlayLeaderboardView() {
               </div>
             ) : (
               <div className="space-y-8">
+                <PrizePool />
+
                 <Podium rows={rows} ownWallet={ownWallet} />
 
                 <YourRankCard viewer={viewer} />
