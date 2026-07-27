@@ -10,6 +10,7 @@ import AdminReportsTab from "@/components/AdminReportsTab";
 import AdminLiveMicroPanel from "@/components/admin/AdminLiveMicroPanel";
 import AdminFlashCryptoPanel from "@/components/admin/AdminFlashCryptoPanel";
 import AdminLiveOpsPanel from "@/components/admin/AdminLiveOpsPanel";
+import AdminPlayContestPanel from "@/components/admin/AdminPlayContestPanel";
 import { solanaExplorerAddressUrl } from "@/utils/explorer";
 import { PLATFORM_WALLET } from "@/utils/solana";
 
@@ -96,7 +97,12 @@ type ActiveMarket = {
 
 type AdminFilter = "inbox" | "resolved" | "blocked" | "active" | "reports" | "all";
 type TableFilter = Exclude<AdminFilter, "reports">;
-type OverviewSection = "sports_flash" | "crypto_flash" | "live_ops" | "resolutions";
+type OverviewSection =
+  | "sports_flash"
+  | "crypto_flash"
+  | "live_ops"
+  | "play_contest"
+  | "resolutions";
 
 /* ========= Config ========= */
 
@@ -1164,6 +1170,11 @@ export default function AdminOverviewPage() {
       title: "Live Operations",
       description: "Operator control center — monitor live sessions and disable streams for compliance.",
     },
+    play_contest: {
+      title: "Play Contest",
+      description:
+        "Play prize period — live ranking, frozen winners, audit and prize payment tracking. Records payments; sends nothing.",
+    },
     resolutions: {
       title: "Resolutions",
       description: "Pending/admin actions, resolved history, blocked markets and reports moderation.",
@@ -1196,6 +1207,7 @@ export default function AdminOverviewPage() {
                   { id: "sports_flash" as const, label: "Sports Flash" },
                   { id: "crypto_flash" as const, label: "Crypto Flash" },
                   { id: "live_ops" as const, label: "Live Operations" },
+                  { id: "play_contest" as const, label: "Play Contest" },
                   { id: "resolutions" as const, label: "Resolutions" },
                 ]).map((item) => (
                   <button
@@ -1308,6 +1320,8 @@ export default function AdminOverviewPage() {
               {activeSection === "crypto_flash" && <AdminFlashCryptoPanel />}
 
               {activeSection === "live_ops" && <AdminLiveOpsPanel />}
+
+              {activeSection === "play_contest" && <AdminPlayContestPanel />}
 
               {activeSection === "resolutions" && (
                 <>

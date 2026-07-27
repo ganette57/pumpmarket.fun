@@ -451,7 +451,7 @@ function sumStakeCentsByOutcome(
 }
 
 /** "800.00" | 800 → 80000 cents, exactly. Null when unparseable. */
-function decimalToCents(v: unknown): number | null {
+export function decimalToCents(v: unknown): number | null {
   const s = String(v ?? "").trim();
   if (!/^-?\d+(\.\d+)?$/.test(s)) return null;
   const neg = s.startsWith("-");
@@ -462,7 +462,7 @@ function decimalToCents(v: unknown): number | null {
 }
 
 /** Integer cents → "1234.56". */
-function centsToDecimal(cents: number): string {
+export function centsToDecimal(cents: number): string {
   const neg = cents < 0;
   const abs = Math.abs(Math.round(cents));
   return `${neg ? "-" : ""}${Math.floor(abs / 100)}.${String(abs % 100).padStart(
@@ -1106,7 +1106,7 @@ function units8ToDecimal(units: number): string {
  * is still live), and among settled rows a win dominates a loss dominates a
  * refund. It never invents a status that no trade actually has.
  */
-function groupStatus(counts: Record<PlayTradeStatus, number>): PlayTradeStatus {
+export function groupStatus(counts: Record<PlayTradeStatus, number>): PlayTradeStatus {
   if (counts.open > 0) return "open";
   if (counts.won > 0) return "won";
   if (counts.lost > 0) return "lost";
@@ -1322,7 +1322,7 @@ function decimalOrZero(v: unknown): string {
 }
 
 /** Epoch ms for an ISO timestamp; 0 when unparseable so ordering stays total. */
-function msOf(iso: string): number {
+export function msOf(iso: string): number {
   const t = new Date(iso).getTime();
   return Number.isFinite(t) ? t : 0;
 }
@@ -1636,7 +1636,7 @@ export async function getPlayLeaderboard(opts?: {
 }
 
 /** wins/decided as a 4-dp decimal string. "0.0000" when nothing is decided. */
-function ratioToDecimal(numerator: number, denominator: number): string {
+export function ratioToDecimal(numerator: number, denominator: number): string {
   if (denominator <= 0) return "0.0000";
   const scaled = Math.round((numerator / denominator) * 10_000);
   return `${Math.floor(scaled / 10_000)}.${String(scaled % 10_000).padStart(4, "0")}`;
