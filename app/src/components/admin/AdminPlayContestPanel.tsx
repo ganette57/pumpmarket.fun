@@ -33,6 +33,8 @@ type ContestStatus =
   | "under_review"
   | "verified"
   | "paid"
+  /** Ran normally, produced no payable ranking, needs nothing further. */
+  | "closed"
   | "cancelled";
 
 type PrizeStatus = "pending" | "verified" | "paid" | "disputed" | "cancelled";
@@ -100,6 +102,11 @@ type Preview = {
   generated_at: string;
   warnings: string[];
   unresolved_markets: UnresolvedMarket[];
+  /** Server-evaluated. The panel renders these; it never re-derives them. */
+  can_freeze: boolean;
+  freeze_blocked_reason: string | null;
+  can_close: boolean;
+  close_blocked_reason: string | null;
 };
 
 type AuditPosition = {
@@ -196,14 +203,65 @@ function timeUntil(iso: string, nowMs: number): string | null {
   ).padStart(2, "0")}s`;
 }
 
-/** A `datetime-local` value read as UTC, not as the operator's local zone. */
+/* ----- Timezone: entered LOCAL, stored UTC ----------------------------------
+ *
+ * A `datetime-local` input has no zone attached, and the operator reads it
+ * in their own. Treating those digits as UTC silently shifted every
+ * contest window by the browser's offset, so the period an operator typed
+ * was not the period that got stored.
+ *
+ * The input is now parsed in the BROWSER'S zone and converted to a UTC
+ * instant before it is sent. Nothing downstream changes: the database
+ * still stores timestamptz, and eligibility is still judged on
+ * play_trades.settled_at in UTC.
+ * -------------------------------------------------------------------------- */
+
+/** A `datetime-local` value (browser-local) → the UTC instant it denotes. */
 function localInputToUtcIso(v: string): string {
   if (!v) return "";
-  return `${v.length === 16 ? v : v.slice(0, 16)}:00Z`;
+  const d = new Date(v); // no trailing Z → parsed in the browser's zone
+  return Number.isFinite(d.getTime()) ? d.toISOString() : "";
 }
 
-function utcIsoToLocalInput(iso: string): string {
-  return new Date(iso).toISOString().slice(0, 16);
+/** A Date → the `datetime-local` value that shows it in local time. */
+function dateToLocalInput(d: Date): string {
+  if (!Number.isFinite(d.getTime())) return "";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(
+    d.getHours()
+  )}:${p(d.getMinutes())}`;
+}
+
+function browserTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "local time";
+  } catch {
+    return "local time";
+  }
+}
+
+const PRETTY: Intl.DateTimeFormatOptions = {
+  day: "2-digit",
+  month: "short",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+};
+
+/** "27 Jul 2026, 16:15" in the browser's zone. */
+function fmtLocalPretty(x?: string | null): string {
+  if (!x) return "—";
+  const d = new Date(x);
+  if (!Number.isFinite(d.getTime())) return "—";
+  return d.toLocaleString("en-GB", PRETTY);
+}
+
+/** "27 Jul 2026, 14:15 UTC". */
+function fmtUtcPretty(x?: string | null): string {
+  if (!x) return "—";
+  const d = new Date(x);
+  if (!Number.isFinite(d.getTime())) return "—";
+  return `${d.toLocaleString("en-GB", { ...PRETTY, timeZone: "UTC" })} UTC`;
 }
 
 /* ========= Small UI atoms (same language as the rest of Admin) ========= */
@@ -331,6 +389,11 @@ export default function AdminPlayContestPanel() {
   const [verifyOpen, setVerifyOpen] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [verifyErr, setVerifyErr] = useState<string | null>(null);
+
+  const [closeOpen, setCloseOpen] = useState(false);
+  const [closeNote, setCloseNote] = useState("");
+  const [closing, setClosing] = useState(false);
+  const [closeErr, setCloseErr] = useState<string | null>(null);
 
   // Winner audit (expanded row)
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -477,6 +540,31 @@ export default function AdminPlayContestPanel() {
     }
   }
 
+  async function doClose() {
+    if (!contest) return;
+    setClosing(true);
+    setCloseErr(null);
+    try {
+      const j = await postJSON<{ closed: boolean; message: string }>(
+        "/api/admin/play-contests/close",
+        { contest_id: contest.id, note: closeNote.trim() || undefined }
+      );
+      setCloseOpen(false);
+      setCloseNote("");
+      // The closed contest is terminal, so /current stops returning it and
+      // the panel falls through to the empty state + Create contest.
+      setPreview(null);
+      previewedFor.current = null;
+      await load();
+      setTab("preview");
+      flash(j.message);
+    } catch (e: any) {
+      setCloseErr(e?.message || "Close failed");
+    } finally {
+      setClosing(false);
+    }
+  }
+
   async function saveRow(row: ContestResult, nextStatus?: PrizeStatus) {
     if (!contest) return;
     setSavingRow(row.id);
@@ -571,6 +659,30 @@ export default function AdminPlayContestPanel() {
   const isFrozen = !!contest?.frozen_at;
   const isVerified = !!contest?.verified_at;
 
+  // Both exits are decided by the server (the actions re-check them too).
+  // Before the first preview lands there is no verdict, so Freeze stays
+  // offered on its old terms and Close stays hidden.
+  const canFreeze = !isFrozen && (preview ? preview.can_freeze : true);
+  const canClose = !!preview?.can_close;
+
+  /** The one-line explanation under the action row, when there is one. */
+  const exitHint = useMemo(() => {
+    if (!preview || !contest) return null;
+    if (canClose) {
+      return "This contest has no eligible settled players. Close it to create the next contest.";
+    }
+    if (!isFrozen && !preview.can_freeze && preview.freeze_blocked_reason) {
+      // When freeze is impossible AND close is blocked too, the close
+      // reason is the more actionable of the two.
+      const closeReason =
+        preview.total_players === 0 && preview.close_blocked_reason
+          ? ` ${preview.close_blocked_reason}`
+          : "";
+      return `Freeze unavailable: ${preview.freeze_blocked_reason}${closeReason}`;
+    }
+    return null;
+  }, [preview, contest, canClose, isFrozen]);
+
   const prizeRows = useMemo(
     () => results.filter((r) => Number(r.prize_amount_usd) > 0),
     [results]
@@ -656,7 +768,11 @@ export default function AdminPlayContestPanel() {
               {contest.name}
             </div>
             <div className="text-xs md:text-sm text-gray-400 mt-1">
-              {fmtUtc(contest.starts_at)} → {fmtUtc(contest.ends_at)}
+              {fmtUtcPretty(contest.starts_at)} → {fmtUtcPretty(contest.ends_at)}
+            </div>
+            <div className="text-[10px] text-gray-500 mt-0.5">
+              Local: {fmtLocalPretty(contest.starts_at)} →{" "}
+              {fmtLocalPretty(contest.ends_at)} ({browserTimeZone()})
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -725,7 +841,7 @@ export default function AdminPlayContestPanel() {
               setFreezeAck(false);
               setFreezeOpen(true);
             }}
-            disabled={isFrozen}
+            disabled={!canFreeze}
             className="px-3 py-2 rounded-lg bg-pump-green text-black text-xs md:text-sm font-semibold hover:opacity-90 transition disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {isFrozen ? "Results frozen" : "Freeze results"}
@@ -740,7 +856,31 @@ export default function AdminPlayContestPanel() {
           >
             {isVerified ? "Verified" : "Verify results"}
           </button>
+
+          {/* The exit for a contest with nothing to freeze. Offered only
+              when the server says it is allowed — never as a shortcut past
+              a real ranking. */}
+          {canClose ? (
+            <button
+              onClick={() => {
+                setCloseErr(null);
+                setCloseNote("");
+                setCloseOpen(true);
+              }}
+              className="px-3 py-2 rounded-lg bg-white/5 border border-yellow-500/40 text-yellow-300 text-xs md:text-sm font-semibold hover:bg-yellow-500/10 transition"
+            >
+              Close contest
+            </button>
+          ) : null}
         </div>
+
+        {/* Why an action is unavailable — never leave a dead button
+            unexplained. */}
+        {exitHint ? (
+          <div className="mt-3 rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-[11px] md:text-xs text-gray-400">
+            {exitHint}
+          </div>
+        ) : null}
 
         {notice ? (
           <div className="mt-3 rounded-lg border border-pump-green/30 bg-pump-green/10 px-3 py-2 text-xs md:text-sm text-pump-green">
@@ -1069,6 +1209,59 @@ export default function AdminPlayContestPanel() {
                 className="px-4 py-2 rounded-lg bg-pump-green text-black text-sm font-semibold hover:opacity-90 transition disabled:opacity-50"
               >
                 {verifying ? "Verifying…" : "Verify results"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ===== Close dialog ===== */}
+      {closeOpen ? (
+        <div className="fixed inset-0 z-[9998] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60" onClick={() => setCloseOpen(false)} />
+          <div className="relative z-[9999] w-full max-w-md card-pump p-5">
+            <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">
+              Close contest
+            </div>
+            <div className="text-lg font-bold text-white mb-2">{contest.name}</div>
+            <p className="text-sm text-gray-300 mb-3">
+              Close this contest without winners? No results will be frozen and no
+              prizes will be recorded.
+            </p>
+            <p className="text-[11px] text-gray-500 mb-4">
+              The contest stays in the database as history. It simply stops being the
+              current contest, which is what frees you to create the next one.
+            </p>
+
+            <label className="text-[10px] text-gray-500 block mb-1">
+              Internal note (optional)
+            </label>
+            <input
+              type="text"
+              value={closeNote}
+              onChange={(e) => setCloseNote(e.target.value)}
+              placeholder="e.g. no markets resolved inside this window"
+              className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-white text-xs placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-yellow-500/50 mb-4"
+            />
+
+            {closeErr ? (
+              <div className="mb-3 text-sm text-red-400">{closeErr}</div>
+            ) : null}
+
+            <div className="flex items-center justify-end gap-3">
+              <button
+                onClick={() => setCloseOpen(false)}
+                disabled={closing}
+                className="px-4 py-2 rounded-lg bg-white/5 text-white text-sm font-medium hover:bg-white/10 transition disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void doClose()}
+                disabled={closing}
+                className="px-4 py-2 rounded-lg bg-yellow-500 text-black text-sm font-semibold hover:opacity-90 transition disabled:opacity-50"
+              >
+                {closing ? "Closing…" : "Close contest"}
               </button>
             </div>
           </div>
@@ -1476,24 +1669,50 @@ type ContestForm = {
   third_prize_usd: string;
 };
 
-/** Monday 00:00 UTC of the current week → the following Monday. */
+/**
+ * The NEXT Monday 00:00 local time → the Monday after it.
+ *
+ * Local, because the form is now entered in local time. Next Monday
+ * rather than this one, because the create form exists to schedule the
+ * FOLLOWING contest — a default that started in the past would overlap
+ * the period just closed.
+ */
 function defaultForm(): ContestForm {
-  const now = new Date();
-  const monday = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-  );
-  const dow = (monday.getUTCDay() + 6) % 7; // 0 = Monday
-  monday.setUTCDate(monday.getUTCDate() - dow);
-  const next = new Date(monday.getTime() + 7 * 86400_000);
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const dow = (start.getDay() + 6) % 7; // 0 = Monday
+  start.setDate(start.getDate() - dow + 7);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 7);
   return {
     name: "Weekly Play Contest",
-    starts_at: utcIsoToLocalInput(monday.toISOString()),
-    ends_at: utcIsoToLocalInput(next.toISOString()),
+    starts_at: dateToLocalInput(start),
+    ends_at: dateToLocalInput(end),
     prize_pool_usd: "50.00",
     first_prize_usd: "25.00",
     second_prize_usd: "15.00",
     third_prize_usd: "10.00",
   };
+}
+
+/**
+ * What the operator typed, and what will actually be stored. Shown under
+ * every datetime field so the local→UTC conversion is never a surprise.
+ */
+function TimePreview({ value }: { value: string }) {
+  const iso = localInputToUtcIso(value);
+  if (!iso) return null;
+  return (
+    <div className="mt-1 space-y-0.5 text-[10px] leading-tight">
+      <div className="text-gray-500">
+        Local: <span className="text-gray-300">{fmtLocalPretty(iso)}</span>{" "}
+        {browserTimeZone()}
+      </div>
+      <div className="text-gray-500">
+        UTC: <span className="text-gray-300">{fmtUtcPretty(iso)}</span>
+      </div>
+    </div>
+  );
 }
 
 function CreateForm({
@@ -1527,8 +1746,12 @@ function CreateForm({
 
   return (
     <div className="mt-4 rounded-xl border border-white/10 bg-black/25 p-4">
-      <div className="text-xs text-gray-500 uppercase tracking-wide mb-3">
+      <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">
         New contest
+      </div>
+      <div className="text-[11px] text-gray-500 mb-3">
+        Times are entered in your local timezone ({browserTimeZone()}) and stored in
+        UTC.
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1542,22 +1765,24 @@ function CreateForm({
           />
         </div>
         <div>
-          <label className="text-[10px] text-gray-500 block mb-1">Starts (UTC)</label>
+          <label className="text-[10px] text-gray-500 block mb-1">Starts</label>
           <input
             type="datetime-local"
             value={form.starts_at}
             onChange={(e) => set({ starts_at: e.target.value })}
             className={field}
           />
+          <TimePreview value={form.starts_at} />
         </div>
         <div>
-          <label className="text-[10px] text-gray-500 block mb-1">Ends (UTC)</label>
+          <label className="text-[10px] text-gray-500 block mb-1">Ends</label>
           <input
             type="datetime-local"
             value={form.ends_at}
             onChange={(e) => set({ ends_at: e.target.value })}
             className={field}
           />
+          <TimePreview value={form.ends_at} />
         </div>
         <div>
           <label className="text-[10px] text-gray-500 block mb-1">Prize pool ($)</label>
@@ -1613,7 +1838,7 @@ function CreateForm({
           </div>
         ) : (
           <div className="text-gray-500">
-            Both timestamps are read and stored as UTC.
+            Eligibility is judged on settled_at in UTC.
           </div>
         )}
       </div>

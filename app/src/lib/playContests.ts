@@ -55,6 +55,8 @@ export type PlayContestStatus =
   | "under_review"
   | "verified"
   | "paid"
+  /** Ran normally, produced no payable ranking, needs nothing further. */
+  | "closed"
   | "cancelled";
 
 export type PlayPrizeStatus =
@@ -71,8 +73,27 @@ export const PLAY_CONTEST_STATUSES: PlayContestStatus[] = [
   "under_review",
   "verified",
   "paid",
+  "closed",
   "cancelled",
 ];
+
+/**
+ * Statuses that are DONE. A terminal contest is history: it is never
+ * returned as the current manageable contest, so closing one is what
+ * frees the operator to create the next.
+ *
+ * `paid` is terminal because every prize is recorded. `closed` because
+ * there was never a prize to record. `cancelled` because the period is
+ * disowned. Everything else still wants an admin action.
+ */
+export const PLAY_CONTEST_TERMINAL_STATUSES: PlayContestStatus[] = [
+  "paid",
+  "closed",
+  "cancelled",
+];
+
+/** Postgres `in` list for a .not("status", "in", …) filter. */
+const TERMINAL_STATUS_FILTER = `(${PLAY_CONTEST_TERMINAL_STATUSES.join(",")})`;
 
 export const PLAY_PRIZE_STATUSES: PlayPrizeStatus[] = [
   "pending",
@@ -161,6 +182,15 @@ export type PlayContestPreview = {
   /** Operator-facing warnings. Never suppressed, never auto-resolved. */
   warnings: string[];
   unresolved_markets: PlayContestUnresolvedMarket[];
+  /**
+   * Server-evaluated availability of the two exits. The UI renders these
+   * rather than re-deriving the policy, and the actions re-evaluate it
+   * themselves — the client is never the authority on either.
+   */
+  can_freeze: boolean;
+  freeze_blocked_reason: string | null;
+  can_close: boolean;
+  close_blocked_reason: string | null;
 };
 
 export type PlayContestAuditPosition = {
@@ -580,13 +610,22 @@ export async function getContestUnresolvedMarkets(args: {
 /* -------------------------------------------------------------------------- */
 
 /**
- * The contest the admin is managing: the one whose window contains now,
- * else the most recent non-cancelled one.
+ * The contest the admin is MANAGING: the one whose window contains now,
+ * else the most recent non-terminal one.
+ *
+ * TERMINAL CONTESTS ARE NEVER RETURNED
+ * ------------------------------------
+ * paid / closed / cancelled are history and are filtered out of both
+ * queries. That is the whole lifecycle contract: while a contest is
+ * returned here the admin panel manages it and offers no create form, so
+ * a contest that can never reach a terminal state strands the operator.
+ * They are excluded, never deleted — every historical row stays readable
+ * by id and stays in the database.
  *
  * Also advances the stored status through the PRE-FREEZE phases only
  * (draft → live → ended) so the summary card is honest without a cron. It
- * never touches under_review / verified / paid / cancelled — those are
- * operator decisions and no clock may undo one.
+ * never touches under_review / verified / paid / closed / cancelled —
+ * those are operator decisions and no clock may undo one.
  */
 export async function getCurrentPlayContest(): Promise<PlayContest | null> {
   const supa = supabaseServer();
@@ -595,7 +634,7 @@ export async function getCurrentPlayContest(): Promise<PlayContest | null> {
   const { data: active, error: activeErr } = await supa
     .from("play_contests")
     .select(CONTEST_COLS)
-    .neq("status", "cancelled")
+    .not("status", "in", TERMINAL_STATUS_FILTER)
     .lte("starts_at", nowIso)
     .gt("ends_at", nowIso)
     .order("starts_at", { ascending: false })
@@ -609,7 +648,7 @@ export async function getCurrentPlayContest(): Promise<PlayContest | null> {
     const { data: latest, error: latestErr } = await supa
       .from("play_contests")
       .select(CONTEST_COLS)
-      .neq("status", "cancelled")
+      .not("status", "in", TERMINAL_STATUS_FILTER)
       .order("starts_at", { ascending: false })
       .limit(1);
     if (latestErr) throw toEngineError(latestErr);
@@ -686,6 +725,110 @@ export async function listPlayContestResults(
 }
 
 /* -------------------------------------------------------------------------- */
+/*  Exit policy — one evaluation, shared by the preview and the actions        */
+/* -------------------------------------------------------------------------- */
+
+type ExitInputs = {
+  contest: PlayContest;
+  windowState: PlayContestWindowState;
+  eligiblePlayers: number;
+  unresolvedMarkets: number;
+  truncated: boolean;
+  /** Frozen rows actually on disk, when the caller has counted them. */
+  frozenRows?: number;
+};
+
+type ExitVerdict = { ok: boolean; reason: string | null };
+
+/**
+ * May this contest be CLOSED without winners?
+ *
+ * A close is the exit for a contest that ran normally and produced nothing
+ * payable. It must never become a shortcut past a real ranking, so it is
+ * refused whenever a ranking exists, could still exist, or already has.
+ *
+ * Deliberately no override (unlike freeze): when eligible players exist,
+ * the correct action is Freeze, and offering a way around that would let
+ * an operator discard real winners with one click.
+ */
+function evaluateClose(input: ExitInputs): ExitVerdict {
+  const { contest } = input;
+
+  if (contest.status === "closed") {
+    return { ok: false, reason: "This contest is already closed." };
+  }
+  if (PLAY_CONTEST_TERMINAL_STATUSES.includes(contest.status)) {
+    return { ok: false, reason: `This contest is already ${contest.status}.` };
+  }
+  if (contest.status !== "ended") {
+    return {
+      ok: false,
+      reason:
+        input.windowState === "ended"
+          ? `Only an ended contest can be closed; this one is ${contest.status}.`
+          : "This contest has not ended yet.",
+    };
+  }
+  if (input.windowState !== "ended") {
+    return { ok: false, reason: "This contest has not ended yet." };
+  }
+  if (contest.frozen_at || (input.frozenRows ?? 0) > 0) {
+    return {
+      ok: false,
+      reason: "Results are already frozen. Verify and record payment instead.",
+    };
+  }
+  if (input.truncated) {
+    return {
+      ok: false,
+      reason:
+        "The settled-trade scan hit its ceiling, so an empty ranking cannot be proven.",
+    };
+  }
+  if (input.unresolvedMarkets > 0) {
+    return {
+      ok: false,
+      reason: `${input.unresolvedMarkets} market(s) with contest-period Play activity are still unresolved; those positions could still become eligible.`,
+    };
+  }
+  if (input.eligiblePlayers > 0) {
+    return {
+      ok: false,
+      reason: `${input.eligiblePlayers} eligible player(s) — freeze the results instead of closing.`,
+    };
+  }
+  return { ok: true, reason: null };
+}
+
+/** May this contest be FROZEN right now, ignoring the explicit overrides? */
+function evaluateFreeze(input: ExitInputs): ExitVerdict {
+  const { contest } = input;
+
+  if (contest.frozen_at) {
+    return { ok: false, reason: "Results are already frozen." };
+  }
+  if (PLAY_CONTEST_TERMINAL_STATUSES.includes(contest.status)) {
+    return { ok: false, reason: `This contest is ${contest.status}.` };
+  }
+  if (input.truncated) {
+    return {
+      ok: false,
+      reason: "The settled-trade scan hit its ceiling, so the ranking is partial.",
+    };
+  }
+  if (input.eligiblePlayers === 0) {
+    return {
+      ok: false,
+      reason:
+        "No eligible settled players — there is no ranking to snapshot. Close the contest instead.",
+    };
+  }
+  // A live window and unresolved markets are BLOCKS, not impossibilities:
+  // both have a deliberate override, so freeze stays offered here.
+  return { ok: true, reason: null };
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Live preview                                                               */
 /* -------------------------------------------------------------------------- */
 
@@ -743,13 +886,27 @@ export async function getPlayContestPreview(
     );
   }
   if (ranked.length === 0) {
-    warnings.push("No eligible settled Play results in this period yet.");
+    warnings.push(
+      state === "ended"
+        ? "This contest has no eligible settled players. Close it to create the next contest."
+        : "No eligible settled Play results in this period yet."
+    );
   }
   if (truncated) {
     warnings.push(
       "The settled-trade scan hit its ceiling; totals may be partial. Do not freeze."
     );
   }
+
+  const exitInputs: ExitInputs = {
+    contest,
+    windowState: state,
+    eligiblePlayers: ranked.length,
+    unresolvedMarkets: unresolved.length,
+    truncated,
+  };
+  const freezeVerdict = evaluateFreeze(exitInputs);
+  const closeVerdict = evaluateClose(exitInputs);
 
   return {
     contest_id: contest.id,
@@ -762,6 +919,10 @@ export async function getPlayContestPreview(
     generated_at: generatedAt,
     warnings,
     unresolved_markets: unresolved,
+    can_freeze: freezeVerdict.ok,
+    freeze_blocked_reason: freezeVerdict.reason,
+    can_close: closeVerdict.ok,
+    close_blocked_reason: closeVerdict.reason,
   };
 }
 
@@ -924,6 +1085,125 @@ export async function freezePlayContest(args: {
     froze: true,
     unresolved_markets: unresolved,
   };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Close — the exit for a contest with nothing to freeze                      */
+/* -------------------------------------------------------------------------- */
+
+export type CloseOutcome = {
+  contest: PlayContest;
+  /** True when THIS call closed it; false when it was already closed. */
+  closed: boolean;
+};
+
+/**
+ * Close a contest that ran normally and produced no payable ranking.
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * `ended` is not a resting state — while a contest sits there it is still
+ * returned as the current manageable contest, so the create form never
+ * appears and the next contest can never be launched. A period with zero
+ * eligible settled players cannot be frozen (there is no ranking), cannot
+ * honestly be `paid` (nothing was won) and must not be called `cancelled`
+ * (it ran exactly as intended). `closed` is that missing resting state.
+ *
+ * WHAT IT WILL NOT DO
+ * -------------------
+ * It is never a shortcut past a real ranking. It re-derives the ranking
+ * server-side and refuses if ANY eligible player exists — with no
+ * override, because the correct action there is Freeze and a one-click
+ * bypass would let an operator discard real winners. It also refuses
+ * while a contest-period market is still unresolved, since those
+ * positions could still become eligible.
+ *
+ * It creates no result row, moves no money, and touches no play_trades.
+ *
+ * IDEMPOTENT. A repeat on an already-closed contest returns it unchanged.
+ */
+export async function closePlayContest(args: {
+  contest: PlayContest;
+  adminWallet: string;
+  note?: string | null;
+}): Promise<CloseOutcome> {
+  const supa = supabaseServer();
+  const { contest } = args;
+
+  // Idempotent: closing a closed contest is a no-op, not an error.
+  if (contest.status === "closed") {
+    return { contest, closed: false };
+  }
+
+  // Frozen rows are checked on disk, not just via contest.frozen_at, so a
+  // snapshot can never be orphaned behind a closed contest.
+  const { count: frozenRows, error: countErr } = await supa
+    .from("play_contest_results")
+    .select("id", { count: "exact", head: true })
+    .eq("contest_id", contest.id);
+
+  if (countErr) throw toEngineError(countErr);
+
+  const [{ ranked, truncated }, unresolved] = await Promise.all([
+    rankPlayContestPeriod({
+      startsAt: contest.starts_at,
+      endsAt: contest.ends_at,
+    }),
+    getContestUnresolvedMarkets({
+      startsAt: contest.starts_at,
+      endsAt: contest.ends_at,
+    }),
+  ]);
+
+  const verdict = evaluateClose({
+    contest,
+    windowState: windowState(contest),
+    eligiblePlayers: ranked.length,
+    unresolvedMarkets: unresolved.length,
+    truncated,
+    frozenRows: frozenRows ?? 0,
+  });
+
+  if (!verdict.ok) {
+    throw new PlayEngineError(verdict.reason ?? "This contest cannot be closed.", 409);
+  }
+
+  const now = new Date().toISOString();
+  const note = args.note ? String(args.note).trim().slice(0, 2000) : "";
+
+  const patch: Record<string, unknown> = { status: "closed", updated_at: now };
+  if (note) {
+    // No closed_by column exists and the spec asks for no new schema, so
+    // the operator's note carries the human context. The acting wallet is
+    // in the route's server log.
+    patch.notes = contest.notes ? `${contest.notes}\n${note}` : note;
+  }
+
+  const { data: updated, error } = await supa
+    .from("play_contests")
+    .update(patch)
+    .eq("id", contest.id)
+    // Guard: a freeze landing concurrently wins. Only a contest still
+    // ended-and-unfrozen may be closed, re-checked at write time.
+    .eq("status", "ended")
+    .is("frozen_at", null)
+    .select(CONTEST_COLS)
+    .maybeSingle();
+
+  if (error) throw toEngineError(error);
+
+  if (!updated) {
+    // Something changed under us — report the current truth, never a
+    // success the database did not agree to.
+    const fresh = await getPlayContestById(contest.id);
+    if (fresh?.status === "closed") return { contest: fresh, closed: false };
+    throw new PlayEngineError(
+      "This contest changed while it was being closed. Refresh the preview and retry.",
+      409
+    );
+  }
+
+  return { contest: rowToContest(updated), closed: true };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1396,11 +1676,20 @@ export async function createPlayContest(
   const startsAt = new Date(startsMs).toISOString();
   const endsAt = new Date(endsMs).toISOString();
 
-  // No overlapping active contest. The database repeats this as an
-  // exclusion constraint; this check exists to return a usable message.
+  // No overlapping contest period. `cancelled` is the ONE status excluded:
+  // a cancelled contest never counted, so its instants are free again. A
+  // `closed` or `paid` contest DID run — real Play results settled inside
+  // its window and it is the historical record of them — so it still
+  // blocks, and letting a second contest claim the same instants would let
+  // two contests claim the same settled results.
+  //
+  // This never blocks the create-the-next-contest flow, because the next
+  // contest is scheduled for a LATER window. The database repeats the rule
+  // as an exclusion constraint; this check exists to return a usable
+  // message instead of a raw constraint error.
   const { data: clash, error: clashErr } = await supa
     .from("play_contests")
-    .select("id,name,starts_at,ends_at")
+    .select("id,name,status,starts_at,ends_at")
     .neq("status", "cancelled")
     .lt("starts_at", endsAt)
     .gt("ends_at", startsAt)
@@ -1410,7 +1699,8 @@ export async function createPlayContest(
   if (((clash as any[]) || []).length > 0) {
     const c = (clash as any[])[0];
     throw new PlayEngineError(
-      `Overlaps an existing contest ("${c.name}", ${c.starts_at} → ${c.ends_at}). Cancel it first.`,
+      `Overlaps the ${c.status} contest "${c.name}" (${c.starts_at} → ${c.ends_at}). ` +
+        "Pick a window that starts after it ends.",
       409
     );
   }

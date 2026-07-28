@@ -140,6 +140,24 @@ BEGIN
   END IF;
 
   -- -------------------------------------------------------------------
+  -- 5b. `closed` is an accepted terminal status
+  --     (requires 20260728_play_contests_closed_status.sql)
+  -- -------------------------------------------------------------------
+  update public.play_contests set status = 'closed' where id = c_id;
+  assert (select status from public.play_contests where id = c_id) = 'closed',
+    'the closed status was rejected — apply 20260728_play_contests_closed_status.sql';
+
+  -- ...and an unknown status is still rejected.
+  failed := false;
+  BEGIN
+    update public.play_contests set status = 'archived' where id = c_id;
+  EXCEPTION WHEN check_violation THEN failed := true;
+  END;
+  assert failed, 'an unknown contest status was accepted';
+
+  update public.play_contests set status = 'ended' where id = c_id;
+
+  -- -------------------------------------------------------------------
   -- 6. verified_at cannot exist without frozen_at
   -- -------------------------------------------------------------------
   failed := false;
