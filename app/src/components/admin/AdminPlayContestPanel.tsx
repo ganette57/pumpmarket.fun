@@ -395,6 +395,11 @@ export default function AdminPlayContestPanel() {
   const [closing, setClosing] = useState(false);
   const [closeErr, setCloseErr] = useState<string | null>(null);
 
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelReason, setCancelReason] = useState("");
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelErr, setCancelErr] = useState<string | null>(null);
+
   // Winner audit (expanded row)
   const [expanded, setExpanded] = useState<string | null>(null);
   const [audits, setAudits] = useState<Record<string, WinnerAudit>>({});
@@ -565,6 +570,31 @@ export default function AdminPlayContestPanel() {
     }
   }
 
+  async function doCancel() {
+    if (!contest) return;
+    setCancelling(true);
+    setCancelErr(null);
+    try {
+      const j = await postJSON<{ cancelled: boolean; message: string }>(
+        "/api/admin/play-contests/cancel",
+        { contest_id: contest.id, reason: cancelReason.trim() || undefined }
+      );
+      setCancelOpen(false);
+      setCancelReason("");
+      // Cancelled is terminal, so /current stops returning it and the panel
+      // falls through to the empty state + Create contest.
+      setPreview(null);
+      previewedFor.current = null;
+      await load();
+      setTab("preview");
+      flash(j.message);
+    } catch (e: any) {
+      setCancelErr(e?.message || "Cancel failed");
+    } finally {
+      setCancelling(false);
+    }
+  }
+
   async function saveRow(row: ContestResult, nextStatus?: PrizeStatus) {
     if (!contest) return;
     setSavingRow(row.id);
@@ -664,6 +694,16 @@ export default function AdminPlayContestPanel() {
   // offered on its old terms and Close stays hidden.
   const canFreeze = !isFrozen && (preview ? preview.can_freeze : true);
   const canClose = !!preview?.can_close;
+
+  // Cancel is the emergency exit and needs no preview to decide: it depends
+  // only on the contest's own state. Refused once anything is frozen,
+  // because a frozen snapshot is what a prize is paid against.
+  const canCancel =
+    !!contest &&
+    !isFrozen &&
+    (contest.status === "draft" ||
+      contest.status === "live" ||
+      contest.status === "ended");
 
   /** The one-line explanation under the action row, when there is one. */
   const exitHint = useMemo(() => {
@@ -870,6 +910,21 @@ export default function AdminPlayContestPanel() {
               className="px-3 py-2 rounded-lg bg-white/5 border border-yellow-500/40 text-yellow-300 text-xs md:text-sm font-semibold hover:bg-yellow-500/10 transition"
             >
               Close contest
+            </button>
+          ) : null}
+
+          {/* Emergency exit. Distinct from Close: this DISOWNS the period
+              rather than filing it as a run that paid nothing. */}
+          {canCancel ? (
+            <button
+              onClick={() => {
+                setCancelErr(null);
+                setCancelReason("");
+                setCancelOpen(true);
+              }}
+              className="ml-auto px-3 py-2 rounded-lg bg-transparent border border-red-500/40 text-red-300 text-xs md:text-sm font-medium hover:bg-red-500/10 transition"
+            >
+              Cancel contest
             </button>
           ) : null}
         </div>
@@ -1262,6 +1317,74 @@ export default function AdminPlayContestPanel() {
                 className="px-4 py-2 rounded-lg bg-yellow-500 text-black text-sm font-semibold hover:opacity-90 transition disabled:opacity-50"
               >
                 {closing ? "Closing…" : "Close contest"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ===== Cancel dialog ===== */}
+      {cancelOpen ? (
+        <div className="fixed inset-0 z-[9998] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/60"
+            onClick={() => setCancelOpen(false)}
+          />
+          <div className="relative z-[9999] w-full max-w-md card-pump p-5 max-h-[85vh] overflow-y-auto">
+            <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">
+              Cancel contest
+            </div>
+            <div className="text-lg font-bold text-white mb-2">{contest.name}</div>
+
+            <p className="text-sm text-gray-300 mb-3">
+              Cancel this contest? It will be removed from the public competition
+              view. No results or prizes will be recorded.
+            </p>
+
+            {/* A live contest is the one case where somebody is actively
+                competing right now, so it gets the stronger warning. */}
+            {contest.status === "live" ? (
+              <div className="mb-3 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-200">
+                This contest is still live. Cancelling it will discard the
+                competition period for prize purposes. Existing Play trades
+                remain unchanged.
+              </div>
+            ) : null}
+
+            <p className="text-[11px] text-gray-500 mb-4">
+              The contest row stays in the database. No Play trade, settlement or
+              balance is touched, and no frozen result is created.
+            </p>
+
+            <label className="text-[10px] text-gray-500 block mb-1">
+              Reason / internal note (optional)
+            </label>
+            <input
+              type="text"
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              placeholder="e.g. wrong dates, replaced by a corrected period"
+              className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-white text-xs placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-red-500/50 mb-4"
+            />
+
+            {cancelErr ? (
+              <div className="mb-3 text-sm text-red-400">{cancelErr}</div>
+            ) : null}
+
+            <div className="flex items-center justify-end gap-3">
+              <button
+                onClick={() => setCancelOpen(false)}
+                disabled={cancelling}
+                className="px-4 py-2 rounded-lg bg-white/5 text-white text-sm font-medium hover:bg-white/10 transition disabled:opacity-50"
+              >
+                Keep contest
+              </button>
+              <button
+                onClick={() => void doCancel()}
+                disabled={cancelling}
+                className="px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-semibold hover:bg-red-700 transition disabled:opacity-50"
+              >
+                {cancelling ? "Cancelling…" : "Cancel contest"}
               </button>
             </div>
           </div>

@@ -25,21 +25,37 @@
 // it. The hero's small print still states the one rule a player could
 // otherwise get wrong: open positions do not count yet.
 //
+// WHAT THE PAGE SHOWS — the CONTEST, not All Time
+// -----------------------------------------------
+// Every number here belongs to one competition: the contest the admin
+// configured, its prize ladder, and the ranking of results settled inside
+// its window. Nothing on this page is hardcoded any more — the prize pool,
+// the per-rank prizes, the period and the standings all come from
+// /api/play/contest, so a contest edited in admin changes this page and no
+// second source of truth exists to drift from it.
+//
+// The ranking has two sources and the API says which one it used:
+//   `preview` — recalculated from settled trades in the window; may still
+//               change, and the page says so.
+//   `frozen`  — the immutable official snapshot; never recalculated.
+//
 // WHAT IS NOT HERE
 // ----------------
-// No SOL, no balance, no account id, no prize or rewards promise, no season
-// countdown, no badges. Every card and row links to /profile/[wallet], which
-// in Play mode already renders the public Play profile — so the mode carries
-// across the navigation with no reload and no query parameter.
+// No SOL, no balance, no account id, no automatic-payout promise, no
+// badges. Every card and row links to /profile/[wallet], which in Play mode
+// already renders the public Play profile — so the mode carries across the
+// navigation with no reload and no query parameter.
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Medal, Trophy } from "lucide-react";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { usePlayLeaderboard } from "@/components/play/usePlayLeaderboard";
+import { usePlayContest } from "@/components/play/usePlayContest";
 import {
   formatUsd,
   toCents,
-  type PlayLeaderboardRowView,
+  type PlayContestRowView,
+  type PlayPublicContestView,
 } from "@/lib/playClient";
 
 /** Matches the cap the API applies — asking for more changes nothing. */
@@ -76,17 +92,17 @@ function formatWinRate(v: string): string {
   return `${Math.round(n * 100)}%`;
 }
 
-function hasUsername(row: PlayLeaderboardRowView): boolean {
+function hasUsername(row: PlayContestRowView): boolean {
   return !!row.username && row.username.trim().length > 0;
 }
 
-function displayName(row: PlayLeaderboardRowView): string {
+function displayName(row: PlayContestRowView): string {
   return hasUsername(row)
     ? (row.username as string).trim()
     : shortAddr(row.wallet_address);
 }
 
-function initialsOf(row: PlayLeaderboardRowView): string {
+function initialsOf(row: PlayContestRowView): string {
   return (row.username?.trim() || row.wallet_address).slice(0, 2).toUpperCase();
 }
 
@@ -126,29 +142,180 @@ function medalFor(rank: number): MedalStyle | null {
   return rank === 1 || rank === 2 || rank === 3 ? MEDALS[rank] : null;
 }
 
+/* -------------------------------------------------------------------------- */
+/*  Prizes — read from the contest, never declared here                        */
+/* -------------------------------------------------------------------------- */
+
 /**
- * The weekly prize ladder.
- *
  * PRIZE IS NOT PROFIT. Profit is the player's realized result on settled
- * markets — the metric the ranking is computed from, and the only number on
- * this page that comes from the API. Prize is a fixed cash reward for the
- * final weekly placement, declared here and nowhere else. They are rendered as
- * separate elements everywhere they appear together so the two can never be
- * read as one figure.
+ * markets — the metric the ranking is computed from. Prize is the cash reward
+ * the CONTEST attaches to a final placing. They are rendered as separate
+ * elements everywhere they appear together so the two can never be read as one
+ * figure.
  *
- * Presentation only: nothing here is ranked on, summed, or sent anywhere, and
- * the leaderboard response is untouched by it.
+ * Both now come from the same API response, so a prize shown here is the prize
+ * the admin configured — there is no second copy of these numbers to drift.
  */
-const PRIZES: Record<1 | 2 | 3, string> = {
-  1: "$25",
-  2: "$15",
-  3: "$10",
+
+/** The raw prize decimal for a rank, or null when that rank pays nothing. */
+function prizeAmountFor(
+  contest: PlayPublicContestView | null,
+  rank: number
+): string | null {
+  if (!contest) return null;
+  const raw =
+    rank === 1
+      ? contest.first_prize_usd
+      : rank === 2
+        ? contest.second_prize_usd
+        : rank === 3
+          ? contest.third_prize_usd
+          : null;
+  if (raw == null) return null;
+  // A zero prize is not a prize: a contest may pay only two places, or none.
+  const c = toCents(raw);
+  return c !== null && c > BigInt(0) ? raw : null;
+}
+
+/** "$15" / "$12.50" — trailing ".00" dropped, cents kept when they exist. */
+function formatPrize(v: string): string {
+  return formatUsd(v, { compact: true });
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Contest phase — one derivation, used by every piece of copy below          */
+/* -------------------------------------------------------------------------- */
+
+type Phase =
+  | "upcoming"
+  | "live"
+  | "awaiting_review"
+  | "under_review"
+  | "verified"
+  | "paid";
+
+/**
+ * The phase drives every conditional string on this page, so the banner, the
+ * countdown, the disclaimer and the standings caption can never contradict
+ * each other.
+ *
+ * Status comes from the server, which already reconciles it against the
+ * clock. The one thing decided here is `upcoming` vs `live` for a contest
+ * whose window flipped between the fetch and this render — a second's drift
+ * that would otherwise show "starts in 00:00:00".
+ */
+function phaseOf(contest: PlayPublicContestView, nowMs: number): Phase {
+  switch (contest.status) {
+    case "under_review":
+      return "under_review";
+    case "verified":
+      return "verified";
+    case "paid":
+      return "paid";
+    case "ended":
+      return "awaiting_review";
+    default: {
+      const starts = new Date(contest.starts_at).getTime();
+      const ends = new Date(contest.ends_at).getTime();
+      if (Number.isFinite(starts) && nowMs < starts) return "upcoming";
+      if (Number.isFinite(ends) && nowMs >= ends) return "awaiting_review";
+      return "live";
+    }
+  }
+}
+
+const PHASE_COPY: Record<
+  Phase,
+  { badge: string; note: string; tone: "green" | "amber" | "neutral" }
+> = {
+  upcoming: {
+    badge: "Starting soon",
+    note: "Standings open when the competition starts.",
+    tone: "neutral",
+  },
+  live: {
+    badge: "Live competition",
+    note: "Results update as markets settle.",
+    tone: "green",
+  },
+  awaiting_review: {
+    badge: "Competition ended",
+    note: "Results are awaiting review and may not yet be final.",
+    tone: "amber",
+  },
+  under_review: {
+    badge: "Results frozen",
+    note: "Results frozen — verification in progress.",
+    tone: "amber",
+  },
+  verified: {
+    badge: "Official results",
+    note: "These results have been verified.",
+    tone: "green",
+  },
+  paid: {
+    badge: "Official results",
+    note: "Prizes recorded as paid.",
+    tone: "green",
+  },
 };
 
-const PRIZE_POOL = "$50";
+/** A ranking is only worth showing once the competition has actually begun. */
+function showsRanking(phase: Phase): boolean {
+  return phase !== "upcoming";
+}
 
-function prizeFor(rank: number): string | null {
-  return rank === 1 || rank === 2 || rank === 3 ? PRIZES[rank] : null;
+/* -------------------------------------------------------------------------- */
+/*  Time                                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Timestamps are stored and compared in UTC; a visitor reads them in their
+ * own zone. Eligibility is untouched by any of this — it is decided
+ * server-side on settled_at.
+ */
+function browserTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "local time";
+  } catch {
+    return "local time";
+  }
+}
+
+/** "29 Jul, 13:15" in the visitor's own zone. */
+function formatLocal(iso: string): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "—";
+  return d.toLocaleString(undefined, {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/** "2d 04:11:09" / "04:11:09" until `iso`, or null once it has passed. */
+function countdownTo(iso: string, nowMs: number): string | null {
+  const ms = new Date(iso).getTime() - nowMs;
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  const s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86400);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const clock = `${pad(Math.floor((s % 86400) / 3600))}:${pad(
+    Math.floor((s % 3600) / 60)
+  )}:${pad(s % 60)}`;
+  return d > 0 ? `${d}d ${clock}` : clock;
+}
+
+/** A 1s tick, but only while something on screen is actually counting down. */
+function useNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [active]);
+  return now;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -160,7 +327,7 @@ function Avatar({
   size,
   ringClass,
 }: {
-  row: PlayLeaderboardRowView;
+  row: PlayContestRowView;
   size: "sm" | "md" | "lg";
   ringClass?: string;
 }) {
@@ -192,7 +359,7 @@ function Identity({
   align = "left",
   nameClass,
 }: {
-  row: PlayLeaderboardRowView;
+  row: PlayContestRowView;
   align?: "left" | "center";
   nameClass?: string;
 }) {
@@ -281,7 +448,15 @@ function Stat({
  * on `hover:-translate-y-0.5`, and a second translate would fight it and drop
  * the card on hover.
  */
-function Podium({ rows, ownWallet }: { rows: PlayLeaderboardRowView[]; ownWallet: string | null }) {
+function Podium({
+  rows,
+  ownWallet,
+  contest,
+}: {
+  rows: PlayContestRowView[];
+  ownWallet: string | null;
+  contest: PlayPublicContestView | null;
+}) {
   const top = rows.slice(0, 3);
   if (top.length === 0) return null;
 
@@ -326,6 +501,7 @@ function Podium({ rows, ownWallet }: { rows: PlayLeaderboardRowView[]; ownWallet
         <PodiumCard
           key={row.wallet_address}
           row={row}
+          contest={contest}
           isOwn={!!ownWallet && row.wallet_address === ownWallet}
           layoutClass={[
             row.rank === 1 ? firstOnMobile : "",
@@ -347,13 +523,15 @@ function PodiumCard({
   row,
   layoutClass,
   isOwn,
+  contest,
 }: {
-  row: PlayLeaderboardRowView;
+  row: PlayContestRowView;
   layoutClass: string;
   isOwn: boolean;
+  contest: PlayPublicContestView | null;
 }) {
   const medal = medalFor(row.rank);
-  const prize = prizeFor(row.rank);
+  const prize = prizeAmountFor(contest, row.rank);
 
   return (
     <Link
@@ -403,13 +581,13 @@ function PodiumCard({
             ${medal?.chip ?? "border-white/15 text-gray-300"}`}
         >
           <Medal className="h-3 w-3" aria-hidden />
-          {prize} Prize
+          {formatPrize(prize)} Prize
         </span>
       )}
 
       <div className="mt-4 grid w-full grid-cols-3 gap-1 border-t border-white/[0.06] pt-3">
         <Stat value={String(row.wins)} label="Wins" compact />
-        <Stat value={String(row.picks)} label="Picks" compact />
+        <Stat value={String(row.settled_picks)} label="Picks" compact />
         <Stat value={formatWinRate(row.win_rate)} label="Win rate" compact />
       </div>
     </Link>
@@ -421,44 +599,98 @@ function PodiumCard({
 /* -------------------------------------------------------------------------- */
 
 /**
- * The weekly prize ladder, stated once above the podium.
+ * The contest's prize ladder and period, stated once above the podium.
  *
- * Static copy — it declares what the competition pays, and reads nothing from
- * the leaderboard response. The disclaimer is deliberately plain: it says
- * prizes follow a verification step and stops there, promising no automatic or
- * on-chain payout, because no such mechanism exists in this codebase.
+ * EVERY value here comes from the contest. A rank that pays nothing renders no
+ * chip at all, so a two-place contest shows two chips rather than a "$0" third.
+ *
+ * The disclaimer is deliberately plain: it says prizes follow a verification
+ * step and stops there, promising no automatic or on-chain payout, because no
+ * such mechanism exists in this codebase.
  */
-function PrizePool() {
+function PrizePool({
+  contest,
+  phase,
+  nowMs,
+}: {
+  contest: PlayPublicContestView;
+  phase: Phase;
+  nowMs: number;
+}) {
+  const ranks = ([1, 2, 3] as const)
+    .map((rank) => ({ rank, amount: prizeAmountFor(contest, rank) }))
+    .filter((r): r is { rank: 1 | 2 | 3; amount: string } => r.amount !== null);
+
+  const copy = PHASE_COPY[phase];
+  const target = phase === "upcoming" ? contest.starts_at : contest.ends_at;
+  const countdown = countdownTo(target, nowMs);
+
+  const toneClass =
+    copy.tone === "green"
+      ? "border-pump-green/25 bg-pump-green/[0.08] text-pump-green"
+      : copy.tone === "amber"
+        ? "border-[#f5c451]/30 bg-[#f5c451]/[0.08] text-[#f5c451]"
+        : "border-white/15 bg-white/[0.04] text-gray-300";
+
   return (
     <section className="rounded-2xl border border-white/10 bg-[#0c0e12] px-4 py-4 md:px-5">
       <div className="flex flex-col items-center gap-3 text-center sm:flex-row sm:justify-between sm:text-left">
-        <div>
-          <div className="text-[10px] font-medium uppercase tracking-wider text-gray-500">
-            This week&apos;s prizes
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center justify-center gap-2 sm:justify-start">
+            <span
+              className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.14em] ${toneClass}`}
+            >
+              {copy.badge}
+            </span>
+            <span className="truncate text-[11px] font-medium text-gray-400">
+              {contest.name}
+            </span>
           </div>
-          <div className="mt-0.5 flex items-center justify-center gap-2 sm:justify-start">
+
+          <div className="mt-1.5 flex items-center justify-center gap-2 sm:justify-start">
             <Trophy className="h-4 w-4 text-pump-green" aria-hidden />
             <span className="text-lg font-extrabold tabular-nums text-white">
-              {PRIZE_POOL} prize pool
+              {formatPrize(contest.prize_pool_usd)} prize pool
             </span>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center justify-center gap-2">
-          {([1, 2, 3] as const).map((rank) => (
-            <span
-              key={rank}
-              className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-bold tabular-nums ${MEDALS[rank].chip}`}
-            >
-              <Medal className="h-3.5 w-3.5" aria-hidden />
-              {rank === 1 ? "1st" : rank === 2 ? "2nd" : "3rd"} {PRIZES[rank]}
+        {ranks.length > 0 && (
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            {ranks.map(({ rank, amount }) => (
+              <span
+                key={rank}
+                className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-bold tabular-nums ${MEDALS[rank].chip}`}
+              >
+                <Medal className="h-3.5 w-3.5" aria-hidden />
+                {rank === 1 ? "1st" : rank === 2 ? "2nd" : "3rd"}{" "}
+                {formatPrize(amount)}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Period + countdown. Times are stored in UTC and rendered in the
+          visitor's own zone, with the zone named so it is never ambiguous. */}
+      <div className="mt-3 flex flex-col items-center gap-1 border-t border-white/[0.06] pt-3 sm:flex-row sm:justify-between">
+        <span className="text-[11px] tabular-nums text-gray-500">
+          {formatLocal(contest.starts_at)} → {formatLocal(contest.ends_at)}{" "}
+          <span className="text-gray-600">({browserTimeZone()})</span>
+        </span>
+
+        {countdown && (
+          <span className="text-[11px] font-semibold tabular-nums text-gray-300">
+            {phase === "upcoming" ? "Competition starts in " : "Ends in "}
+            <span className={copy.tone === "green" ? "text-pump-green" : "text-white"}>
+              {countdown}
             </span>
-          ))}
-        </div>
+          </span>
+        )}
       </div>
 
       <p className="mt-3 border-t border-white/[0.06] pt-3 text-center text-[11px] leading-relaxed text-gray-500 sm:text-left">
-        Weekly prizes are awarded after leaderboard results are verified.
+        {copy.note} Prizes are awarded after results are verified.
       </p>
     </section>
   );
@@ -500,7 +732,7 @@ function StandingsRow({
   row,
   isOwn,
 }: {
-  row: PlayLeaderboardRowView;
+  row: PlayContestRowView;
   isOwn: boolean;
 }) {
   const medal = medalFor(row.rank);
@@ -533,7 +765,7 @@ function StandingsRow({
           {formatProfit(row.realized_pnl_usd)}
         </span>
         <span className="text-right text-sm tabular-nums text-white/80">
-          {row.picks}
+          {row.settled_picks}
         </span>
         <span className="text-right text-sm tabular-nums text-white/80">
           {row.wins}
@@ -565,8 +797,8 @@ function StandingsRow({
           </span>
         </div>
         <div className="mt-1.5 pl-[4.75rem] text-[11px] text-gray-500">
-          {row.wins} {row.wins === 1 ? "win" : "wins"} · {row.picks}{" "}
-          {row.picks === 1 ? "pick" : "picks"} · {formatWinRate(row.win_rate)} win
+          {row.wins} {row.wins === 1 ? "win" : "wins"} · {row.settled_picks}{" "}
+          {row.settled_picks === 1 ? "pick" : "picks"} · {formatWinRate(row.win_rate)} win
           rate
         </div>
       </div>
@@ -584,7 +816,14 @@ function StandingsRow({
  * ranked result — never for a wallet a visitor merely typed. It carries the
  * same public stats as any other row and NEVER a balance.
  */
-function YourRankCard({ viewer }: { viewer: PlayLeaderboardRowView | null }) {
+function YourRankCard({
+  viewer,
+  frozen,
+}: {
+  viewer: PlayContestRowView | null;
+  /** True when the ranking is the official snapshot, not a live preview. */
+  frozen: boolean;
+}) {
   if (!viewer) {
     return (
       <div className="rounded-2xl border border-white/10 bg-[#0c0e12] px-5 py-4">
@@ -592,10 +831,12 @@ function YourRankCard({ viewer }: { viewer: PlayLeaderboardRowView | null }) {
           Your rank
         </div>
         <p className="mt-1.5 text-sm font-semibold text-white">
-          You&apos;re not ranked yet.
+          You&apos;re not ranked in this competition yet.
         </p>
         <p className="mt-0.5 text-xs text-gray-400">
-          Settle your first Play market to enter the leaderboard.
+          {frozen
+            ? "You're not in the official results for this competition."
+            : "Settle a Play market during the competition window to enter."}
         </p>
       </div>
     );
@@ -634,7 +875,7 @@ function YourRankCard({ viewer }: { viewer: PlayLeaderboardRowView | null }) {
             valueClass={profitToneClass(viewer.realized_pnl_usd)}
           />
           <Stat value={String(viewer.wins)} label="Wins" />
-          <Stat value={String(viewer.picks)} label="Picks" />
+          <Stat value={String(viewer.settled_picks)} label="Picks" />
         </span>
       </div>
     </Link>
@@ -646,14 +887,26 @@ function YourRankCard({ viewer }: { viewer: PlayLeaderboardRowView | null }) {
 /* -------------------------------------------------------------------------- */
 
 export default function PlayLeaderboardView() {
-  const { leaderboard, error, pending, refresh } = usePlayLeaderboard({
+  const { data, error, pending, refresh } = usePlayContest({
     limit: LEADERBOARD_LIMIT,
   });
   const { publicKey, connected } = useWallet();
   const connectedWallet = connected && publicKey ? publicKey.toBase58() : null;
 
-  const rows = leaderboard?.rows ?? [];
-  const viewer = leaderboard?.viewer ?? null;
+  const contest = data?.contest ?? null;
+  const rows = data?.ranking ?? [];
+  const viewer = data?.viewer ?? null;
+  const totalPlayers = data?.meta.total_players ?? 0;
+  const frozen = data?.meta.ranking_state === "frozen";
+
+  // Tick only while a countdown is on screen — an upcoming or running
+  // competition. A frozen result has nothing to count down to.
+  const phaseForTick = contest ? contest.status : null;
+  const now = useNow(
+    phaseForTick === "draft" || phaseForTick === "live"
+  );
+
+  const phase = contest ? phaseOf(contest, now) : null;
 
   // "Me" is the wallet the server proved from the Play session cookie. The
   // connected wallet is only the fallback for highlighting when there is no
@@ -662,6 +915,7 @@ export default function PlayLeaderboardView() {
   const ownWallet = viewer?.wallet_address ?? connectedWallet;
 
   const hasRows = rows.length > 0;
+  const ranked = !!phase && showsRanking(phase);
 
   // The podium already IS the ranking for the first three, so the standings
   // list carries on from #4 rather than reprinting them. With three players or
@@ -688,10 +942,10 @@ export default function PlayLeaderboardView() {
               </span>
               {/* Scale of the field, so the count never depends on the
                   standings table existing. */}
-              {leaderboard && leaderboard.total_players > 0 && (
+              {ranked && totalPlayers > 0 && (
                 <span className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-gray-400">
-                  {leaderboard.total_players.toLocaleString()}{" "}
-                  {leaderboard.total_players === 1 ? "player" : "players"}
+                  {totalPlayers.toLocaleString()}{" "}
+                  {totalPlayers === 1 ? "player" : "players"}
                 </span>
               )}
             </div>
@@ -705,7 +959,7 @@ export default function PlayLeaderboardView() {
             </p>
             <p className="mx-auto mt-1.5 max-w-md text-sm leading-relaxed text-gray-400">
               Make your picks, earn profit on settled markets, and finish the
-              week on top.
+              competition on top.
             </p>
             <p className="mt-2 text-[11px] text-gray-600">
               Open positions do not count until the market settles.
@@ -743,16 +997,20 @@ export default function PlayLeaderboardView() {
                   ))}
                 </div>
               </div>
-            ) : !hasRows ? (
+            ) : !contest || !phase ? (
+              /* NO CONTEST. Deliberately shows no prize ladder and no
+                 ranking: there is no competition to advertise, and the
+                 old hardcoded $50 week must never stand in for one. */
               <div className="rounded-2xl border border-white/10 bg-[#0c0e12] px-5 py-16 text-center">
-                <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-pump-green/25 bg-pump-green/[0.08]">
-                  <Trophy className="h-7 w-7 text-pump-green" />
+                <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04]">
+                  <Trophy className="h-7 w-7 text-gray-500" />
                 </div>
                 <h2 className="text-lg font-bold text-white">
-                  No settled Play results yet.
+                  No Play competition is currently scheduled.
                 </h2>
                 <p className="mx-auto mt-1.5 max-w-sm text-sm leading-relaxed text-gray-400">
-                  Finish a Play market to claim the first spot.
+                  Play markets are still open — results from your picks will
+                  count towards the next competition.
                 </p>
                 <Link
                   href="/"
@@ -763,38 +1021,89 @@ export default function PlayLeaderboardView() {
               </div>
             ) : (
               <div className="space-y-8">
-                <PrizePool />
+                {/* Prizes and period always render once a contest exists —
+                    including before it starts, which is the whole point of
+                    an upcoming state. */}
+                <PrizePool contest={contest} phase={phase} nowMs={now} />
 
-                <Podium rows={rows} ownWallet={ownWallet} />
+                {!ranked ? (
+                  /* UPCOMING. No ranking at all rather than an empty
+                     podium: nothing settled inside the window yet, so any
+                     standings shown here would be misleading. */
+                  <div className="rounded-2xl border border-white/10 bg-[#0c0e12] px-5 py-14 text-center">
+                    <h2 className="text-lg font-bold text-white">
+                      The competition hasn&apos;t started yet.
+                    </h2>
+                    <p className="mx-auto mt-1.5 max-w-sm text-sm leading-relaxed text-gray-400">
+                      Standings open at{" "}
+                      <span className="tabular-nums text-gray-300">
+                        {formatLocal(contest.starts_at)}
+                      </span>
+                      . Only markets that settle inside the competition window
+                      count.
+                    </p>
+                    <Link
+                      href="/"
+                      className="mt-6 inline-flex h-10 items-center justify-center rounded-full bg-pump-green px-6 text-sm font-bold text-black transition hover:bg-pump-green/90"
+                    >
+                      Browse markets
+                    </Link>
+                  </div>
+                ) : !hasRows ? (
+                  <div className="rounded-2xl border border-white/10 bg-[#0c0e12] px-5 py-14 text-center">
+                    <h2 className="text-lg font-bold text-white">
+                      No settled results in this competition yet.
+                    </h2>
+                    <p className="mx-auto mt-1.5 max-w-sm text-sm leading-relaxed text-gray-400">
+                      Finish a Play market before the competition ends to claim
+                      the first spot.
+                    </p>
+                    <Link
+                      href="/"
+                      className="mt-6 inline-flex h-10 items-center justify-center rounded-full bg-pump-green px-6 text-sm font-bold text-black transition hover:bg-pump-green/90"
+                    >
+                      Browse markets
+                    </Link>
+                  </div>
+                ) : (
+                  <>
+                    <Podium
+                      rows={rows}
+                      ownWallet={ownWallet}
+                      contest={contest}
+                    />
 
-                <YourRankCard viewer={viewer} />
+                    <YourRankCard viewer={viewer} frozen={frozen} />
 
-                {standings.length > 0 && (
-                  <section>
-                    <div className="mb-3 flex items-baseline justify-between gap-3">
-                      <h2 className="text-sm font-bold uppercase tracking-wider text-white">
-                        Top players
-                      </h2>
-                      {leaderboard &&
-                        leaderboard.total_players > rows.length && (
-                          <span className="text-[11px] tabular-nums text-gray-500">
-                            Top {rows.length} of{" "}
-                            {leaderboard.total_players.toLocaleString()}
-                          </span>
-                        )}
-                    </div>
+                    {standings.length > 0 && (
+                      <section>
+                        <div className="mb-3 flex items-baseline justify-between gap-3">
+                          <h2 className="text-sm font-bold uppercase tracking-wider text-white">
+                            Top players
+                          </h2>
+                          {totalPlayers > rows.length && (
+                            <span className="text-[11px] tabular-nums text-gray-500">
+                              Top {rows.length} of{" "}
+                              {totalPlayers.toLocaleString()}
+                            </span>
+                          )}
+                        </div>
 
-                    <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#0c0e12]">
-                      <StandingsHeader />
-                      {standings.map((row) => (
-                        <StandingsRow
-                          key={row.wallet_address}
-                          row={row}
-                          isOwn={!!ownWallet && row.wallet_address === ownWallet}
-                        />
-                      ))}
-                    </div>
-                  </section>
+                        <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#0c0e12]">
+                          <StandingsHeader />
+                          {standings.map((row) => (
+                            <StandingsRow
+                              key={row.wallet_address}
+                              row={row}
+                              isOwn={
+                                !!ownWallet && row.wallet_address === ownWallet
+                              }
+                            />
+                          ))}
+                        </div>
+                      </section>
+                    )}
+                  </>
                 )}
               </div>
             )}

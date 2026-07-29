@@ -4,10 +4,13 @@
 //
 // WHAT THIS MODULE OWNS
 // ---------------------
-//   * the period ranking (the ONLY implementation — the admin UI never
-//     ranks anything itself, and never receives raw trades to rank);
+//   * the period ranking (the ONLY implementation — neither the admin UI
+//     nor the public page ranks anything itself, and neither ever
+//     receives raw trades to rank);
 //   * the freeze snapshot and its idempotency;
-//   * verification, prize-status tracking and the winner audit read.
+//   * verification, prize-status tracking and the winner audit read;
+//   * the PUBLIC projection of a contest — a separate selector and a
+//     separate, strictly narrower row shape, never the admin one.
 //
 // WHAT IT DELIBERATELY DOES NOT OWN
 // ---------------------------------
@@ -1741,4 +1744,415 @@ export async function createPlayContest(
   if (!data) throw new PlayEngineError("Contest was not created.", 500);
 
   return rowToContest(data);
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Cancel — the emergency exit, available before a freeze                     */
+/* -------------------------------------------------------------------------- */
+
+export type CancelOutcome = {
+  contest: PlayContest;
+  /** True when THIS call cancelled it; false when it was already cancelled. */
+  cancelled: boolean;
+};
+
+/** Statuses a contest can be cancelled FROM. Everything else is refused. */
+const CANCELLABLE_STATUSES: PlayContestStatus[] = ["draft", "live", "ended"];
+
+/**
+ * Disown a contest period before any ranking has been frozen.
+ *
+ * DIFFERENT FROM CLOSE, ON PURPOSE
+ * --------------------------------
+ * `closed` says "this ran and produced nothing payable" — history worth
+ * keeping. `cancelled` says "this period does not count as a competition
+ * at all", which is why it is the one status the overlap constraint
+ * ignores: those instants become free to schedule again.
+ *
+ * Allowed from draft / live / ended only. Once results are frozen the
+ * snapshot is the record a prize is paid against, so under_review,
+ * verified and paid are refused outright — cancelling one would orphan a
+ * frozen winner. `closed` is refused because it is already terminal.
+ *
+ * WHAT IT DOES NOT TOUCH
+ * ----------------------
+ * Not one play_trade, not one settlement, not one balance, not one
+ * result row. Cancelling a LIVE contest discards the competition period
+ * for prize purposes and nothing else: every trade a player made inside
+ * it stays exactly as it was, still settles normally, and still counts on
+ * the all-time leaderboard and on their profile.
+ *
+ * IDEMPOTENT. A repeat returns the contest unchanged.
+ */
+export async function cancelPlayContest(args: {
+  contest: PlayContest;
+  adminWallet: string;
+  reason?: string | null;
+}): Promise<CancelOutcome> {
+  const supa = supabaseServer();
+  const { contest } = args;
+
+  if (contest.status === "cancelled") {
+    return { contest, cancelled: false };
+  }
+
+  if (contest.frozen_at) {
+    throw new PlayEngineError(
+      "Results are already frozen. A frozen contest cannot be cancelled — its snapshot is the record prizes are paid against.",
+      409
+    );
+  }
+
+  if (!CANCELLABLE_STATUSES.includes(contest.status)) {
+    throw new PlayEngineError(
+      `A ${contest.status} contest cannot be cancelled.`,
+      409
+    );
+  }
+
+  const now = new Date().toISOString();
+  const reason = args.reason ? String(args.reason).trim().slice(0, 2000) : "";
+
+  const patch: Record<string, unknown> = { status: "cancelled", updated_at: now };
+  if (reason) {
+    patch.notes = contest.notes ? `${contest.notes}\n${reason}` : reason;
+  }
+
+  const { data: updated, error } = await supa
+    .from("play_contests")
+    .update(patch)
+    .eq("id", contest.id)
+    // Re-checked at write time: a freeze landing concurrently wins.
+    .in("status", CANCELLABLE_STATUSES)
+    .is("frozen_at", null)
+    .select(CONTEST_COLS)
+    .maybeSingle();
+
+  if (error) throw toEngineError(error);
+
+  if (!updated) {
+    const fresh = await getPlayContestById(contest.id);
+    if (fresh?.status === "cancelled") return { contest: fresh, cancelled: false };
+    throw new PlayEngineError(
+      "This contest changed while it was being cancelled. Refresh the preview and retry.",
+      409
+    );
+  }
+
+  return { contest: rowToContest(updated), cancelled: true };
+}
+
+/* ========================================================================== */
+/*  PUBLIC PROJECTION                                                          */
+/* ========================================================================== */
+//
+// Everything below is what an anonymous visitor to /leaderboard may see.
+// It is a SEPARATE selector and a SEPARATE, strictly narrower row shape —
+// never the admin one with fields removed at the edge, because that is the
+// shape that leaks the first time somebody adds a column.
+//
+// NEVER CROSSES THIS LINE
+// -----------------------
+// created_by, frozen_by, verified_by, notes, timezone, prize_status,
+// payment_reference, admin_note, paid_at, dispute notes, play_accounts
+// UUIDs, client_trade_id, ledger rows, session data, balances.
+
+/** A contest as the public page sees it. Exactly these fields, no more. */
+export type PlayPublicContest = {
+  id: string;
+  name: string;
+  starts_at: string;
+  ends_at: string;
+  status: PlayContestStatus;
+  prize_pool_usd: string;
+  first_prize_usd: string;
+  second_prize_usd: string;
+  third_prize_usd: string;
+  frozen_at: string | null;
+  verified_at: string | null;
+};
+
+/** One ranked player as the public page sees them. */
+export type PlayPublicRankingRow = {
+  rank: number;
+  wallet_address: string;
+  username: string | null;
+  avatar_url: string | null;
+  realized_pnl_usd: string;
+  wins: number;
+  losses: number;
+  settled_picks: number;
+  win_rate: string;
+};
+
+export type PlayPublicRankingState = "preview" | "frozen" | "none";
+
+export type PlayPublicContestView = {
+  contest: PlayPublicContest | null;
+  ranking: PlayPublicRankingRow[];
+  /** The caller's own row, when a Play session is present and they rank. */
+  viewer: PlayPublicRankingRow | null;
+  meta: {
+    generated_at: string;
+    /** Eligible players BEFORE the display cap. */
+    total_players: number;
+    /** Contest-period markets still undecided. Always 0 once frozen. */
+    unresolved_markets: number;
+    /**
+     * `preview` — recalculated now, may still change.
+     * `frozen`  — the immutable snapshot, never recalculated.
+     * `none`    — no contest is scheduled.
+     */
+    ranking_state: PlayPublicRankingState;
+    truncated: boolean;
+  };
+};
+
+/** Ranked players the public page receives. Matches the old All-Time cap. */
+export const PLAY_PUBLIC_CONTEST_LIMIT = 100;
+
+/**
+ * Which contest the PUBLIC page shows, in priority order. Lower wins.
+ *
+ * A running competition outranks an upcoming one, which outranks results
+ * still being settled up. `paid` sits last so it stays visible as the most
+ * recent official result right up until a newer draft or live contest
+ * exists to replace it — at which point the newer one simply outranks it.
+ *
+ * `closed` and `cancelled` are never shown: one produced nothing payable,
+ * the other was disowned. Neither is a competition a visitor can enter or
+ * a result they can read.
+ */
+const PUBLIC_CONTEST_PRIORITY: Record<PlayContestStatus, number> = {
+  live: 1,
+  draft: 2,
+  ended: 3,
+  under_review: 4,
+  verified: 5,
+  paid: 6,
+  closed: Number.POSITIVE_INFINITY,
+  cancelled: Number.POSITIVE_INFINITY,
+};
+
+/** How many candidate rows the public selector considers. */
+const PUBLIC_CONTEST_SCAN = 20;
+
+/**
+ * The contest the public page shows.
+ *
+ * DELIBERATELY NOT getCurrentPlayContest
+ * --------------------------------------
+ * The admin selector answers "what still needs an action from me", so it
+ * drops `paid` — correct there, wrong here, because a paid contest is
+ * precisely the finished result a visitor should still be able to read.
+ * The two questions are different, so they get two selectors rather than
+ * one with a flag.
+ *
+ * Priority is computed on the EFFECTIVE status: a draft whose window has
+ * already opened is treated as live even if no read has synced its stored
+ * status yet, so the public page can never advertise "starts in…" for a
+ * competition that is already running.
+ */
+export async function getPublicPlayContest(): Promise<PlayContest | null> {
+  const supa = supabaseServer();
+
+  const { data, error } = await supa
+    .from("play_contests")
+    .select(CONTEST_COLS)
+    .not("status", "in", "(closed,cancelled)")
+    .order("starts_at", { ascending: false })
+    .limit(PUBLIC_CONTEST_SCAN);
+
+  if (error) throw toEngineError(error);
+
+  const rows = ((data as any[]) || []).map(rowToContest);
+  if (rows.length === 0) return null;
+
+  /** Stored status, corrected by the clock for the pre-freeze phases. */
+  const effectiveStatus = (c: PlayContest): PlayContestStatus => {
+    if (!["draft", "live", "ended"].includes(c.status)) return c.status;
+    const w = windowState(c);
+    return w === "not_started" ? "draft" : w === "live" ? "live" : "ended";
+  };
+
+  let best: PlayContest | null = null;
+  let bestPriority = Number.POSITIVE_INFINITY;
+
+  for (const c of rows) {
+    const p = PUBLIC_CONTEST_PRIORITY[effectiveStatus(c)] ?? Number.POSITIVE_INFINITY;
+    if (p === Number.POSITIVE_INFINITY) continue;
+    // Rows arrive newest-first, so a strict `<` keeps the newest of a tie.
+    if (p < bestPriority) {
+      best = c;
+      bestPriority = p;
+    }
+  }
+
+  if (!best) return null;
+
+  // Persist the clock-derived status, so the public page and the admin
+  // panel never disagree about whether a contest is live.
+  return syncWindowStatus(best);
+}
+
+/** The admin contest shape, narrowed to the public one. */
+function toPublicContest(c: PlayContest): PlayPublicContest {
+  return {
+    id: c.id,
+    name: c.name,
+    starts_at: c.starts_at,
+    ends_at: c.ends_at,
+    status: c.status,
+    prize_pool_usd: c.prize_pool_usd,
+    first_prize_usd: c.first_prize_usd,
+    second_prize_usd: c.second_prize_usd,
+    third_prize_usd: c.third_prize_usd,
+    frozen_at: c.frozen_at,
+    verified_at: c.verified_at,
+  };
+}
+
+/**
+ * The public contest view: the selected contest, its ranking, the caller's
+ * own row, and the meta a visitor needs to know how final any of it is.
+ *
+ * RANKING SOURCE — decided by frozen_at, not by a status string
+ * ------------------------------------------------------------
+ * Frozen  → play_contest_results, read verbatim. Never recalculated, so a
+ *           settlement landing after the freeze cannot move a published
+ *           result. This is what `under_review`, `verified` and `paid`
+ *           all read from.
+ * Not yet → rankPlayContestPeriod, the SAME trusted helper the admin
+ *           preview and the freeze use. The public page therefore cannot
+ *           show a ranking that disagrees with the one the admin froze.
+ *
+ * `viewerWallet` is proven from the Play session cookie by the caller and
+ * is never a request field, so a visitor can only ever ask about
+ * themselves. The viewer row carries the same public stats as any other
+ * row and never a balance.
+ */
+export async function getPublicPlayContestView(opts?: {
+  limit?: number;
+  viewerWallet?: string | null;
+}): Promise<PlayPublicContestView> {
+  const generatedAt = new Date().toISOString();
+  const viewerWallet = opts?.viewerWallet ?? null;
+
+  const limit = Math.min(
+    Math.max(Math.floor(Number(opts?.limit) || PLAY_PUBLIC_CONTEST_LIMIT), 1),
+    PLAY_PUBLIC_CONTEST_LIMIT
+  );
+
+  const empty: PlayPublicContestView = {
+    contest: null,
+    ranking: [],
+    viewer: null,
+    meta: {
+      generated_at: generatedAt,
+      total_players: 0,
+      unresolved_markets: 0,
+      ranking_state: "none",
+      truncated: false,
+    },
+  };
+
+  const contest = await getPublicPlayContest();
+  if (!contest) return empty;
+
+  const publicContest = toPublicContest(contest);
+
+  /* ---- Frozen: the snapshot, verbatim ---------------------------------- */
+  if (contest.frozen_at) {
+    const frozen = await listPlayContestResults(contest.id);
+
+    // Narrowed HERE, not at the route: prize_status, payment_reference,
+    // admin_note, paid_at and verified_at never leave this function.
+    const ranking: PlayPublicRankingRow[] = frozen.map((r) => ({
+      rank: r.rank,
+      wallet_address: r.wallet_address,
+      username: r.username,
+      avatar_url: r.avatar_url,
+      realized_pnl_usd: r.realized_pnl_usd,
+      wins: r.wins,
+      losses: r.losses,
+      settled_picks: r.settled_picks,
+      win_rate: r.win_rate,
+    }));
+
+    return {
+      contest: publicContest,
+      ranking: ranking.slice(0, limit),
+      viewer: viewerWallet
+        ? ranking.find((r) => r.wallet_address === viewerWallet) ?? null
+        : null,
+      meta: {
+        generated_at: generatedAt,
+        // The snapshot stores a bounded number of ranks, so this is the
+        // size of the OFFICIAL result, not of the field that played.
+        total_players: ranking.length,
+        // A frozen result cannot be moved by a late settlement, so an
+        // unresolved market is no longer information a visitor can act on.
+        unresolved_markets: 0,
+        ranking_state: "frozen",
+        truncated: false,
+      },
+    };
+  }
+
+  /* ---- Not frozen: the live period ranking ----------------------------- */
+  const [{ ranked, truncated }, unresolved] = await Promise.all([
+    rankPlayContestPeriod({
+      startsAt: contest.starts_at,
+      endsAt: contest.ends_at,
+    }),
+    getContestUnresolvedMarkets({
+      startsAt: contest.starts_at,
+      endsAt: contest.ends_at,
+    }),
+  ]);
+
+  const visible = ranked.slice(0, limit);
+
+  // Identity for exactly the rows that will be serialized: the visible
+  // page plus the viewer's own row when it falls outside it.
+  const viewerIndex = viewerWallet
+    ? ranked.findIndex((r) => r.wallet_address === viewerWallet)
+    : -1;
+
+  const needIdentity = new Set(visible.map((r) => r.wallet_address));
+  if (viewerIndex >= 0) needIdentity.add(ranked[viewerIndex].wallet_address);
+
+  const ids = await identityFor(Array.from(needIdentity));
+
+  const toRow = (
+    r: Omit<PlayContestRankingRow, "rank" | "username" | "avatar_url">,
+    rank: number
+  ): PlayPublicRankingRow => {
+    const id = ids.get(r.wallet_address);
+    return {
+      rank,
+      wallet_address: r.wallet_address,
+      username: id?.display_name ?? null,
+      avatar_url: id?.avatar_url ?? null,
+      realized_pnl_usd: r.realized_pnl_usd,
+      wins: r.wins,
+      losses: r.losses,
+      settled_picks: r.settled_picks,
+      win_rate: r.win_rate,
+    };
+  };
+
+  return {
+    contest: publicContest,
+    ranking: visible.map((r, i) => toRow(r, i + 1)),
+    viewer:
+      viewerIndex >= 0 ? toRow(ranked[viewerIndex], viewerIndex + 1) : null,
+    meta: {
+      generated_at: generatedAt,
+      total_players: ranked.length,
+      unresolved_markets: unresolved.length,
+      ranking_state: "preview",
+      truncated,
+    },
+  };
 }

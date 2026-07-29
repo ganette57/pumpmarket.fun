@@ -278,6 +278,68 @@ export type PlayLeaderboardView = {
   generated_at: string;
 };
 
+/* ----- Public Play competition (mirrors /api/play/contest) ----------------- */
+
+export type PlayContestStatusView =
+  | "draft"
+  | "live"
+  | "ended"
+  | "under_review"
+  | "verified"
+  | "paid"
+  | "closed"
+  | "cancelled";
+
+/** The contest as the public page sees it. No admin field reaches here. */
+export type PlayPublicContestView = {
+  id: string;
+  name: string;
+  starts_at: string;
+  ends_at: string;
+  status: PlayContestStatusView;
+  prize_pool_usd: string;
+  first_prize_usd: string;
+  second_prize_usd: string;
+  third_prize_usd: string;
+  frozen_at: string | null;
+  verified_at: string | null;
+};
+
+/** One ranked player in a contest. Narrower than the All-Time row. */
+export type PlayContestRowView = {
+  rank: number;
+  wallet_address: string;
+  username: string | null;
+  avatar_url: string | null;
+  realized_pnl_usd: string;
+  wins: number;
+  losses: number;
+  /** Settled grouped (market, outcome) positions — never raw buys. */
+  settled_picks: number;
+  /** wins / (wins + losses) as a 0..1 decimal string. Refunds excluded. */
+  win_rate: string;
+};
+
+/**
+ * `preview` — recalculated now, may still change as markets settle.
+ * `frozen`  — the immutable official snapshot.
+ * `none`    — no competition is scheduled.
+ */
+export type PlayContestRankingState = "preview" | "frozen" | "none";
+
+export type PlayContestResponse = {
+  contest: PlayPublicContestView | null;
+  ranking: PlayContestRowView[];
+  viewer: PlayContestRowView | null;
+  meta: {
+    generated_at: string;
+    total_players: number;
+    unresolved_markets: number;
+    ranking_state: PlayContestRankingState;
+    truncated: boolean;
+  };
+};
+
 export type PlayTradeResponse = {
   replayed: boolean;
   trade: {
@@ -514,6 +576,58 @@ export const playClient = {
       truncated: !!l?.truncated,
       generated_at: String(l?.generated_at ?? ""),
     } as PlayLeaderboardView;
+  },
+
+  /**
+   * The current PUBLIC Play competition: the contest, its ranking, and the
+   * caller's own row.
+   *
+   * Public — no session required. When a Play session cookie IS present the
+   * response also carries `viewer`: the caller's own row and rank within
+   * THIS contest, with the same public stats as any other row and no
+   * balance.
+   *
+   * `meta.ranking_state` says how final the ranking is: `frozen` is the
+   * official snapshot and will not move again, `preview` is recalculated
+   * and may still change as markets settle.
+   *
+   * Money and win rate stay decimal strings, as everywhere else here.
+   */
+  async contest(opts?: { limit?: number }) {
+    const raw = await post<PlayContestResponse>(
+      "/api/play/contest",
+      opts?.limit ? { limit: opts.limit } : {}
+    );
+    const row = (r: PlayContestRowView): PlayContestRowView => ({
+      ...r,
+      rank: Number(r.rank) || 0,
+      wins: Number(r.wins) || 0,
+      losses: Number(r.losses) || 0,
+      settled_picks: Number(r.settled_picks) || 0,
+      realized_pnl_usd: decimal(r.realized_pnl_usd),
+      win_rate: decimal(r.win_rate),
+    });
+    const c = raw?.contest ?? null;
+    return {
+      contest: c
+        ? {
+            ...c,
+            prize_pool_usd: decimal(c.prize_pool_usd),
+            first_prize_usd: decimal(c.first_prize_usd),
+            second_prize_usd: decimal(c.second_prize_usd),
+            third_prize_usd: decimal(c.third_prize_usd),
+          }
+        : null,
+      ranking: (raw?.ranking ?? []).map(row),
+      viewer: raw?.viewer ? row(raw.viewer) : null,
+      meta: {
+        generated_at: String(raw?.meta?.generated_at ?? ""),
+        total_players: Number(raw?.meta?.total_players) || 0,
+        unresolved_markets: Number(raw?.meta?.unresolved_markets) || 0,
+        ranking_state: (raw?.meta?.ranking_state ?? "none") as PlayContestRankingState,
+        truncated: !!raw?.meta?.truncated,
+      },
+    } as PlayContestResponse;
   },
 
   /**
