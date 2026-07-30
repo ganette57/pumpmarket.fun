@@ -36,14 +36,13 @@ import { Medal, Trophy } from "lucide-react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import {
   useRealLeaderboard,
+  type RealLeaderboardResponse,
   type RealLeaderboardRowView,
 } from "@/components/real/useRealLeaderboard";
+import { ROAD_MILESTONES } from "@/lib/realRoad";
 
 /** Matches the cap the API applies — asking for more changes nothing. */
 const LEADERBOARD_LIMIT = 100;
-
-/** The milestone the road counts towards. A target, never a promise. */
-const ROAD_TARGET_USD = 1_000_000;
 
 /**
  * Optional snapshot schedule. Configuration-driven so a ranking deadline
@@ -256,90 +255,190 @@ function Stat({
 /*  Road to $1M progress                                                       */
 /* -------------------------------------------------------------------------- */
 
+/** "$12,450" / "$1M" / "$100K" — compact, no cents. */
+function formatUsdWhole(n: number): string {
+  return `$${Math.round(n).toLocaleString("en-US")}`;
+}
+
 /**
- * A COMMUNITY MILESTONE, not a prize.
+ * THE COMMUNITY ROAD — driven by VOLUME, never by one trader's profit.
  *
- * The bar tracks the leading trader's claimed profit against a $1,000,000
- * target. FunMarket is not paying $1M and the copy never says it does —
- * the wording is deliberately "community milestone" and "road progress".
+ * This card and the ranking below it measure different things on purpose:
+ * the ranking is competitive (whose claimed profit is highest), the road
+ * is collective (how much everyone has traded). Wiring the road to the
+ * leader's profit — as it was before this pass — made one person's result
+ * look like the whole community's progress.
  *
- * The percentage needs a dollar denominator, so it renders only when a
- * fresh price exists. Without one the SOL figure still shows and the
- * percentage disappears rather than being computed from a stale rate.
+ * Every reward figure is an UPPER BOUND on a campaign that is verified
+ * and reviewed before anything is paid. The milestones are CUMULATIVE
+ * TOTALS: $1M at $100M volume is the campaign maximum, not an eighth
+ * instalment on top of the previous seven.
+ *
+ * Milestone maths is done server-side; this renders what it is handed.
+ * Without a price every USD field is null and the card falls back to the
+ * SOL total rather than showing a stale percentage.
  */
-function RoadProgress({
-  leaderSol,
-  price,
+function CommunityRoad({
+  road,
 }: {
-  leaderSol: string;
-  price: { usd: number; as_of: string } | null;
+  road: NonNullable<RealLeaderboardResponse["road"]>;
 }) {
-  const sol = Math.max(solNumber(leaderSol), 0);
-  const usd = price ? sol * price.usd : null;
-  const pct = usd != null ? Math.min((usd / ROAD_TARGET_USD) * 100, 100) : null;
+  const usd = road.total_real_volume_usd;
+  const pct = road.milestone_progress != null ? road.milestone_progress * 100 : null;
 
   return (
     <section className="rounded-2xl border border-white/10 bg-[#0c0e12] px-4 py-4 md:px-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0">
           <div className="text-[10px] font-medium uppercase tracking-wider text-gray-500">
-            Community milestone
+            Community road progress
           </div>
           <div className="mt-0.5 flex items-center gap-2">
             <Trophy className="h-4 w-4 text-pump-green" aria-hidden />
             <span className="text-lg font-extrabold tabular-nums text-white">
-              Road to ${ROAD_TARGET_USD.toLocaleString("en-US")}
+              Road to {formatUsdWhole(road.final_goal_usd)}
             </span>
           </div>
         </div>
 
         <div className="text-left sm:text-right">
-          <div className="text-[10px] font-medium uppercase tracking-wider text-gray-500">
-            Current leader
-          </div>
-          <div className="text-lg font-extrabold tabular-nums text-pump-green">
-            {formatSol(leaderSol)}
+          <div className="text-xl font-extrabold tabular-nums text-white">
+            {`${solNumber(road.total_real_volume_sol).toLocaleString("en-US", {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })} SOL traded`}
           </div>
           {usd != null && (
             <div className="text-[11px] tabular-nums text-gray-400">
-              {formatUsdApprox(leaderSol, price!.usd)}
+              ≈ {formatUsdWhole(usd)}
             </div>
           )}
         </div>
       </div>
 
-      {pct != null ? (
+      {/* The four facts a reader needs, in one glance. */}
+      {usd != null && road.next_milestone_usd != null ? (
         <>
+          <dl className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="min-w-0">
+              <dt className="text-[10px] uppercase tracking-wider text-gray-500">
+                Next milestone
+              </dt>
+              <dd className="mt-0.5 truncate text-sm font-bold tabular-nums text-white">
+                {formatUsdWhole(road.next_milestone_usd)} volume
+              </dd>
+            </div>
+            <div className="min-w-0">
+              <dt className="text-[10px] uppercase tracking-wider text-gray-500">
+                Unlocks
+              </dt>
+              <dd className="mt-0.5 truncate text-sm font-bold tabular-nums text-pump-green">
+                Up to {formatUsdWhole(road.next_reward_usd ?? 0)}
+              </dd>
+            </div>
+            <div className="min-w-0">
+              <dt className="text-[10px] uppercase tracking-wider text-gray-500">
+                Progress
+              </dt>
+              <dd className="mt-0.5 truncate text-sm font-bold tabular-nums text-white">
+                {formatUsdWhole(usd)} / {formatUsdWhole(road.next_milestone_usd)}
+              </dd>
+            </div>
+            <div className="min-w-0">
+              <dt className="text-[10px] uppercase tracking-wider text-gray-500">
+                Rewards distributed
+              </dt>
+              <dd className="mt-0.5 truncate text-sm font-bold tabular-nums text-white">
+                {formatUsdWhole(road.rewards_distributed_usd)}
+              </dd>
+            </div>
+          </dl>
+
           <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-white/[0.06]">
             <div
               className="h-full rounded-full bg-pump-green transition-[width] duration-700"
-              // Sub-1% progress would otherwise be an invisible bar, so it
+              // A near-zero step would otherwise be an invisible bar, so it
               // keeps a hairline width purely so the track reads as started.
-              style={{ width: `${Math.max(pct, 0.35)}%` }}
+              style={{ width: `${Math.max(pct ?? 0, 0.5)}%` }}
             />
           </div>
-          <div className="mt-1.5 flex items-baseline justify-between gap-3">
+          <div className="mt-1.5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
             <span className="text-[11px] font-semibold tabular-nums text-pump-green">
-              {pct < 0.01 ? "<0.01" : pct.toFixed(pct < 1 ? 3 : 2)}% of the road
+              {pct != null && pct < 0.01 ? "<0.01" : (pct ?? 0).toFixed(2)}% to the
+              next milestone
             </span>
             <span className="text-[10px] text-gray-600">
-              USD equivalent based on the current SOL price ·{" "}
-              {formatWhen(price!.as_of)}
+              USD equivalent based on the current SOL price
+              {road.price_timestamp ? ` · ${formatWhen(road.price_timestamp)}` : ""}
             </span>
           </div>
         </>
       ) : (
-        <p className="mt-3 border-t border-white/[0.06] pt-3 text-[11px] text-gray-500">
-          Road progress is unavailable right now — the SOL price could not be
-          confirmed. Rankings below are unaffected: they are calculated in SOL.
+        <p className="mt-4 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-gray-400">
+          USD milestone progress is temporarily unavailable. Volume above is
+          authoritative and is measured in SOL.
         </p>
       )}
 
+      <MilestoneTrack currentUsd={usd} />
+
       <p className="mt-3 border-t border-white/[0.06] pt-3 text-[11px] leading-relaxed text-gray-500">
-        A community progress milestone based on the leading trader&apos;s claimed
-        profit. It is not a prize pool and not a guaranteed payout.
+        Final goal: up to {formatUsdWhole(road.maximum_rewards_usd)} in community
+        rewards at {formatUsdWhole(road.final_goal_usd)} volume. Every eligible Real
+        trade moves the community closer to the next reward milestone.
+      </p>
+      <p className="mt-1.5 text-[11px] leading-relaxed text-gray-600">
+        The detailed reward breakdown and number of rewarded traders will be
+        published before each milestone snapshot. Milestone rewards are
+        distributed after volume verification, leaderboard review and anti-fraud
+        checks, and are subject to eligibility rules and the published snapshot
+        terms.
       </p>
     </section>
+  );
+}
+
+/**
+ * The eight-stop ladder.
+ *
+ * Scrolls horizontally INSIDE the card on narrow screens rather than
+ * wrapping or widening the page — the card owns the overflow, the
+ * document never does.
+ */
+function MilestoneTrack({ currentUsd }: { currentUsd: number | null }) {
+  return (
+    <div className="mt-4 -mx-1 overflow-x-auto px-1 pb-1">
+      <ol className="flex min-w-max items-center gap-1.5">
+        {ROAD_MILESTONES.map((m) => {
+          const reached = currentUsd != null && currentUsd >= m.volume_usd;
+          // The target is the first stop not yet reached; with no price
+          // nothing is highlighted rather than guessing a position.
+          const isNext =
+            currentUsd != null &&
+            !reached &&
+            ROAD_MILESTONES.findIndex((x) => currentUsd < x.volume_usd) ===
+              ROAD_MILESTONES.indexOf(m);
+          return (
+            <li
+              key={m.volume_usd}
+              title={`${m.label} volume → up to ${formatUsdWhole(
+                m.rewards_usd
+              )} in community rewards`}
+              className={`whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] font-bold tabular-nums transition ${
+                reached
+                  ? "border-pump-green/45 bg-pump-green/12 text-pump-green"
+                  : isNext
+                    ? "border-white/35 bg-white/[0.07] text-white"
+                    : "border-white/10 text-gray-600"
+              }`}
+            >
+              {reached ? "✓ " : ""}
+              {m.label}
+            </li>
+          );
+        })}
+      </ol>
+    </div>
   );
 }
 
@@ -609,7 +708,7 @@ function YourRankCard({
         </p>
         <p className="mt-0.5 text-xs text-gray-400">
           {connected
-            ? "Settle and claim your first Real market to enter the Road to $1M."
+            ? "Settle and claim your first Real market to enter the rankings."
             : "Connect your wallet to see where you stand."}
         </p>
       </div>
@@ -709,17 +808,20 @@ export default function RealLeaderboardView() {
             </div>
 
             <h1 className="mt-4 text-3xl font-extrabold uppercase leading-none tracking-tight text-white md:text-5xl">
-              Road to $1M
+              Road to $100M
             </h1>
 
             <p className="mt-3 text-base font-semibold text-white/90 md:text-lg">
-              Trade real markets. Claim your winnings. Climb the Road to $1M.
+              Trade real markets. Build your profit. Unlock real rewards.
             </p>
             <p className="mx-auto mt-1.5 max-w-md text-sm leading-relaxed text-gray-400">
-              Rankings are based on claimed profit from settled Real markets.
+              Every eligible Real trade moves the community toward the next
+              milestone.
             </p>
-            <p className="mt-2 text-[11px] text-gray-600">
-              Claim your winnings before each snapshot to have your profit counted.
+            <p className="mx-auto mt-2 max-w-md text-[11px] leading-relaxed text-gray-600">
+              Trader rankings are based on claimed profit from settled Real
+              markets. Claim your winnings before each snapshot to have your
+              profit counted.
             </p>
             {snapshotLine && (
               <p className="mt-1.5 text-[11px] font-semibold tabular-nums text-pump-green/90">
@@ -767,85 +869,103 @@ export default function RealLeaderboardView() {
                   ))}
                 </div>
               </div>
-            ) : !hasRows ? (
-              <div className="rounded-2xl border border-white/10 bg-[#0c0e12] px-5 py-16 text-center">
-                <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-pump-green/25 bg-pump-green/[0.08]">
-                  <Trophy className="h-7 w-7 text-pump-green" />
-                </div>
-                <h2 className="text-lg font-bold text-white">
-                  No settled Real results yet.
-                </h2>
-                <p className="mx-auto mt-1.5 max-w-sm text-sm leading-relaxed text-gray-400">
-                  Be the first trader on the Road to $1M.
-                </p>
-                <Link
-                  href="/"
-                  className="mt-6 inline-flex h-10 items-center justify-center rounded-full bg-pump-green px-6 text-sm font-bold text-black transition hover:bg-pump-green/90"
-                >
-                  Browse markets
-                </Link>
-              </div>
             ) : (
               <div className="space-y-8">
-                <RoadProgress
-                  leaderSol={rows[0].claimed_profit_sol}
-                  price={data?.sol_usd ?? null}
-                />
+                {/* The road is COMMUNITY-wide, so it renders even with an
+                    empty ranking: a market can be traded heavily and still
+                    have nothing settled to rank yet. */}
+                {data?.road && <CommunityRoad road={data.road} />}
 
-                <Podium rows={rows} ownWallet={connectedWallet} price={price} />
-
-                <YourRankCard
-                  viewer={viewer}
-                  connected={!!connectedWallet}
-                  price={price}
-                />
-
-                {standings.length > 0 && (
-                  <section>
-                    <div className="mb-3 flex items-baseline justify-between gap-3">
-                      <h2 className="text-sm font-bold uppercase tracking-wider text-white">
-                        Traders
-                      </h2>
-                      {meta && meta.total_traders > rows.length && (
-                        <span className="text-[11px] tabular-nums text-gray-500">
-                          Top {rows.length} of {meta.total_traders.toLocaleString()}
+                {!hasRows ? (
+                  <div className="rounded-2xl border border-white/10 bg-[#0c0e12] px-5 py-16 text-center">
+                    <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-pump-green/25 bg-pump-green/[0.08]">
+                      <Trophy className="h-7 w-7 text-pump-green" />
+                    </div>
+                    <h2 className="text-lg font-bold text-white">
+                      No settled Real results yet.
+                    </h2>
+                    <p className="mx-auto mt-1.5 max-w-sm text-sm leading-relaxed text-gray-400">
+                      Be the first trader on the leaderboard.
+                    </p>
+                    <Link
+                      href="/"
+                      className="mt-6 inline-flex h-10 items-center justify-center rounded-full bg-pump-green px-6 text-sm font-bold text-black transition hover:bg-pump-green/90"
+                    >
+                      Browse markets
+                    </Link>
+                  </div>
+                ) : (
+                  <>
+                    <section>
+                      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                        <h2 className="text-sm font-bold uppercase tracking-wider text-white">
+                          Top traders
+                        </h2>
+                        <span className="text-[11px] text-gray-500">
+                          Ranked by claimed profit.
                         </span>
-                      )}
-                    </div>
+                      </div>
 
-                    <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#0c0e12]">
-                      <StandingsHeader />
-                      {standings.map((row) => (
-                        <StandingsRow
-                          key={row.wallet_address}
-                          row={row}
-                          price={price}
-                          isOwn={
-                            !!connectedWallet &&
-                            row.wallet_address === connectedWallet
-                          }
-                        />
-                      ))}
-                    </div>
-                  </section>
+                      <Podium
+                        rows={rows}
+                        ownWallet={connectedWallet}
+                        price={price}
+                      />
+                    </section>
+
+                    <YourRankCard
+                      viewer={viewer}
+                      connected={!!connectedWallet}
+                      price={price}
+                    />
+
+                    {standings.length > 0 && (
+                      <section>
+                        <div className="mb-3 flex items-baseline justify-between gap-3">
+                          <h2 className="text-sm font-bold uppercase tracking-wider text-white">
+                            Standings
+                          </h2>
+                          {meta && meta.total_traders > rows.length && (
+                            <span className="text-[11px] tabular-nums text-gray-500">
+                              Top {rows.length} of{" "}
+                              {meta.total_traders.toLocaleString()}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#0c0e12]">
+                          <StandingsHeader />
+                          {standings.map((row) => (
+                            <StandingsRow
+                              key={row.wallet_address}
+                              row={row}
+                              price={price}
+                              isOwn={
+                                !!connectedWallet &&
+                                row.wallet_address === connectedWallet
+                              }
+                            />
+                          ))}
+                        </div>
+                      </section>
+                    )}
+                  </>
                 )}
 
-                {/* The limitation, stated in the body and not only in a
-                    tooltip: an unclaimed win is simply absent from this
-                    board, and a reader is entitled to know how many. */}
-                <p className="text-center text-[11px] leading-relaxed text-gray-500">
-                  Rankings are based on claimed profit from settled Real markets.
-                  Winning positions that have not been claimed are not counted
-                  {meta && meta.excluded_unclaimed_positions > 0
-                    ? ` — ${meta.excluded_unclaimed_positions} unclaimed ${
-                        meta.excluded_unclaimed_positions === 1
-                          ? "position is"
-                          : "positions are"
-                      } currently excluded`
-                    : ""}
-                  . Claim your winnings before the snapshot to have your profit
-                  counted.
-                </p>
+                {/* The hero already states the metric and the claim rule,
+                    so this adds only what is NOT said there: how many
+                    winning positions are currently sitting outside the
+                    ranking. Silence about that would misrepresent the
+                    board as complete. */}
+                {meta && meta.excluded_unclaimed_positions > 0 && (
+                  <p className="text-center text-[11px] leading-relaxed text-gray-500">
+                    {meta.excluded_unclaimed_positions} unclaimed winning{" "}
+                    {meta.excluded_unclaimed_positions === 1
+                      ? "position is"
+                      : "positions are"}{" "}
+                    currently excluded from these rankings.
+                  </p>
+                )}
               </div>
             )}
           </div>

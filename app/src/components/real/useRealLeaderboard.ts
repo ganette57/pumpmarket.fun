@@ -47,6 +47,22 @@ export type RealLeaderboardResponse = {
     is_test_data: boolean;
     excluded_unclaimed_positions: number;
     eligible_rows: number;
+    /** Cumulative eligible Real buy volume — what the road runs on. */
+    total_real_volume_sol: string;
+  };
+  /** Community road progress. Every USD field is null without a price. */
+  road: {
+    total_real_volume_sol: string;
+    total_real_volume_usd: number | null;
+    previous_milestone_usd: number | null;
+    next_milestone_usd: number | null;
+    next_reward_usd: number | null;
+    milestone_progress: number | null;
+    unlocked_rewards_usd: number | null;
+    final_goal_usd: number;
+    maximum_rewards_usd: number;
+    rewards_distributed_usd: number;
+    price_timestamp: string | null;
   };
   /** null when the price is unavailable or stale — hide every USD figure. */
   sol_usd: { usd: number; as_of: string } | null;

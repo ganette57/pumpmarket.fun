@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getRealLeaderboard } from "@/lib/realLeaderboard";
 import { getSolUsdPrice } from "@/lib/solPrice";
+import { computeRoadProgress } from "@/lib/realRoad";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,11 +38,23 @@ async function handle(limit: number | undefined, wallet: string | null) {
     getSolUsdPrice().catch(() => null),
   ]);
 
+  // The community road is computed HERE, where both the authoritative SOL
+  // volume and the price are in hand, so the browser never re-derives a
+  // milestone or a percentage. Without a price every USD-derived field
+  // comes back null and the client hides them.
+  const road = computeRoadProgress({
+    volumeSol: leaderboard.meta.total_real_volume_sol,
+    solUsd: price?.usd ?? null,
+    priceAsOf: price?.as_of ?? null,
+  });
+
   return NextResponse.json(
     {
       rows: leaderboard.rows,
       viewer: leaderboard.viewer,
       meta: leaderboard.meta,
+      /** Volume-driven community progress — never the leader's profit. */
+      road,
       /** null when unavailable or stale — hide USD entirely in that case. */
       sol_usd: price,
     },

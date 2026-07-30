@@ -81,6 +81,16 @@ export type RealLeaderboardMeta = {
   excluded_unclaimed_positions: number;
   /** Eligible transaction rows the ranking was built from. */
   eligible_rows: number;
+  /**
+   * CUMULATIVE eligible Real BUY volume across every trader — the figure
+   * the community road is built on.
+   *
+   * Not the same quantity as a row's total_settled_volume_sol: this
+   * includes buys on markets that are still open, and excludes sells,
+   * claims, refunds and creator-fee withdrawals so a round trip cannot be
+   * counted twice.
+   */
+  total_real_volume_sol: string;
 };
 
 export type RealLeaderboardView = {
@@ -300,6 +310,7 @@ export async function getRealLeaderboard(opts?: {
     is_test_data: false,
     excluded_unclaimed_positions: 0,
     eligible_rows: 0,
+    total_real_volume_sol: "0.000000000",
   };
   const empty: RealLeaderboardView = { rows: [], viewer: null, meta: emptyMeta };
 
@@ -361,14 +372,38 @@ export async function getRealLeaderboard(opts?: {
 
   const positions = new Map<string, Position>();
   let eligibleRows = 0;
+  let communityVolumeLamports = 0;
 
   for (const t of txs) {
     const m = marketOf(t);
-    // Not eligible, orphaned, or still open — never counted.
-    if (!m || !isTerminal(m)) continue;
+    // Orphaned, or from another cluster/program — never counted at all.
+    if (!m) continue;
 
     const wallet = String(t.user_address || "").trim();
     if (!wallet) continue;
+
+    /* ---- COMMUNITY VOLUME ---------------------------------------------
+     * Counted for every eligible BUY, including buys on markets that are
+     * still open. Volume is what was traded, not what has settled — a
+     * trade contributes to the community road the moment it happens,
+     * which is exactly what the page promises.
+     *
+     * BUYS ONLY, so a round trip is not counted twice: a sell returns
+     * lamports from the same pool a buy put in, and adding both would
+     * inflate the road with money that only moved once. Claims, refunds
+     * and creator-fee withdrawals are settlement flows, not trading, and
+     * are excluded here as well.
+     *
+     * This is a DIFFERENT quantity from the per-trader
+     * total_settled_volume_sol below, which covers only the positions the
+     * ranking actually counted.
+     * ------------------------------------------------------------------ */
+    if (String(t.tx_type || "trade") === "trade" && t.is_buy) {
+      communityVolumeLamports += solToLamports(t.cost);
+    }
+
+    // The RANKING additionally requires a settled market.
+    if (!isTerminal(m)) continue;
 
     const marketKey = String(m.market_address || m.id);
     const key = `${wallet}|${marketKey}`;
@@ -513,8 +548,11 @@ export async function getRealLeaderboard(opts?: {
     is_test_data: cluster !== "mainnet-beta" && sawUndeclared,
     excluded_unclaimed_positions: excludedUnclaimed,
     eligible_rows: eligibleRows,
+    total_real_volume_sol: lamportsToSolString(communityVolumeLamports),
   };
 
+  // The road is community-wide, so volume survives an empty RANKING: a
+  // market can be traded heavily and still have nothing settled to rank.
   if (ranked.length === 0) return { rows: [], viewer: null, meta };
 
   // Total, deterministic order on exact integers and a unique final key.
