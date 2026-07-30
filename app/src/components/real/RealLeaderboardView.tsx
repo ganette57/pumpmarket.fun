@@ -39,7 +39,11 @@ import {
   type RealLeaderboardResponse,
   type RealLeaderboardRowView,
 } from "@/components/real/useRealLeaderboard";
-import { ROAD_MILESTONES } from "@/lib/realRoad";
+import {
+  ROAD_MILESTONES,
+  plannedRewardForRank,
+  type MilestoneRewardBreakdown,
+} from "@/lib/realRoad";
 
 /** Matches the cap the API applies — asking for more changes nothing. */
 const LEADERBOARD_LIMIT = 100;
@@ -261,6 +265,19 @@ function formatUsdWhole(n: number): string {
 }
 
 /**
+ * "4th", "10th", "21st". Derived rather than hardcoded so a future
+ * milestone config can use any rank range without a copy bug — 11–13 are
+ * the cases a naive last-digit rule gets wrong.
+ */
+function ordinal(n: number): string {
+  const abs = Math.abs(Math.round(n));
+  const tens = abs % 100;
+  if (tens >= 11 && tens <= 13) return `${abs}th`;
+  const ones = abs % 10;
+  return `${abs}${ones === 1 ? "st" : ones === 2 ? "nd" : ones === 3 ? "rd" : "th"}`;
+}
+
+/**
  * THE COMMUNITY ROAD — driven by VOLUME, never by one trader's profit.
  *
  * This card and the ranking below it measure different things on purpose:
@@ -285,6 +302,11 @@ function CommunityRoad({
 }) {
   const usd = road.total_real_volume_usd;
   const pct = road.milestone_progress != null ? road.milestone_progress * 100 : null;
+  const breakdown = road.reward_breakdown;
+  // "$100K" rather than "$100,000" for the one-line summary.
+  const nextLabel =
+    ROAD_MILESTONES.find((m) => m.volume_usd === road.next_milestone_usd)?.label ??
+    (road.next_milestone_usd != null ? formatUsdWhole(road.next_milestone_usd) : null);
 
   return (
     <section className="rounded-2xl border border-white/10 bg-[#0c0e12] px-4 py-4 md:px-5">
@@ -319,21 +341,33 @@ function CommunityRoad({
       {/* The four facts a reader needs, in one glance. */}
       {usd != null && road.next_milestone_usd != null ? (
         <>
+          {/* The four facts §8 asks a reader to absorb in five seconds:
+              which milestone, how big the pool, how many are rewarded,
+              how far along. "Rewards distributed" is real but secondary,
+              so it sits in the footer rather than competing here. */}
           <dl className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div className="min-w-0">
               <dt className="text-[10px] uppercase tracking-wider text-gray-500">
-                Next milestone
+                Next reward milestone
               </dt>
               <dd className="mt-0.5 truncate text-sm font-bold tabular-nums text-white">
-                {formatUsdWhole(road.next_milestone_usd)} volume
+                {formatUsdWhole(road.next_milestone_usd)} verified Real volume
               </dd>
             </div>
             <div className="min-w-0">
               <dt className="text-[10px] uppercase tracking-wider text-gray-500">
-                Unlocks
+                Milestone reward pool
               </dt>
               <dd className="mt-0.5 truncate text-sm font-bold tabular-nums text-pump-green">
-                Up to {formatUsdWhole(road.next_reward_usd ?? 0)}
+                Up to {formatUsdWhole(road.next_reward_usd ?? 0)} total
+              </dd>
+            </div>
+            <div className="min-w-0">
+              <dt className="text-[10px] uppercase tracking-wider text-gray-500">
+                Rewarded traders
+              </dt>
+              <dd className="mt-0.5 truncate text-sm font-bold tabular-nums text-white">
+                {breakdown ? `Top ${breakdown.rewarded_traders}` : "To be confirmed"}
               </dd>
             </div>
             <div className="min-w-0">
@@ -342,14 +376,6 @@ function CommunityRoad({
               </dt>
               <dd className="mt-0.5 truncate text-sm font-bold tabular-nums text-white">
                 {formatUsdWhole(usd)} / {formatUsdWhole(road.next_milestone_usd)}
-              </dd>
-            </div>
-            <div className="min-w-0">
-              <dt className="text-[10px] uppercase tracking-wider text-gray-500">
-                Rewards distributed
-              </dt>
-              <dd className="mt-0.5 truncate text-sm font-bold tabular-nums text-white">
-                {formatUsdWhole(road.rewards_distributed_usd)}
               </dd>
             </div>
           </dl>
@@ -373,6 +399,15 @@ function CommunityRoad({
             </span>
           </div>
         </>
+      ) : usd != null ? (
+        // Price is fine and the community has cleared the final goal —
+        // there is simply no next milestone. Distinguished from the
+        // no-price case below, which is a temporary outage and must not
+        // be described as an achievement (or vice versa).
+        <p className="mt-4 rounded-lg border border-pump-green/25 bg-pump-green/[0.06] px-3 py-2 text-[11px] text-pump-green">
+          The community has reached the {formatUsdWhole(road.final_goal_usd)}{" "}
+          volume goal.
+        </p>
       ) : (
         <p className="mt-4 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-gray-400">
           USD milestone progress is temporarily unavailable. Volume above is
@@ -380,19 +415,45 @@ function CommunityRoad({
         </p>
       )}
 
+      {/* The whole reward model in one sentence, built from the config so
+          it can never disagree with the facts above or the podium badges. */}
+      {breakdown && nextLabel && (
+        <p className="mt-3 text-[12px] font-medium leading-relaxed text-gray-300">
+          Reach {nextLabel} in verified Real volume to unlock up to{" "}
+          {formatUsdWhole(breakdown.total_reward_usd)} in rewards for the Top{" "}
+          {breakdown.rewarded_traders} traders.
+        </p>
+      )}
+
+      {/* No split published for the milestone now being worked towards. */}
+      {!breakdown && road.next_milestone_usd != null && (
+        <p className="mt-3 text-[12px] font-medium leading-relaxed text-gray-300">
+          Reward breakdown will be published before the snapshot.
+        </p>
+      )}
+
       <MilestoneTrack currentUsd={usd} />
 
-      <p className="mt-3 border-t border-white/[0.06] pt-3 text-[11px] leading-relaxed text-gray-500">
-        Final goal: up to {formatUsdWhole(road.maximum_rewards_usd)} in community
-        rewards at {formatUsdWhole(road.final_goal_usd)} volume. Every eligible Real
-        trade moves the community closer to the next reward milestone.
-      </p>
-      <p className="mt-1.5 text-[11px] leading-relaxed text-gray-600">
-        The detailed reward breakdown and number of rewarded traders will be
-        published before each milestone snapshot. Milestone rewards are
-        distributed after volume verification, leaderboard review and anti-fraud
-        checks, and are subject to eligibility rules and the published snapshot
-        terms.
+      <div className="mt-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-t border-white/[0.06] pt-3">
+        <span className="text-[11px] text-gray-500">
+          Final goal: up to {formatUsdWhole(road.maximum_rewards_usd)} in community
+          rewards at {formatUsdWhole(road.final_goal_usd)} volume.
+        </span>
+        <span className="text-[11px] tabular-nums text-gray-500">
+          Rewards distributed:{" "}
+          <span className="font-semibold text-gray-300">
+            {formatUsdWhole(road.rewards_distributed_usd)}
+          </span>
+        </span>
+      </div>
+
+      {/* The ONE disclaimer on this page. Deliberately not repeated under
+          the podium or the standings — saying it four times reads as
+          hedging and stops being read at all. */}
+      <p className="mt-2 text-[11px] leading-relaxed text-gray-600">
+        Reward amounts shown are planned maximums for the current milestone and
+        remain subject to volume verification, eligibility checks, anti-fraud
+        review and the published snapshot terms.
       </p>
     </section>
   );
@@ -450,10 +511,12 @@ function Podium({
   rows,
   ownWallet,
   price,
+  breakdown,
 }: {
   rows: RealLeaderboardRowView[];
   ownWallet: string | null;
   price: number | null;
+  breakdown: MilestoneRewardBreakdown | null;
 }) {
   const top = rows.slice(0, 3);
   if (top.length === 0) return null;
@@ -487,6 +550,7 @@ function Podium({
           key={row.wallet_address}
           row={row}
           price={price}
+          breakdown={breakdown}
           isOwn={!!ownWallet && row.wallet_address === ownWallet}
           layoutClass={[
             row.rank === 1 ? firstOnMobile : "",
@@ -507,14 +571,17 @@ function PodiumCard({
   layoutClass,
   isOwn,
   price,
+  breakdown,
 }: {
   row: RealLeaderboardRowView;
   layoutClass: string;
   isOwn: boolean;
   price: number | null;
+  breakdown: MilestoneRewardBreakdown | null;
 }) {
   const medal = medalFor(row.rank);
   const usd = formatUsdApprox(row.claimed_profit_sol, price);
+  const reward = plannedRewardForRank(breakdown, row.rank);
 
   return (
     <Link
@@ -563,6 +630,29 @@ function PodiumCard({
         <Stat value={String(row.settled_claimed_positions)} label="Settled" compact />
         <Stat value={formatWinRate(row.win_rate)} label="Win rate" compact />
       </div>
+
+      {/* PLANNED REWARD — a different kind of number from the one above it.
+          Claimed Profit is what this trader has ALREADY realized and is
+          ranked on; this is what the position would pay at the next
+          milestone snapshot. Kept in its own zone below the stat strip,
+          at chip scale, so it can never be read as part of the profit
+          figure and never competes with it for attention. */}
+      {reward != null && (
+        // NOT whitespace-nowrap: a paired mobile podium card is ~166px and
+        // "1st reward · Up to $400" does not fit on one line there, so a
+        // nowrap chip spills outside its own card. It wraps instead, and
+        // because all three labels are the same length they wrap
+        // identically — the cards stay exactly equal in height.
+        <span
+          className={`mt-3 inline-flex max-w-full items-center justify-center gap-1.5 rounded-full border px-2.5 py-1 text-center text-[11px] font-bold leading-tight tabular-nums
+            ${medal?.chip ?? "border-white/15 text-gray-300"}`}
+        >
+          <Medal className="h-3 w-3 shrink-0" aria-hidden />
+          <span className="min-w-0">
+            {ordinal(row.rank)} reward · Up to {formatUsdWhole(reward)}
+          </span>
+        </span>
+      )}
     </Link>
   );
 }
@@ -910,7 +1000,27 @@ export default function RealLeaderboardView() {
                         rows={rows}
                         ownWallet={connectedWallet}
                         price={price}
+                        breakdown={data?.road?.reward_breakdown ?? null}
                       />
+
+                      {/* The places the podium cannot show. One line, no
+                          table — the detail belongs in the snapshot
+                          announcement, not on the leaderboard. */}
+                      {data?.road?.reward_breakdown && (
+                        <p className="mt-4 text-center text-[11px] leading-relaxed text-gray-500">
+                          <span className="font-semibold text-gray-300">
+                            {ordinal(data.road.reward_breakdown.remaining_from_rank)}
+                            –{ordinal(data.road.reward_breakdown.remaining_to_rank)}{" "}
+                            place share up to{" "}
+                            {formatUsdWhole(
+                              data.road.reward_breakdown.remaining_pool_usd
+                            )}
+                            .
+                          </span>{" "}
+                          The detailed payout amounts will be confirmed before the
+                          milestone snapshot.
+                        </p>
+                      )}
                     </section>
 
                     <YourRankCard

@@ -62,6 +62,18 @@ export type RealLeaderboardResponse = {
     final_goal_usd: number;
     maximum_rewards_usd: number;
     rewards_distributed_usd: number;
+    /** Published split for the next milestone; null when none is set yet. */
+    reward_breakdown: {
+      milestone_usd: number;
+      total_reward_usd: number;
+      rewarded_traders: number;
+      first_usd: number;
+      second_usd: number;
+      third_usd: number;
+      remaining_from_rank: number;
+      remaining_to_rank: number;
+      remaining_pool_usd: number;
+    } | null;
     price_timestamp: string | null;
   };
   /** null when the price is unavailable or stale — hide every USD figure. */

@@ -59,6 +59,83 @@ export const ROAD_MILESTONES: RoadMilestone[] = [
 export const ROAD_MAX_REWARDS_USD =
   ROAD_MILESTONES[ROAD_MILESTONES.length - 1].rewards_usd;
 
+/* -------------------------------------------------------------------------- */
+/*  Reward distribution — the ONE place any split is written down              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How a milestone's pool is planned to be split.
+ *
+ * SINGLE SOURCE. The card, the podium badges and the remaining-places line
+ * all read these numbers; none of them writes an amount of its own. A
+ * split that lived in three components would drift the first time one
+ * changed, and a leaderboard that advertises two different first prizes
+ * is worse than one that advertises none.
+ *
+ * PLANNED MAXIMUMS. Every figure is an upper bound on a campaign that is
+ * verified and reviewed before anything is paid — never a funded pool.
+ */
+export type MilestoneRewardBreakdown = {
+  milestone_usd: number;
+  total_reward_usd: number;
+  rewarded_traders: number;
+  first_usd: number;
+  second_usd: number;
+  third_usd: number;
+  remaining_from_rank: number;
+  remaining_to_rank: number;
+  /** Shared across remaining_from_rank..remaining_to_rank. */
+  remaining_pool_usd: number;
+};
+
+/**
+ * Only the FIRST milestone has a published split. Later milestones
+ * deliberately have none yet: inventing seven more top-three ladders
+ * would commit the product to numbers nobody has decided, and the UI is
+ * built to say "breakdown will be published before the snapshot" rather
+ * than guess. Adding one later is appending an entry here — no component
+ * changes.
+ *
+ * INVARIANT: first + second + third + remaining_pool === total_reward.
+ * 400 + 250 + 150 + 200 = 1000.
+ */
+export const MILESTONE_REWARD_BREAKDOWNS: MilestoneRewardBreakdown[] = [
+  {
+    milestone_usd: 100_000,
+    total_reward_usd: 1_000,
+    rewarded_traders: 10,
+    first_usd: 400,
+    second_usd: 250,
+    third_usd: 150,
+    remaining_from_rank: 4,
+    remaining_to_rank: 10,
+    remaining_pool_usd: 200,
+  },
+];
+
+/** The published split for a milestone, or null when none exists yet. */
+export function rewardBreakdownFor(
+  milestoneUsd: number | null | undefined
+): MilestoneRewardBreakdown | null {
+  if (milestoneUsd == null) return null;
+  return (
+    MILESTONE_REWARD_BREAKDOWNS.find((b) => b.milestone_usd === milestoneUsd) ??
+    null
+  );
+}
+
+/** The planned reward for a podium rank, or null off the published podium. */
+export function plannedRewardForRank(
+  breakdown: MilestoneRewardBreakdown | null,
+  rank: number
+): number | null {
+  if (!breakdown) return null;
+  if (rank === 1) return breakdown.first_usd;
+  if (rank === 2) return breakdown.second_usd;
+  if (rank === 3) return breakdown.third_usd;
+  return null;
+}
+
 /**
  * Community rewards actually distributed so far, in USD.
  *
@@ -88,6 +165,12 @@ export type RoadProgress = {
   final_goal_usd: number;
   maximum_rewards_usd: number;
   rewards_distributed_usd: number;
+  /**
+   * The published split for the milestone currently being worked towards.
+   * Null when that milestone has no split configured yet — the UI then
+   * says so rather than showing a stale one from an earlier milestone.
+   */
+  reward_breakdown: MilestoneRewardBreakdown | null;
   /** When the price used here was reported. Null when there is no price. */
   price_timestamp: string | null;
 };
@@ -130,6 +213,10 @@ export function computeRoadProgress(args: {
       next_reward_usd: null,
       milestone_progress: null,
       unlocked_rewards_usd: null,
+      // Without a price there is no way to know WHICH milestone is next,
+      // so no split is claimed either. Showing the first one regardless
+      // would be wrong the moment volume has already passed it.
+      reward_breakdown: null,
       price_timestamp: null,
     };
   }
@@ -154,6 +241,8 @@ export function computeRoadProgress(args: {
       next_reward_usd: null,
       milestone_progress: 1,
       unlocked_rewards_usd: unlocked,
+      // Campaign complete: there is no next milestone to split.
+      reward_breakdown: null,
       price_timestamp: args.priceAsOf,
     };
   }
@@ -174,6 +263,10 @@ export function computeRoadProgress(args: {
     next_reward_usd: next.rewards_usd,
     milestone_progress: progress,
     unlocked_rewards_usd: unlocked,
+    // Null once the community passes $100K, until a split is configured
+    // for the milestone after it. The UI says so rather than keeping the
+    // $100K ladder on screen as though it were still the active one.
+    reward_breakdown: rewardBreakdownFor(next.volume_usd),
     price_timestamp: args.priceAsOf,
   };
 }
