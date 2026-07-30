@@ -1,6 +1,8 @@
 // app/src/lib/markets.ts
 import { supabase } from "@/lib/supabaseClient";
 import { awardTradePoints } from "@/lib/funPoints";
+import { getSolanaCluster } from "@/utils/explorer";
+import { getProgramIdForCluster } from "@/lib/solanaCluster";
 
 /* -------------------------------------------------------------------------- */
 /*  Types                                                                      */
@@ -471,6 +473,24 @@ export async function indexMarket(input: IndexMarketInput): Promise<void> {
     contested: false,
     contest_count: 0,
   };
+
+  // ENVIRONMENT PROVENANCE — stamped at creation, from this deployment's
+  // own configuration. Historically both columns were left NULL on every
+  // row, which made it impossible to tell a mainnet market from a devnet
+  // one or from a superseded program deployment without probing the chain;
+  // the Real leaderboard's eligibility gate needs exactly that answer, and
+  // refuses any row that does not declare it. Purely additive: the columns
+  // already exist, nothing else reads them, and the Anchor program is
+  // untouched.
+  try {
+    const cluster = getSolanaCluster();
+    payload.cluster = cluster;
+    const programId = getProgramIdForCluster(cluster).toBase58();
+    if (programId) payload.program_id = programId;
+  } catch {
+    // A misconfigured program id must never block market creation — the
+    // row is simply written without provenance, exactly as before.
+  }
 
   // Sport fields (only included when present)
   if (input.market_mode) payload.market_mode = input.market_mode;
