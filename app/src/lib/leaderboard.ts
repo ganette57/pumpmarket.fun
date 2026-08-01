@@ -1,9 +1,12 @@
 // Global Fun Points leaderboard — read-only queries over the Phase 2
 // tables.
 //
-// STATUS: dormant. /leaderboard no longer renders a points ranking, so the
-// only remaining consumer is lib/treasury.ts. Kept intact as the reference
-// implementation for whatever ranking replaces it.
+// STATUS: dormant, with NO remaining consumer. /leaderboard now ranks Real
+// traders by claimed profit (lib/realLeaderboard.ts) and Play players by
+// contest P&L (lib/playContests.ts); /treasury reads the shared Road
+// payload. lib/treasury.ts, the last importer, was removed with the
+// Championship model it served. Kept intact only as the reference
+// implementation of the Fun Points queries — nothing reads it.
 //
 // No writes, no new tables: everything is derived from
 // fun_points_accounts (the running balance per wallet) and optionally
