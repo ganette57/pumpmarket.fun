@@ -40,7 +40,12 @@ export async function POST(req: Request) {
     return NextResponse.json(result);
   } catch (e: unknown) {
     if (e instanceof PlayEngineError) {
-      return NextResponse.json({ error: e.message }, { status: e.status });
+      // Admin-only endpoint: when the public message was softened for
+      // traders, the operator still gets the engine's own words.
+      return NextResponse.json(
+        { error: e.message, ...(e.detail ? { detail: e.detail } : {}) },
+        { status: e.status }
+      );
     }
     console.error("[/api/play/settle] error:", e);
     return NextResponse.json({ error: "Server error" }, { status: 500 });

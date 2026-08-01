@@ -164,10 +164,19 @@ export type PlaySettlementResult = {
 export type PlayRolloverResult = {
   rolled: boolean;
   reason?: string;
+  /** Present on the no-op branch that created the very first season. */
+  season_id?: number;
   closed_season_id?: number;
   new_season_id?: number;
   new_starts_at?: string;
   new_ends_at?: string;
+  /**
+   * True for the weekly admin rollover, which zeroes every bankroll. False
+   * for the automatic season roll that play_current_season() performs when
+   * it finds an expired season — that one is pure bookkeeping and never
+   * touches a balance. See 20260729_play_season_lifecycle.sql.
+   */
+  reset_bankrolls?: boolean;
   accounts_reset?: number;
   balance_cleared_usd?: string;
 };
@@ -175,10 +184,18 @@ export type PlayRolloverResult = {
 /** Raised for engine-level refusals (insufficient balance, closed market…). */
 export class PlayEngineError extends Error {
   status: number;
-  constructor(message: string, status = 400) {
+  /**
+   * The engine's own words, when `message` had to be replaced by something
+   * safe to show a trader. Never sent to a public client — it exists so the
+   * admin UI and the server logs keep the diagnosis that `message` drops.
+   * Undefined whenever `message` is already the engine's text.
+   */
+  detail?: string;
+  constructor(message: string, status = 400, detail?: string) {
     super(message);
     this.name = "PlayEngineError";
     this.status = status;
+    this.detail = detail;
   }
 }
 
@@ -186,13 +203,40 @@ export class PlayEngineError extends Error {
 /*  Helpers                                                                    */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * The season is infrastructure, not a rule of the game. A trader who is
+ * told "no open season covers now(); run play_rollover_season()" has been
+ * handed a database chore they cannot do anything about — so these
+ * refusals, alone among the engine's, do not reach the client verbatim.
+ *
+ * play_current_season() now heals an expired season by itself, so any
+ * message matched here means the automatic recovery ALSO failed. That is an
+ * operator's problem: the raw text is logged and travels on the error's
+ * `detail`, never in what the trader reads.
+ */
+function isSeasonUnavailable(raw: string): boolean {
+  return (
+    /no (open|active) season/i.test(raw) ||
+    /could not open (a )?new season/i.test(raw)
+  );
+}
+
 // Postgres RAISE EXCEPTION messages arrive prefixed with "play: ". Anything
 // that starts with that prefix is a deliberate, user-safe refusal. Anything
 // else is an internal fault and must not leak to the client.
 function toEngineError(error: { message?: string } | null): PlayEngineError {
   const raw = String(error?.message || "Play engine error");
   if (raw.startsWith("play: ")) {
-    return new PlayEngineError(raw.slice("play: ".length), 400);
+    const detail = raw.slice("play: ".length);
+    if (isSeasonUnavailable(detail)) {
+      console.error("[playEngine] season unavailable after auto-recovery:", raw);
+      return new PlayEngineError(
+        "Play trading is temporarily unavailable. Please try again.",
+        503,
+        detail
+      );
+    }
+    return new PlayEngineError(detail, 400);
   }
   console.error("[playEngine] unexpected error:", raw);
   return new PlayEngineError("Play engine error", 500);

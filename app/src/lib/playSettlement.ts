@@ -188,8 +188,17 @@ export async function settlePlayForMarket(
   } catch (e: unknown) {
     // The RPC is one transaction: a throw means nothing was committed, so a
     // retry starts from a clean 'open' state.
+    //
+    // This report is read by an operator, never by a trader, so it carries
+    // the engine's own words: PlayEngineError.detail when the public
+    // message was softened for the client, otherwise the message itself.
+    // Settlement no longer resolves a current season at all — it stamps the
+    // ledger with the settled trade's own season_id — so nothing here may
+    // suggest opening or rolling a season as the remedy.
     const message =
-      e instanceof PlayEngineError ? e.message : "Play settlement failed.";
+      e instanceof PlayEngineError
+        ? (e.detail ?? e.message)
+        : "Play settlement failed.";
     console.error("[playSettlement] settlement failed for", market, e);
     return {
       status: "failed",

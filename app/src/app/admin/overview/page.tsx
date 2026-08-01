@@ -870,8 +870,29 @@ export default function AdminOverviewPage() {
       }
 
       if (onchainState.status === "finalized") {
+        // Real is already terminal — never re-send the transaction. But this
+        // is exactly the state an operator lands in when Real finalized and
+        // Play settlement failed, so the click still has work to do: ask the
+        // commit route to retry the Play half alone. It writes nothing to
+        // `markets` and settles each position once, so a market whose Play
+        // side is already correct simply reports a no-op.
+        setFlowStep("committing");
+        setFlowMsg("Already finalized on-chain — retrying Play settlement...");
+
+        let retryRes: CommitResponse | null = null;
+        try {
+          retryRes = await postJSON<CommitResponse>("/api/admin/market/approve/commit", {
+            market: marketAddr,
+          });
+        } catch (retryErr) {
+          // The DB row is not finalized yet (Real never committed), so there
+          // is no Play retry to make here. Report the on-chain truth exactly
+          // as before rather than turning it into an error.
+          console.warn("[doApprove] Play-only retry unavailable:", retryErr);
+        }
+
         setFlowStep("done");
-        setFlowMsg("Market already finalized on-chain!");
+        setFlowMsg(`Market already finalized on-chain!${playNote(retryRes)}`);
         setTimeout(() => { closeDrawer(); load(); }, 2000);
         return;
       }

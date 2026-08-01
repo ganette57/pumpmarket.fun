@@ -34,13 +34,8 @@ export async function POST(req: Request) {
     const woRaw = body?.winning_outcome ?? body?.winningOutcome ?? body?.winner;
     const winningOutcome = Number(woRaw);
 
-    if (!market || !txSig || !Number.isFinite(winningOutcome)) {
-      return jsonError("Missing market / winning_outcome / tx_sig", 400, {
-        got: { market: !!market, tx_sig: !!txSig, winning_outcome: woRaw },
-      });
-    }
-    if (winningOutcome < 0 || winningOutcome > 255) {
-      return jsonError("winning_outcome out of range (u8)", 400, { winning_outcome: winningOutcome });
+    if (!market) {
+      return jsonError("Missing market", 400);
     }
 
     const supabase = supabaseAdmin();
@@ -48,7 +43,7 @@ export async function POST(req: Request) {
     // Guard: only commit if still proposed (avoid double-click / race)
     const { data: cur, error: curErr } = await supabase
       .from("markets")
-      .select("resolution_status, resolved, cancelled")
+      .select("resolution_status, resolved, cancelled, winning_outcome, resolve_tx")
       .eq("market_address", market)
       .maybeSingle();
 
@@ -56,8 +51,54 @@ export async function POST(req: Request) {
     if (!cur) return jsonError("Market not found", 404);
 
     const status = String(cur.resolution_status || "open").toLowerCase();
+
+    // ── Real is ALREADY terminal: retry the Play half, and only the Play half.
+    //
+    // This is the repair path for "Real finalized, but PLAY SETTLEMENT NEEDS
+    // ATTENTION". Real finalization is an on-chain transaction that has
+    // already landed and a markets row that is already correct; asking an
+    // operator to sign it a second time would be wrong, and the old 409 left
+    // them no way to retry Play at all.
+    //
+    // So: no on-chain transaction, no write to `markets`, not one field of
+    // Real touched. The winning outcome comes from the stored row, never from
+    // the request — the DB is what Real finalized on, and it is what Play
+    // must settle on. play_settle_market is idempotent, so an operator who
+    // clicks this again after a successful repair gets a clean no-op.
+    if (status === "finalized" && !cur.cancelled) {
+      const storedWo =
+        cur.winning_outcome === null || cur.winning_outcome === undefined
+          ? null
+          : Number(cur.winning_outcome);
+
+      const playSettlement = await settlePlayForMarket(market, {
+        expectedWinningOutcome: storedWo,
+      });
+
+      return NextResponse.json({
+        ok: true,
+        market,
+        winning_outcome: storedWo,
+        tx_sig: cur.resolve_tx ?? null,
+        play_only_retry: true,
+        note: "Real was already finalized — nothing on-chain was re-sent; Play settlement retried.",
+        play_settlement: playSettlement,
+      });
+    }
+
     if (status !== "proposed" || cur.resolved || cur.cancelled) {
       return jsonError(`Cannot commit approve (status=${status}, resolved=${!!cur.resolved}, cancelled=${!!cur.cancelled})`, 409);
+    }
+
+    // Fresh commit — a real transaction just landed, so its signature and the
+    // outcome it finalized are both required.
+    if (!txSig || !Number.isFinite(winningOutcome)) {
+      return jsonError("Missing market / winning_outcome / tx_sig", 400, {
+        got: { market: !!market, tx_sig: !!txSig, winning_outcome: woRaw },
+      });
+    }
+    if (winningOutcome < 0 || winningOutcome > 255) {
+      return jsonError("winning_outcome out of range (u8)", 400, { winning_outcome: winningOutcome });
     }
 
     const { error } = await supabase

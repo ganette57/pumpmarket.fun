@@ -989,9 +989,14 @@ BEGIN
     'settled P&L must remain attributed to the season the trade was placed in';
   ASSERT (SELECT balance_usd FROM public.play_accounts WHERE id = acc.id) > 0,
     'payout must land in the current (post-reset) balance';
+  -- The payout ledger row carries the POSITION's season, not the season the
+  -- clock happens to be in when it settles (20260729_play_season_lifecycle).
+  -- One season per position, start to finish — and settlement therefore needs
+  -- no season covering now() at all.
   ASSERT (SELECT season_id FROM public.play_ledger
-           WHERE trade_id = open_trade.id AND kind = 'trade_payout') = new_season,
-    'the payout ledger row belongs to the season in which the money moved';
+           WHERE trade_id = open_trade.id AND kind = 'trade_payout') = old_season,
+    'the payout ledger row belongs to the season the position was placed in';
+  ASSERT new_season <> old_season, 'guard: the two seasons must differ here';
 
   RAISE NOTICE 'PASS 11 — rollover resets bankroll, preserves odds and open positions';
 END $t11$;
