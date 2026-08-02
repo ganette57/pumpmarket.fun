@@ -515,7 +515,21 @@ export function buildXIntentUrl(text: string): string {
   return `https://x.com/intent/tweet?text=${encodeURIComponent(text)}`;
 }
 
-/** Filename for the "Save result card" fallback. Contains no identifiers. */
+/**
+ * Filename for the shared/downloaded PNG. Built from the market TITLE, which
+ * is public — never the market address, wallet or any account identifier,
+ * because this name is what the file carries into a share sheet or a
+ * downloads folder.
+ */
 export function shareFileName(view: ResultCardView): string {
-  return `funmarket-${view.mode}-${view.state}.png`;
+  const slug = String(view.marketTitle || "")
+    .toLowerCase()
+    .normalize("NFKD")
+    // Strip accents so the name stays ASCII-safe across filesystems.
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48)
+    .replace(/-+$/g, "");
+  return slug ? `funmarket-result-${slug}.png` : `funmarket-result-${view.mode}-${view.state}.png`;
 }

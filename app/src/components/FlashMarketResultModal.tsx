@@ -390,17 +390,24 @@ export default function FlashMarketResultModal({
                 </div>
               ) : (
                 <div className="flex h-full w-full items-center justify-center">
-                  <span className="text-xs text-gray-500">Generating result card…</span>
+                  <span className="text-xs text-gray-500">Preparing result card…</span>
                 </div>
               )}
             </div>
 
-            <p aria-live="polite" className="sr-only">
+            {/* One region, announced and visible. The success line stays put
+                until another action replaces it — a user pasting into X must
+                still be able to read the instruction when they come back. */}
+            <p
+              aria-live="polite"
+              role="status"
+              className={[
+                "mt-2 text-[11px]",
+                share.actionStatus === "error" ? "text-[#ff8fa0]" : "text-gray-400",
+              ].join(" ")}
+            >
               {share.statusMessage ?? ""}
             </p>
-            {share.statusMessage && share.actionStatus !== "idle" ? (
-              <p className="mt-2 text-[11px] text-gray-400">{share.statusMessage}</p>
-            ) : null}
           </section>
         </div>
 
@@ -410,7 +417,7 @@ export default function FlashMarketResultModal({
             <button
               ref={primaryActionRef}
               type="button"
-              onClick={() => void share.shareResult()}
+              onClick={() => void share.shareWithImage()}
               disabled={share.actionStatus === "working"}
               className={[
                 "w-full rounded-xl px-4 py-3 text-sm font-bold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/80",
@@ -420,7 +427,7 @@ export default function FlashMarketResultModal({
                   : "bg-white text-black hover:bg-gray-200",
               ].join(" ")}
             >
-              {share.actionStatus === "working" ? "Preparing…" : "Share result"}
+              {share.actionStatus === "working" ? "Preparing…" : "Share with image"}
             </button>
 
             <button
@@ -434,6 +441,17 @@ export default function FlashMarketResultModal({
               </svg>
               Share on X
             </button>
+
+            {/* X cannot receive a file from a web intent, so say up front how
+                the image will actually get there. Pointless on a device whose
+                share sheet carries the file itself. */}
+            {!share.canShareImageNatively ? (
+              <p className="-mt-0.5 text-center text-[11px] text-gray-500">
+                {share.canCopyImage
+                  ? "The image will be copied for you to paste into X."
+                  : "The image will be downloaded for you to attach."}
+              </p>
+            ) : null}
 
             {showClaimAction ? (
               <Link
