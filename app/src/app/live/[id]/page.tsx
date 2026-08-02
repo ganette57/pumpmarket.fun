@@ -24,6 +24,8 @@ import LiveDesktopPastMarkets from "@/components/LiveDesktopPastMarkets";
 import FlashMarketResultModal, {
   type FlashMarketResultState,
 } from "@/components/FlashMarketResultModal";
+import { buildRealResultValues } from "@/lib/resultPayload";
+import type { PayoutQualifier } from "@/lib/resultCard";
 import {
   StreamPlayer,
   StreamUnavailable,
@@ -318,12 +320,26 @@ export default function LiveViewerPage() {
     result: FlashMarketResultState;
     outcomeLabel?: string | null;
     winningShares?: number | null;
+    marketTitle?: string | null;
+    marketPath?: string | null;
+    stake?: string | null;
+    payout?: string | null;
+    profit?: string | null;
+    payoutQualifier?: PayoutQualifier | null;
+    claimAvailable?: boolean;
   } | null>(null);
   const prevSettledRef = useRef(false);
   const hostJustResolvedRef = useRef(false);
 
   const [positionShares, setPositionShares] = useState<number[] | null>(null);
   const [marketBalanceLamports, setMarketBalanceLamports] = useState<number | null>(null);
+  // Kept for the result modal: net cost + claimed live on the position, the
+  // winning supply lives on the market. Without them the modal omits the
+  // money rows rather than estimating them.
+  const [onchainAccounts, setOnchainAccounts] = useState<{
+    posAcc: unknown;
+    marketAcc: unknown;
+  } | null>(null);
 
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
   const [showBuyHint, setShowBuyHint] = useState(false);
@@ -482,6 +498,7 @@ export default function LiveViewerPage() {
       };
 
       if (snap?.marketLamports != null) setMarketBalanceLamports(snap.marketLamports);
+      setOnchainAccounts({ posAcc: snap?.posAcc ?? null, marketAcc: snap?.marketAcc ?? null });
       if (snap?.posAcc?.shares) {
         setPositionShares(Array.isArray(snap.posAcc.shares) ? snap.posAcc.shares.map((x: any) => Number(x) || 0) : []);
       } else {
@@ -545,10 +562,26 @@ export default function LiveViewerPage() {
         if (totalShares > 0) {
           const outcomeLabel =
             (market.outcomeNames || [])[winningIdx] || null;
+          const values = buildRealResultValues({
+            positionAccount: onchainAccounts?.posAcc ?? null,
+            marketAccount: onchainAccounts?.marketAcc ?? null,
+            marketLamports: marketBalanceLamports,
+            winningIndex: winningIdx,
+            // "proposed" is not final: nothing is claimable yet, so the
+            // payout is labelled an estimate rather than a claim.
+            finalized: !!market.resolved,
+          });
           setResultModal({
             result: userShares > 0 ? "win" : "lose",
             outcomeLabel,
             winningShares: userShares > 0 ? userShares : null,
+            marketTitle: market.question || null,
+            marketPath: market.publicKey ? `/trade/${market.publicKey}` : null,
+            stake: values.stake,
+            payout: values.payout,
+            profit: values.profit,
+            payoutQualifier: values.payoutQualifier,
+            claimAvailable: values.claimAvailable,
           });
         }
       }
@@ -560,7 +593,11 @@ export default function LiveViewerPage() {
     market?.resolutionStatus,
     market?.proposedOutcome,
     market?.outcomeNames,
+    market?.question,
+    market?.publicKey,
     positionShares,
+    onchainAccounts,
+    marketBalanceLamports,
   ]);
 
   /* ── Derived market data ───────────────────────────────────────── */
@@ -1507,8 +1544,17 @@ export default function LiveViewerPage() {
         <FlashMarketResultModal
           open
           result={resultModal.result}
+          mode="real"
+          marketTitle={resultModal.marketTitle}
           outcomeLabel={resultModal.outcomeLabel}
+          pickLabel={resultModal.result === "win" ? resultModal.outcomeLabel : null}
           winningShares={resultModal.winningShares}
+          stake={resultModal.stake ?? null}
+          payout={resultModal.payout ?? null}
+          profit={resultModal.profit ?? null}
+          payoutQualifier={resultModal.payoutQualifier ?? null}
+          claimAvailable={resultModal.claimAvailable ?? false}
+          marketPath={resultModal.marketPath ?? null}
           onClose={() => setResultModal(null)}
         />
       )}

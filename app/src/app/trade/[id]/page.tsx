@@ -31,6 +31,9 @@ import MarketCard from "@/components/MarketCard";
 import BlockedMarketBanner from "@/components/BlockedMarketBanner";
 import TradeBuyPopOverlay from "@/components/TradeBuyPopOverlay";
 import FlashMarketResultModal, { type FlashMarketResultState } from "@/components/FlashMarketResultModal";
+import { buildPlayResultValues, buildRealResultValues } from "@/lib/resultPayload";
+import { playClient } from "@/lib/playClient";
+import type { PayoutQualifier, ResultMode } from "@/lib/resultCard";
 import NbaWidgetDrawer from "@/components/NbaWidgetDrawer";
 import SoccerMatchDrawer from "@/components/SoccerMatchDrawer";
 import FlashCryptoMiniChart from "@/components/FlashCryptoMiniChart";
@@ -158,10 +161,19 @@ type TradeResult = {
 
 type FlashResultPayload = {
   state: FlashMarketResultState;
+  mode: ResultMode;
   outcomeLabel: string | null;
+  /** The outcome the user backed — differs from outcomeLabel on a loss. */
+  pickLabel: string | null;
   winningShares: number;
   secondaryText: string | null;
   storageKey: string;
+  /** Exact decimal strings; null means "not known" and the row is dropped. */
+  stake: string | null;
+  payout: string | null;
+  profit: string | null;
+  payoutQualifier: PayoutQualifier | null;
+  claimAvailable: boolean;
 };
 
 type DisplayStatus = "scheduled" | "live" | "finished" | "unknown";
@@ -1879,6 +1891,13 @@ export default function TradePage() {
   const [flashResultPayload, setFlashResultPayload] = useState<FlashResultPayload | null>(null);
   const [flashRawOutcomeHint, setFlashRawOutcomeHint] = useState<{ outcomeIndex: number; version: string } | null>(null);
   const flashResultSeenRef = useRef<string | null>(null);
+  // Decoded on-chain accounts kept for the result modal: the position carries
+  // net cost + claimed, the market carries the winning supply. Without them
+  // the modal shows the outcome only, never a made-up number.
+  const [onchainAccounts, setOnchainAccounts] = useState<{
+    posAcc: unknown;
+    marketAcc: unknown;
+  } | null>(null);
   const loadOnchainSnapshot = useCallback(async (marketAddress: string) => {
     console.log("[SNAPSHOT] rpc endpoint =", (connection as any)?._rpcEndpoint);
 console.log("[SNAPSHOT] marketAddress =", marketAddress);
@@ -2090,6 +2109,8 @@ const scoreLogRef = useRef<{
 // --- On-chain snapshot merge (fast)
 if (snap?.marketLamports != null) setMarketBalanceLamports(snap.marketLamports);
 
+setOnchainAccounts({ posAcc: snap?.posAcc ?? null, marketAcc: snap?.marketAcc ?? null });
+
 if (snap?.posAcc?.shares) {
   const sharesArr = Array.isArray(snap.posAcc.shares)
     ? snap.posAcc.shares.map((x: any) => Number(x) || 0)
@@ -2132,6 +2153,7 @@ if (snap?.posAcc?.shares) {
       setFlashResultModalOpen(false);
       setFlashResultPayload(null);
       setFlashRawOutcomeHint(null);
+      setOnchainAccounts(null);
       flashResultSeenRef.current = null;
       scoreLogRef.current = { lastIgnoredSignature: "", lastDisplaySignature: "" };
     }, [id]);
@@ -3678,10 +3700,6 @@ useEffect(() => {
     })();
     if (!Number.isFinite(windowEndMs) || nowMs < windowEndMs) return null;
 
-    const normalizedShares = userSharesForUi.map((qty) => Math.max(0, Math.floor(Number(qty) || 0)));
-    const totalShares = normalizedShares.reduce((sum, qty) => sum + qty, 0);
-    if (totalShares <= 0) return null;
-
     let winningIndex: number | null = null;
     let rawVersion = "unknown";
 
@@ -3711,30 +3729,35 @@ useEffect(() => {
 
     if (winningIndex == null) return null;
 
-    const winningShares = Math.max(0, Number(normalizedShares[winningIndex] || 0));
-    const state: FlashMarketResultState = winningShares > 0 ? "win" : "lose";
     const settlementStatus = String(market.resolutionStatus || "").trim().toLowerCase();
-    const secondaryText =
-      market.resolved === true || settlementStatus === "finalized"
-        ? "Market finalized."
-        : "Settlement pending.";
+    const finalized = market.resolved === true || settlementStatus === "finalized";
+    const secondaryText = finalized ? "Market finalized." : "Settlement pending.";
 
     return {
-      state,
+      winningIndex,
+      finalized,
       outcomeLabel: derived.names[winningIndex] || null,
-      winningShares,
       secondaryText,
       resolutionStamp: `${Math.floor(windowEndMs)}:${winningIndex}:${rawVersion}`,
     };
-  }, [market, derived, userSharesForUi, nowMs, flashRawOutcomeHint]);
+    // userSharesForUi is deliberately NOT a dependency: this memo describes
+    // the MARKET's resolution, and the per-user branch happens below so Play
+    // and Real can read their own authoritative positions.
+  }, [market, derived, nowMs, flashRawOutcomeHint]);
 
+  // The result modal is strictly mode-scoped. Real reads the on-chain
+  // position; Play reads the player's own settled play_trades. Neither mode
+  // can ever paint the other's numbers, and the storage key carries the mode
+  // so switching modes on a settled market still shows the right result once.
   useEffect(() => {
     if (!connected || !publicKey || !market || !flashResultCandidate) return;
     if (tradeStep !== "idle") return;
 
     const marketIdForKey = String(market.dbId || market.publicKey || "").trim();
     if (!marketIdForKey) return;
-    const storageKey = `flash_result_seen:${publicKey.toBase58()}:${marketIdForKey}:${flashResultCandidate.resolutionStamp}`;
+
+    const modeKey: ResultMode = isPlayTrading ? "play" : "real";
+    const storageKey = `flash_result_seen:${modeKey}:${publicKey.toBase58()}:${marketIdForKey}:${flashResultCandidate.resolutionStamp}`;
     if (flashResultSeenRef.current === storageKey) return;
 
     let alreadySeen = false;
@@ -3748,16 +3771,91 @@ useEffect(() => {
       return;
     }
 
-    flashResultSeenRef.current = storageKey;
-    setFlashResultPayload({
-      state: flashResultCandidate.state,
-      outcomeLabel: flashResultCandidate.outcomeLabel,
-      winningShares: flashResultCandidate.winningShares,
-      secondaryText: flashResultCandidate.secondaryText,
-      storageKey,
-    });
-    setFlashResultModalOpen(true);
-  }, [connected, publicKey, market, flashResultCandidate, tradeStep]);
+    const { winningIndex, finalized, outcomeLabel, secondaryText } = flashResultCandidate;
+
+    if (!isPlayTrading) {
+      // ── Real ────────────────────────────────────────────────────────────
+      const totalShares = userSharesForUi.reduce(
+        (sum, qty) => sum + Math.max(0, Math.floor(Number(qty) || 0)),
+        0
+      );
+      if (totalShares <= 0) return;
+
+      const values = buildRealResultValues({
+        positionAccount: onchainAccounts?.posAcc ?? null,
+        marketAccount: onchainAccounts?.marketAcc ?? null,
+        marketLamports: marketBalanceLamports,
+        winningIndex,
+        finalized,
+      });
+
+      flashResultSeenRef.current = storageKey;
+      setFlashResultPayload({
+        state: values.state,
+        mode: "real",
+        outcomeLabel,
+        pickLabel: values.state === "win" ? outcomeLabel : null,
+        winningShares: values.winningShares ?? 0,
+        secondaryText,
+        storageKey,
+        stake: values.stake,
+        payout: values.payout,
+        profit: values.profit,
+        payoutQualifier: values.payoutQualifier,
+        claimAvailable: values.claimAvailable,
+      });
+      setFlashResultModalOpen(true);
+      return;
+    }
+
+    // ── Play ──────────────────────────────────────────────────────────────
+    // One scoped request for this wallet's own trades. No leaderboard, no
+    // contest fetch. If nothing settled yet there is no result to announce.
+    let cancelled = false;
+    void (async () => {
+      let values: ReturnType<typeof buildPlayResultValues> = null;
+      try {
+        const trades = await playClient.history({ limit: 200 });
+        values = buildPlayResultValues(trades, String(market.publicKey || ""));
+      } catch {
+        // No Play session, or the request failed — stay silent rather than
+        // guessing a result.
+        return;
+      }
+      if (cancelled || !values) return;
+
+      flashResultSeenRef.current = storageKey;
+      setFlashResultPayload({
+        state: values.state,
+        mode: "play",
+        outcomeLabel,
+        pickLabel: values.pickLabel,
+        winningShares: 0,
+        secondaryText,
+        storageKey,
+        stake: values.stake,
+        payout: values.payout,
+        profit: values.profit,
+        payoutQualifier: null,
+        claimAvailable: false,
+      });
+      setFlashResultModalOpen(true);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    connected,
+    publicKey,
+    market,
+    flashResultCandidate,
+    tradeStep,
+    isPlayTrading,
+    userSharesForUi,
+    onchainAccounts,
+    marketBalanceLamports,
+  ]);
 
   useEffect(() => {
     if (!id || !isSoccerNextGoalMicroForScore) return;
@@ -4251,9 +4349,18 @@ const ended = endedByTime;
     <FlashMarketResultModal
       open={flashResultModalOpen && !!flashResultPayload}
       result={flashResultPayload?.state ?? "lose"}
+      mode={flashResultPayload?.mode ?? "real"}
+      marketTitle={market?.question ?? null}
       outcomeLabel={flashResultPayload?.outcomeLabel ?? null}
+      pickLabel={flashResultPayload?.pickLabel ?? null}
       winningShares={flashResultPayload?.winningShares ?? null}
       secondaryText={flashResultPayload?.secondaryText ?? null}
+      stake={flashResultPayload?.stake ?? null}
+      payout={flashResultPayload?.payout ?? null}
+      profit={flashResultPayload?.profit ?? null}
+      payoutQualifier={flashResultPayload?.payoutQualifier ?? null}
+      claimAvailable={flashResultPayload?.claimAvailable ?? false}
+      marketPath={market?.publicKey ? `/trade/${market.publicKey}` : null}
       onClose={closeFlashResultModal}
     />
   );

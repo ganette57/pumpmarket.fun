@@ -41,6 +41,8 @@ import PlayLiveBuySheet from "@/components/play/PlayLiveBuySheet";
 import FlashMarketResultModal, {
   type FlashMarketResultState,
 } from "@/components/FlashMarketResultModal";
+import { buildRealResultValues } from "@/lib/resultPayload";
+import type { PayoutQualifier } from "@/lib/resultCard";
 import { proposeLiveResolution } from "@/lib/liveResolve";
 import { createLiveFlashMarket } from "@/lib/liveMarketCreate";
 import bs58 from "bs58";
@@ -1194,27 +1196,61 @@ export default function LivePage() {
     result: FlashMarketResultState;
     outcomeLabel: string | null;
     winningShares: number | null;
+    marketTitle: string | null;
+    marketPath: string | null;
+    stake: string | null;
+    payout: string | null;
+    profit: string | null;
+    payoutQualifier: PayoutQualifier | null;
+    claimAvailable: boolean;
   } | null>(null);
   const settledSeenRef = useRef<
     Record<string, { pk: string; settled: boolean }>
   >({});
   const shownResultsRef = useRef<Set<string>>(new Set());
 
-  const fetchViewerShares = useCallback(
-    async (marketAddress: string): Promise<number[] | null> => {
+  /**
+   * The viewer's position PLUS the two account facts the result modal needs
+   * to state a payout honestly: net_cost_lamports / claimed from the position,
+   * and the winning supply + pot from the market. One batched call, made once
+   * when a market settles — not a poll.
+   */
+  const fetchViewerResultContext = useCallback(
+    async (
+      marketAddress: string
+    ): Promise<{
+      shares: number[] | null;
+      posAcc: unknown;
+      marketAcc: unknown;
+      marketLamports: number | null;
+    } | null> => {
       if (!publicKey || !program) return null;
       try {
         const mk = new PublicKey(marketAddress);
         const [posPda] = getUserPositionPDA(mk, publicKey);
-        const info = await connection.getAccountInfo(posPda, "confirmed");
-        if (!info?.data) return null;
-        const acc = (program as any).coder.accounts.decode(
-          "userPosition",
-          info.data
+        const infos = await connection.getMultipleAccountsInfo(
+          [mk, posPda],
+          "confirmed"
         );
-        return Array.isArray(acc?.shares)
-          ? acc.shares.map((x: any) => Number(x) || 0)
+        const marketInfo = infos?.[0] ?? null;
+        const posInfo = infos?.[1] ?? null;
+        if (!posInfo?.data) return null;
+
+        const coder = (program as any).coder;
+        const posAcc = coder.accounts.decode("userPosition", posInfo.data);
+        const marketAcc = marketInfo?.data
+          ? coder.accounts.decode("market", marketInfo.data)
           : null;
+
+        return {
+          shares: Array.isArray(posAcc?.shares)
+            ? posAcc.shares.map((x: any) => Number(x) || 0)
+            : null,
+          posAcc,
+          marketAcc,
+          marketLamports:
+            marketInfo?.lamports != null ? Number(marketInfo.lamports) : null,
+        };
       } catch {
         return null;
       }
@@ -1244,20 +1280,37 @@ export default function LivePage() {
     const maybeShow = async (
       pk: string,
       winningIdx: number | null,
-      names: string[]
+      names: string[],
+      title: string | null,
+      finalized: boolean
     ) => {
       if (winningIdx == null || !Number.isFinite(winningIdx)) return;
       if (shownResultsRef.current.has(pk)) return;
       shownResultsRef.current.add(pk);
       if (isHostViewer) return;
-      const shares = await fetchViewerShares(pk);
+      const ctx = await fetchViewerResultContext(pk);
+      const shares = ctx?.shares ?? null;
       const total = (shares ?? []).reduce((a, b) => a + (Number(b) || 0), 0);
       if (!shares || total <= 0) return;
       const winningShares = Number(shares[winningIdx] || 0);
+      const values = buildRealResultValues({
+        positionAccount: ctx?.posAcc ?? null,
+        marketAccount: ctx?.marketAcc ?? null,
+        marketLamports: ctx?.marketLamports ?? null,
+        winningIndex: winningIdx,
+        finalized,
+      });
       setResultModal({
         result: winningShares > 0 ? "win" : "lose",
         outcomeLabel: names[winningIdx] ?? null,
         winningShares: winningShares > 0 ? winningShares : null,
+        marketTitle: title,
+        marketPath: `/trade/${pk}`,
+        stake: values.stake,
+        payout: values.payout,
+        profit: values.profit,
+        payoutQualifier: values.payoutQualifier,
+        claimAvailable: values.claimAvailable,
       });
     };
 
@@ -1268,7 +1321,9 @@ export default function LivePage() {
           activeFeedSnapshot.proposedOutcome != null
             ? Number(activeFeedSnapshot.proposedOutcome)
             : null,
-          activeFeedSnapshot.outcomeNames
+          activeFeedSnapshot.outcomeNames,
+          activeFeedSnapshot.question ?? null,
+          !!activeFeedSnapshot.resolved
         );
       }
     } else if (!prev.settled) {
@@ -1291,7 +1346,13 @@ export default function LivePage() {
             winningIdx != null;
           if (!settledOld) return;
           const names = toStringArray(m.outcome_names) ?? ["YES", "NO"];
-          await maybeShow(oldPk, winningIdx, names);
+          await maybeShow(
+            oldPk,
+            winningIdx,
+            names,
+            String(m.question || "") || null,
+            !!m.resolved
+          );
         } catch {}
       })();
     }
@@ -1303,7 +1364,7 @@ export default function LivePage() {
     isMobile,
     isPlay,
     publicKey,
-    fetchViewerShares,
+    fetchViewerResultContext,
     activeFeedSession,
     activeFeedSnapshot,
   ]);
@@ -1529,8 +1590,17 @@ export default function LivePage() {
           <FlashMarketResultModal
             open
             result={resultModal.result}
+            mode="real"
+            marketTitle={resultModal.marketTitle}
             outcomeLabel={resultModal.outcomeLabel}
+            pickLabel={resultModal.result === "win" ? resultModal.outcomeLabel : null}
             winningShares={resultModal.winningShares}
+            stake={resultModal.stake}
+            payout={resultModal.payout}
+            profit={resultModal.profit}
+            payoutQualifier={resultModal.payoutQualifier}
+            claimAvailable={resultModal.claimAvailable}
+            marketPath={resultModal.marketPath}
             onClose={() => setResultModal(null)}
           />
         )}

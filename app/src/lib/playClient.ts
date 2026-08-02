@@ -128,6 +128,24 @@ export type PlayOpenTrade = {
   created_at: string;
 };
 
+export type PlayTradeStatusView = "open" | "won" | "lost" | "refunded";
+
+/** One of the caller's own Play trades, as /api/play/history returns it. */
+export type PlayHistoryTradeView = {
+  id: string;
+  market_address: string;
+  outcome_index: number;
+  outcome_name: string | null;
+  stake_usd: string;
+  shares: string;
+  status: PlayTradeStatusView;
+  /** Null until the trade settles — never render null as 0. */
+  payout_usd: string | null;
+  realized_pnl_usd: string | null;
+  created_at: string;
+  settled_at: string | null;
+};
+
 export type PlayStateResponse = {
   account: PlayAccountView;
   season: PlaySeasonView;
@@ -484,11 +502,29 @@ export const playClient = {
     return raw.snapshots ?? {};
   },
 
-  history(args?: { status?: string; limit?: number }) {
-    return post<{ account_id: string; trades: PlayOpenTrade[] }>(
+  /**
+   * The session wallet's OWN Play trades. The account comes from the session
+   * cookie, so there is no parameter that could read another wallet.
+   *
+   * Money stays as decimal strings — `payout_usd` / `realized_pnl_usd` are
+   * null until the trade settles, and a null must never be shown as 0.
+   */
+  async history(args?: { status?: PlayTradeStatusView; limit?: number }) {
+    const raw = await post<{ account_id: string; trades: PlayHistoryTradeView[] }>(
       "/api/play/history",
       args ?? {}
     );
+    return (raw.trades ?? []).map((t) => ({
+      ...t,
+      stake_usd: decimal(t.stake_usd),
+      shares: decimal(t.shares),
+      payout_usd:
+        t.payout_usd === null || t.payout_usd === undefined ? null : decimal(t.payout_usd),
+      realized_pnl_usd:
+        t.realized_pnl_usd === null || t.realized_pnl_usd === undefined
+          ? null
+          : decimal(t.realized_pnl_usd),
+    })) as PlayHistoryTradeView[];
   },
 
   /**
