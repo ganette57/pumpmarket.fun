@@ -43,6 +43,7 @@ import FlashMarketResultModal, {
 } from "@/components/FlashMarketResultModal";
 import { buildRealResultValues } from "@/lib/resultPayload";
 import type { PayoutQualifier } from "@/lib/resultCard";
+import { hasSeenResult, markResultSeen, resultSeenKey } from "@/lib/resultSeen";
 import { proposeLiveResolution } from "@/lib/liveResolve";
 import { createLiveFlashMarket } from "@/lib/liveMarketCreate";
 import bs58 from "bs58";
@@ -1194,6 +1195,9 @@ export default function LivePage() {
   //   existing "Market resolved / Outcome proposed" card is the fallback.
   const [resultModal, setResultModal] = useState<{
     result: FlashMarketResultState;
+    provisional: boolean;
+    secondaryText: string | null;
+    seenKey: string | null;
     outcomeLabel: string | null;
     winningShares: number | null;
     marketTitle: string | null;
@@ -1285,9 +1289,22 @@ export default function LivePage() {
       finalized: boolean
     ) => {
       if (winningIdx == null || !Number.isFinite(winningIdx)) return;
+      // In-memory guard against a poll firing this twice in one session; the
+      // localStorage key below is what survives a refresh.
       if (shownResultsRef.current.has(pk)) return;
       shownResultsRef.current.add(pk);
       if (isHostViewer) return;
+
+      const account = publicKey?.toBase58();
+      if (!account) return;
+      const seenKey = resultSeenKey({
+        mode: "real",
+        account,
+        market: pk,
+        outcomeIndex: winningIdx,
+      });
+      if (hasSeenResult(seenKey)) return;
+
       const ctx = await fetchViewerResultContext(pk);
       const shares = ctx?.shares ?? null;
       const total = (shares ?? []).reduce((a, b) => a + (Number(b) || 0), 0);
@@ -1302,6 +1319,11 @@ export default function LivePage() {
       });
       setResultModal({
         result: winningShares > 0 ? "win" : "lose",
+        // The feed reaches here on "proposed" as well as "resolved"; anything
+        // short of finalized is provisional and must say so.
+        provisional: !finalized,
+        secondaryText: finalized ? "Market finalized." : "Outcome proposed.",
+        seenKey,
         outcomeLabel: names[winningIdx] ?? null,
         winningShares: winningShares > 0 ? winningShares : null,
         marketTitle: title,
@@ -1591,6 +1613,8 @@ export default function LivePage() {
             open
             result={resultModal.result}
             mode="real"
+            provisional={resultModal.provisional}
+            secondaryText={resultModal.secondaryText}
             marketTitle={resultModal.marketTitle}
             outcomeLabel={resultModal.outcomeLabel}
             pickLabel={resultModal.result === "win" ? resultModal.outcomeLabel : null}
@@ -1601,7 +1625,10 @@ export default function LivePage() {
             payoutQualifier={resultModal.payoutQualifier}
             claimAvailable={resultModal.claimAvailable}
             marketPath={resultModal.marketPath}
-            onClose={() => setResultModal(null)}
+            onClose={() => {
+              if (resultModal.seenKey) markResultSeen(resultModal.seenKey);
+              setResultModal(null);
+            }}
           />
         )}
       </div>

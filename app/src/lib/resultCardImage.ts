@@ -28,6 +28,8 @@ const TEXT = "#ffffff";
 const TEXT_MUTED = "#8b93a1";
 const TEXT_DIM = "#5f6773";
 const HAIRLINE = "rgba(255,255,255,0.09)";
+/** Amber, distinct from every result accent so it reads as a caveat. */
+const ACCENT_PROVISIONAL = "#f5c451";
 
 const PAD_X = 72;
 const PAD_Y = 56;
@@ -291,6 +293,16 @@ export function paintResultCard(ctx: Ctx, view: ResultCardView): void {
 
   /* ── Footer block: detail rows + wordmark ───────────────────────────── */
   const footerTop = CARD_HEIGHT - 150;
+
+  // Provisional strip, above the divider so it reads before the numbers do.
+  // A card can outlive the dispute window once it is posted, so a proposed
+  // result must carry this wherever it travels.
+  if (view.provisionalFooter) {
+    setFont(ctx, 700, 19, stack, 1.3);
+    ctx.fillStyle = ACCENT_PROVISIONAL;
+    ctx.fillText(view.provisionalFooter, PAD_X, footerTop - 20);
+    setFont(ctx, 700, 19, stack, 0);
+  }
 
   ctx.strokeStyle = HAIRLINE;
   ctx.lineWidth = 1;

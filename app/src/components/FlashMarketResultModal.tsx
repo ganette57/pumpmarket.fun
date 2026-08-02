@@ -52,6 +52,11 @@ export type FlashMarketResultModalProps = {
   profit?: string | null;
   payoutQualifier?: PayoutQualifier | null;
   claimAvailable?: boolean;
+  /**
+   * The outcome is proposed, not final. Downgrades every money label to an
+   * estimate and shows the provisional notice in the modal and on the card.
+   */
+  provisional?: boolean;
 
   /** Public path for the shared URL, e.g. "/trade/<address>". */
   marketPath?: string | null;
@@ -83,6 +88,7 @@ export default function FlashMarketResultModal({
   profit = null,
   payoutQualifier = null,
   claimAvailable = false,
+  provisional = false,
   marketPath = null,
   onNextMarket = null,
   nextMarketLabel = "Next market",
@@ -108,6 +114,7 @@ export default function FlashMarketResultModal({
       profit,
       payoutQualifier,
       claimAvailable,
+      provisional,
       marketPath,
     };
     return buildResultCardView(input);
@@ -125,6 +132,7 @@ export default function FlashMarketResultModal({
     profit,
     payoutQualifier,
     claimAvailable,
+    provisional,
     marketPath,
   ]);
 
@@ -265,11 +273,18 @@ export default function FlashMarketResultModal({
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-5 pt-5 sm:px-6 sm:pt-6">
           {/* ── Mode + headline ─────────────────────────────────────── */}
           <div className="flex items-center justify-between gap-3">
-            <span
-              className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-bold uppercase tracking-[0.14em] ring-1 ${accentChip}`}
-            >
-              {view.modeLabel}
-            </span>
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+              <span
+                className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-bold uppercase tracking-[0.14em] ring-1 ${accentChip}`}
+              >
+                {view.modeLabel}
+              </span>
+              {view.provisionalLabel ? (
+                <span className="inline-flex items-center rounded-full bg-[#f5c451]/15 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.14em] text-[#f5c451] ring-1 ring-[#f5c451]/30">
+                  {view.provisionalLabel}
+                </span>
+              ) : null}
+            </div>
             <button
               type="button"
               onClick={requestClose}
@@ -289,6 +304,12 @@ export default function FlashMarketResultModal({
           <p id="result-modal-description" className="mt-2 break-words text-sm text-gray-300">
             {view.marketTitle}
           </p>
+
+          {view.provisionalNote ? (
+            <p className="mt-3 rounded-xl border border-[#f5c451]/25 bg-[#f5c451]/[0.07] px-3 py-2 text-xs text-[#f5c451]">
+              {view.provisionalNote}
+            </p>
+          ) : null}
 
           {/* ── Primary number ──────────────────────────────────────── */}
           {view.primaryValue ? (

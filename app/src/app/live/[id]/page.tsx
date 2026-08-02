@@ -26,6 +26,7 @@ import FlashMarketResultModal, {
 } from "@/components/FlashMarketResultModal";
 import { buildRealResultValues } from "@/lib/resultPayload";
 import type { PayoutQualifier } from "@/lib/resultCard";
+import { hasSeenResult, markResultSeen, resultSeenKey } from "@/lib/resultSeen";
 import {
   StreamPlayer,
   StreamUnavailable,
@@ -150,6 +151,8 @@ type UiMarket = {
   isBlocked?: boolean;
   resolutionStatus?: string;
   proposedOutcome?: number | null;
+  /** Set once resolution is final — may differ from the proposed outcome. */
+  winningOutcome?: number | null;
 };
 
 /* ── Host controls ──────────────────────────────────────────────────── */
@@ -318,10 +321,13 @@ export default function LiveViewerPage() {
   );
   const [resultModal, setResultModal] = useState<{
     result: FlashMarketResultState;
+    provisional?: boolean;
     outcomeLabel?: string | null;
     winningShares?: number | null;
     marketTitle?: string | null;
     marketPath?: string | null;
+    secondaryText?: string | null;
+    seenKey?: string | null;
     stake?: string | null;
     payout?: string | null;
     profit?: string | null;
@@ -495,6 +501,10 @@ export default function LiveViewerPage() {
         isBlocked: !!dbMarket.is_blocked,
         resolutionStatus: String(dbMarket.resolution_status || "open"),
         proposedOutcome: dbMarket.proposed_winning_outcome ?? null,
+        winningOutcome:
+          (dbMarket as any).winning_outcome != null
+            ? Number((dbMarket as any).winning_outcome)
+            : null,
       };
 
       if (snap?.marketLamports != null) setMarketBalanceLamports(snap.marketLamports);
@@ -538,6 +548,35 @@ export default function LiveViewerPage() {
     hostJustResolvedRef.current = false;
   }, [market?.publicKey]);
 
+  /**
+   * Poll the market row while it is still open.
+   *
+   * THIS IS WHY THE MODAL WAS LATE. The realtime subscription on this page
+   * watches `live_sessions`, not `markets`, and loadMarket() only ran on a
+   * market swap or a host action. A viewer therefore never saw the host's
+   * proposal land in `markets.resolution_status` — the modal could not fire
+   * because the client still believed the market was open. Polling stops as
+   * soon as a terminal status is read, so a settled market costs nothing.
+   */
+  useEffect(() => {
+    const addr = session?.market_address;
+    if (!addr) return;
+    const status = String(market?.resolutionStatus || "open");
+    if (status === "finalized" || status === "cancelled") return;
+
+    let cancelled = false;
+    const tick = () => {
+      if (cancelled) return;
+      if (document.visibilityState !== "visible") return;
+      void loadMarket(addr);
+    };
+    const iv = setInterval(tick, 8000);
+    return () => {
+      cancelled = true;
+      clearInterval(iv);
+    };
+  }, [session?.market_address, market?.resolutionStatus, loadMarket]);
+
   // Auto-fire the win/lose modal on the false→true settle transition.
   // Suppressed for the host (they just resolved); shown to viewers; falls
   // back to no modal when no user position exists (the result panel already
@@ -547,51 +586,96 @@ export default function LiveViewerPage() {
     // shares. The shared "Market resolved" panel is the neutral fallback until
     // a Play-specific result modal ships (later phase).
     if (isPlay) return;
-    const nowSettled =
-      !!market?.resolved || market?.resolutionStatus === "proposed";
-    if (nowSettled && !prevSettledRef.current) {
-      if (hostJustResolvedRef.current) {
-        hostJustResolvedRef.current = false;
-      } else if (market?.proposedOutcome != null && positionShares) {
-        const winningIdx = market.proposedOutcome;
-        const userShares = Number(positionShares[winningIdx] || 0);
-        const totalShares = positionShares.reduce(
-          (a, b) => a + (Number(b) || 0),
-          0,
-        );
-        if (totalShares > 0) {
-          const outcomeLabel =
-            (market.outcomeNames || [])[winningIdx] || null;
-          const values = buildRealResultValues({
-            positionAccount: onchainAccounts?.posAcc ?? null,
-            marketAccount: onchainAccounts?.marketAcc ?? null,
-            marketLamports: marketBalanceLamports,
-            winningIndex: winningIdx,
-            // "proposed" is not final: nothing is claimable yet, so the
-            // payout is labelled an estimate rather than a claim.
-            finalized: !!market.resolved,
-          });
-          setResultModal({
-            result: userShares > 0 ? "win" : "lose",
-            outcomeLabel,
-            winningShares: userShares > 0 ? userShares : null,
-            marketTitle: market.question || null,
-            marketPath: market.publicKey ? `/trade/${market.publicKey}` : null,
-            stake: values.stake,
-            payout: values.payout,
-            profit: values.profit,
-            payoutQualifier: values.payoutQualifier,
-            claimAvailable: values.claimAvailable,
-          });
-        }
-      }
+
+    const status = String(market?.resolutionStatus || "open");
+    const refunded = status === "cancelled";
+    // A PROPOSED outcome is enough to announce a provisional result — waiting
+    // for "finalized" is what made this modal appear hours late.
+    const nowSettled = !!market?.resolved || status === "proposed" || refunded;
+    if (!nowSettled) {
+      prevSettledRef.current = false;
+      return;
     }
-    prevSettledRef.current = nowSettled;
+    if (prevSettledRef.current) return;
+
+    if (hostJustResolvedRef.current) {
+      hostJustResolvedRef.current = false;
+      prevSettledRef.current = true;
+      return;
+    }
+
+    const winningIdx = refunded
+      ? null
+      : market?.winningOutcome != null && status === "finalized"
+        ? Number(market.winningOutcome)
+        : market?.proposedOutcome != null
+          ? Number(market.proposedOutcome)
+          : null;
+
+    if ((winningIdx === null && !refunded) || !positionShares) return;
+
+    const totalShares = positionShares.reduce((a, b) => a + (Number(b) || 0), 0);
+    if (totalShares <= 0) return;
+
+    // Same outcome-keyed dedupe as every other surface, so a proposal already
+    // seen here is not re-announced when the market finalizes.
+    const account = publicKey?.toBase58();
+    const marketKey = String(market?.publicKey || "");
+    if (!account || !marketKey) return;
+    const seenKey = resultSeenKey({
+      mode: "real",
+      account,
+      market: marketKey,
+      outcomeIndex: winningIdx,
+      refunded,
+    });
+    if (hasSeenResult(seenKey)) {
+      prevSettledRef.current = true;
+      return;
+    }
+
+    const userShares = winningIdx === null ? 0 : Number(positionShares[winningIdx] || 0);
+    const outcomeLabel =
+      winningIdx === null ? null : (market?.outcomeNames || [])[winningIdx] || null;
+
+    const values = buildRealResultValues({
+      positionAccount: onchainAccounts?.posAcc ?? null,
+      marketAccount: onchainAccounts?.marketAcc ?? null,
+      marketLamports: marketBalanceLamports,
+      winningIndex: winningIdx,
+      finalized: status === "finalized" || !!market?.resolved,
+      refunded,
+    });
+
+    const provisional = status === "proposed";
+
+    setResultModal({
+      result: values.state,
+      provisional,
+      outcomeLabel,
+      winningShares: userShares > 0 ? userShares : null,
+      marketTitle: market?.question || null,
+      marketPath: market?.publicKey ? `/trade/${market.publicKey}` : null,
+      secondaryText: refunded
+        ? "Market cancelled."
+        : provisional
+          ? "Outcome proposed."
+          : "Market finalized.",
+      seenKey,
+      stake: values.stake,
+      payout: values.payout,
+      profit: values.profit,
+      payoutQualifier: values.payoutQualifier,
+      claimAvailable: values.claimAvailable,
+    });
+    prevSettledRef.current = true;
   }, [
     isPlay,
+    publicKey,
     market?.resolved,
     market?.resolutionStatus,
     market?.proposedOutcome,
+    market?.winningOutcome,
     market?.outcomeNames,
     market?.question,
     market?.publicKey,
@@ -1545,9 +1629,11 @@ export default function LiveViewerPage() {
           open
           result={resultModal.result}
           mode="real"
+          provisional={resultModal.provisional ?? false}
           marketTitle={resultModal.marketTitle}
           outcomeLabel={resultModal.outcomeLabel}
           pickLabel={resultModal.result === "win" ? resultModal.outcomeLabel : null}
+          secondaryText={resultModal.secondaryText ?? null}
           winningShares={resultModal.winningShares}
           stake={resultModal.stake ?? null}
           payout={resultModal.payout ?? null}
@@ -1555,7 +1641,10 @@ export default function LiveViewerPage() {
           payoutQualifier={resultModal.payoutQualifier ?? null}
           claimAvailable={resultModal.claimAvailable ?? false}
           marketPath={resultModal.marketPath ?? null}
-          onClose={() => setResultModal(null)}
+          onClose={() => {
+            if (resultModal.seenKey) markResultSeen(resultModal.seenKey);
+            setResultModal(null);
+          }}
         />
       )}
     </>

@@ -31,9 +31,14 @@ import MarketCard from "@/components/MarketCard";
 import BlockedMarketBanner from "@/components/BlockedMarketBanner";
 import TradeBuyPopOverlay from "@/components/TradeBuyPopOverlay";
 import FlashMarketResultModal, { type FlashMarketResultState } from "@/components/FlashMarketResultModal";
-import { buildPlayResultValues, buildRealResultValues } from "@/lib/resultPayload";
+import {
+  buildPlayResultValues,
+  buildProvisionalPlayResultValues,
+  buildRealResultValues,
+} from "@/lib/resultPayload";
 import { playClient } from "@/lib/playClient";
 import type { PayoutQualifier, ResultMode } from "@/lib/resultCard";
+import { hasSeenResult, markResultSeen, resultSeenKey } from "@/lib/resultSeen";
 import NbaWidgetDrawer from "@/components/NbaWidgetDrawer";
 import SoccerMatchDrawer from "@/components/SoccerMatchDrawer";
 import FlashCryptoMiniChart from "@/components/FlashCryptoMiniChart";
@@ -162,6 +167,8 @@ type TradeResult = {
 type FlashResultPayload = {
   state: FlashMarketResultState;
   mode: ResultMode;
+  /** The outcome is only proposed — every value is presented as an estimate. */
+  provisional: boolean;
   outcomeLabel: string | null;
   /** The outcome the user backed — differs from outcomeLabel on a loss. */
   pickLabel: string | null;
@@ -3258,9 +3265,7 @@ useEffect(() => {
     setFlashResultModalOpen(false);
     const storageKey = flashResultPayload?.storageKey;
     if (!storageKey) return;
-    try {
-      window.localStorage.setItem(storageKey, "1");
-    } catch {}
+    markResultSeen(storageKey);
     flashResultSeenRef.current = storageKey;
   }, [flashResultPayload?.storageKey]);
 
@@ -3684,6 +3689,58 @@ useEffect(() => {
       marketMode === "flash_crypto" ||
       typeTag === "flash_crypto_price" ||
       typeTag === "flash_crypto_graduation";
+
+    // Live-hosted markets reach this page by redirect the moment their session
+    // ends, so they need the result modal just as much as flash markets do.
+    const isLiveHosted =
+      Object.keys(liveMicroMeta).length > 0 || !!activeLiveSession;
+    if (!isFlashCrypto && !isLiveHosted) return null;
+
+    const clampOutcome = (v: unknown): number | null => {
+      const n = Number(v);
+      if (v === null || v === undefined || !Number.isFinite(n)) return null;
+      return clampInt(n, 0, Math.max(0, derived.names.length - 1));
+    };
+
+    /* ── 1. The stored resolution — the authoritative, immediate trigger ──
+       This is what was missing: a host proposal writes resolution_status
+       "proposed" and proposed_winning_outcome, and nothing here read them, so
+       the modal waited for the flash price path (or never fired at all on a
+       host-resolved Live market). PROPOSED is enough to show a PROVISIONAL
+       result; it never settles, credits or claims anything early. */
+    const status = String(market.resolutionStatus || "").trim().toLowerCase();
+
+    if (status === "cancelled") {
+      return {
+        winningIndex: null as number | null,
+        finalized: true,
+        provisional: false,
+        refunded: true,
+        outcomeLabel: null as string | null,
+        secondaryText: "Market cancelled.",
+      };
+    }
+
+    if (status === "proposed" || status === "finalized") {
+      const idx =
+        status === "finalized"
+          ? clampOutcome(market.winningOutcome) ?? clampOutcome(market.proposedOutcome)
+          : clampOutcome(market.proposedOutcome);
+      if (idx !== null) {
+        const provisional = status === "proposed";
+        return {
+          winningIndex: idx,
+          finalized: !provisional,
+          provisional,
+          refunded: false,
+          outcomeLabel: derived.names[idx] || null,
+          secondaryText: provisional ? "Outcome proposed." : "Market finalized.",
+        };
+      }
+    }
+
+    /* ── 2. Flash price fallback — the window closed but the DB has not
+       caught up yet. Always provisional: nothing has been recorded. ── */
     if (!isFlashCrypto) return null;
 
     const windowEndMs = (() => {
@@ -3728,22 +3785,22 @@ useEffect(() => {
     }
 
     if (winningIndex == null) return null;
-
-    const settlementStatus = String(market.resolutionStatus || "").trim().toLowerCase();
-    const finalized = market.resolved === true || settlementStatus === "finalized";
-    const secondaryText = finalized ? "Market finalized." : "Settlement pending.";
+    void rawVersion;
 
     return {
       winningIndex,
-      finalized,
+      finalized: false,
+      // The window closed but no proposal is recorded yet, so this is a read
+      // of the price feed, not a settlement. It can only ever be provisional.
+      provisional: true,
+      refunded: false,
       outcomeLabel: derived.names[winningIndex] || null,
-      secondaryText,
-      resolutionStamp: `${Math.floor(windowEndMs)}:${winningIndex}:${rawVersion}`,
+      secondaryText: "Awaiting the host's resolution.",
     };
     // userSharesForUi is deliberately NOT a dependency: this memo describes
     // the MARKET's resolution, and the per-user branch happens below so Play
     // and Real can read their own authoritative positions.
-  }, [market, derived, nowMs, flashRawOutcomeHint]);
+  }, [market, derived, nowMs, flashRawOutcomeHint, activeLiveSession]);
 
   // The result modal is strictly mode-scoped. Real reads the on-chain
   // position; Play reads the player's own settled play_trades. Neither mode
@@ -3756,22 +3813,25 @@ useEffect(() => {
     const marketIdForKey = String(market.dbId || market.publicKey || "").trim();
     if (!marketIdForKey) return;
 
-    const modeKey: ResultMode = isPlayTrading ? "play" : "real";
-    const storageKey = `flash_result_seen:${modeKey}:${publicKey.toBase58()}:${marketIdForKey}:${flashResultCandidate.resolutionStamp}`;
-    if (flashResultSeenRef.current === storageKey) return;
+    const { winningIndex, finalized, provisional, refunded, outcomeLabel, secondaryText } =
+      flashResultCandidate;
 
-    let alreadySeen = false;
-    try {
-      alreadySeen = window.localStorage.getItem(storageKey) === "1";
-    } catch {
-      alreadySeen = false;
-    }
-    if (alreadySeen) {
+    const modeKey: ResultMode = isPlayTrading ? "play" : "real";
+    // Keyed on the OUTCOME, not the status: proposed → finalized with the same
+    // outcome is one result and must not open a second modal, while a changed
+    // outcome or a cancellation is a different result and may.
+    const storageKey = resultSeenKey({
+      mode: modeKey,
+      account: publicKey.toBase58(),
+      market: marketIdForKey,
+      outcomeIndex: winningIndex,
+      refunded,
+    });
+    if (flashResultSeenRef.current === storageKey) return;
+    if (hasSeenResult(storageKey)) {
       flashResultSeenRef.current = storageKey;
       return;
     }
-
-    const { winningIndex, finalized, outcomeLabel, secondaryText } = flashResultCandidate;
 
     if (!isPlayTrading) {
       // ── Real ────────────────────────────────────────────────────────────
@@ -3787,12 +3847,14 @@ useEffect(() => {
         marketLamports: marketBalanceLamports,
         winningIndex,
         finalized,
+        refunded,
       });
 
       flashResultSeenRef.current = storageKey;
       setFlashResultPayload({
         state: values.state,
         mode: "real",
+        provisional,
         outcomeLabel,
         pickLabel: values.state === "win" ? outcomeLabel : null,
         winningShares: values.winningShares ?? 0,
@@ -3810,13 +3872,18 @@ useEffect(() => {
 
     // ── Play ──────────────────────────────────────────────────────────────
     // One scoped request for this wallet's own trades. No leaderboard, no
-    // contest fetch. If nothing settled yet there is no result to announce.
+    // contest fetch. Settled trades give the authoritative result; a merely
+    // proposed outcome falls back to the provisional view, which prices
+    // nothing and settles nothing.
     let cancelled = false;
     void (async () => {
       let values: ReturnType<typeof buildPlayResultValues> = null;
       try {
         const trades = await playClient.history({ limit: 200 });
-        values = buildPlayResultValues(trades, String(market.publicKey || ""));
+        const address = String(market.publicKey || "");
+        values =
+          buildPlayResultValues(trades, address) ??
+          buildProvisionalPlayResultValues(trades, address, winningIndex, refunded);
       } catch {
         // No Play session, or the request failed — stay silent rather than
         // guessing a result.
@@ -3828,6 +3895,7 @@ useEffect(() => {
       setFlashResultPayload({
         state: values.state,
         mode: "play",
+        provisional,
         outcomeLabel,
         pickLabel: values.pickLabel,
         winningShares: 0,
@@ -4350,6 +4418,7 @@ const ended = endedByTime;
       open={flashResultModalOpen && !!flashResultPayload}
       result={flashResultPayload?.state ?? "lose"}
       mode={flashResultPayload?.mode ?? "real"}
+      provisional={flashResultPayload?.provisional ?? false}
       marketTitle={market?.question ?? null}
       outcomeLabel={flashResultPayload?.outcomeLabel ?? null}
       pickLabel={flashResultPayload?.pickLabel ?? null}

@@ -24,10 +24,11 @@
 // position shows its stake and a dash, never a quoted valuation dressed up
 // as profit.
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { Pencil } from "lucide-react";
+import { Pencil, Share2 } from "lucide-react";
 import EditProfileModal from "@/components/EditProfileModal";
+import FlashMarketResultModal from "@/components/FlashMarketResultModal";
 import { usePlaySession } from "@/components/play/PlaySessionProvider";
 import { usePlayProfile } from "@/components/play/usePlayProfile";
 import {
@@ -35,6 +36,8 @@ import {
   toCents,
   type PlayProfilePositionView,
 } from "@/lib/playClient";
+import { buildPlayProfileShareInput } from "@/lib/resultPayload";
+import type { ResultCardInput } from "@/lib/resultCard";
 
 /* -------------------------------------------------------------------------- */
 /*  Formatting                                                                 */
@@ -112,6 +115,41 @@ function StatusPill({ status }: { status: PlayProfilePositionView["status"] }) {
   );
 }
 
+/**
+ * Status + Share, together. A plain <button> — the profile rows are not links,
+ * and this must not become one, so there is no anchor to nest.
+ */
+function StatusCell({
+  position,
+  onShare,
+}: {
+  position: PlayProfilePositionView;
+  onShare: (p: PlayProfilePositionView) => void;
+}) {
+  // No button on a row whose result cannot be stated truthfully.
+  const shareable = buildPlayProfileShareInput(position) !== null;
+  return (
+    <div className="flex items-center gap-1.5">
+      <StatusPill status={position.status} />
+      {shareable ? (
+        <button
+          type="button"
+          onClick={() => onShare(position)}
+          aria-label={`Share this result: ${STATUS_LABEL[position.status]} on ${
+            position.market_title || position.market_address
+          }`}
+          title="Share this result"
+          // Roomier tap target on touch layouts, tighter inside the dense
+          // desktop table where the pointer is precise.
+          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-500 transition hover:bg-white/[0.06] hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-pump-green md:h-7 md:w-7"
+        >
+          <Share2 className="h-4 w-4 md:h-3.5 md:w-3.5" aria-hidden="true" />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Header pieces — same visual language as the Real profile header            */
 /* -------------------------------------------------------------------------- */
@@ -151,6 +189,16 @@ export default function PlayProfileView({ wallet }: { wallet: string }) {
   } = usePlaySession();
 
   const [editOpen, setEditOpen] = useState(false);
+
+  // The historical result being shared, if any. It reuses the very same
+  // result modal, card renderer and share hook the live surfaces use — this
+  // screen only supplies the payload.
+  const [shareInput, setShareInput] = useState<ResultCardInput | null>(null);
+
+  const handleShare = useCallback((position: PlayProfilePositionView) => {
+    const input = buildPlayProfileShareInput(position);
+    if (input) setShareInput(input);
+  }, []);
 
   // Identity is seeded from the API and patched locally on save, so an edit
   // shows immediately without a refetch. Same fields, same table, same row
@@ -328,8 +376,32 @@ export default function PlayProfileView({ wallet }: { wallet: string }) {
           pending={pending}
           error={error}
           onRetry={refresh}
+          onShare={handleShare}
         />
       </section>
+
+      {/* One shared result modal for the whole list — the same component the
+          Live and Trade surfaces open, pre-filled with a historical row. */}
+      {shareInput ? (
+        <FlashMarketResultModal
+          open
+          mode={shareInput.mode}
+          result={shareInput.state}
+          marketTitle={shareInput.marketTitle}
+          pickLabel={shareInput.pickLabel}
+          outcomeLabel={shareInput.winningOutcomeLabel}
+          secondaryText={shareInput.marketResultText}
+          currency={shareInput.currency}
+          stake={shareInput.stake}
+          payout={shareInput.payout}
+          profit={shareInput.profit}
+          payoutQualifier={shareInput.payoutQualifier}
+          claimAvailable={shareInput.claimAvailable}
+          provisional={shareInput.provisional}
+          marketPath={shareInput.marketPath}
+          onClose={() => setShareInput(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -343,11 +415,13 @@ function PlayPositions({
   pending,
   error,
   onRetry,
+  onShare,
 }: {
   positions: PlayProfilePositionView[];
   pending: boolean;
   error: boolean;
   onRetry: () => void;
+  onShare: (p: PlayProfilePositionView) => void;
 }) {
   if (error) {
     return (
@@ -428,7 +502,7 @@ function PlayPositions({
                   {formatUsd(p.total_stake_usd)}
                 </td>
                 <td className="py-3 px-3">
-                  <StatusPill status={p.status} />
+                  <StatusCell position={p} onShare={onShare} />
                 </td>
                 <td
                   className={`py-3 px-3 text-right tabular-nums font-semibold ${pnlToneClass(
@@ -472,7 +546,7 @@ function PlayPositions({
             </div>
 
             <div className="mt-2 flex items-center justify-between gap-3">
-              <StatusPill status={p.status} />
+              <StatusCell position={p} onShare={onShare} />
               <span
                 className={`text-sm font-bold tabular-nums ${pnlToneClass(
                   p.realized_pnl_usd

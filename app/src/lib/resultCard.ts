@@ -52,6 +52,13 @@ export type ResultCardInput = {
   claimAvailable?: boolean;
   /** Public market URL path (e.g. "/trade/<address>"). */
   marketPath?: string | null;
+  /**
+   * The outcome is PROPOSED, not final — the dispute window is still open.
+   * Every money label becomes an estimate and the card carries a provisional
+   * footer. Nothing about settlement, claiming or balances changes; this flag
+   * only governs what the user is told.
+   */
+  provisional?: boolean;
 };
 
 export type ResultTone = "positive" | "negative" | "neutral";
@@ -80,6 +87,14 @@ export type ResultCardView = {
   claimNote: string | null;
   accentHex: string;
   marketPath: string | null;
+  /** True while the outcome is only proposed. */
+  provisional: boolean;
+  /** "PROVISIONAL RESULT" — badge text, null when the result is final. */
+  provisionalLabel: string | null;
+  /** Supporting sentence for the modal. */
+  provisionalNote: string | null;
+  /** Single-line footer stamped onto the share card. */
+  provisionalFooter: string | null;
 };
 
 /* -------------------------------------------------------------------------- */
@@ -285,6 +300,10 @@ export function payoutRowLabel(qualifier: PayoutQualifier | null): string {
   return "Payout";
 }
 
+export const PROVISIONAL_LABEL = "PROVISIONAL RESULT";
+export const PROVISIONAL_NOTE = "Awaiting final confirmation after the dispute period.";
+export const PROVISIONAL_FOOTER = "Provisional result · Awaiting final confirmation";
+
 export function buildResultCardView(input: ResultCardInput): ResultCardView {
   const isPlay = input.mode === "play";
   const { state, currency } = input;
@@ -296,8 +315,28 @@ export function buildResultCardView(input: ResultCardInput): ResultCardView {
     state === "win" ? "YOU WON" : state === "refund" ? "MARKET REFUNDED" : "NOT THIS TIME";
   const verb = state === "win" ? "WON" : state === "refund" ? "REFUNDED" : "LOST";
 
-  const profitLabel = isPlay ? "Play Profit" : "Profit";
-  const primaryLabel = state === "refund" ? "Amount returned" : profitLabel;
+  // A proposed outcome can still be disputed, so nothing derived from it may
+  // be presented as settled. Every money label downgrades to an estimate and
+  // the payout qualifier is forced to "estimated" no matter what the caller
+  // passed — "Claimable"/"Claimed" cannot be true before finalization.
+  const provisional = input.provisional === true;
+  const payoutQualifier: PayoutQualifier | null = provisional
+    ? "estimated"
+    : input.payoutQualifier;
+
+  const profitLabel = provisional
+    ? isPlay
+      ? "Estimated Play Profit"
+      : "Estimated Profit"
+    : isPlay
+    ? "Play Profit"
+    : "Profit";
+  const primaryLabel =
+    state === "refund"
+      ? provisional
+        ? "Estimated amount returned"
+        : "Amount returned"
+      : profitLabel;
 
   const primaryRaw = state === "refund" ? input.payout ?? input.stake : input.profit;
   const primaryValue = formatMoney(currency, primaryRaw, { signed: state !== "refund" });
@@ -317,7 +356,7 @@ export function buildResultCardView(input: ResultCardInput): ResultCardView {
 
   if (state === "win") {
     const payoutText = formatMoney(currency, input.payout);
-    if (payoutText) rows.push({ label: payoutRowLabel(input.payoutQualifier), value: payoutText });
+    if (payoutText) rows.push({ label: payoutRowLabel(payoutQualifier), value: payoutText });
   }
 
   if (state === "lose" && input.winningOutcomeLabel) {
@@ -330,16 +369,19 @@ export function buildResultCardView(input: ResultCardInput): ResultCardView {
 
   // "Claim available" is shown ONLY when a claim is genuinely outstanding —
   // never for an already-claimed position, and never for a mere estimate.
+  // A provisional result carries its own notice, so it must never also claim
+  // a payout is claimable — nothing is claimable before the dispute window
+  // closes.
   const claimNote =
-    isPlay || state !== "win"
+    isPlay || state !== "win" || provisional
       ? null
-      : input.payoutQualifier === "claimed"
+      : payoutQualifier === "claimed"
       ? // Post-claim the pot no longer holds this payout, so no amount can be
         // stated honestly — say what happened instead of showing a number.
         "Payout already claimed."
-      : input.claimAvailable && input.payoutQualifier === "claimable"
+      : input.claimAvailable && payoutQualifier === "claimable"
       ? "Claim available — claim it from your dashboard to receive it."
-      : input.payoutQualifier === "estimated"
+      : payoutQualifier === "estimated"
       ? "Not claimable yet — this market is still finalizing."
       : null;
 
@@ -359,6 +401,10 @@ export function buildResultCardView(input: ResultCardInput): ResultCardView {
     claimNote,
     accentHex,
     marketPath: input.marketPath ?? null,
+    provisional,
+    provisionalLabel: provisional ? PROVISIONAL_LABEL : null,
+    provisionalNote: provisional ? PROVISIONAL_NOTE : null,
+    provisionalFooter: provisional ? PROVISIONAL_FOOTER : null,
   };
 }
 
@@ -424,12 +470,18 @@ export function buildSharePostText(view: ResultCardView, url: string): string {
     );
   } else if (view.state === "refund") {
     lines.push(`This ${BRAND_IN_TEXT} market was refunded.`, "", title);
-    if (view.primaryValue) lines.push(`Amount returned: ${view.primaryValue}`);
+    if (view.primaryValue) lines.push(`${view.primaryLabel}: ${view.primaryValue}`);
     lines.push("", url);
   } else {
     lines.push(`Missed this one on ${BRAND_IN_TEXT}.`, "", title);
     if (pick) lines.push(`Pick: ${pick}`);
     lines.push("", "Next market 👇", url);
+  }
+
+  // A post about a proposed outcome must say so — the reader cannot see the
+  // card's provisional footer if they only read the text.
+  if (view.provisional) {
+    lines.splice(lines.length - 1, 0, "(Provisional — awaiting final confirmation)");
   }
 
   return clampToXLength(lines.join("\n"), url);

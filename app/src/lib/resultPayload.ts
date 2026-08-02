@@ -14,10 +14,12 @@ import {
   lamportsToSolString,
   subtractDecimals,
   sumDecimals,
+  toDecimalString,
   type PayoutQualifier,
+  type ResultCardInput,
   type ResultState,
 } from "./resultCard";
-import type { PlayHistoryTradeView } from "./playClient";
+import type { PlayHistoryTradeView, PlayProfilePositionView } from "./playClient";
 
 /* -------------------------------------------------------------------------- */
 /*  Real                                                                       */
@@ -33,6 +35,8 @@ export type RealResultInput = {
   winningIndex: number | null;
   /** True once resolution is FINAL on-chain (not merely proposed). */
   finalized: boolean;
+  /** The market was cancelled — everyone gets their net cost back. */
+  refunded?: boolean;
 };
 
 export type RealResultValues = {
@@ -85,12 +89,26 @@ export function buildRealResultValues(input: RealResultInput): RealResultValues 
       ? shares[winningIndex]
       : null;
 
-  const state: ResultState = winningShares !== null && winningShares > 0 ? "win" : "lose";
-
   const netCost = readNetCostLamports(positionAccount);
   const stake = netCost === null ? null : lamportsToSolString(netCost);
 
   const claimed = (positionAccount as { claimed?: unknown } | null)?.claimed === true;
+
+  // A cancelled market returns exactly the net cost — that is the program's
+  // own refund rule, not an estimate of ours, so it can be stated outright.
+  if (input.refunded) {
+    return {
+      state: "refund",
+      stake,
+      payout: stake,
+      profit: stake === null ? null : "0",
+      payoutQualifier: claimed ? "claimed" : "claimable",
+      claimAvailable: !claimed && stake !== null,
+      winningShares: null,
+    };
+  }
+
+  const state: ResultState = winningShares !== null && winningShares > 0 ? "win" : "lose";
 
   let payout: string | null = null;
   let payoutQualifier: PayoutQualifier | null = null;
@@ -188,4 +206,140 @@ export function buildPlayResultValues(
       .find((name): name is string => typeof name === "string" && name.trim().length > 0) ?? null;
 
   return { state, stake, payout, profit, pickLabel };
+}
+
+/**
+ * A share payload for one settled row of the public Play profile.
+ *
+ * Returns null — meaning "no Share button on this row" — whenever the row
+ * cannot be described truthfully: an open position has no result, and a
+ * settled row missing its realized P&L cannot state a profit. Nothing is
+ * derived or back-filled here; the numbers are the ones settlement wrote.
+ *
+ * The winning outcome is deliberately absent: the profile knows which outcome
+ * the player BACKED, not which one the market settled on, and guessing it on
+ * a loss would put a false statement on a public card.
+ *
+ * Nothing account-scoped travels into the payload — no account id, balance,
+ * session or trade id. The fields used here are the same ones the profile row
+ * already renders publicly.
+ */
+export function buildPlayProfileShareInput(
+  position: PlayProfilePositionView
+): ResultCardInput | null {
+  const { status } = position;
+  if (status === "open") return null;
+
+  const profit = toDecimalString(position.realized_pnl_usd);
+  if (profit === null) return null;
+
+  const state: ResultState =
+    status === "won" ? "win" : status === "refunded" ? "refund" : "lose";
+
+  const settledLabel = (() => {
+    const raw = position.last_trade_at;
+    if (!raw) return null;
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toLocaleDateString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  })();
+
+  return {
+    mode: "play",
+    state,
+    marketTitle: position.market_title,
+    pickLabel: position.outcome_name || `Outcome #${position.outcome_index + 1}`,
+    winningOutcomeLabel: null,
+    marketResultText:
+      state === "refund"
+        ? "Market refunded."
+        : settledLabel
+        ? `Settled ${settledLabel}`
+        : "Market finalized.",
+    currency: "usd",
+    stake: toDecimalString(position.total_stake_usd),
+    payout: toDecimalString(position.payout_usd),
+    profit,
+    payoutQualifier: null,
+    claimAvailable: false,
+    provisional: false,
+    marketPath: position.market_address ? `/trade/${position.market_address}` : null,
+  };
+}
+
+/**
+ * A PROVISIONAL Play result, built from the player's still-open trades on a
+ * market whose outcome has only been proposed.
+ *
+ * Play settles on Real finalization, so at proposal time nothing is priced
+ * yet: `stake` is authoritative (it was recorded when the trade executed) but
+ * `payout` is genuinely unknown and stays null. Profit is filled in only for
+ * a loss, where it is exactly the stake back out — a win's profit depends on
+ * the payout, which does not exist yet.
+ *
+ * This reads the trade ledger and writes nothing. It does not settle, price
+ * or credit anything.
+ */
+export function buildProvisionalPlayResultValues(
+  trades: PlayHistoryTradeView[],
+  marketAddress: string,
+  winningIndex: number | null,
+  refunded: boolean
+): PlayResultValues | null {
+  const mine = trades.filter(
+    (t) => String(t.market_address || "").trim() === String(marketAddress || "").trim()
+  );
+  if (!mine.length) return null;
+
+  // If settlement already ran, the authoritative path owns this result.
+  if (mine.every((t) => t.status !== "open")) return null;
+
+  const stake = sumDecimals(mine.map((t) => t.stake_usd));
+
+  const pickLabel =
+    mine
+      .slice()
+      .sort((a, b) => Number(b.stake_usd) - Number(a.stake_usd))
+      .map((t) => t.outcome_name)
+      .find((name): name is string => typeof name === "string" && name.trim().length > 0) ?? null;
+
+  if (refunded) {
+    return { state: "refund", stake, payout: null, profit: null, pickLabel };
+  }
+
+  if (winningIndex === null || !Number.isFinite(winningIndex)) return null;
+
+  const holdsWinner = mine.some(
+    (t) => Number(t.outcome_index) === Math.floor(winningIndex)
+  );
+
+  if (holdsWinner) {
+    const winningStake = sumDecimals(
+      mine
+        .filter((t) => Number(t.outcome_index) === Math.floor(winningIndex))
+        .map((t) => t.stake_usd)
+    );
+    const winningPick =
+      mine.find((t) => Number(t.outcome_index) === Math.floor(winningIndex))?.outcome_name ?? pickLabel;
+    return {
+      state: "win",
+      stake: winningStake,
+      payout: null,
+      profit: null,
+      pickLabel: winningPick,
+    };
+  }
+
+  return {
+    state: "lose",
+    stake,
+    // Every stake on this market is lost if the proposal holds.
+    profit: stake === null ? null : subtractDecimals("0", stake),
+    payout: null,
+    pickLabel,
+  };
 }
