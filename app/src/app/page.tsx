@@ -17,6 +17,7 @@ import FeedTradeSheet from "@/components/FeedTradeSheet";
 import HomeFeedActionRail from "@/components/HomeFeedActionRail";
 import HomeFeedCommentsSheet from "@/components/HomeFeedCommentsSheet";
 import ModeSwitch from "@/components/mode/ModeSwitch";
+import ModeBalancePill from "@/components/mode/ModeBalancePill";
 import { useTradingMode } from "@/components/mode/ModeProvider";
 import {
   useMarketSnapshotActions,
@@ -1212,24 +1213,31 @@ export default function Home() {
           </div>
         ) : (
           <div className="relative bg-black">
-            {/* Fixed overlay: branding + Search icon */}
+            {/* Fixed overlay header — the mobile feed has no MobileTopBar.
+                LAYOUT: [ balance ]   [ PLAY | REAL ]   [ search ]
+
+                The FunMarket wordmark that used to sit here is gone: the
+                mode switch is the control users reach for, so it takes the
+                centre. Equal 1fr outer columns keep it optically centred
+                regardless of how wide the balance reads (or whether it
+                renders at all, with no wallet connected). */}
             <div className="fixed top-0 left-0 right-0 z-[60] pointer-events-none">
-              <div className="flex items-center justify-between px-4 pt-[env(safe-area-inset-top,12px)] h-16">
-                <Link href="/" className="pointer-events-auto flex items-center gap-1">
-                  <img src="/logo4.png" alt="FunMarket" className="h-10 w-10 object-contain" />
-                  <span className="font-semibold text-white text-sm drop-shadow-lg">FunMarket</span>
-                </Link>
+              <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 px-4 pt-[env(safe-area-inset-top,12px)] h-16">
+                <div className="flex min-w-0 items-center justify-start">
+                  <ModeBalancePill variant="overlay" className="pointer-events-auto" />
+                </div>
 
-                {/* Play / Real mode — the mobile feed has no MobileTopBar */}
-                <ModeSwitch size="sm" variant="overlay" className="pointer-events-auto ml-auto mr-2" />
+                <ModeSwitch size="sm" variant="overlay" className="pointer-events-auto" />
 
-                <Link
-                  href="/search"
-                  className="pointer-events-auto h-9 w-9 flex items-center justify-center rounded-full bg-black/40 backdrop-blur-sm border border-white/15"
-                  aria-label="Search markets"
-                >
-                  <Search className="w-[18px] h-[18px] text-white/90" />
-                </Link>
+                <div className="flex min-w-0 items-center justify-end">
+                  <Link
+                    href="/search"
+                    className="pointer-events-auto h-9 w-9 flex items-center justify-center rounded-full bg-black/40 backdrop-blur-sm border border-white/15"
+                    aria-label="Search markets"
+                  >
+                    <Search className="w-[18px] h-[18px] text-white/90" />
+                  </Link>
+                </div>
               </div>
             </div>
 

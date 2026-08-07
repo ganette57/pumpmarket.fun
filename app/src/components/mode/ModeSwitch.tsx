@@ -12,6 +12,10 @@
 // from the Live MobileTabs, `bg-pump-green text-black` for the active state
 // (the same accent as the Create / Go Live buttons), and subtle grey for the
 // inactive one. No new design language is introduced.
+//
+// It calls requestMode() rather than setMode(), which is what gives every
+// instance of this control — mobile header, home feed, Live tabs, desktop
+// header — the same one-time "Switch to Real?" explainer for free.
 
 import { useTradingMode } from "@/components/mode/ModeProvider";
 import type { TradingMode } from "@/lib/tradingMode";
@@ -43,7 +47,7 @@ export default function ModeSwitch({
   variant?: Variant;
   className?: string;
 }) {
-  const { mode, setMode } = useTradingMode();
+  const { mode, requestMode } = useTradingMode();
   const s = SIZE[size];
 
   const item = (value: TradingMode, label: string) => {
@@ -52,7 +56,7 @@ export default function ModeSwitch({
       <button
         key={value}
         type="button"
-        onClick={() => setMode(value)}
+        onClick={() => requestMode(value)}
         aria-pressed={active}
         aria-label={`Switch to ${label} mode`}
         className={`${s.pad} ${s.text} rounded-full font-bold uppercase tracking-wide transition-colors duration-150 ${

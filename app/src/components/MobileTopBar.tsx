@@ -1,4 +1,21 @@
 // src/components/MobileTopBar.tsx
+//
+// The mobile app header for every non-immersive surface: trade, leaderboard,
+// explorer, dashboard, profile. (/ , /live and /live/[id] render their own
+// headers — see AppShell.)
+//
+// LAYOUT: [ balance ]   [ PLAY | REAL ]   [ menu ]
+//
+// The FunMarket wordmark used to own the whole left half and pushed the mode
+// switch against the menu button. Mode is the control users actually reach
+// for on mobile, so the wordmark is gone and the switch sits dead centre.
+// Branding still lives in the tab title, the favicon and the desktop header.
+//
+// Centring is done with a three-column grid whose outer columns are equal
+// fractions, NOT with flex + ml-auto: that way the switch stays optically
+// centred whether the balance pill reads "$850", "12.4K SOL" or is absent
+// entirely (no wallet connected).
+
 "use client";
 
 import Link from "next/link";
@@ -7,6 +24,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { useWallet } from "@solana/wallet-adapter-react";
 import ModeSwitch from "@/components/mode/ModeSwitch";
+import ModeBalancePill from "@/components/mode/ModeBalancePill";
 
 export default function MobileTopBar({ showSearch }: { showSearch: boolean }) {
   const router = useRouter();
@@ -55,31 +73,27 @@ const avatarLabel = useMemo(() => {
 
   return (
     <>
-      <div className={`fixed top-0 left-0 right-0 z-[70] border-b border-gray-800 bg-black/80 backdrop-blur ${showSearch ? "h-[116px]" : "h-16"}`}>
+      <div
+        className={`fixed top-0 left-0 right-0 z-[70] border-b border-gray-800 bg-black/80 backdrop-blur ${showSearch ? "h-[116px]" : "h-16"}`}
+        // Kept off the notch / status bar in standalone (PWA) mode. The
+        // spacer below carries the identical padding so nothing shifts.
+        // content-box because Tailwind's preflight is border-box globally:
+        // without it the safe-area padding would eat into h-16 instead of
+        // adding to it, and the row would overflow its own bar.
+        style={{ paddingTop: "env(safe-area-inset-top, 0px)", boxSizing: "content-box" }}
+      >
         {/* Row 1 */}
-        <div className="pl-2 pr-4 h-16 flex items-center gap-3">
-                    {/* Brand */}
-                    <Link href="/" className="flex items-center flex-1 min-w-0">
-  <div className="h-16 w-16 shrink-0">
-    <img
-      src="/logo4.png"
-      alt="FunMarket"
-      className="h-full w-full object-contain"
-    />
-  </div>
+        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 h-16 px-3">
+          {/* Left: active-mode balance */}
+          <div className="flex min-w-0 items-center justify-start">
+            <ModeBalancePill variant="header" />
+          </div>
 
-  <div className="flex items-center gap-2 min-w-0">
-    <span className="font-semibold text-white truncate">FunMarket</span>
-    <span className="shrink-0 px-2 py-0.5 text-[9px] font-bold uppercase rounded-full bg-pump-green text-black">
-      beta
-    </span>
-  </div>
-</Link>
+          {/* Centre: Play / Real mode — the primary control on mobile */}
+          <ModeSwitch size="sm" variant="header" />
 
-         {/* Play / Real mode */}
-         <ModeSwitch size="sm" variant="header" className="shrink-0" />
-
-         {/* Menu button */}
+          {/* Right: menu / wallet */}
+          <div className="flex min-w-0 items-center justify-end">
 <div className="shrink-0 relative" ref={menuRef}>
   <button
     type="button"
@@ -164,6 +178,7 @@ const avatarLabel = useMemo(() => {
     </div>
   )}
 </div>
+          </div>
         </div>
 
         {/* Search */}
@@ -191,8 +206,11 @@ const avatarLabel = useMemo(() => {
         )}
       </div>
 
-      {/* Spacer */}
-      <div className={showSearch ? "h-[116px]" : "h-16"} />
+      {/* Spacer — must match the fixed bar's height AND its safe-area pad */}
+      <div
+        className={showSearch ? "h-[116px]" : "h-16"}
+        style={{ paddingTop: "env(safe-area-inset-top, 0px)", boxSizing: "content-box" }}
+      />
           </>
   );
 }
