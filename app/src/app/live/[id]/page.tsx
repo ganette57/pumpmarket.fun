@@ -25,8 +25,9 @@ import FlashMarketResultModal, {
   type FlashMarketResultState,
 } from "@/components/FlashMarketResultModal";
 import { buildRealResultValues } from "@/lib/resultPayload";
-import type { PayoutQualifier } from "@/lib/resultCard";
+import type { PayoutQualifier, ResultMode } from "@/lib/resultCard";
 import { hasSeenResult, markResultSeen, resultSeenKey } from "@/lib/resultSeen";
+import { fetchPlayLiveResult, playLiveSeenKey } from "@/lib/playLiveResult";
 import {
   StreamPlayer,
   StreamUnavailable,
@@ -321,8 +322,16 @@ export default function LiveViewerPage() {
   );
   const [resultModal, setResultModal] = useState<{
     result: FlashMarketResultState;
+    /** Which ecosystem produced these numbers. Never inferred at render. */
+    mode: ResultMode;
     provisional?: boolean;
     outcomeLabel?: string | null;
+    /**
+     * The outcome the user actually backed. Play knows it from the trade
+     * ledger even on a loss; Real leaves it null and the render falls back to
+     * the winning outcome on a win, exactly as before.
+     */
+    pickLabel?: string | null;
     winningShares?: number | null;
     marketTitle?: string | null;
     marketPath?: string | null;
@@ -336,6 +345,12 @@ export default function LiveViewerPage() {
   } | null>(null);
   const prevSettledRef = useRef(false);
   const hostJustResolvedRef = useRef(false);
+  /**
+   * The Play result key already shown, or currently being fetched. The market
+   * row is polled every 8s, so without this claim each poll would fire another
+   * /api/play/history request for a result that is already on screen.
+   */
+  const playResultKeyRef = useRef<string | null>(null);
 
   const [positionShares, setPositionShares] = useState<number[] | null>(null);
   const [marketBalanceLamports, setMarketBalanceLamports] = useState<number | null>(null);
@@ -651,6 +666,7 @@ export default function LiveViewerPage() {
 
     setResultModal({
       result: values.state,
+      mode: "real",
       provisional,
       outcomeLabel,
       winningShares: userShares > 0 ? userShares : null,
@@ -682,6 +698,143 @@ export default function LiveViewerPage() {
     positionShares,
     onchainAccounts,
     marketBalanceLamports,
+  ]);
+
+  /**
+   * Play: the same announcement, from the Play ledger.
+   *
+   * Deliberately a SEPARATE effect from the Real one above rather than a
+   * branch inside it. The two are mutually exclusive on `isPlay`, so Real
+   * behaviour — including its host suppression and its prevSettledRef
+   * transition tracking — is left exactly as it was.
+   *
+   * THE HOST IS NOT SUPPRESSED HERE. Real suppresses them because they just
+   * used the resolve sheet and already know the outcome; but a host can also
+   * have traded this market with Play money, and that position deserves its
+   * result like anyone else's. The gate is "does this wallet hold a Play
+   * position on this market", which is the honest condition — a host who did
+   * not trade in Play still sees nothing, because the ledger has nothing.
+   */
+  useEffect(() => {
+    if (!isPlay) return;
+
+    // The session is winding down and this page redirects to /trade in 600ms.
+    // Opening a modal into that would either be torn off screen mid-fetch or
+    // be shown twice, so /trade owns the result from here — it runs the same
+    // lookup and, because the seen-key below matches the one it builds, shows
+    // it exactly once.
+    const status = String(session?.status || "");
+    if (status === "ended" || status === "resolved" || status === "cancelled") return;
+
+    const resolution = String(market?.resolutionStatus || "open");
+    const refunded = resolution === "cancelled";
+    // A PROPOSED outcome is enough — that is the whole point of this fix.
+    const settledNow = !!market?.resolved || resolution === "proposed" || refunded;
+    if (!settledNow) return;
+
+    const account = publicKey?.toBase58();
+    const marketAddress = String(market?.publicKey || "");
+    if (!account || !marketAddress) return;
+
+    const winningIdx = refunded
+      ? null
+      : market?.winningOutcome != null && resolution === "finalized"
+        ? Number(market.winningOutcome)
+        : market?.proposedOutcome != null
+          ? Number(market.proposedOutcome)
+          : null;
+    if (winningIdx === null && !refunded) return;
+
+    // Same identifier /trade/[id] keys on, so a result seen on either surface
+    // is never announced again on the other.
+    const seenKey = playLiveSeenKey({
+      account,
+      marketId: String(market?.dbId || marketAddress),
+      winningIndex: winningIdx,
+      refunded,
+    });
+    if (playResultKeyRef.current === seenKey) return;
+    if (hasSeenResult(seenKey)) {
+      playResultKeyRef.current = seenKey;
+      return;
+    }
+    // Claim before awaiting: another poll must not race in behind us.
+    playResultKeyRef.current = seenKey;
+
+    const finalized = resolution === "finalized" || !!market?.resolved;
+    const outcomeLabel =
+      winningIdx === null ? null : (market?.outcomeNames || [])[winningIdx] || null;
+    const marketTitle = market?.question || null;
+
+    let cancelled = false;
+    let answered = false;
+
+    void (async () => {
+      const lookup = await fetchPlayLiveResult({
+        marketAddress,
+        winningIndex: winningIdx,
+        refunded,
+        finalized,
+      });
+      answered = lookup.status !== "unavailable";
+      if (cancelled) return;
+
+      if (lookup.status === "unavailable") {
+        // No Play session or a failed request — that is not evidence the
+        // wallet has no position, so release the claim and let a later poll
+        // try again.
+        if (playResultKeyRef.current === seenKey) playResultKeyRef.current = null;
+        return;
+      }
+      // "none" keeps the claim: the ledger answered, this wallet has nothing
+      // on this market, and re-asking every 8s would be pure noise.
+      if (lookup.status === "none") return;
+
+      const { values } = lookup;
+      setResultModal({
+        result: values.state,
+        mode: "play",
+        provisional: values.provisional,
+        outcomeLabel,
+        pickLabel: values.pickLabel,
+        // A Real-only concept; Play sizes itself in stake, not share counts.
+        winningShares: null,
+        marketTitle,
+        marketPath: `/trade/${marketAddress}`,
+        secondaryText: refunded
+          ? "Market cancelled."
+          : values.provisional
+            ? "Outcome proposed."
+            : "Market finalized.",
+        seenKey,
+        stake: values.stake,
+        payout: values.payout,
+        profit: values.profit,
+        // Play money is credited by settlement, never claimed.
+        payoutQualifier: null,
+        claimAvailable: false,
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+      // Torn down mid-flight: drop the claim so the next run can retry.
+      if (!answered && playResultKeyRef.current === seenKey) {
+        playResultKeyRef.current = null;
+      }
+    };
+  }, [
+    isPlay,
+    publicKey,
+    session?.status,
+    market?.resolved,
+    market?.resolutionStatus,
+    market?.proposedOutcome,
+    market?.winningOutcome,
+    market?.outcomeNames,
+    market?.question,
+    market?.publicKey,
+    market?.dbId,
   ]);
 
   /* ── Derived market data ───────────────────────────────────────── */
@@ -1628,11 +1781,14 @@ export default function LiveViewerPage() {
         <FlashMarketResultModal
           open
           result={resultModal.result}
-          mode="real"
+          mode={resultModal.mode}
           provisional={resultModal.provisional ?? false}
           marketTitle={resultModal.marketTitle}
           outcomeLabel={resultModal.outcomeLabel}
-          pickLabel={resultModal.result === "win" ? resultModal.outcomeLabel : null}
+          pickLabel={
+            resultModal.pickLabel ??
+            (resultModal.result === "win" ? resultModal.outcomeLabel : null)
+          }
           secondaryText={resultModal.secondaryText ?? null}
           winningShares={resultModal.winningShares}
           stake={resultModal.stake ?? null}

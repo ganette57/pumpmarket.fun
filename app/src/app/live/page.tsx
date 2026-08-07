@@ -42,8 +42,9 @@ import FlashMarketResultModal, {
   type FlashMarketResultState,
 } from "@/components/FlashMarketResultModal";
 import { buildRealResultValues } from "@/lib/resultPayload";
-import type { PayoutQualifier } from "@/lib/resultCard";
+import type { PayoutQualifier, ResultMode } from "@/lib/resultCard";
 import { hasSeenResult, markResultSeen, resultSeenKey } from "@/lib/resultSeen";
+import { fetchPlayLiveResult, playLiveSeenKey } from "@/lib/playLiveResult";
 import { proposeLiveResolution } from "@/lib/liveResolve";
 import { createLiveFlashMarket } from "@/lib/liveMarketCreate";
 import bs58 from "bs58";
@@ -1195,10 +1196,18 @@ export default function LivePage() {
   //   existing "Market resolved / Outcome proposed" card is the fallback.
   const [resultModal, setResultModal] = useState<{
     result: FlashMarketResultState;
+    /** Which ecosystem produced these numbers. Never inferred at render. */
+    mode: ResultMode;
     provisional: boolean;
     secondaryText: string | null;
     seenKey: string | null;
     outcomeLabel: string | null;
+    /**
+     * The outcome the user actually backed. Play knows it from the trade
+     * ledger even on a loss; Real leaves it null and the render falls back to
+     * the winning outcome on a win, exactly as before.
+     */
+    pickLabel: string | null;
     winningShares: number | null;
     marketTitle: string | null;
     marketPath: string | null;
@@ -1212,6 +1221,12 @@ export default function LivePage() {
     Record<string, { pk: string; settled: boolean }>
   >({});
   const shownResultsRef = useRef<Set<string>>(new Set());
+  /**
+   * The Play result key already shown, or currently being fetched. Snapshots
+   * are polled and the feed re-renders on every swipe, so without this claim
+   * each pass would fire another /api/play/history request.
+   */
+  const playResultKeyRef = useRef<string | null>(null);
 
   /**
    * The viewer's position PLUS the two account facts the result modal needs
@@ -1319,12 +1334,14 @@ export default function LivePage() {
       });
       setResultModal({
         result: winningShares > 0 ? "win" : "lose",
+        mode: "real",
         // The feed reaches here on "proposed" as well as "resolved"; anything
         // short of finalized is provisional and must say so.
         provisional: !finalized,
         secondaryText: finalized ? "Market finalized." : "Outcome proposed.",
         seenKey,
         outcomeLabel: names[winningIdx] ?? null,
+        pickLabel: null,
         winningShares: winningShares > 0 ? winningShares : null,
         marketTitle: title,
         marketPath: `/trade/${pk}`,
@@ -1390,6 +1407,111 @@ export default function LivePage() {
     activeFeedSession,
     activeFeedSnapshot,
   ]);
+
+  /**
+   * Play: the same announcement in the immersive feed, from the Play ledger.
+   *
+   * Kept separate from the Real effect above so that one is untouched; the two
+   * are mutually exclusive on `isPlay`.
+   *
+   * It intentionally does NOT use the Real effect's false→true transition
+   * tracking. That only fires for a viewer who was watching the exact moment
+   * the host proposed — swipe into an already-proposed market, or come back
+   * from a backgrounded tab, and no transition is ever observed. Keying purely
+   * on "settled, wallet holds a Play position, and this outcome has not been
+   * shown yet" is what actually gets the trader their result, and the
+   * outcome-keyed localStorage entry is what stops it repeating.
+   *
+   * The host is not suppressed here — see the note on the /live/[id] effect.
+   */
+  useEffect(() => {
+    if (!isMobile || !isPlay || !activeFeedSnapshot) return;
+
+    const resolution = String(activeFeedSnapshot.resolutionStatus || "open");
+    const refunded = resolution === "cancelled";
+    const settledNow =
+      !!activeFeedSnapshot.resolved || resolution === "proposed" || refunded;
+    if (!settledNow) return;
+
+    const account = publicKey?.toBase58();
+    const marketAddress = String(activeFeedSnapshot.publicKey || "");
+    if (!account || !marketAddress) return;
+
+    const winningIdx = refunded
+      ? null
+      : activeFeedSnapshot.proposedOutcome != null
+        ? Number(activeFeedSnapshot.proposedOutcome)
+        : null;
+    if (winningIdx === null && !refunded) return;
+
+    const seenKey = playLiveSeenKey({
+      account,
+      marketId: String(activeFeedSnapshot.dbId || marketAddress),
+      winningIndex: winningIdx,
+      refunded,
+    });
+    if (playResultKeyRef.current === seenKey) return;
+    if (hasSeenResult(seenKey)) {
+      playResultKeyRef.current = seenKey;
+      return;
+    }
+    playResultKeyRef.current = seenKey;
+
+    const finalized = !!activeFeedSnapshot.resolved;
+    const names = activeFeedSnapshot.outcomeNames || [];
+    const outcomeLabel = winningIdx === null ? null : names[winningIdx] ?? null;
+    const marketTitle = activeFeedSnapshot.question ?? null;
+
+    let cancelled = false;
+    let answered = false;
+
+    void (async () => {
+      const lookup = await fetchPlayLiveResult({
+        marketAddress,
+        winningIndex: winningIdx,
+        refunded,
+        finalized,
+      });
+      answered = lookup.status !== "unavailable";
+      if (cancelled) return;
+
+      if (lookup.status === "unavailable") {
+        if (playResultKeyRef.current === seenKey) playResultKeyRef.current = null;
+        return;
+      }
+      if (lookup.status === "none") return;
+
+      const { values } = lookup;
+      setResultModal({
+        result: values.state,
+        mode: "play",
+        provisional: values.provisional,
+        secondaryText: refunded
+          ? "Market cancelled."
+          : values.provisional
+            ? "Outcome proposed."
+            : "Market finalized.",
+        seenKey,
+        outcomeLabel,
+        pickLabel: values.pickLabel,
+        winningShares: null,
+        marketTitle,
+        marketPath: `/trade/${marketAddress}`,
+        stake: values.stake,
+        payout: values.payout,
+        profit: values.profit,
+        payoutQualifier: null,
+        claimAvailable: false,
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+      if (!answered && playResultKeyRef.current === seenKey) {
+        playResultKeyRef.current = null;
+      }
+    };
+  }, [isMobile, isPlay, publicKey, activeFeedSnapshot]);
 
   if (isMobile) {
     if (loading) {
@@ -1612,12 +1734,15 @@ export default function LivePage() {
           <FlashMarketResultModal
             open
             result={resultModal.result}
-            mode="real"
+            mode={resultModal.mode}
             provisional={resultModal.provisional}
             secondaryText={resultModal.secondaryText}
             marketTitle={resultModal.marketTitle}
             outcomeLabel={resultModal.outcomeLabel}
-            pickLabel={resultModal.result === "win" ? resultModal.outcomeLabel : null}
+            pickLabel={
+              resultModal.pickLabel ??
+              (resultModal.result === "win" ? resultModal.outcomeLabel : null)
+            }
             winningShares={resultModal.winningShares}
             stake={resultModal.stake}
             payout={resultModal.payout}
