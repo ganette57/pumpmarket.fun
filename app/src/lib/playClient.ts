@@ -188,6 +188,23 @@ export type PlayMarketSnapshotView = {
   stake_by_outcome_usd: string[];
 };
 
+/**
+ * The two market-wide inputs play_settle_market's pro-rata payout divides by,
+ * as /api/play/settlement-preview returns them. Inputs only — the payout
+ * itself is computed by src/lib/playPayoutMath.ts, which owns the single
+ * mirror of the SQL formula.
+ */
+export type PlaySettlementBookView = {
+  market_address: string;
+  winning_outcome: number;
+  /** The SQL's `final_pool`. */
+  virtual_pool_usd: string;
+  /** The SQL's `total_winning` — SUM(shares) over ALL open winning trades. */
+  total_winning_shares: string;
+  status: string;
+  version: number;
+};
+
 export type PlayHistoryPointView = {
   /** ISO timestamp. */
   t: string;
@@ -525,6 +542,37 @@ export const playClient = {
           ? null
           : decimal(t.realized_pnl_usd),
     })) as PlayHistoryTradeView[];
+  },
+
+  /**
+   * The settlement book for one market and one proposed outcome, so a
+   * provisional result can show an estimated payout.
+   *
+   * Read-only end to end: the route runs no RPC, settles nothing and credits
+   * nothing. Returns null when the numbers cannot be stated exactly — the
+   * caller must then show no payout at all rather than a zero.
+   */
+  async settlementPreview(args: {
+    marketAddress: string;
+    winningOutcome: number;
+  }): Promise<PlaySettlementBookView | null> {
+    const raw = await post<{ book: PlaySettlementBookView | null }>(
+      "/api/play/settlement-preview",
+      {
+        market_address: args.marketAddress,
+        winning_outcome: args.winningOutcome,
+      }
+    );
+    const book = raw?.book;
+    if (!book) return null;
+    // decimal() would coerce an unreadable value to "0"; a zero pool or a
+    // zero winning supply must stay unknown, so they are checked instead.
+    const pool = String(book.virtual_pool_usd ?? "").trim();
+    const total = String(book.total_winning_shares ?? "").trim();
+    if (!/^-?\d+(\.\d+)?$/.test(pool) || !/^-?\d+(\.\d+)?$/.test(total)) {
+      return null;
+    }
+    return { ...book, virtual_pool_usd: pool, total_winning_shares: total };
   },
 
   /**

@@ -19,6 +19,7 @@ import {
   type ResultCardInput,
   type ResultState,
 } from "./resultCard";
+import { playProRataPayoutUsd } from "./playPayoutMath";
 import type { PlayHistoryTradeView, PlayProfilePositionView } from "./playClient";
 
 /* -------------------------------------------------------------------------- */
@@ -272,23 +273,47 @@ export function buildPlayProfileShareInput(
 }
 
 /**
+ * The market-wide half of the settlement inputs, from
+ * /api/play/settlement-preview. Omit it and a provisional win prices nothing,
+ * exactly as before this existed.
+ */
+export type PlayProvisionalBook = {
+  /** play_market_states.virtual_pool_usd — the SQL's `final_pool`. */
+  virtual_pool_usd: string;
+  /** SUM(shares) over ALL open winning trades — the SQL's `total_winning`. */
+  total_winning_shares: string;
+};
+
+/**
  * A PROVISIONAL Play result, built from the player's still-open trades on a
  * market whose outcome has only been proposed.
  *
- * Play settles on Real finalization, so at proposal time nothing is priced
- * yet: `stake` is authoritative (it was recorded when the trade executed) but
- * `payout` is genuinely unknown and stays null. Profit is filled in only for
- * a loss, where it is exactly the stake back out — a win's profit depends on
- * the payout, which does not exist yet.
+ * `stake` is authoritative — it was recorded when the trade executed. The
+ * payout is an ESTIMATE, and it is estimated the only honest way: by running
+ * the identical arithmetic play_settle_market will run, over the identical
+ * Play book. playPayoutMath.ts holds that mirror; nothing is derived from
+ * displayed odds, implied probability or a 1/p multiple, and no Real value
+ * exists anywhere on this path.
+ *
+ * The estimate is exact for the proposed outcome, not merely close:
+ * play_assert_market_tradable refuses every Play trade once
+ * markets.resolution_status leaves 'open', so neither the pool nor the
+ * winning supply can move between the proposal and settlement. A DISPUTE that
+ * changes the outcome is the one thing that changes the number — which is
+ * precisely what "provisional" is telling the user.
+ *
+ * Without a `book` the payout and a win's profit stay null and the modal drops
+ * those rows. Null means "not known" and must never render as zero.
  *
  * This reads the trade ledger and writes nothing. It does not settle, price
- * or credit anything.
+ * or credit anything, and it moves no balance.
  */
 export function buildProvisionalPlayResultValues(
   trades: PlayHistoryTradeView[],
   marketAddress: string,
   winningIndex: number | null,
-  refunded: boolean
+  refunded: boolean,
+  book?: PlayProvisionalBook | null
 ): PlayResultValues | null {
   const mine = trades.filter(
     (t) => String(t.market_address || "").trim() === String(marketAddress || "").trim()
@@ -298,10 +323,15 @@ export function buildProvisionalPlayResultValues(
   // If settlement already ran, the authoritative path owns this result.
   if (mine.every((t) => t.status !== "open")) return null;
 
-  const stake = sumDecimals(mine.map((t) => t.stake_usd));
+  // Settlement walks `status = 'open'` rows and nothing else, so the estimate
+  // describes exactly that set. In practice it is all of `mine` — a market
+  // with any settled row is claimed by buildPlayResultValues above.
+  const open = mine.filter((t) => t.status === "open");
+
+  const stake = sumDecimals(open.map((t) => t.stake_usd));
 
   const pickLabel =
-    mine
+    open
       .slice()
       .sort((a, b) => Number(b.stake_usd) - Number(a.stake_usd))
       .map((t) => t.outcome_name)
@@ -313,23 +343,49 @@ export function buildProvisionalPlayResultValues(
 
   if (winningIndex === null || !Number.isFinite(winningIndex)) return null;
 
-  const holdsWinner = mine.some(
-    (t) => Number(t.outcome_index) === Math.floor(winningIndex)
-  );
+  const winner = Math.floor(winningIndex);
+  const won = open.filter((t) => Number(t.outcome_index) === winner);
 
-  if (holdsWinner) {
-    const winningStake = sumDecimals(
-      mine
-        .filter((t) => Number(t.outcome_index) === Math.floor(winningIndex))
-        .map((t) => t.stake_usd)
-    );
-    const winningPick =
-      mine.find((t) => Number(t.outcome_index) === Math.floor(winningIndex))?.outcome_name ?? pickLabel;
+  if (won.length) {
+    const winningPick = won[0]?.outcome_name ?? pickLabel;
+
+    // trunc() is applied PER TRADE in the SQL loop, so the per-trade payouts
+    // are computed separately and only then summed. One unpriceable row
+    // voids the whole estimate — a partial payout would understate the total.
+    const perTrade = book
+      ? won.map((t) =>
+          playProRataPayoutUsd({
+            shares: t.shares,
+            totalWinningShares: book.total_winning_shares,
+            finalPoolUsd: book.virtual_pool_usd,
+          })
+        )
+      : [];
+    const priced =
+      perTrade.length === won.length && perTrade.every((p) => p !== null);
+
+    const payout = priced ? sumDecimals(perTrade) : null;
+
+    // Settlement's realized P&L over the same rows: a winning trade earns
+    // `payout - stake`, and any losing leg on this market still loses its
+    // whole stake. Summing both is what play_settle_market credits, so the
+    // estimate stays consistent with `stake` above once it finalizes.
+    const pnls = priced
+      ? [
+          ...won.map((t, i) => subtractDecimals(perTrade[i], toDecimalString(t.stake_usd))),
+          ...open
+            .filter((t) => Number(t.outcome_index) !== winner)
+            .map((t) => subtractDecimals("0", toDecimalString(t.stake_usd))),
+        ]
+      : [];
+    const profit =
+      priced && pnls.every((p) => p !== null) ? sumDecimals(pnls) : null;
+
     return {
       state: "win",
-      stake: winningStake,
-      payout: null,
-      profit: null,
+      stake,
+      payout,
+      profit,
       pickLabel: winningPick,
     };
   }

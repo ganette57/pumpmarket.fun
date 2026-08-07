@@ -14,12 +14,16 @@
 //
 // WHAT IT WILL NOT DO
 // -------------------
-// It never settles, prices or credits anything: it POSTs to /api/play/history
-// and reads. At proposal time the stake is authoritative — it was recorded
-// when the trade executed — but the payout genuinely does not exist yet,
-// because Play settles only when the Real market finalizes. The builders below
-// leave it null and the modal drops the row rather than showing a number
-// nobody can stand behind.
+// It never settles, credits or moves anything: it POSTs to /api/play/history
+// and /api/play/settlement-preview, and reads. Both are read-only; neither
+// calls play_settle_market.
+//
+// On a provisional WIN it does state an ESTIMATED payout, and that estimate is
+// not a guess. It comes from playPayoutMath.ts running the identical formula
+// play_settle_market runs, over the identical Play book — never from displayed
+// odds or an implied multiple. When the book cannot be read exactly the payout
+// stays null and the modal drops the row rather than showing a number nobody
+// can stand behind.
 //
 // Real data never enters here, and nothing from here reaches a Real modal.
 
@@ -27,8 +31,10 @@ import { playClient } from "./playClient";
 import {
   buildPlayResultValues,
   buildProvisionalPlayResultValues,
+  type PlayResultValues,
 } from "./resultPayload";
 import { resultSeenKey } from "./resultSeen";
+import type { PlayHistoryTradeView } from "./playClient";
 import type { ResultState } from "./resultCard";
 
 /** Matches the page size /trade/[id] already uses for the same lookup. */
@@ -95,6 +101,74 @@ export function playLiveSeenKey(args: {
 }
 
 /**
+ * Folds an already-fetched trade list into one market's result, settled
+ * numbers first and a priced provisional estimate second.
+ *
+ * EVERY Play surface goes through here — /live/[id], the mobile /live feed and
+ * /trade/[id] — so a result can never mean one thing on one page and
+ * something else on another. Returns null when this wallet has no position on
+ * this market.
+ *
+ * The only network call is the read-only settlement book, and only for a
+ * provisional WIN: a loss already knows its profit, and a settled result needs
+ * no estimate at all.
+ */
+export async function resolvePlayResultValues(args: {
+  trades: PlayHistoryTradeView[];
+  marketAddress: string;
+  winningIndex: number | null;
+  refunded: boolean;
+}): Promise<{ values: PlayResultValues; settled: boolean } | null> {
+  const address = String(args.marketAddress || "").trim();
+  if (!address) return null;
+
+  // Settlement already ran: those numbers are authoritative and win outright.
+  const settled = buildPlayResultValues(args.trades, address);
+  if (settled) return { values: settled, settled: true };
+
+  // Otherwise the outcome is only proposed (or Play settlement has not caught
+  // up yet). Lose → profit is exactly the recorded stake back out, and no
+  // book is needed for it.
+  const provisional = buildProvisionalPlayResultValues(
+    args.trades,
+    address,
+    args.winningIndex,
+    args.refunded
+  );
+  if (!provisional) return null;
+
+  // Only a win needs a price, so the extra request is only made for one.
+  if (provisional.state !== "win" || args.winningIndex === null) {
+    return { values: provisional, settled: false };
+  }
+
+  let book = null;
+  try {
+    book = await playClient.settlementPreview({
+      marketAddress: address,
+      winningOutcome: args.winningIndex,
+    });
+  } catch {
+    // The result itself is already known and correct — only the estimate is
+    // missing. Fall through with the unpriced values rather than losing a
+    // real win over a failed side request.
+    book = null;
+  }
+  if (!book) return { values: provisional, settled: false };
+
+  const priced =
+    buildProvisionalPlayResultValues(
+      args.trades,
+      address,
+      args.winningIndex,
+      args.refunded,
+      book
+    ) ?? provisional;
+
+  return { values: priced, settled: false };
+}
+
+/**
  * Reads the connected wallet's own Play trades and folds the ones on this
  * market into a single result.
  *
@@ -122,27 +196,21 @@ export async function fetchPlayLiveResult(args: {
     return { status: "unavailable" };
   }
 
-  // Settlement already ran: those numbers are authoritative and win outright.
-  const settled = buildPlayResultValues(trades, address);
-  if (settled) {
-    return {
-      status: "ok",
-      // Finalized on chain but settled in Play means real numbers. Anything
-      // short of finalized still carries the provisional notice.
-      values: { ...settled, provisional: !args.finalized },
-    };
-  }
-
-  // Otherwise the outcome is only proposed (or Play settlement has not caught
-  // up yet). This prices nothing: win → payout and profit stay null; lose →
-  // profit is exactly the recorded stake back out.
-  const provisional = buildProvisionalPlayResultValues(
+  const resolved = await resolvePlayResultValues({
     trades,
-    address,
-    args.winningIndex,
-    args.refunded
-  );
-  if (!provisional) return { status: "none" };
+    marketAddress: address,
+    winningIndex: args.winningIndex,
+    refunded: args.refunded,
+  });
+  if (!resolved) return { status: "none" };
 
-  return { status: "ok", values: { ...provisional, provisional: true } };
+  return {
+    status: "ok",
+    values: {
+      ...resolved.values,
+      // Finalized on chain AND settled in Play means real numbers. Anything
+      // short of that still carries the provisional notice.
+      provisional: resolved.settled ? !args.finalized : true,
+    },
+  };
 }

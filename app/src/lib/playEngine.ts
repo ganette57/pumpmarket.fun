@@ -663,6 +663,140 @@ export async function getMarketState(
 }
 
 /* -------------------------------------------------------------------------- */
+/*  Settlement book (read-only)                                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The two market-wide numbers play_settle_market feeds into its pro-rata
+ * payout, read without settling anything.
+ *
+ * These are INPUTS, not a payout. Consistent with the header of this file, no
+ * payout arithmetic happens server-side here; src/lib/playPayoutMath.ts owns
+ * the mirror of the SQL formula, and it is the only place that mirror exists.
+ *
+ * Nothing user-scoped is in here — the pool is market-wide and the share total
+ * is an aggregate over every trader, the same class of public book data
+ * `stake_by_outcome_usd` already exposes on /api/play/markets. No account id,
+ * balance, wallet or individual trade can be reconstructed from it.
+ */
+export type PlaySettlementBook = {
+  market_address: string;
+  /** The proposed (or final) winning outcome these numbers describe. */
+  winning_outcome: number;
+  /** play_market_states.virtual_pool_usd — the SQL's `final_pool`. */
+  virtual_pool_usd: string;
+  /**
+   * SUM(shares) over OPEN play_trades on the winning outcome — the SQL's
+   * `total_winning`. Sourced from the trade ledger exactly as the SQL sources
+   * it, so the seeded opening book in `outcome_supplies` can never leak in.
+   */
+  total_winning_shares: string;
+  /** Play state status. Anything but 'open' means settlement already ran. */
+  status: PlayMarketStateStatus;
+  version: number;
+};
+
+/**
+ * Ceiling on open winning trades summed for one market. Beyond it the sum
+ * could silently undercount, which would OVERSTATE every winner's estimate —
+ * so the book comes back null instead and the UI shows no payout at all.
+ */
+const PLAY_WINNING_MAX_TRADES = 5000;
+
+/** Exact sum of numeric(28,8) values, in integer 1e-8 units. Never a float. */
+function sumSharesScaled(rows: Array<{ shares?: unknown }>): bigint | null {
+  const SCALE = 8;
+  let total = BigInt(0);
+  for (const r of rows) {
+    const s = String(r?.shares ?? "").trim();
+    if (!/^-?\d+(\.\d+)?$/.test(s)) return null; // unreadable row — refuse to guess
+    const neg = s.startsWith("-");
+    const [whole, frac = ""] = (neg ? s.slice(1) : s).split(".");
+    const scaled =
+      BigInt(whole || "0") * BigInt("100000000") +
+      BigInt((frac + "0".repeat(SCALE)).slice(0, SCALE) || "0");
+    total += neg ? -scaled : scaled;
+  }
+  return total;
+}
+
+/** 1e-8 units -> "1234.50000000". */
+function sharesFromScaled(scaled: bigint): string {
+  const neg = scaled < BigInt(0);
+  const abs = neg ? -scaled : scaled;
+  const unit = BigInt("100000000");
+  return `${neg ? "-" : ""}${(abs / unit).toString()}.${(abs % unit)
+    .toString()
+    .padStart(8, "0")}`;
+}
+
+/**
+ * Reads the settlement book for one market and one proposed outcome.
+ *
+ * READ-ONLY. It calls no RPC, settles nothing, credits nothing and mutates no
+ * row — two SELECTs and an exact integer sum.
+ *
+ * Returns null when the answer cannot be stated exactly: no Play state row, a
+ * row that is unreadable, or more open winning trades than can be summed in
+ * one pass. Callers must treat null as "no estimate", never as zero.
+ *
+ * The numbers are stable from proposal onward: play_assert_market_tradable
+ * refuses every trade once markets.resolution_status leaves 'open', so no new
+ * stake can enter the pool or the winning supply between the proposal and
+ * finalization.
+ */
+export async function getPlaySettlementBook(
+  marketAddress: string,
+  winningOutcome: number
+): Promise<PlaySettlementBook | null> {
+  if (!Number.isInteger(winningOutcome) || winningOutcome < 0) return null;
+
+  const supa = supabaseServer();
+
+  const stateRes = await supa
+    .from("play_market_states")
+    .select("market_address,virtual_pool_usd,status,version")
+    .eq("market_address", marketAddress)
+    .maybeSingle();
+  if (stateRes.error) throw toEngineError(stateRes.error);
+  if (!stateRes.data) return null; // no Play economy on this market
+
+  // Summed in Node because this PostgREST has aggregate functions disabled
+  // (PGRST123), the same reason getPlayMarketSnapshots sums stakes here. The
+  // rows are a single column and never leave the server — only the total is
+  // serialized. `count` is exact so a server-side row cap can never be
+  // mistaken for a complete read.
+  const tradesRes = await supa
+    .from("play_trades")
+    .select("shares", { count: "exact" })
+    .eq("market_address", marketAddress)
+    .eq("status", "open")
+    .eq("outcome_index", winningOutcome)
+    .limit(PLAY_WINNING_MAX_TRADES);
+  if (tradesRes.error) throw toEngineError(tradesRes.error);
+
+  const rows = (tradesRes.data as Array<{ shares?: unknown }>) || [];
+  if (typeof tradesRes.count === "number" && tradesRes.count > rows.length) {
+    return null; // truncated read — an undercount would overstate every payout
+  }
+
+  const total = sumSharesScaled(rows);
+  if (total === null) return null;
+
+  const pool = String((stateRes.data as any).virtual_pool_usd ?? "");
+  if (!/^-?\d+(\.\d+)?$/.test(pool.trim())) return null;
+
+  return {
+    market_address: marketAddress,
+    winning_outcome: winningOutcome,
+    virtual_pool_usd: pool.trim(),
+    total_winning_shares: sharesFromScaled(total),
+    status: ((stateRes.data as any).status || "open") as PlayMarketStateStatus,
+    version: Number((stateRes.data as any).version) || 0,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Play chart history                                                         */
 /* -------------------------------------------------------------------------- */
 

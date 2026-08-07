@@ -32,10 +32,10 @@ import BlockedMarketBanner from "@/components/BlockedMarketBanner";
 import TradeBuyPopOverlay from "@/components/TradeBuyPopOverlay";
 import FlashMarketResultModal, { type FlashMarketResultState } from "@/components/FlashMarketResultModal";
 import {
-  buildPlayResultValues,
-  buildProvisionalPlayResultValues,
   buildRealResultValues,
+  type PlayResultValues,
 } from "@/lib/resultPayload";
+import { resolvePlayResultValues } from "@/lib/playLiveResult";
 import { playClient } from "@/lib/playClient";
 import type { PayoutQualifier, ResultMode } from "@/lib/resultCard";
 import { hasSeenResult, markResultSeen, resultSeenKey } from "@/lib/resultSeen";
@@ -3873,17 +3873,23 @@ useEffect(() => {
     // ── Play ──────────────────────────────────────────────────────────────
     // One scoped request for this wallet's own trades. No leaderboard, no
     // contest fetch. Settled trades give the authoritative result; a merely
-    // proposed outcome falls back to the provisional view, which prices
-    // nothing and settles nothing.
+    // proposed outcome falls back to the provisional view, whose estimated
+    // payout comes from the same shared resolver the live surfaces use, so
+    // this page can never state a different number than /live does. It
+    // settles nothing and moves no balance.
     let cancelled = false;
     void (async () => {
-      let values: ReturnType<typeof buildPlayResultValues> = null;
+      let values: PlayResultValues | null = null;
       try {
         const trades = await playClient.history({ limit: 200 });
         const address = String(market.publicKey || "");
         values =
-          buildPlayResultValues(trades, address) ??
-          buildProvisionalPlayResultValues(trades, address, winningIndex, refunded);
+          (await resolvePlayResultValues({
+            trades,
+            marketAddress: address,
+            winningIndex,
+            refunded,
+          }))?.values ?? null;
       } catch {
         // No Play session, or the request failed — stay silent rather than
         // guessing a result.
