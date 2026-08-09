@@ -2,7 +2,7 @@
 
 // src/components/mode/ModeBalancePill.tsx
 //
-// The compact balance shown on the left of the mobile header.
+// The balance shown on the left of the mobile header.
 //
 // It shows the balance for the mode you are actually in, from the same
 // source that mode spends from:
@@ -12,6 +12,11 @@
 //          stake against. No second fetch: this reads the provider.
 //   REAL → useSolBalance() — native SOL from the wallet adapter connection.
 //          No SPL tokens.
+//
+// The wallet glyph is what makes the number legible at a glance: a bare
+// "$5,500" floating in a header could be anything — a prize pool, a volume
+// figure, a market cap. The icon says "this is yours" in the width a text
+// label like "Balance:" could never afford on mobile.
 //
 // HONESTY RULE
 // ------------
@@ -24,11 +29,12 @@
 // account for a balance to belong to. The header centres its mode switch
 // with a grid, so the switch does not move when the pill disappears.
 
+import { Wallet } from "lucide-react";
 import { useTradingMode } from "@/components/mode/ModeProvider";
 import { usePlaySession } from "@/components/play/PlaySessionProvider";
 import { useSolBalance } from "@/hooks/useSolBalance";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { formatCompactSol, formatCompactUsd } from "@/lib/compactBalance";
+import { formatBalanceSol, formatBalanceUsd } from "@/lib/compactBalance";
 
 /**
  * `header`  — solid surfaces (mobile top bar)
@@ -39,8 +45,8 @@ import { formatCompactSol, formatCompactUsd } from "@/lib/compactBalance";
 type Variant = "header" | "overlay";
 
 const CONTAINER: Record<Variant, string> = {
-  header: "border border-gray-700/60 bg-black/40",
-  overlay: "border border-white/10 bg-black/65 backdrop-blur-md",
+  header: "border border-gray-600/70 bg-black/60",
+  overlay: "border border-white/20 bg-black/75 backdrop-blur-md",
 };
 
 export default function ModeBalancePill({
@@ -64,13 +70,13 @@ export default function ModeBalancePill({
   // back from it. Either one missing means "unknown", not "empty".
   const value = isPlay
     ? play.authenticated && play.balanceUsd !== null
-      ? formatCompactUsd(play.balanceUsd)
+      ? formatBalanceUsd(play.balanceUsd)
       : null
-    : formatCompactSol(sol.lamports);
+    : formatBalanceSol(sol.lamports);
 
   return (
     <span
-      className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-1 text-[11px] font-bold tabular-nums tracking-tight ${
+      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold tabular-nums tracking-tight ${
         value ? "text-white" : "text-gray-500"
       } ${CONTAINER[variant]} ${className}`}
       aria-label={
@@ -79,6 +85,11 @@ export default function ModeBalancePill({
           : "Balance unavailable"
       }
     >
+      <Wallet
+        aria-hidden="true"
+        strokeWidth={2.25}
+        className={`h-3.5 w-3.5 shrink-0 ${value ? "text-gray-300" : "text-gray-600"}`}
+      />
       {value ?? "—"}
     </span>
   );

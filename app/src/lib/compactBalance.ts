@@ -1,34 +1,46 @@
 // src/lib/compactBalance.ts
 //
-// Compact balance formatting for the mobile header pill.
+// Balance formatting for the mobile header pill.
 //
-// Display-only. Two rules apply to everything here:
+// POLICY: ordinary balances are shown IN FULL. This module used to shorten
+// everything — "$5.5K" for $5,500 — which is fine for a stat and wrong for
+// an account balance, because a balance is a number the user is about to
+// make a decision with. Thousands separators, cents only when they mean
+// something: "$5,500", "$850", "$12,450.75", "$0.50".
 //
-//   1. Never overstate. Every shortening TRUNCATES toward zero rather than
-//      rounding, so a $7,399 balance reads "$7.3K" and never "$7.4K". A
-//      header pill that rounds a balance up is a balance the user does not
-//      have.
+// Compaction survives only as an overflow valve above $1M, where the full
+// string genuinely stops fitting a 390px header.
+//
+// Two rules still hold everywhere here:
+//
+//   1. Never overstate. Any shortening TRUNCATES toward zero, so $1,299,000
+//      reads "$1.2M" and never "$1.3M". A header that rounds a balance up
+//      is a balance the user does not have.
 //   2. Never touch binary float for Play money. Play balances arrive as
-//      decimal strings and are converted to integer cents by toCents(), so
-//      the pill agrees with the exact figures shown in the trading panels.
+//      decimal strings and go through toCents(), so the pill agrees exactly
+//      with the figures the trading panels check a stake against.
 //
 // SOL is formatted from integer lamports for the same reason.
 
-import { toCents } from "@/lib/playClient";
+import { formatUsd, toCents } from "@/lib/playClient";
 
 const BIG_ZERO = BigInt(0);
 const BIG_HUNDRED = BigInt(100);
-const BIG_THOUSAND = BigInt(1000);
 const BIG_MILLION = BigInt(1_000_000);
 const BIG_BILLION = BigInt(1_000_000_000);
 
 /** Lamports per SOL. Kept local so this module has no web3.js dependency. */
 export const LAMPORTS_PER_SOL = 1_000_000_000;
 
+/** `1234567` -> "1,234,567". */
+function group(value: number | bigint): string {
+  return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
 /**
  * `12345n, 1000n` -> "12.3" ; `12000n, 1000n` -> "12"
  *
- * One truncated decimal, with a trailing ".0" dropped so "$1.0K" reads "$1K".
+ * One truncated decimal, with a trailing ".0" dropped so "$1.0M" reads "$1M".
  */
 function oneDecimal(value: bigint, unit: bigint): string {
   const whole = value / unit;
@@ -37,7 +49,8 @@ function oneDecimal(value: bigint, unit: bigint): string {
 }
 
 /**
- * Compact USD for the header pill: "$850", "$7.3K", "$12.4K", "$1.2M".
+ * Play balance for the header pill: "$850", "$5,500", "$12,450.75", "$0.50".
+ * Above $1M it falls back to "$1.2M" / "$3.4B" so the header cannot overflow.
  *
  * Accepts the decimal string the Play API returns. Returns null when the
  * input is not a number at all — the caller renders a neutral placeholder
@@ -48,7 +61,7 @@ function oneDecimal(value: bigint, unit: bigint): string {
  * arithmetic (a trade must never see NaN) and the wrong one for a header:
  * it would turn "balance unknown" into a confident "$0".
  */
-export function formatCompactUsd(value: unknown): string | null {
+export function formatBalanceUsd(value: unknown): string | null {
   if (value === null || value === undefined) return null;
   if (!/^-?\d+(\.\d+)?$/.test(String(value).trim())) return null;
 
@@ -59,28 +72,30 @@ export function formatCompactUsd(value: unknown): string | null {
   const abs = negative ? -cents : cents;
   const dollars = abs / BIG_HUNDRED; // truncates the cents away
 
-  let body: string;
-  if (dollars < BIG_THOUSAND) {
-    body = dollars.toString();
-  } else if (dollars < BIG_MILLION) {
-    body = `${oneDecimal(dollars, BIG_THOUSAND)}K`;
-  } else if (dollars < BIG_BILLION) {
-    body = `${oneDecimal(dollars, BIG_MILLION)}M`;
-  } else {
-    body = `${oneDecimal(dollars, BIG_BILLION)}B`;
-  }
+  // Ordinary balances reuse formatUsd() — the same grouping the trading
+  // panels print — so the header and the panel can never disagree about
+  // what the user has. `compact` only drops a meaningless ".00" tail.
+  if (dollars < BIG_MILLION) return formatUsd(value, { compact: true });
+
+  const body =
+    dollars < BIG_BILLION
+      ? `${oneDecimal(dollars, BIG_MILLION)}M`
+      : `${oneDecimal(dollars, BIG_BILLION)}B`;
 
   return `${negative ? "-" : ""}$${body}`;
 }
 
 /**
- * Compact SOL for the header pill: "0.18 SOL", "2.4 SOL", "123 SOL".
+ * Wallet balance for the header pill: "0.28 SOL", "2.4 SOL", "125 SOL".
  *
  * Takes raw lamports (what `connection.getBalance` returns) so no precision
  * is lost on the way in. A dust balance shows "<0.01 SOL" instead of
  * collapsing to "0 SOL", which would read as an empty wallet.
+ *
+ * No "K" abbreviation at any size — a large holding is still shown as the
+ * number it is, grouped.
  */
-export function formatCompactSol(lamports: number | null | undefined): string | null {
+export function formatBalanceSol(lamports: number | null | undefined): string | null {
   if (lamports === null || lamports === undefined) return null;
   if (!Number.isFinite(lamports)) return null;
 
@@ -95,7 +110,7 @@ export function formatCompactSol(lamports: number | null | undefined): string | 
   if (centiSol === 0) return `${sign}<0.01 SOL`;
 
   if (centiSol < 100) {
-    // Under 1 SOL: two decimals, e.g. "0.18 SOL".
+    // Under 1 SOL: two decimals, e.g. "0.28 SOL".
     return `${sign}0.${String(centiSol).padStart(2, "0")} SOL`;
   }
 
@@ -107,7 +122,7 @@ export function formatCompactSol(lamports: number | null | undefined): string | 
     return frac ? `${sign}${whole}.${frac} SOL` : `${sign}${whole} SOL`;
   }
 
-  if (whole < 1000) return `${sign}${whole} SOL`;
-
-  return `${sign}${oneDecimal(BigInt(whole), BIG_THOUSAND)}K SOL`;
+  // 100 SOL and up: whole SOL only. The hundredths stop carrying meaning at
+  // that size and cost more header width than they are worth.
+  return `${sign}${group(whole)} SOL`;
 }
