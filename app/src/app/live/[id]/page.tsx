@@ -36,12 +36,16 @@ import {
   formatVol,
   LiveMobileContent,
   MobileImmersiveSlide,
+  TradeWindowBar,
 } from "@/components/LiveMobileContent";
 
 import { supabase } from "@/lib/supabaseClient";
 import { proposeLiveResolution } from "@/lib/liveResolve";
 import { createLiveFlashMarket } from "@/lib/liveMarketCreate";
-import { parseTimestampMs } from "@/lib/liveFlashWindows";
+import {
+  deriveTradeWindowState,
+  parseTimestampMs,
+} from "@/lib/liveFlashWindows";
 import { getMarketByAddress, recordTransaction, applyTradeToMarketInSupabase } from "@/lib/markets";
 import {
   getLiveSession,
@@ -938,10 +942,24 @@ export default function LiveViewerPage() {
   // Market account has no trade-lock field, so the chain still allows trades
   // until resolution_time (= end_at). Accepted for MVP; closing it needs a
   // program upgrade adding a distinct trade_lock_time.
-  const tradeLockedByWindow = useMemo(() => {
-    const lockMs = parseTimestampMs(market?.tradingLockAt);
-    return lockMs != null && nowMs >= lockMs;
-  }, [market?.tradingLockAt, nowMs]);
+  //
+  // Derived ONCE, here. It drives both the desktop TradeWindowBar and the
+  // boolean gate below, so the strip a desktop viewer reads and the rule that
+  // disables their trade controls can never disagree. Null when the market
+  // carries no lock (legacy markets) — which means "no trade window", not
+  // "locked".
+  const tradeWindow = useMemo(
+    () =>
+      deriveTradeWindowState({
+        lockAtMs: parseTimestampMs(market?.tradingLockAt),
+        endAtMs: market?.resolutionTime ? market.resolutionTime * 1000 : null,
+        startedAtMs: parseTimestampMs(market?.startedAt),
+        nowMs,
+      }),
+    [market?.tradingLockAt, market?.startedAt, market?.resolutionTime, nowMs],
+  );
+
+  const tradeLockedByWindow = !!tradeWindow && !tradeWindow.open;
 
   /** Every reason the buy path must be shut, in one place. */
   const tradingClosed = sessionLocked || expiredByTime || tradeLockedByWindow;
@@ -1555,6 +1573,11 @@ export default function LiveViewerPage() {
               {/* ── RIGHT — trading panel ─────────────────────── */}
               <div className="col-span-1">
                 <div className="sticky top-6 space-y-4 pb-8">
+                  {/* Trade-window strip — sits directly above the trade
+                      controls so a desktop viewer sees WHY they just got
+                      disabled. Same component and same derived state as the
+                      mobile strip; there is no second countdown. */}
+                  {tradeWindow && <TradeWindowBar state={tradeWindow} />}
                   {market && derived && !isPlay && (
                     <TradingPanel
                       mode="desktop"
@@ -1702,6 +1725,11 @@ export default function LiveViewerPage() {
 
               <div className="col-span-1">
                 <div className="sticky top-6 space-y-4 pb-8">
+                  {/* Trade-window strip — sits directly above the trade
+                      controls so a desktop viewer sees WHY they just got
+                      disabled. Same component and same derived state as the
+                      mobile strip; there is no second countdown. */}
+                  {tradeWindow && <TradeWindowBar state={tradeWindow} />}
                   {market && derived && !isPlay && (
                     <TradingPanel
                       mode="desktop"

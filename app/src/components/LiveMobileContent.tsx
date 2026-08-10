@@ -1294,39 +1294,26 @@ function LiveResolveSheet({
 // caller's clock tick, so a backgrounded tab, a sleeping device, a rerender
 // or a viewer joining halfway all land on the correct frame immediately.
 
-const URGENCY_STYLES: Record<
-  TradeWindowState["urgency"],
-  { text: string; fill: string; dot: string; edge: string }
-> = {
-  green: {
-    text: "text-pump-green",
-    fill: "bg-gradient-to-r from-pump-green/70 to-pump-green",
-    dot: "bg-pump-green shadow-[0_0_6px_rgba(109,255,164,0.8)]",
-    edge: "rgba(109,255,164,0.65)",
-  },
-  yellow: {
-    text: "text-amber-300",
-    fill: "bg-gradient-to-r from-amber-400/70 to-amber-300",
-    dot: "bg-amber-300 shadow-[0_0_6px_rgba(252,211,77,0.8)]",
-    edge: "rgba(252,211,77,0.65)",
-  },
-  orange: {
-    text: "text-orange-400",
-    fill: "bg-gradient-to-r from-orange-500/70 to-orange-400",
-    dot: "bg-orange-400 shadow-[0_0_6px_rgba(251,146,60,0.85)]",
-    edge: "rgba(251,146,60,0.7)",
-  },
-  red: {
-    text: "text-[#ff5c73]",
-    fill: "bg-gradient-to-r from-[#ff5c73]/70 to-[#ff5c73]",
-    dot: "bg-[#ff5c73] shadow-[0_0_6px_rgba(255,92,115,0.9)]",
-    edge: "rgba(255,92,115,0.75)",
-  },
+// ONE accent per urgency, as a raw "r, g, b" triple. Border, glow, fill, dot
+// and text are all composed from it below, so the four states cannot drift
+// apart and "make it more vivid" is a single number to turn.
+//
+// Green and red are the EXACT YES / NO colours of the market bar directly
+// above this strip, so the urgency ramp reads as part of the same system
+// rather than a second, weaker palette.
+const URGENCY_ACCENT: Record<TradeWindowState["urgency"], string> = {
+  green: "109, 255, 164", // pump-green — same as the YES side
+  yellow: "255, 214, 10", // vivid amber, not the muted amber-300
+  orange: "255, 138, 26", // vivid orange
+  red: "255, 92, 115", // #ff5c73 — same as the NO side
 };
 
-function TradeWindowBar({ state }: { state: TradeWindowState }) {
+// Exported so the desktop live layout renders the SAME strip from the SAME
+// derived state — there is one TradeWindowBar and one countdown, not a
+// per-surface reimplementation.
+export function TradeWindowBar({ state }: { state: TradeWindowState }) {
   const open = state.open;
-  const style = open ? URGENCY_STYLES[state.urgency] : null;
+  const accent = open ? URGENCY_ACCENT[state.urgency] : null;
 
   // Pulse only in the final stretch, and only while trading is actually
   // open — a locked bar must read as inert.
@@ -1336,38 +1323,54 @@ function TradeWindowBar({ state }: { state: TradeWindowState }) {
     <div
       className="relative rounded-lg p-px transition-colors duration-500"
       style={{
-        background: open
-          ? `linear-gradient(90deg, ${style!.edge}, rgba(255,255,255,0.06))`
+        // Saturated edge + outer glow. The gradient keeps the left end at
+        // full strength and fades right, so the strip still reads as a
+        // direction rather than an evenly lit box.
+        background: accent
+          ? `linear-gradient(90deg, rgba(${accent},1), rgba(${accent},0.45))`
           : "rgba(255,255,255,0.08)",
+        boxShadow: accent
+          ? `0 0 20px -5px rgba(${accent},0.75), 0 0 40px -18px rgba(${accent},0.9)`
+          : "none",
       }}
     >
       <div className="relative overflow-hidden rounded-[7px] bg-black/85 px-3 py-1.5">
         {/* Drain track. Anchored LEFT so the fill's right edge sweeps
             leftward — the bar empties from the right, full at T0 and gone at
-            lock_at. */}
+            lock_at. Kept a translucent wash, never a solid neon block: the
+            label and timer sit on top of it and must stay readable. */}
         <div
           aria-hidden
           className="pointer-events-none absolute inset-y-0 left-0 right-0"
         >
           <div
-            className={`h-full transition-[width] duration-1000 ease-linear ${
-              open ? `${style!.fill} opacity-[0.16]` : "opacity-0"
-            }`}
-            style={{ width: `${Math.round(state.fractionRemaining * 100)}%` }}
+            className="h-full transition-[width] duration-1000 ease-linear"
+            style={{
+              width: `${Math.round(state.fractionRemaining * 100)}%`,
+              // Brightest at the draining edge, so the eye tracks the edge
+              // that is actually moving.
+              background: accent
+                ? `linear-gradient(90deg, rgba(${accent},0.18) 0%, rgba(${accent},0.42) 100%)`
+                : "transparent",
+            }}
           />
         </div>
 
         <div className="relative z-10 flex items-center justify-between gap-2">
           <span className="inline-flex items-center gap-1.5 min-w-0">
             <span
-              className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                open ? style!.dot : "bg-white/25"
-              }`}
+              className="w-1.5 h-1.5 rounded-full shrink-0"
+              style={{
+                background: accent ? `rgb(${accent})` : "rgba(255,255,255,0.25)",
+                boxShadow: accent ? `0 0 10px 1px rgba(${accent},0.95)` : "none",
+              }}
             />
             <span
-              className={`text-[10px] font-bold uppercase tracking-wider whitespace-nowrap ${
-                open ? style!.text : "text-white/45"
-              }`}
+              className="text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"
+              style={{
+                color: accent ? `rgb(${accent})` : "rgba(255,255,255,0.45)",
+                textShadow: accent ? `0 0 12px rgba(${accent},0.6)` : "none",
+              }}
             >
               {open ? "Place your bet" : "Trading locked"}
             </span>
@@ -1375,8 +1378,12 @@ function TradeWindowBar({ state }: { state: TradeWindowState }) {
 
           <span
             className={`text-[11px] font-bold tabular-nums tracking-wide whitespace-nowrap ${
-              open ? style!.text : "text-white/45"
-            } ${pulse ? "fm-lock-pulse" : ""}`}
+              pulse ? "fm-lock-pulse" : ""
+            }`}
+            style={{
+              color: accent ? `rgb(${accent})` : "rgba(255,255,255,0.45)",
+              textShadow: accent ? `0 0 12px rgba(${accent},0.65)` : "none",
+            }}
           >
             {open
               ? formatMmSs(state.secondsToLock)
@@ -1384,6 +1391,15 @@ function TradeWindowBar({ state }: { state: TradeWindowState }) {
           </span>
         </div>
       </div>
+
+      {/* Final-seconds pulse. Lives WITH the component rather than in the
+          mobile slide, so the desktop strip animates too. CSS-only (no JS
+          loop); the <style> tag never participates in layout. */}
+      <style>{`
+        .fm-lock-pulse{animation:fm-lock-beat 1s ease-in-out infinite}
+        @keyframes fm-lock-beat{0%,100%{opacity:1}50%{opacity:0.45}}
+        @media (prefers-reduced-motion:reduce){.fm-lock-pulse{animation:none}}
+      `}</style>
     </div>
   );
 }
@@ -2335,14 +2351,6 @@ export function MobileImmersiveSlide({
               <div className="h-10 rounded-xl bg-white/5 border border-white/10 animate-pulse" />
             )}
           </div>
-
-          {/* Final-seconds pulse on the trade-window timer. CSS-only (no JS
-              loop); the <style> tag never participates in layout. */}
-          <style>{`
-            .fm-lock-pulse{animation:fm-lock-beat 1s ease-in-out infinite}
-            @keyframes fm-lock-beat{0%,100%{opacity:1}50%{opacity:0.45}}
-            @media (prefers-reduced-motion:reduce){.fm-lock-pulse{animation:none}}
-          `}</style>
 
           {/* HUD STRIPS — between the market card and the action panels. */}
           <div className="px-3 mt-3 space-y-2">
