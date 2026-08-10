@@ -12,8 +12,12 @@
 
 import { useEffect, useState } from "react";
 import type { QueuedNextMarketConfig } from "@/lib/liveSessions";
-
-const DURATION_OPTIONS = [3, 5, 10, 30] as const;
+import {
+  FLASH_DURATION_OPTIONS,
+  DEFAULT_FLASH_DURATION_MIN,
+  tradeWindowSecondsFor,
+  formatMmSs,
+} from "@/lib/liveFlashWindows";
 
 export type LiveDesktopHostPanelProps = {
   isHost: boolean;
@@ -261,7 +265,9 @@ function CreateNextModal({
   const [title, setTitle] = useState("");
   const [yesLabel, setYesLabel] = useState("YES");
   const [noLabel, setNoLabel] = useState("NO");
-  const [durationMin, setDurationMin] = useState<number>(5);
+  const [durationMin, setDurationMin] = useState<number>(
+    DEFAULT_FLASH_DURATION_MIN,
+  );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -354,8 +360,8 @@ function CreateNextModal({
             <label className="block text-xs font-semibold text-white/70 mb-1.5">
               Duration
             </label>
-            <div className="grid grid-cols-4 gap-2">
-              {DURATION_OPTIONS.map((d) => (
+            <div className="grid grid-cols-3 gap-2">
+              {FLASH_DURATION_OPTIONS.map((d) => (
                 <button
                   key={d}
                   type="button"
@@ -370,6 +376,10 @@ function CreateNextModal({
                 </button>
               ))}
             </div>
+            <p className="text-[11px] text-gray-500 mt-1.5">
+              Betting open for the first{" "}
+              {formatMmSs(tradeWindowSecondsFor(durationMin))}, then watch-only.
+            </p>
           </div>
 
           {error && (

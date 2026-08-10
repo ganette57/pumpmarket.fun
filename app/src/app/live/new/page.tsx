@@ -8,8 +8,12 @@ import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { createLiveSession } from "@/lib/liveSessions";
 import { useProgram } from "@/hooks/useProgram";
 import { createLiveFlashMarket } from "@/lib/liveMarketCreate";
-
-const DURATION_OPTIONS = [3, 5, 10, 30] as const;
+import {
+  FLASH_DURATION_OPTIONS,
+  DEFAULT_FLASH_DURATION_MIN,
+  tradeWindowSecondsFor,
+  formatMmSs,
+} from "@/lib/liveFlashWindows";
 
 export default function NewLiveSessionPage() {
   const router = useRouter();
@@ -21,7 +25,9 @@ export default function NewLiveSessionPage() {
   const [marketTitle, setMarketTitle] = useState("");
   const [yesLabel, setYesLabel] = useState("YES");
   const [noLabel, setNoLabel] = useState("NO");
-  const [durationMin, setDurationMin] = useState<number>(5);
+  const [durationMin, setDurationMin] = useState<number>(
+    DEFAULT_FLASH_DURATION_MIN,
+  );
 
   const [submitting, setSubmitting] = useState(false);
   const [step, setStep] = useState<"" | "market" | "session">("");
@@ -57,17 +63,20 @@ export default function NewLiveSessionPage() {
       // 1. Create the short market on-chain (shared with the in-HUD Next
       // Market flow). Same on-chain instruction as /create.
       setStep("market");
-      const { marketAddress } = await createLiveFlashMarket({
-        program,
-        connection,
-        publicKey,
-        signTransaction,
-        title: marketTitle,
-        outcomes: [yesLabel, noLabel],
-        durationMin,
-      });
+      const { marketAddress, startedAtIso, lockAtIso, endAtIso } =
+        await createLiveFlashMarket({
+          program,
+          connection,
+          publicKey,
+          signTransaction,
+          title: marketTitle,
+          outcomes: [yesLabel, noLabel],
+          durationMin,
+        });
 
       // 2. Create the live session linked to the new market (always live).
+      // The session carries the market's clock from the start — trading is
+      // already open, and it closes at lock_at.
       setStep("session");
       const session = await createLiveSession({
         title: marketTitle.trim(),
@@ -76,6 +85,9 @@ export default function NewLiveSessionPage() {
         stream_url: streamUrl.trim(),
         status: "live",
         thumbnail_url: null,
+        started_at: startedAtIso,
+        lock_at: lockAtIso,
+        end_at: endAtIso,
       });
 
       // 3. Go to the main live feed, focused on the new session.
@@ -188,8 +200,8 @@ export default function NewLiveSessionPage() {
           <label className="block text-sm font-semibold text-white mb-1.5">
             Duration
           </label>
-          <div className="grid grid-cols-4 gap-2">
-            {DURATION_OPTIONS.map((d) => (
+          <div className="grid grid-cols-3 gap-2">
+            {FLASH_DURATION_OPTIONS.map((d) => (
               <button
                 key={d}
                 type="button"
@@ -205,7 +217,12 @@ export default function NewLiveSessionPage() {
             ))}
           </div>
           <p className="text-xs text-gray-500 mt-1">
-            Market resolves {durationMin} minute{durationMin === 1 ? "" : "s"} after going live.
+            Betting is open for the first{" "}
+            <span className="text-pump-green font-semibold">
+              {formatMmSs(tradeWindowSecondsFor(durationMin))}
+            </span>
+            . The market then runs watch-only and resolves {durationMin} minute
+            {durationMin === 1 ? "" : "s"} after going live.
           </p>
         </div>
 

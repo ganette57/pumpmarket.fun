@@ -41,6 +41,7 @@ import {
 import { supabase } from "@/lib/supabaseClient";
 import { proposeLiveResolution } from "@/lib/liveResolve";
 import { createLiveFlashMarket } from "@/lib/liveMarketCreate";
+import { parseTimestampMs } from "@/lib/liveFlashWindows";
 import { getMarketByAddress, recordTransaction, applyTradeToMarketInSupabase } from "@/lib/markets";
 import {
   getLiveSession,
@@ -143,6 +144,10 @@ type UiMarket = {
   bLamports?: number;
   totalVolume: number;
   resolutionTime: number;
+  /** `markets.trading_lock_at` — when trading closes, before resolutionTime. */
+  tradingLockAt?: string | null;
+  /** `markets.created_at` — T0 of this flash market. */
+  startedAt?: string | null;
   resolved: boolean;
   marketType: 0 | 1;
   outcomeNames?: string[];
@@ -507,6 +512,8 @@ export default function LiveViewerPage() {
         bLamports: parseBLamports(dbMarket) || undefined,
         totalVolume: Number(dbMarket.total_volume) || 0,
         resolutionTime: Number.isFinite(endMs) ? Math.floor(endMs / 1000) : 0,
+        tradingLockAt: (dbMarket as any).trading_lock_at ?? null,
+        startedAt: (dbMarket as any).created_at ?? null,
         resolved: !!dbMarket.resolved || !!snap?.marketAcc?.resolved,
         marketType: mt,
         outcomeNames: names.slice(0, 10),
@@ -919,6 +926,26 @@ export default function LiveViewerPage() {
   // trades when the timer runs out.
   const expiredByTime = !!countdown && countdown.remSec <= 0;
 
+  // Trade-window lock: trading closes at markets.trading_lock_at, well before
+  // the market ends. The market stays viewable and the result flow is
+  // unchanged — only the buy path shuts. Recomputed from the timestamp on
+  // every clock tick, so it is already correct for a viewer who joins after
+  // the lock, and it needs no host action to fire.
+  //
+  // ENFORCEMENT LEVEL: Play is authoritative (play_assert_market_tradable
+  // rejects against Postgres now()). Real is APPLICATION-LEVEL ONLY — a Real
+  // buy goes straight from the client to `buy_shares`, and the on-chain
+  // Market account has no trade-lock field, so the chain still allows trades
+  // until resolution_time (= end_at). Accepted for MVP; closing it needs a
+  // program upgrade adding a distinct trade_lock_time.
+  const tradeLockedByWindow = useMemo(() => {
+    const lockMs = parseTimestampMs(market?.tradingLockAt);
+    return lockMs != null && nowMs >= lockMs;
+  }, [market?.tradingLockAt, nowMs]);
+
+  /** Every reason the buy path must be shut, in one place. */
+  const tradingClosed = sessionLocked || expiredByTime || tradeLockedByWindow;
+
   /* ── Host resolve (reuses the existing propose flow) ────────────── */
   async function handleResolveLive(outcomeIndex: number) {
     if (!connected || !publicKey || !program || !signTransaction || !market) {
@@ -1083,7 +1110,14 @@ export default function LiveViewerPage() {
 
   async function handleTrade(shares: number, outcomeIndex: number, side: "buy" | "sell", costSol?: number) {
     if (!connected || !publicKey || !program || !market || !session || !derived) return;
-    if (sessionLocked || expiredByTime) return;
+    if (tradingClosed) return;
+    // Re-check the deadline against the wall clock at submit time, not just
+    // the rendered value: `tradingClosed` rides a 1s tick that a backgrounded
+    // tab can stall, and an already-open sheet must never post through a
+    // stale frame. Application-level Flash lock only — see
+    // tradeLockedByWindow for what the chain does and does not enforce.
+    const lockMs = parseTimestampMs(market.tradingLockAt);
+    if (lockMs != null && Date.now() >= lockMs) return;
 
     const key = "trade";
     if (inFlightRef.current[key]) return;
@@ -1308,6 +1342,8 @@ export default function LiveViewerPage() {
                       resolutionTime: market.resolutionTime,
                       totalVolume: market.totalVolume,
                       publicKey: market.publicKey,
+                      tradingLockAt: market.tradingLockAt ?? null,
+                      startedAt: market.startedAt ?? null,
                     }
                   : null
               }
@@ -1323,9 +1359,9 @@ export default function LiveViewerPage() {
               }
               isPlay={isPlay}
               active={true}
-              sessionLocked={sessionLocked || expiredByTime}
+              sessionLocked={tradingClosed}
               onOutcomeTap={(idx) => {
-                if (sessionLocked || expiredByTime) return;
+                if (tradingClosed) return;
                 setDefaultOutcomeIndex(idx);
                 setMobileSheetOpen(true);
               }}
@@ -1536,7 +1572,7 @@ export default function LiveViewerPage() {
                       onTrade={(s, idx, side, cost) => void handleTrade(s, idx, side, cost)}
                       marketBalanceLamports={marketBalanceLamports}
                       userHoldings={userSharesForUi}
-                      marketClosed={!!marketClosed || expiredByTime}
+                      marketClosed={!!marketClosed || tradingClosed}
                     />
                   )}
                   {market && derived && isPlay && (
@@ -1545,15 +1581,22 @@ export default function LiveViewerPage() {
                       outcomeNames={derived.names}
                       layout="desktop"
                       playStatus={eco.status}
-                      marketClosed={!!marketClosed || expiredByTime}
+                      marketClosed={!!marketClosed || tradingClosed}
                     />
                   )}
 
-                  {sessionLocked && (
+                  {(sessionLocked || tradeLockedByWindow) && (
                     <div className="rounded-xl border border-gray-800/40 bg-pump-dark/30 p-4 text-center">
                       <p className="text-sm text-gray-400">
-                        Trading is {session.status === "locked" ? "locked" : "disabled"}.
+                        Trading is {sessionLocked && session.status !== "locked"
+                          ? "disabled"
+                          : "locked"}.
                       </p>
+                      {tradeLockedByWindow && !sessionLocked && !expiredByTime && (
+                        <p className="text-xs text-gray-500 mt-1">
+                          The market runs until the timer ends.
+                        </p>
+                      )}
                     </div>
                   )}
 
@@ -1676,7 +1719,7 @@ export default function LiveViewerPage() {
                       onTrade={(s, idx, side, cost) => void handleTrade(s, idx, side, cost)}
                       marketBalanceLamports={marketBalanceLamports}
                       userHoldings={userSharesForUi}
-                      marketClosed={!!marketClosed || expiredByTime}
+                      marketClosed={!!marketClosed || tradingClosed}
                     />
                   )}
                   {market && derived && isPlay && (
@@ -1685,14 +1728,16 @@ export default function LiveViewerPage() {
                       outcomeNames={derived.names}
                       layout="desktop"
                       playStatus={eco.status}
-                      marketClosed={!!marketClosed || expiredByTime}
+                      marketClosed={!!marketClosed || tradingClosed}
                     />
                   )}
 
-                  {sessionLocked && (
+                  {(sessionLocked || tradeLockedByWindow) && (
                     <div className="rounded-xl border border-gray-800/40 bg-pump-dark/30 p-4 text-center">
                       <p className="text-sm text-gray-400">
-                        Trading is {session.status === "locked" ? "locked" : "disabled"} for this session.
+                        {sessionLocked
+                          ? `Trading is ${session.status === "locked" ? "locked" : "disabled"} for this session.`
+                          : "Trading is locked — the market runs until the timer ends."}
                       </p>
                     </div>
                   )}
@@ -1726,7 +1771,7 @@ export default function LiveViewerPage() {
           connected={connected}
           submitting={submitting}
           onTrade={handleTrade}
-          sessionLocked={sessionLocked || expiredByTime}
+          sessionLocked={tradingClosed}
           defaultOutcomeIndex={defaultOutcomeIndex}
           keepNavbar
         />
@@ -1738,7 +1783,7 @@ export default function LiveViewerPage() {
           marketAddress={market.publicKey}
           outcomeNames={derived.names}
           defaultOutcomeIndex={defaultOutcomeIndex}
-          sessionLocked={sessionLocked || expiredByTime}
+          sessionLocked={tradingClosed}
           playStatus={eco.status}
           keepNavbar
           onTraded={({ outcomeName, shares }) => {

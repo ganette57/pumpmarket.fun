@@ -47,6 +47,7 @@ import { hasSeenResult, markResultSeen, resultSeenKey } from "@/lib/resultSeen";
 import { fetchPlayLiveResult, playLiveSeenKey } from "@/lib/playLiveResult";
 import { proposeLiveResolution } from "@/lib/liveResolve";
 import { createLiveFlashMarket } from "@/lib/liveMarketCreate";
+import { parseTimestampMs } from "@/lib/liveFlashWindows";
 import bs58 from "bs58";
 
 type DesktopTab = "live" | "feed";
@@ -71,6 +72,10 @@ type MobileMarketSnapshot = {
   category?: string;
   /** Unix seconds — drives the immersive countdown overlay */
   resolutionTime?: number;
+  /** `markets.trading_lock_at` — when trading closes (before end). */
+  tradingLockAt?: string | null;
+  /** `markets.created_at` — T0 of this flash market. */
+  startedAt?: string | null;
   /** Resolution state — drives the result panel after a market settles */
   resolutionStatus?: string;
   proposedOutcome?: number | null;
@@ -78,6 +83,32 @@ type MobileMarketSnapshot = {
    *  resolve auto-start (the on-chain market is created at resolve time). */
   queuedNext?: QueuedNextMarketConfig | null;
 };
+
+/**
+ * True once the flash market's trade window has closed.
+ *
+ * A null/absent lock means "no trade window" (every market created before
+ * the lock shipped), NOT "locked" — those keep trading until end_date.
+ *
+ * ENFORCEMENT LEVEL — read this before trusting it
+ * ------------------------------------------------
+ * PLAY is authoritative: play_assert_market_tradable rejects at/after
+ * markets.trading_lock_at using Postgres now(), inside the trade
+ * transaction. Bypassing this function changes nothing.
+ *
+ * REAL is APPLICATION-LEVEL ONLY. A Real buy is a direct client->chain
+ * `buy_shares` call with no server in the path, and the on-chain Market
+ * account has no trade-lock field — its only time gate is
+ * `now < market.resolution_time`, i.e. end_at. So this gate stops Real
+ * trading through the FunMarket app, and someone calling the program
+ * directly could still trade until resolution_time. Accepted for MVP;
+ * closing it needs a program upgrade adding a distinct trade_lock_time.
+ * Do not describe the Real path as on-chain enforcement.
+ */
+function isTradeLockedNow(tradingLockAt: unknown): boolean {
+  const lockMs = parseTimestampMs(tradingLockAt);
+  return lockMs != null && Date.now() >= lockMs;
+}
 
 function parseEndDateToSec(raw: any): number {
   if (!raw) return 0;
@@ -398,6 +429,8 @@ function MobileLiveTradeSlide({
                 resolutionTime: market.resolutionTime,
                 totalVolume: market.totalVolume,
                 publicKey: market.publicKey,
+                tradingLockAt: market.tradingLockAt ?? null,
+                startedAt: market.startedAt ?? null,
               }
             : null
         }
@@ -621,6 +654,8 @@ export default function LivePage() {
           imageUrl: (dbMarket as any).image_url || undefined,
           category: (dbMarket as any).category || undefined,
           resolutionTime: parseEndDateToSec((dbMarket as any).end_date) || undefined,
+          tradingLockAt: (dbMarket as any).trading_lock_at ?? null,
+          startedAt: (dbMarket as any).created_at ?? null,
           resolutionStatus: String((dbMarket as any).resolution_status || "open"),
           proposedOutcome: (dbMarket as any).proposed_winning_outcome ?? null,
           queuedNext: null,
@@ -980,6 +1015,8 @@ export default function LivePage() {
         Date.now() >= loaded.resolutionTime * 1000
       )
         return;
+      // Trade-window lock: the buy flow cannot even be opened past lock_at.
+      if (isTradeLockedNow(loaded.tradingLockAt)) return;
 
       setMobileTradeSessionId(session.id);
       setMobileTradeOutcomeIndex(
@@ -1005,7 +1042,8 @@ export default function LivePage() {
     tradeMarket.isBlocked ||
     tradeMarket.resolved ||
     (tradeMarket.resolutionTime != null &&
-      Date.now() >= tradeMarket.resolutionTime * 1000);
+      Date.now() >= tradeMarket.resolutionTime * 1000) ||
+    isTradeLockedNow(tradeMarket.tradingLockAt);
 
   // Play status for the market whose Quick Trade sheet is open — used only to
   // gate the Play sheet. Never feeds Real. (Hook is called unconditionally;
@@ -1035,6 +1073,11 @@ export default function LivePage() {
         Date.now() >= tradeMarket.resolutionTime * 1000
       )
         return;
+      // Hard stop at the trade-window lock, for an already-open sheet.
+      // Application-level Flash lock only: on-chain buy_shares remains
+      // governed by resolution_time until a future program upgrade adds a
+      // distinct trade_lock_time. See isTradeLockedNow.
+      if (isTradeLockedNow(tradeMarket.tradingLockAt)) return;
 
       inFlightTradeRef.current = true;
       setSubmittingTrade(true);

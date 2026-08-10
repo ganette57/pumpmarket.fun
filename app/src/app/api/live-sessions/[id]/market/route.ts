@@ -119,6 +119,26 @@ export async function POST(
       nextHistory.push(previousMarketAddress);
     }
 
+    // A chained market gets its OWN clock. The session row mirrors the new
+    // market's timestamps so every live surface reads one consistent window
+    // instead of inheriting the market that just resolved. `markets` is the
+    // authoritative owner of these values — they are only copied here.
+    const { data: marketRow } = await supabase
+      .from("markets")
+      .select("trading_lock_at,end_date,created_at")
+      .eq("market_address", newMarketAddress)
+      .maybeSingle();
+
+    const sessionWindow = {
+      // The new market went live now; created_at is a tighter T0 when the
+      // row is already indexed (it always is — createLiveFlashMarket awaits
+      // indexMarket before calling this route).
+      started_at:
+        (marketRow as any)?.created_at ?? new Date().toISOString(),
+      lock_at: (marketRow as any)?.trading_lock_at ?? null,
+      end_at: (marketRow as any)?.end_date ?? null,
+    };
+
     let updated: any;
     let updErr: any;
     {
@@ -129,6 +149,7 @@ export async function POST(
           queued_market_config: null,
           queued_market_address: null,
           past_market_addresses: nextHistory,
+          ...sessionWindow,
         })
         .eq("id", sessionId)
         .select("*")
@@ -137,15 +158,27 @@ export async function POST(
       updErr = attempt.error;
     }
     if (updErr) {
-      // Some optional columns missing — retry without queue/history fields.
+      // Some optional columns missing — retry with the market swap plus the
+      // timing mirror only (both predate the queue/history columns).
       const fallback = await supabase
         .from("live_sessions")
-        .update({ market_address: newMarketAddress })
+        .update({ market_address: newMarketAddress, ...sessionWindow })
         .eq("id", sessionId)
         .select("*")
         .single();
       updated = fallback.data;
       updErr = fallback.error;
+    }
+    if (updErr) {
+      // Last resort — never let the timing mirror block the actual swap.
+      const bare = await supabase
+        .from("live_sessions")
+        .update({ market_address: newMarketAddress })
+        .eq("id", sessionId)
+        .select("*")
+        .single();
+      updated = bare.data;
+      updErr = bare.error;
     }
 
     if (updErr) {

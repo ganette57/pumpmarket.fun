@@ -17,6 +17,15 @@ import {
 } from "@/lib/streamProviders";
 import { supabase } from "@/lib/supabaseClient";
 import { getMarketByAddress } from "@/lib/markets";
+import {
+  FLASH_DURATION_OPTIONS,
+  DEFAULT_FLASH_DURATION_MIN,
+  deriveTradeWindowState,
+  formatMmSs,
+  parseTimestampMs,
+  tradeWindowSecondsFor,
+  type TradeWindowState,
+} from "@/lib/liveFlashWindows";
 import { buildOddsSeries, downsample } from "@/lib/marketHistory";
 import PlayOddsChart from "@/components/play/PlayOddsChart";
 import PlayActivity from "@/components/play/PlayActivity";
@@ -1274,10 +1283,115 @@ function LiveResolveSheet({
   );
 }
 
+/* ── TradeWindowBar ──────────────────────────────────────────────── */
+// The horizontal strip between the market card and the action panels.
+//
+// Fully driven by the authoritative markets.trading_lock_at / end_at: while
+// trading is open it drains right-to-left toward the lock, and after the lock
+// it reports how much watch-only market time is left.
+//
+// It holds no timer state. `state` is recomputed from timestamps against the
+// caller's clock tick, so a backgrounded tab, a sleeping device, a rerender
+// or a viewer joining halfway all land on the correct frame immediately.
+
+const URGENCY_STYLES: Record<
+  TradeWindowState["urgency"],
+  { text: string; fill: string; dot: string; edge: string }
+> = {
+  green: {
+    text: "text-pump-green",
+    fill: "bg-gradient-to-r from-pump-green/70 to-pump-green",
+    dot: "bg-pump-green shadow-[0_0_6px_rgba(109,255,164,0.8)]",
+    edge: "rgba(109,255,164,0.65)",
+  },
+  yellow: {
+    text: "text-amber-300",
+    fill: "bg-gradient-to-r from-amber-400/70 to-amber-300",
+    dot: "bg-amber-300 shadow-[0_0_6px_rgba(252,211,77,0.8)]",
+    edge: "rgba(252,211,77,0.65)",
+  },
+  orange: {
+    text: "text-orange-400",
+    fill: "bg-gradient-to-r from-orange-500/70 to-orange-400",
+    dot: "bg-orange-400 shadow-[0_0_6px_rgba(251,146,60,0.85)]",
+    edge: "rgba(251,146,60,0.7)",
+  },
+  red: {
+    text: "text-[#ff5c73]",
+    fill: "bg-gradient-to-r from-[#ff5c73]/70 to-[#ff5c73]",
+    dot: "bg-[#ff5c73] shadow-[0_0_6px_rgba(255,92,115,0.9)]",
+    edge: "rgba(255,92,115,0.75)",
+  },
+};
+
+function TradeWindowBar({ state }: { state: TradeWindowState }) {
+  const open = state.open;
+  const style = open ? URGENCY_STYLES[state.urgency] : null;
+
+  // Pulse only in the final stretch, and only while trading is actually
+  // open — a locked bar must read as inert.
+  const pulse = open && state.secondsToLock <= 5;
+
+  return (
+    <div
+      className="relative rounded-lg p-px transition-colors duration-500"
+      style={{
+        background: open
+          ? `linear-gradient(90deg, ${style!.edge}, rgba(255,255,255,0.06))`
+          : "rgba(255,255,255,0.08)",
+      }}
+    >
+      <div className="relative overflow-hidden rounded-[7px] bg-black/85 px-3 py-1.5">
+        {/* Drain track. Anchored LEFT so the fill's right edge sweeps
+            leftward — the bar empties from the right, full at T0 and gone at
+            lock_at. */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 left-0 right-0"
+        >
+          <div
+            className={`h-full transition-[width] duration-1000 ease-linear ${
+              open ? `${style!.fill} opacity-[0.16]` : "opacity-0"
+            }`}
+            style={{ width: `${Math.round(state.fractionRemaining * 100)}%` }}
+          />
+        </div>
+
+        <div className="relative z-10 flex items-center justify-between gap-2">
+          <span className="inline-flex items-center gap-1.5 min-w-0">
+            <span
+              className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                open ? style!.dot : "bg-white/25"
+              }`}
+            />
+            <span
+              className={`text-[10px] font-bold uppercase tracking-wider whitespace-nowrap ${
+                open ? style!.text : "text-white/45"
+              }`}
+            >
+              {open ? "Place your bet" : "Trading locked"}
+            </span>
+          </span>
+
+          <span
+            className={`text-[11px] font-bold tabular-nums tracking-wide whitespace-nowrap ${
+              open ? style!.text : "text-white/45"
+            } ${pulse ? "fm-lock-pulse" : ""}`}
+          >
+            {open
+              ? formatMmSs(state.secondsToLock)
+              : `${formatMmSs(state.secondsToEnd)} LEFT`}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Create Next Market sheet — host-only. Collects title / outcomes / duration
 // and hands them to the page's onCreate handler (which reuses the shared
 // `createLiveFlashMarket` helper + signed market_address update).
-const NEXT_MARKET_DURATIONS = [3, 5, 10, 30] as const;
+const NEXT_MARKET_DURATIONS = FLASH_DURATION_OPTIONS;
 
 function LiveNextMarketSheet({
   open,
@@ -1295,7 +1409,9 @@ function LiveNextMarketSheet({
   const [title, setTitle] = useState("");
   const [yesLabel, setYesLabel] = useState("YES");
   const [noLabel, setNoLabel] = useState("NO");
-  const [durationMin, setDurationMin] = useState<number>(5);
+  const [durationMin, setDurationMin] = useState<number>(
+    DEFAULT_FLASH_DURATION_MIN,
+  );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1305,7 +1421,7 @@ function LiveNextMarketSheet({
       setTitle("");
       setYesLabel("YES");
       setNoLabel("NO");
-      setDurationMin(5);
+      setDurationMin(DEFAULT_FLASH_DURATION_MIN);
       setError(null);
       setSubmitting(false);
     }
@@ -1364,7 +1480,7 @@ function LiveNextMarketSheet({
           <label className="block text-xs font-semibold text-white/70 mb-1.5">
             Duration
           </label>
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             {NEXT_MARKET_DURATIONS.map((d) => (
               <button
                 key={d}
@@ -1380,6 +1496,10 @@ function LiveNextMarketSheet({
               </button>
             ))}
           </div>
+          <p className="text-[11px] text-gray-500 mt-1.5">
+            Betting open for the first{" "}
+            {formatMmSs(tradeWindowSecondsFor(durationMin))}, then watch-only.
+          </p>
         </div>
 
         {error && (
@@ -1431,6 +1551,14 @@ export type MobileImmersiveSlideMarket = {
   resolutionTime?: number; // unix seconds
   totalVolume?: number;
   publicKey?: string;
+  /**
+   * `markets.trading_lock_at` — when trading closes, EARLIER than
+   * resolutionTime. Null/absent on legacy markets, which stay tradable for
+   * their whole duration exactly as before.
+   */
+  tradingLockAt?: string | null;
+  /** `markets.created_at` — T0, the denominator for the drain bar. */
+  startedAt?: string | null;
 };
 
 /**
@@ -1582,10 +1710,34 @@ export function MobileImmersiveSlide({
     };
   }, [endIsoOverride, market?.resolutionTime, nowMs]);
 
+  // Trade window — the authoritative lock_at timestamp, never a locally
+  // guessed timer. Null when the market carries no lock (legacy markets),
+  // in which case the bar is not rendered and only the old rules apply.
+  const tradeWindow = useMemo(() => {
+    const endMs =
+      parseTimestampMs(endIsoOverride) ??
+      (market?.resolutionTime ? market.resolutionTime * 1000 : null);
+    return deriveTradeWindowState({
+      lockAtMs: parseTimestampMs(market?.tradingLockAt),
+      endAtMs: endMs,
+      startedAtMs: parseTimestampMs(market?.startedAt),
+      nowMs,
+    });
+  }, [
+    market?.tradingLockAt,
+    market?.startedAt,
+    market?.resolutionTime,
+    endIsoOverride,
+    nowMs,
+  ]);
+
   // Time-based lock: once the visible countdown hits 00:00 the on-chain market
   // rejects trades, so lock the action UI immediately (covers feed + deeplink).
   const expired = !!countdown && countdown.remSec <= 0;
-  const locked = sessionLocked || expired;
+  // Trading also closes at lock_at, well before the market ends. The market
+  // itself stays viewable — only the buy path shuts.
+  const tradeLocked = !!tradeWindow && !tradeWindow.open;
+  const locked = sessionLocked || expired || tradeLocked;
 
   // Host resolve gating: only the host, only after the timer expires, and only
   // while the market is not yet resolved/proposed.
@@ -1799,11 +1951,6 @@ export function MobileImmersiveSlide({
   // no volume `perSideSol` returns null for both sides, so the row stays
   // hidden exactly as before.
   const hasPerSide = effPerSide(0) != null || effPerSide(1) != null;
-
-  // Higher-percentage side — drives the Momentum strip placeholder label.
-  // Pure render computation (no state / effect / timer).
-  const momentumYes =
-    (derived?.percentages?.[0] ?? 0) >= (derived?.percentages?.[1] ?? 0);
 
   // Pin layout heights so the stream wrapper (absolute) and the structured
   // stack's top spacer (in-flow) line up exactly — the stream sits flush
@@ -2189,59 +2336,20 @@ export function MobileImmersiveSlide({
             )}
           </div>
 
-          {/* CSS-only shimmer used by the momentum strip (no JS loop). The
-              <style> tag is display:none and never participates in layout. */}
+          {/* Final-seconds pulse on the trade-window timer. CSS-only (no JS
+              loop); the <style> tag never participates in layout. */}
           <style>{`
-            .fm-mom-shimmer{background:linear-gradient(100deg,transparent 38%,rgba(255,255,255,0.10) 50%,transparent 62%);transform:translateX(-100%);animation:fm-mom-sweep 5s ease-in-out infinite;will-change:transform}
-            @keyframes fm-mom-sweep{0%{transform:translateX(-100%)}55%,100%{transform:translateX(100%)}}
-            @media (prefers-reduced-motion:reduce){.fm-mom-shimmer{animation:none}}
+            .fm-lock-pulse{animation:fm-lock-beat 1s ease-in-out infinite}
+            @keyframes fm-lock-beat{0%,100%{opacity:1}50%{opacity:0.45}}
+            @media (prefers-reduced-motion:reduce){.fm-lock-pulse{animation:none}}
           `}</style>
 
-          {/* HUD STRIPS — visual placeholders between the market card and the
-              action panels. Reserve the eventual Momentum and Up Next rows.
-              Pure presentational; no data or effects wired yet. */}
+          {/* HUD STRIPS — between the market card and the action panels. */}
           <div className="px-3 mt-3 space-y-2">
-            {/* Momentum / tension strip — gradient edge (green→amber→red),
-                soft colored edge-glow, and a CSS-only shimmer sweep. */}
-            <div className="relative rounded-lg p-px bg-[linear-gradient(90deg,rgba(109,255,164,0.65),rgba(252,211,77,0.6),rgba(255,92,115,0.65))] shadow-[-5px_0_18px_-9px_rgba(109,255,164,0.55),0_0_16px_-9px_rgba(252,211,77,0.45),5px_0_18px_-9px_rgba(255,92,115,0.55)]">
-              <div className="relative overflow-hidden rounded-[7px] bg-black/85 px-3 py-1.5">
-                <span
-                  aria-hidden
-                  className="fm-mom-shimmer pointer-events-none absolute inset-0"
-                />
-                <div className="relative z-10 flex items-center justify-between gap-2">
-                  <span className="inline-flex items-center gap-1.5 min-w-0">
-                    <span
-                      className={`w-1.5 h-1.5 rounded-full ${
-                        momentumYes
-                          ? "bg-pump-green shadow-[0_0_6px_rgba(109,255,164,0.8)]"
-                          : "bg-[#ff5c73] shadow-[0_0_6px_rgba(255,92,115,0.8)]"
-                      }`}
-                    />
-                    <span
-                      className={`text-[10px] font-bold uppercase tracking-wider whitespace-nowrap ${
-                        momentumYes ? "text-pump-green" : "text-[#ff5c73]"
-                      }`}
-                    >
-                      Momentum: {momentumYes ? "YES" : "NO"}
-                    </span>
-                  </span>
-                  <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-amber-300 drop-shadow-[0_0_6px_rgba(252,211,77,0.6)] whitespace-nowrap">
-                    High Tension
-                  </span>
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-red-500/15 border border-red-500/30 whitespace-nowrap">
-                    <span className="text-[9px] font-bold uppercase tracking-wider text-red-300">
-                      Final
-                    </span>
-                    {countdown?.label && (
-                      <span className="text-[9px] font-bold tabular-nums text-red-200">
-                        {countdown.label}
-                      </span>
-                    )}
-                  </span>
-                </div>
-              </div>
-            </div>
+            {/* Trade-window countdown — same physical strip, now driven by the
+                authoritative markets.trading_lock_at. Hidden entirely on
+                markets with no lock (nothing to count down to). */}
+            {tradeWindow && <TradeWindowBar state={tradeWindow} />}
 
             {hostSlot ? (
               /* HOST CONTROL CARD (host only) — replaces the Up Next module.
@@ -2330,7 +2438,7 @@ export function MobileImmersiveSlide({
                 <span className="shrink-0 self-start inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-pump-green/10 border border-pump-green/25 text-[9px] font-bold uppercase tracking-wider text-pump-green/80">
                   {hasQueuedNext && queuedNext?.durationMin
                     ? `${queuedNext.durationMin} Min Market`
-                    : "3 Min Market"}
+                    : `${DEFAULT_FLASH_DURATION_MIN} Min Market`}
                 </span>
               </div>
             )}
@@ -2449,8 +2557,18 @@ export function MobileImmersiveSlide({
                 Resolve Market
               </button>
             ) : locked ? (
-              <div className="h-20 flex items-center justify-center rounded-2xl bg-white/[0.04] border border-white/10 backdrop-blur-md">
+              <div className="h-20 flex flex-col items-center justify-center gap-0.5 rounded-2xl bg-white/[0.04] border border-white/10 backdrop-blur-md">
                 <p className="text-sm text-gray-400">Trading is locked</p>
+                {/* The trade window closed but the market is still running —
+                    say so, otherwise a viewer reads this as "market over". */}
+                {tradeLocked && !expired && !sessionLocked && (
+                  <p className="text-[11px] text-gray-500">
+                    Watch it play out
+                    {tradeWindow && tradeWindow.secondsToEnd > 0
+                      ? ` — ${formatMmSs(tradeWindow.secondsToEnd)} left`
+                      : ""}
+                  </p>
+                )}
               </div>
             ) : (
               <div className="h-20 flex items-center justify-center rounded-2xl bg-white/[0.04] border border-white/10 backdrop-blur-md">

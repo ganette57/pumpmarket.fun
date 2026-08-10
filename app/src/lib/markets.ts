@@ -27,6 +27,15 @@ export type DbMarket = {
   start_time?: string | null;
   end_time?: string | null;
 
+  /**
+   * Live flash markets only: the instant trading closes, which is EARLIER
+   * than `end_date`. The market stays viewable (and its result still covers
+   * the full end_date window) after this passes. Null on every non-flash
+   * market and on flash markets created before the trade window shipped —
+   * null means "no trade lock", never "locked".
+   */
+  trading_lock_at?: string | null;
+
   resolved?: boolean | null;
 
   // on-chain fields (mirrored in DB)
@@ -163,6 +172,7 @@ export async function getMarketByAddress(marketAddress: string): Promise<DbMarke
       "image_url",
       "total_volume",
       "end_date",
+      "trading_lock_at",
       "start_time",
       "end_time",
       "resolved",
@@ -438,6 +448,12 @@ export type IndexMarketInput = {
   // feed. Requires column `is_live_session_market boolean default false` on
   // `markets`. Safely omitted on the upsert if undefined.
   is_live_session_market?: boolean | null;
+
+  // Live flash markets only: the instant trading closes, EARLIER than
+  // end_date. Requires column `trading_lock_at timestamptz` on `markets`
+  // (20260809_live_flash_trade_lock.sql). Safely omitted on the upsert if
+  // undefined, so creation never regresses before the migration is run.
+  trading_lock_at?: string | null;
 };
 
 export async function indexMarket(input: IndexMarketInput): Promise<void> {
@@ -507,24 +523,34 @@ export async function indexMarket(input: IndexMarketInput): Promise<void> {
     payload.is_live_session_market = !!input.is_live_session_market;
   }
 
-  // Upsert by market_address (requires unique index on market_address).
-  // If the optional `is_live_session_market` column does not exist yet, fall
-  // back to an upsert without it so existing creation flows never regress
-  // before the migration is run.
-  let { error } = await supabase
-    .from("markets")
-    .upsert(payload, { onConflict: "market_address" });
+  // Trade-window lock (live flash markets only; same optional-column rule).
+  if (input.trading_lock_at !== undefined && input.trading_lock_at !== null) {
+    payload.trading_lock_at = input.trading_lock_at;
+  }
 
-  if (
-    error &&
-    payload.is_live_session_market !== undefined &&
-    /is_live_session_market/i.test(String(error.message || ""))
-  ) {
-    const { is_live_session_market: _omit, ...fallbackPayload } = payload;
-    const retry = await supabase
+  // Upsert by market_address (requires unique index on market_address).
+  // Columns added by later migrations are OPTIONAL: if one of them does not
+  // exist on this deployment yet, drop it and retry so existing creation
+  // flows never regress before the migration is run. Retried one column at a
+  // time because Postgres only names the first offender per attempt.
+  const OPTIONAL_COLUMNS = ["is_live_session_market", "trading_lock_at"] as const;
+
+  let error: { message?: string } | null = null;
+  const attemptPayload: Record<string, unknown> = payload;
+
+  for (let attempt = 0; attempt <= OPTIONAL_COLUMNS.length; attempt++) {
+    const res = await supabase
       .from("markets")
-      .upsert(fallbackPayload, { onConflict: "market_address" });
-    error = retry.error;
+      .upsert(attemptPayload, { onConflict: "market_address" });
+    error = res.error;
+    if (!error) break;
+
+    const message = String(error.message || "");
+    const missing = OPTIONAL_COLUMNS.find(
+      (col) => attemptPayload[col] !== undefined && new RegExp(col, "i").test(message),
+    );
+    if (!missing) break; // a real failure, not a missing optional column
+    delete attemptPayload[missing];
   }
 
   if (error) {

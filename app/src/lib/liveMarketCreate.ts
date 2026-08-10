@@ -14,6 +14,7 @@ import {
 import { BN } from "@coral-xyz/anchor";
 import { sendSignedTx } from "@/lib/solanaSend";
 import { indexMarket } from "@/lib/markets";
+import { computeFlashMarketWindow } from "@/lib/liveFlashWindows";
 
 // Same on-chain market defaults as /create + /live/new.
 const DEFAULT_B_SOL = 0.01;
@@ -39,6 +40,14 @@ export type CreateLiveFlashMarketResult = {
   resolutionTimestamp: number;
   /** Sanitised outcome labels actually written on-chain. */
   outcomes: string[];
+  /** T0 — when this market went live. ISO. */
+  startedAtIso: string;
+  /** T0 + trade window. Trading is rejected at or after this. ISO. */
+  lockAtIso: string;
+  /** T0 + duration. Same instant as `resolutionTimestamp`. ISO. */
+  endAtIso: string;
+  /** Duration after normalization onto the supported option list. */
+  durationMin: number;
 };
 
 export async function createLiveFlashMarket(
@@ -57,17 +66,23 @@ export async function createLiveFlashMarket(
   const safeTitle = String(title || "").trim().slice(0, 200);
   if (!safeTitle) throw new Error("Market title is required");
 
-  const dur = Math.max(1, Math.floor(Number(durationMin) || 0));
-  if (!Number.isFinite(dur) || dur <= 0) {
-    throw new Error("Duration must be a positive number of minutes");
-  }
-
   const outcomes = (rawOutcomes ?? []).slice(0, 2).map((o, i) =>
     String(o || "").trim().slice(0, 24) || (i === 0 ? "YES" : "NO"),
   );
   while (outcomes.length < 2) outcomes.push(outcomes.length === 0 ? "YES" : "NO");
 
-  const resolutionTimestamp = Math.floor(Date.now() / 1000) + dur * 60;
+  // The market starts NOW. `lockAt` closes trading part-way through; `endAt`
+  // is unchanged by it — the trade window never extends the market.
+  //
+  // This is the ONE creation choke point: the session's first market and
+  // every chained market both come through here, so market B can never
+  // inherit a timestamp from market A — its whole window is computed from its
+  // own T0 and its own duration. Throws on an unsupported duration rather
+  // than snapping, because these timestamps are written once and then binding.
+  const window = computeFlashMarketWindow(durationMin);
+  const dur = window.durationMin;
+
+  const resolutionTimestamp = Math.floor(window.endAt.getTime() / 1000);
   const bLamportsU64 = Math.floor(DEFAULT_B_SOL * 1_000_000_000);
 
   // 1. On-chain createMarket — identical to /create + /live/new.
@@ -100,14 +115,18 @@ export async function createLiveFlashMarket(
 
   const marketAddress = marketKeypair.publicKey.toBase58();
 
-  // 2. Supabase index — end_date powers the live HUD countdown. Flagged so
-  // the main home feed can exclude live-session flash markets.
+  // 2. Supabase index — end_date powers the live HUD market countdown and
+  // trading_lock_at powers the trade-window countdown AND the authoritative
+  // Play lock (play_assert_market_tradable compares it against Postgres
+  // now()). Flagged so the main home feed can exclude live-session flash
+  // markets.
   await indexMarket({
     market_address: marketAddress,
     question: safeTitle,
     category: "other",
     creator: publicKey.toBase58(),
-    end_date: new Date(resolutionTimestamp * 1000).toISOString(),
+    end_date: window.endAt.toISOString(),
+    trading_lock_at: window.lockAt.toISOString(),
     market_type: 0,
     outcome_names: outcomes,
     outcome_supplies: outcomes.map(() => 0),
@@ -117,5 +136,13 @@ export async function createLiveFlashMarket(
     is_live_session_market: true,
   } as any);
 
-  return { marketAddress, resolutionTimestamp, outcomes };
+  return {
+    marketAddress,
+    resolutionTimestamp,
+    outcomes,
+    startedAtIso: window.startedAt.toISOString(),
+    lockAtIso: window.lockAt.toISOString(),
+    endAtIso: window.endAt.toISOString(),
+    durationMin: dur,
+  };
 }

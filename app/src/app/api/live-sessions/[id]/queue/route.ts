@@ -6,6 +6,10 @@ import {
   serializeQueuedNextMarketConfig,
   type QueuedNextMarketConfig,
 } from "@/lib/liveSessions";
+import {
+  FLASH_DURATION_OPTIONS,
+  isSupportedFlashDurationMin,
+} from "@/lib/liveFlashWindows";
 
 // Host-only queue ops for the live session's "next market" CONFIG.
 //
@@ -65,6 +69,20 @@ export async function POST(
       if (!config || typeof config !== "object") {
         return NextResponse.json(
           { error: "config is required for set" },
+          { status: 400 },
+        );
+      }
+      // Server-side duration allow-list. This route previously accepted any
+      // positive integer, which would queue a market whose trade window is
+      // undefined. Rejected BEFORE serialisation so the caller gets a clear
+      // 400 rather than a signature mismatch.
+      if (!isSupportedFlashDurationMin(config.durationMin)) {
+        return NextResponse.json(
+          {
+            error: `Invalid duration: ${String(
+              config.durationMin,
+            )}. Allowed: ${FLASH_DURATION_OPTIONS.join(" / ")} minutes.`,
+          },
           { status: 400 },
         );
       }

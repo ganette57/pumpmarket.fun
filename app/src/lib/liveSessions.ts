@@ -35,8 +35,16 @@ export type LiveSession = {
   status: LiveSessionStatus;
   thumbnail_url?: string | null;
   pinned_outcome?: number | null;
+  /** T0 of the session's CURRENT flash market. Refreshed on every swap. */
   started_at?: string | null;
+  /**
+   * When trading closes on the CURRENT flash market — started_at + the
+   * duration's trade window. Mirrors `markets.trading_lock_at`, which is the
+   * value the Play engine actually enforces; this copy exists so live
+   * surfaces can render the countdown without a second market read.
+   */
   lock_at?: string | null;
+  /** When the CURRENT flash market ends. Mirrors `markets.end_date`. */
   end_at?: string | null;
   ended_at?: string | null;
   /** Audit trail for an Admin "Disable Live" action (Part 5). Requires the
@@ -81,6 +89,12 @@ export function serializeQueuedNextMarketConfig(
     String(o || "").trim().slice(0, 24) || (i === 0 ? "YES" : "NO"),
   );
   while (outcomes.length < 2) outcomes.push(outcomes.length === 0 ? "YES" : "NO");
+  // Left as a plain floor ON PURPOSE. This function is the canonical bytes
+  // BOTH sides sign and verify, so it must stay a pure, total serialisation —
+  // if it rejected or snapped, an invalid duration would produce a signature
+  // mismatch (a confusing 403) instead of the clear 400 the caller deserves.
+  // Duration validation is a separate step: the queue route runs
+  // assertSupportedFlashDurationMin BEFORE it gets here.
   const durationMin = Math.max(1, Math.floor(Number(c.durationMin) || 0));
   // Fixed key order — deterministic across client/server.
   return JSON.stringify({ title, outcomes, durationMin });
@@ -93,6 +107,10 @@ export type CreateLiveSessionPayload = {
   stream_url: string;
   status?: LiveSessionStatus;
   thumbnail_url?: string | null;
+  /** T0 / lock / end of the first flash market. See LiveSession. */
+  started_at?: string | null;
+  lock_at?: string | null;
+  end_at?: string | null;
 };
 
 export type UpdateLiveSessionPatch = Partial<
@@ -250,6 +268,13 @@ export async function createLiveSession(
     stream_url: String(payload.stream_url || "").trim(),
     status: payload.status || "live",
     thumbnail_url: payload.thumbnail_url ?? null,
+    // The session goes live the moment it is created, so its first market's
+    // clock is known here. Historically these stayed null until the host
+    // manually toggled status, which left the session row with no usable
+    // timing at all.
+    started_at: payload.started_at ?? null,
+    lock_at: payload.lock_at ?? null,
+    end_at: payload.end_at ?? null,
   };
 
   if (!row.title) throw new Error("title is required");

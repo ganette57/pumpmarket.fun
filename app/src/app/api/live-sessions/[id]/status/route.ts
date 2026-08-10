@@ -8,6 +8,33 @@ type ValidStatus = (typeof VALID_STATUSES)[number];
 
 const MAX_DRIFT_MS = 2 * 60_000; // 2 minutes replay window
 
+/**
+ * The current market's trade-lock / end timestamps, read from the market row
+ * that actually owns them. Best-effort: a missing row or a deployment without
+ * the `trading_lock_at` column yields nulls, which read as "no trade lock"
+ * everywhere downstream.
+ */
+async function readMarketWindow(
+  supabase: ReturnType<typeof supabaseServer>,
+  marketAddress: unknown,
+): Promise<{ lockAt: string | null; endAt: string | null }> {
+  const addr = String(marketAddress || "").trim();
+  if (!addr) return { lockAt: null, endAt: null };
+
+  const { data, error } = await supabase
+    .from("markets")
+    .select("trading_lock_at,end_date")
+    .eq("market_address", addr)
+    .maybeSingle();
+
+  if (error || !data) return { lockAt: null, endAt: null };
+  return {
+    lockAt: (data as any).trading_lock_at ?? null,
+    endAt: (data as any).end_date ?? null,
+  };
+}
+
+
 export async function POST(
   req: Request,
   { params }: { params: { id: string } }
@@ -95,17 +122,35 @@ export async function POST(
     }
 
     // ── Build patch (same logic as client handleStatusChange) ────
+    //
+    // EVERY branch here writes SESSION columns only. The flash trade deadline
+    // lives on `markets.trading_lock_at` and is written exactly once, at
+    // market creation — no host action may move it, or the automatic lock
+    // would stop being deterministic. Nothing in this route touches the
+    // `markets` table.
     const now = new Date().toISOString();
     const patch: Record<string, unknown> = { status: newStatus };
 
     switch (newStatus) {
-      case "live":
-        patch.lock_at = null;
-        patch.end_at = null;
+      case "live": {
         patch.ended_at = null;
         if (!session.started_at) patch.started_at = now;
+        // Re-mirror the CURRENT market's clock rather than nulling it. These
+        // columns used to be wiped here, which was harmless while nothing
+        // read them; they are now a convenience mirror of the market row, so
+        // wiping them would leave the session describing a window that has
+        // nothing to do with the market it points at. Read-only mirror — the
+        // live surfaces still read markets.trading_lock_at, never this.
+        const mirrored = await readMarketWindow(supabase, session.market_address);
+        patch.lock_at = mirrored.lockAt;
+        patch.end_at = mirrored.endAt;
         break;
+      }
       case "locked":
+        // Legacy session-level behaviour, unchanged: stamp when the host
+        // manually locked the SESSION. This is not the flash trade deadline
+        // and cannot shorten it — a manual lock closes trading through
+        // `session.status`, which every live surface already gates on.
         patch.lock_at = now;
         break;
       case "ended":
