@@ -1171,12 +1171,39 @@ export default function Home() {
 
           setOpenClassicMarkets(applyAuthoritative);
           setFeaturedClassicMarkets(applyAuthoritative);
+
+          /**
+           * Publish the authoritative Real snapshot for THIS address directly.
+           *
+           * Classic feed rows reach the snapshot store through the list-publish
+           * effect above, but a Crypto Daily (flash) market is in none of those
+           * lists — /api/home excludes market_mode = "flash_crypto" — so its
+           * probabilities stayed frozen at the pre-trade values after a Real
+           * buy. Publishing by address covers both kinds with one write, and
+           * the store's equality gate makes the duplicate publish for classic
+           * rows a no-op.
+           */
+          const supplies = authSupplies ?? [authYes, authNo];
+          const total = supplies.reduce((a, b) => a + b, 0);
+          publishRealSnapshots([
+            {
+              mode: "real" as const,
+              marketAddress: pk,
+              supplies: supplies.map(String),
+              probabilities:
+                total > 0
+                  ? supplies.map((s) => s / total)
+                  : supplies.map(() => 1 / Math.max(supplies.length, 1)),
+              volume: String(authVolume),
+              status: (row as any).resolved ? "resolved" : "open",
+            },
+          ]);
         } catch {
           // Keep the optimistic value on failure — never revert to stale.
         }
       })();
     },
-    [tradeSheetMarket, isPlayMode]
+    [tradeSheetMarket, isPlayMode, publishRealSnapshots]
   );
 
   // ------- RENDER -------
@@ -1289,6 +1316,7 @@ export default function Home() {
                       <FlashMarketCard
                         market={entry.market}
                         variant="hero"
+                        heroLayout="feed"
                         className="h-full rounded-none border-0"
                         onOutcomeTap={openFlashTradeSheet}
                         onNavigate={() => saveFeedRestoreState(entryKey, index)}
@@ -1433,7 +1461,12 @@ export default function Home() {
                           className="w-full flex-shrink-0 h-[400px]"
                         >
                           {slide.kind === "flash" ? (
-                            <FlashMarketCard market={slide.market} variant="hero" className="h-full" />
+                            <FlashMarketCard
+                              market={slide.market}
+                              variant="hero"
+                              heroLayout="carousel"
+                              className="h-full"
+                            />
                           ) : (
                             <FeaturedMarketCardFull
                               market={slide.market}

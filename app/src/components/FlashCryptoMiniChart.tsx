@@ -49,7 +49,22 @@ type FlashCryptoMiniChartProps = {
   height?: number;
   /** Called on every accepted price sample, so a host card can show the price. */
   onPriceSample?: (price: number) => void;
+  /**
+   * false pauses price polling and the moving time axis. The immersive feed
+   * sets this from an IntersectionObserver so only the card on screen samples
+   * the price API.
+   */
+  active?: boolean;
 };
+
+/**
+ * Rolling viewport for 24h markets: the chart shows the last few minutes and
+ * scrolls right-to-left, like a live trading chart, instead of squeezing the
+ * whole session into the width.
+ */
+const ROLLING_WINDOW_SEC = 8 * 60;
+/** A little empty space at the right edge so the last point isn't glued to it. */
+const ROLLING_LEAD_SEC = 8;
 
 function formatPrice(price: number): string {
   if (price === 0) return "0";
@@ -117,9 +132,12 @@ export default function FlashCryptoMiniChart({
   variant = "full",
   height,
   onPriceSample,
+  active = true,
 }: FlashCryptoMiniChartProps) {
   const isCompact = variant === "compact";
   const isDailyWindow = isFlashCryptoDailyDuration(durationMinutes);
+  // Long windows scroll; short flash windows keep fitContent() as before.
+  const isRolling = isDailyWindow && !isEnded;
   const [points, setPoints] = useState<PricePoint[]>([]);
   const [currentPrice, setCurrentPrice] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -139,6 +157,14 @@ export default function FlashCryptoMiniChart({
   useEffect(() => {
     onPriceSampleRef.current = onPriceSample;
   }, [onPriceSample]);
+  // The chart is created once; this ref carries the (stable) rolling flag into
+  // that setup effect without re-creating the chart.
+  const isRollingRef = useRef(isRolling);
+  isRollingRef.current = isRolling;
+  // Track what the series already holds, so a single new sample can be
+  // appended (animated) instead of replacing the whole dataset.
+  const lastSeriesLenRef = useRef(0);
+  const lastSeriesTimeRef = useRef<number | null>(null);
 
   const windowEndMs = Date.parse(String(windowEnd || ""));
   const hasCountdown = !isEnded && Number.isFinite(windowEndMs);
@@ -202,12 +228,15 @@ export default function FlashCryptoMiniChart({
       onPriceSampleRef.current?.(price);
       setPoints((prev) => {
         const prevLast = prev.length ? prev[prev.length - 1].price : null;
-        // Keep majors unchanged: avoid duplicate points when price is identical.
-        // For meme markets, append every real sample to keep time progression visually alive.
-        if (!isMemeSource && prevLast != null && Math.abs(prevLast - price) < 1e-12) {
+        // Keep majors unchanged on short windows: avoid duplicate points when
+        // price is identical. Rolling (24h) mode appends every real sample even
+        // when the price is unchanged — that is a genuine observation at a new
+        // time, and it is what makes a flat market still read as live.
+        if (!isRolling && !isMemeSource && prevLast != null && Math.abs(prevLast - price) < 1e-12) {
           return prev;
         }
-        const next = [...prev, { time: Date.now(), price }];
+        const now = Date.now();
+        const next = [...prev, { time: now, price }];
         if (isMemeSource) {
           console.log("[flash-meme] chart append = ...", {
             tokenMint,
@@ -216,13 +245,20 @@ export default function FlashCryptoMiniChart({
             points: next.length,
           });
         }
+        if (isRolling) {
+          // Trim by time, not by count, so the window length is stable
+          // regardless of the poll cadence in use.
+          const cutoff = now - (ROLLING_WINDOW_SEC + 60) * 1000;
+          const trimmed = next.filter((p) => p.time >= cutoff);
+          return trimmed.length > 900 ? trimmed.slice(-900) : trimmed;
+        }
         if (next.length > 200) return next.slice(-200);
         return next;
       });
     } catch {
       if (mountedRef.current) setError("Price fetch failed");
     }
-  }, [isMemeSource, majorPair, majorSymbol, sourceType, tokenMint]);
+  }, [isMemeSource, isRolling, majorPair, majorSymbol, sourceType, tokenMint]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -232,15 +268,28 @@ export default function FlashCryptoMiniChart({
   }, []);
 
   useEffect(() => {
-    if (isEnded) {
+    const stop = () => {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
       }
+    };
+
+    // Ended markets never poll. `active === false` means the host says this
+    // card is off screen — a swipe feed must not keep every crypto card
+    // hitting the price API once a second.
+    if (isEnded || !active) {
+      stop();
       return;
     }
 
-    fetchPrice();
+    const isDocHidden = () => typeof document !== "undefined" && document.visibilityState === "hidden";
+
+    const start = () => {
+      if (intervalRef.current || isDocHidden()) return;
+      void fetchPrice();
+      intervalRef.current = setInterval(fetchPrice, adaptivePollMs);
+    };
 
     if (isMemeSource) {
       console.log("[flash-meme] live poll interval = ...", {
@@ -251,14 +300,24 @@ export default function FlashCryptoMiniChart({
       });
     }
 
-    intervalRef.current = setInterval(fetchPrice, adaptivePollMs);
+    start();
+
+    // A backgrounded tab pauses sampling and catches up on return.
+    const onVisibility = () => {
+      if (isDocHidden()) stop();
+      else start();
+    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVisibility);
+    }
+
     return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
+      stop();
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisibility);
       }
     };
-  }, [adaptivePollMs, fetchPrice, isEnded, isMemeSource, pollTier, tokenMint]);
+  }, [active, adaptivePollMs, fetchPrice, isEnded, isMemeSource, pollTier, tokenMint]);
 
   useEffect(() => {
     // Short flash windows seed the series with the start price so the very
@@ -375,8 +434,11 @@ export default function FlashCryptoMiniChart({
       timeScale: {
         visible: false,
         borderVisible: false,
-        fixLeftEdge: true,
-        fixRightEdge: true,
+        // A rolling viewport drives its own visible range, so the edges must
+        // not be pinned to the data extent.
+        fixLeftEdge: !isRollingRef.current,
+        fixRightEdge: !isRollingRef.current,
+        secondsVisible: true,
       },
       handleScroll: false,
       handleScale: false,
@@ -446,7 +508,24 @@ export default function FlashCryptoMiniChart({
     if (!areaSeries || !chart) return;
 
     const seriesData = buildSeriesData(points);
-    areaSeries.setData(seriesData);
+
+    // Appending one point with update() lets the library animate the new
+    // segment in, instead of the hard repaint a full setData() causes.
+    const last = seriesData[seriesData.length - 1];
+    const canAppend =
+      isRolling &&
+      last != null &&
+      seriesData.length === lastSeriesLenRef.current + 1 &&
+      lastSeriesTimeRef.current != null &&
+      Number(last.time) > Number(lastSeriesTimeRef.current);
+
+    if (canAppend) {
+      areaSeries.update(last!);
+    } else {
+      areaSeries.setData(seriesData);
+    }
+    lastSeriesLenRef.current = seriesData.length;
+    lastSeriesTimeRef.current = last ? Number(last.time) : null;
 
     // Keep the price-to-beat inside the visible range, with a little headroom.
     // Without this the reference line can sit off-screen whenever the live
@@ -461,7 +540,7 @@ export default function FlashCryptoMiniChart({
         }
         const minValue = Math.min(base.priceRange.minValue, priceStart);
         const maxValue = Math.max(base.priceRange.maxValue, priceStart);
-        const pad = Math.max((maxValue - minValue) * 0.12, priceStart * 0.0002);
+        const pad = Math.max((maxValue - minValue) * 0.06, priceStart * 0.0002);
         return { priceRange: { minValue: minValue - pad, maxValue: maxValue + pad } };
       },
     });
@@ -483,8 +562,40 @@ export default function FlashCryptoMiniChart({
       });
     }
 
-    chart.timeScale().fitContent();
-  }, [chartReady, points, priceStart]);
+    if (!isRolling) {
+      chart.timeScale().fitContent();
+    }
+  }, [chartReady, isRolling, points, priceStart]);
+
+  /**
+   * Moving time axis. The visible range is a fixed-length window ending at
+   * "now", refreshed on a ticker — so the timeline keeps sliding right-to-left
+   * even while the price is flat, and the newest point stays near the right
+   * edge. No synthetic prices are involved: only the viewport moves.
+   */
+  useEffect(() => {
+    if (!chartReady || !isRolling) return;
+    const chart = chartRef.current;
+    if (!chart) return;
+
+    const applyRange = () => {
+      const nowSec = Math.floor(Date.now() / 1000);
+      try {
+        chart.timeScale().setVisibleRange({
+          from: (nowSec - ROLLING_WINDOW_SEC) as UTCTimestamp,
+          to: (nowSec + ROLLING_LEAD_SEC) as UTCTimestamp,
+        });
+      } catch {
+        // setVisibleRange throws while the series has no data yet.
+      }
+    };
+
+    applyRange();
+    if (!active) return;
+
+    const timer = setInterval(applyRange, 1000);
+    return () => clearInterval(timer);
+  }, [active, chartReady, isRolling, points.length]);
 
   // Compact: chart only. The host card owns the prices, the timer and the copy.
   if (isCompact) {

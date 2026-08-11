@@ -21,6 +21,8 @@ type FlashMarketCardProps = {
   onOutcomeTap?: (outcomeIndex: number, target: FlashCryptoTradeTarget) => void;
   /** Crypto Daily hero only: called before navigating to the trade page. */
   onNavigate?: () => void;
+  /** Which hero surface this is — the Crypto Daily card lays out differently. */
+  heroLayout?: "feed" | "carousel";
 };
 
 function normalizeImageUrl(value: unknown): string | null {
@@ -195,6 +197,7 @@ export default function FlashMarketCard({
   className = "",
   onOutcomeTap,
   onNavigate,
+  heroLayout = "feed",
 }: FlashMarketCardProps) {
   const initialRemainingSec =
     market.status === "active" && market.remainingSec != null
@@ -365,6 +368,7 @@ export default function FlashMarketCard({
         <CryptoDailyHeroCard
           market={market}
           className={className}
+          layout={heroLayout}
           onOutcomeTap={onOutcomeTap}
           onNavigate={onNavigate}
         />

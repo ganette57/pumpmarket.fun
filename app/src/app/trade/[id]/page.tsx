@@ -59,6 +59,7 @@ import { solanaExplorerTxUrl } from "@/utils/explorer";
 import { getActiveLiveSessionForMarket, type LiveSessionStatus } from "@/lib/liveSessions";
 import { getSportEvent, refreshSportEvent, type SportEvent } from "@/lib/sportEvents";
 import { getFlashCryptoMajorConfigBySymbol } from "@/lib/flashCrypto/majors";
+import { formatFlashCryptoCountdown } from "@/lib/flashCrypto/daily";
 
 import type { SocialLinks } from "@/components/SocialLinksForm";
 import { useCallback } from "react";
@@ -935,11 +936,16 @@ function resolveBestLiveScore({
   return { home: null, away: null, source: null, ignoredSources };
 }
 
+/**
+ * Countdown for micro/flash windows.
+ *
+ * This used to be minutes:seconds, which read as "1355:10" on a 24h Crypto
+ * Daily market. The shared formatter keeps MM:SS below one hour — identical
+ * output for the short soccer/flash windows — and rolls over to HH:MM:SS above
+ * it, which is the only correct form for a 24h market.
+ */
 function formatCountdownMmSs(totalSec: number): string {
-  const safe = Math.max(0, Math.floor(totalSec));
-  const minutes = Math.floor(safe / 60);
-  const seconds = safe % 60;
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  return formatFlashCryptoCountdown(totalSec);
 }
 
 function liveMicroStatusText({
