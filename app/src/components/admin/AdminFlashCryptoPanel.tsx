@@ -3,11 +3,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Play, RefreshCw, Sparkles, Square, X } from "lucide-react";
 import {
-  FLASH_CRYPTO_MAJOR_SYMBOLS,
   getFlashCryptoMajorConfigBySymbol,
   type FlashCryptoMajorSymbol,
   type FlashCryptoSourceType,
 } from "@/lib/flashCrypto/majors";
+import {
+  FLASH_CRYPTO_DAILY_DURATION_MINUTES,
+  FLASH_CRYPTO_DAILY_SYMBOLS,
+  formatFlashCryptoCountdown,
+  formatFlashCryptoDurationChip,
+  formatFlashCryptoUsdPrice,
+} from "@/lib/flashCrypto/daily";
 
 type CampaignStatus = "running" | "stopped" | "completed";
 type FlashMode = "price" | "graduation";
@@ -92,9 +98,31 @@ const CAMPAIGNS_PAGE_SIZE = 5;
 const PENDING_PAGE_SIZE = 6;
 const CAMPAIGN_MISSING_RETENTION_MS = 30 * 60_000;
 
-const PRICE_DURATION_OPTIONS = [1, 3, 5] as const;
 const GRADUATION_DURATION_OPTIONS = [10, 30, 60] as const;
-const MAJOR_SYMBOL_OPTIONS = [...FLASH_CRYPTO_MAJOR_SYMBOLS] as FlashCryptoMajorSymbol[];
+// Product focus is BTC + SOL; the other majors stay supported by the backend.
+const MAJOR_SYMBOL_OPTIONS = [...FLASH_CRYPTO_DAILY_SYMBOLS] as FlashCryptoMajorSymbol[];
+const ACTIVE_PAGE_SIZE = 6;
+
+type ActiveMarket = {
+  marketAddress: string;
+  marketId: string | null;
+  mode: FlashMode;
+  question: string;
+  tokenSymbol: string;
+  sourceType?: PriceSourceType;
+  majorSymbol: string | null;
+  priceToBeat: number | null;
+  currentPrice: number | null;
+  changePct: number | null;
+  leadingOutcome: "YES" | "NO" | null;
+  durationMinutes: number;
+  windowEnd: string | null;
+  secondsRemaining: number | null;
+  isActive: boolean;
+  resolutionStatus: string;
+  autoResolvedOutcome: "YES" | "NO" | null;
+  volume: number;
+};
 
 function statusBadge(status: CampaignStatus) {
   const colors: Record<CampaignStatus, string> = {
@@ -206,18 +234,21 @@ function samePendingList(a: PendingResolution[], b: PendingResolution[]): boolea
 
 export default function AdminFlashCryptoPanel() {
   const [mode, setMode] = useState<FlashMode>("price");
-  const [priceSourceType, setPriceSourceType] = useState<PriceSourceType>("pump_fun");
+  const [priceSourceType, setPriceSourceType] = useState<PriceSourceType>("major");
   const [tokenMint, setTokenMint] = useState("");
   const [majorSymbol, setMajorSymbol] = useState<FlashCryptoMajorSymbol>("BTC");
-  const [duration, setDuration] = useState<number>(5);
-  const [totalMarkets, setTotalMarkets] = useState(10);
+  const [duration, setDuration] = useState<number>(FLASH_CRYPTO_DAILY_DURATION_MINUTES);
+  const [totalMarkets, setTotalMarkets] = useState(1);
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
 
   const [campaigns, setCampaigns] = useState<CampaignView[]>([]);
   const [pending, setPending] = useState<PendingResolution[]>([]);
+  const [active, setActive] = useState<ActiveMarket[]>([]);
   const [campaignPage, setCampaignPage] = useState(1);
   const [pendingPage, setPendingPage] = useState(1);
+  const [activePage, setActivePage] = useState(1);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<GraduationSuggestion[]>([]);
@@ -225,10 +256,15 @@ export default function AdminFlashCryptoPanel() {
 
   const refresh = useCallback(async () => {
     try {
-      const [campRes, pendRes] = await Promise.all([
+      const [campRes, pendRes, activeRes] = await Promise.all([
         adminPost("list_campaigns"),
         adminPost("list_pending"),
+        adminPost("list_active", { limit: 25 }),
       ]);
+
+      if (activeRes?.ok) {
+        setActive((activeRes.active || []) as ActiveMarket[]);
+      }
       const nextPending = pendRes.ok
         ? ((pendRes.pending || []) as PendingResolution[]).slice().sort((a, b) => {
             const aTs = Date.parse(String(a.resolvedAt || ""));
@@ -293,10 +329,17 @@ export default function AdminFlashCryptoPanel() {
       }
       return;
     }
-    if (!PRICE_DURATION_OPTIONS.includes(duration as any)) {
-      setDuration(5);
+    // Crypto Daily: price markets are 24h, no selector.
+    if (duration !== FLASH_CRYPTO_DAILY_DURATION_MINUTES) {
+      setDuration(FLASH_CRYPTO_DAILY_DURATION_MINUTES);
     }
   }, [duration, mode]);
+
+  // Local ticker for the "time left" column of the active table.
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (mode !== "graduation") {
@@ -327,6 +370,17 @@ export default function AdminFlashCryptoPanel() {
   useEffect(() => {
     setPendingPage((prev) => Math.min(prev, pendingTotalPages));
   }, [pendingTotalPages]);
+
+  const activeTotalPages = Math.max(1, Math.ceil(active.length / ACTIVE_PAGE_SIZE));
+  const safeActivePage = Math.min(Math.max(1, activePage), activeTotalPages);
+  const paginatedActive = useMemo(() => {
+    const start = (safeActivePage - 1) * ACTIVE_PAGE_SIZE;
+    return active.slice(start, start + ACTIVE_PAGE_SIZE);
+  }, [active, safeActivePage]);
+
+  useEffect(() => {
+    setActivePage((prev) => Math.min(prev, activeTotalPages));
+  }, [activeTotalPages]);
 
   const handleStart = async () => {
     const selectedMajor = getFlashCryptoMajorConfigBySymbol(majorSymbol);
@@ -383,11 +437,18 @@ export default function AdminFlashCryptoPanel() {
     }
   };
 
-  const durationOptions = mode === "graduation" ? GRADUATION_DURATION_OPTIONS : PRICE_DURATION_OPTIONS;
+  const durationOptions = GRADUATION_DURATION_OPTIONS;
+  const isDailyPrice = mode === "price";
 
   return (
     <div className="card-pump space-y-6">
-      <h2 className="text-xl font-bold text-white">Flash Crypto Campaign</h2>
+      <div>
+        <h2 className="text-xl font-bold text-white">Crypto Daily (24H)</h2>
+        <p className="mt-1 text-xs text-gray-500">
+          Always-on BTC / SOL markets. Each market captures an immutable price to beat at
+          creation and resolves 24 hours later against the same authoritative source.
+        </p>
+      </div>
 
       {notice && (
         <div
@@ -412,7 +473,9 @@ export default function AdminFlashCryptoPanel() {
             type="button"
             onClick={() => {
               setMode("price");
-              setDuration(5);
+              setDuration(FLASH_CRYPTO_DAILY_DURATION_MINUTES);
+              setPriceSourceType("major");
+              setTotalMarkets(1);
             }}
             className={`rounded-lg border px-3 py-2 text-sm font-semibold transition ${
               mode === "price"
@@ -420,13 +483,14 @@ export default function AdminFlashCryptoPanel() {
                 : "border-white/10 bg-pump-dark text-gray-300 hover:border-white/20"
             }`}
           >
-            PRICE
+            CRYPTO DAILY (24H)
           </button>
           <button
             type="button"
             onClick={() => {
               setMode("graduation");
               setDuration(10);
+              setTotalMarkets(10);
             }}
             className={`rounded-lg border px-3 py-2 text-sm font-semibold transition ${
               mode === "graduation"
@@ -506,21 +570,27 @@ export default function AdminFlashCryptoPanel() {
 
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="block text-xs text-gray-400 mb-1">Duration (min)</label>
-            <select
-              value={duration}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                setDuration(v);
-              }}
-              className="w-full px-3 py-2 rounded-lg bg-pump-dark border border-white/10 text-white text-sm focus:outline-none focus:ring-1 focus:ring-pump-green"
-            >
-              {durationOptions.map((d) => (
-                <option key={d} value={d} className="bg-pump-dark text-white">
-                  {d === 60 ? "1 hour" : `${d} min`}
-                </option>
-              ))}
-            </select>
+            <label className="block text-xs text-gray-400 mb-1">Duration</label>
+            {isDailyPrice ? (
+              <div className="px-3 py-2 rounded-lg bg-black/20 border border-white/10 text-sm font-semibold text-white">
+                24H (fixed)
+              </div>
+            ) : (
+              <select
+                value={duration}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  setDuration(v);
+                }}
+                className="w-full px-3 py-2 rounded-lg bg-pump-dark border border-white/10 text-white text-sm focus:outline-none focus:ring-1 focus:ring-pump-green"
+              >
+                {durationOptions.map((d) => (
+                  <option key={d} value={d} className="bg-pump-dark text-white">
+                    {d === 60 ? "1 hour" : `${d} min`}
+                  </option>
+                ))}
+              </select>
+            )}
             {mode === "graduation" && (
               <p className="mt-1 text-[11px] text-gray-500">
                 Recommended threshold: {duration === 10 ? "40%+" : "60%+"} progress
@@ -528,7 +598,9 @@ export default function AdminFlashCryptoPanel() {
             )}
           </div>
           <div>
-            <label className="block text-xs text-gray-400 mb-1">Total Markets</label>
+            <label className="block text-xs text-gray-400 mb-1">
+              {isDailyPrice ? "Days to schedule" : "Total Markets"}
+            </label>
             <input
               type="number"
               min={1}
@@ -537,6 +609,11 @@ export default function AdminFlashCryptoPanel() {
               onChange={(e) => setTotalMarkets(Math.max(1, Math.min(100, Number(e.target.value) || 1)))}
               className="w-full px-3 py-2 rounded-lg bg-pump-dark border border-white/10 text-white text-sm focus:outline-none focus:ring-1 focus:ring-pump-green"
             />
+            {isDailyPrice && (
+              <p className="mt-1 text-[11px] text-gray-500">
+                1 = a single 24h market. Higher values roll a new market when the previous one ends.
+              </p>
+            )}
           </div>
         </div>
 
@@ -546,7 +623,7 @@ export default function AdminFlashCryptoPanel() {
           className="flex items-center gap-2 px-4 py-2 rounded-lg bg-pump-green text-black font-semibold hover:opacity-90 transition disabled:opacity-50"
         >
           {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-          Start Campaign
+          {isDailyPrice ? "Create 24H market" : "Start Campaign"}
         </button>
       </div>
 
@@ -601,6 +678,129 @@ export default function AdminFlashCryptoPanel() {
         </div>
       )}
 
+      <div className="space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold text-gray-300">Live crypto inventory</h3>
+          <div className="flex items-center gap-2">
+            <div className="text-[11px] text-gray-500">
+              {active.length} total{active.length > ACTIVE_PAGE_SIZE ? ` • page ${safeActivePage}/${activeTotalPages}` : ""}
+            </div>
+            <button
+              type="button"
+              onClick={() => void refresh()}
+              className="inline-flex items-center gap-1 rounded-md border border-white/15 bg-white/5 px-2.5 py-1 text-[11px] text-gray-200 hover:bg-white/10 transition"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              Refresh
+            </button>
+          </div>
+        </div>
+
+        {active.length === 0 ? (
+          <div className="rounded-lg border border-white/10 bg-pump-dark p-3 text-xs text-gray-500">
+            No active crypto market right now. Create a BTC or SOL 24H market above.
+          </div>
+        ) : (
+          <>
+            {paginatedActive.map((a) => {
+              const endMs = Date.parse(String(a.windowEnd || ""));
+              const secondsLeft = Number.isFinite(endMs) ? Math.max(0, Math.ceil((endMs - nowMs) / 1000)) : null;
+              const ended = secondsLeft != null && secondsLeft <= 0;
+              return (
+                <div key={a.marketAddress} className="p-3 rounded-lg bg-pump-dark border border-white/10 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="font-semibold text-white">
+                        {a.sourceType === "major" ? a.majorSymbol || a.tokenSymbol : `$${a.tokenSymbol}`}
+                      </span>
+                      <span className="text-[10px] px-2 py-0.5 rounded border border-sky-400/40 bg-sky-500/10 text-sky-200">
+                        {a.mode === "graduation" ? "GRADUATION" : a.durationMinutes >= 1440 ? "24H CRYPTO" : `${a.durationMinutes}M`}
+                      </span>
+                      <span
+                        className={`text-[10px] px-2 py-0.5 rounded border ${
+                          a.isActive && !ended
+                            ? "border-pump-green/40 bg-pump-green/10 text-pump-green"
+                            : "border-yellow-400/40 bg-yellow-500/10 text-yellow-300"
+                        }`}
+                      >
+                        {a.isActive && !ended ? "ACTIVE" : "AWAITING RESOLUTION"}
+                      </span>
+                    </div>
+                    <span className="text-xs text-gray-400 font-mono shrink-0">{a.marketAddress.slice(0, 8)}...</span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                    <div className="text-gray-400">
+                      Price to beat:{" "}
+                      <span className="text-white">{formatFlashCryptoUsdPrice(a.priceToBeat)}</span>
+                    </div>
+                    <div className="text-gray-400">
+                      Current:{" "}
+                      <span className="text-white">{formatFlashCryptoUsdPrice(a.currentPrice)}</span>
+                    </div>
+                    <div className="text-gray-400">
+                      Change:{" "}
+                      <span className={(a.changePct ?? 0) >= 0 ? "text-pump-green" : "text-red-400"}>
+                        {a.changePct == null ? "—" : `${a.changePct >= 0 ? "+" : ""}${a.changePct.toFixed(2)}%`}
+                      </span>
+                    </div>
+                    <div className="text-gray-400">
+                      Time left:{" "}
+                      <span className="text-white font-mono tabular-nums">
+                        {secondsLeft == null ? "—" : formatFlashCryptoCountdown(secondsLeft)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 text-[11px] text-gray-500">
+                    <span>
+                      Ends {a.windowEnd ? new Date(a.windowEnd).toLocaleString() : "—"}
+                    </span>
+                    <span>
+                      Resolution:{" "}
+                      <span className="text-gray-300">
+                        {a.resolutionStatus.toUpperCase()}
+                        {a.autoResolvedOutcome ? ` · ${a.autoResolvedOutcome}` : ""}
+                      </span>
+                      {a.leadingOutcome ? (
+                        <span className={a.leadingOutcome === "YES" ? " text-pump-green" : " text-red-400"}>
+                          {" "}
+                          · leaning {a.leadingOutcome}
+                        </span>
+                      ) : null}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+            {activeTotalPages > 1 && (
+              <div className="flex items-center justify-between gap-3 border-t border-white/10 pt-3">
+                <button
+                  type="button"
+                  onClick={() => setActivePage((p) => Math.max(1, p - 1))}
+                  disabled={safeActivePage <= 1}
+                  className="px-2.5 py-1.5 rounded-md border border-white/15 bg-white/5 text-gray-200 text-[11px] hover:bg-white/10 disabled:opacity-50 transition"
+                >
+                  Previous
+                </button>
+                <div className="text-[11px] text-gray-500">
+                  Showing {(safeActivePage - 1) * ACTIVE_PAGE_SIZE + 1}-
+                  {Math.min(safeActivePage * ACTIVE_PAGE_SIZE, active.length)}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActivePage((p) => Math.min(activeTotalPages, p + 1))}
+                  disabled={safeActivePage >= activeTotalPages}
+                  className="px-2.5 py-1.5 rounded-md border border-white/15 bg-white/5 text-gray-200 text-[11px] hover:bg-white/10 disabled:opacity-50 transition"
+                >
+                  Next
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
       {campaigns.length > 0 && (
         <div className="space-y-3">
           <div className="flex items-center justify-between gap-2">
@@ -642,7 +842,7 @@ export default function AdminFlashCryptoPanel() {
                   )}
                 </div>
                 <div className="grid grid-cols-3 gap-2 text-xs text-gray-400">
-                  <div>Duration: <span className="text-white">{c.durationMinutes === 60 ? "1h" : `${c.durationMinutes}m`}</span></div>
+                  <div>Duration: <span className="text-white">{formatFlashCryptoDurationChip(c.durationMinutes)}</span></div>
                   <div>Markets: <span className="text-white">{c.launchedCount}/{c.totalMarkets}</span></div>
                   <div>Started: <span className="text-white">{new Date(c.startedAt).toLocaleTimeString()}</span></div>
                 </div>

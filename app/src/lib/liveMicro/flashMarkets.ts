@@ -5,6 +5,10 @@ import { LIVE_MICRO_TYPE, setLinkedMarketImageUrlIfMissing } from "@/lib/liveMic
 import { FLASH_CRYPTO_GRADUATION_MICRO_TYPE, FLASH_CRYPTO_MICRO_TYPE } from "@/lib/flashCrypto/types";
 import { listFlashCryptoMarketsForExplorer } from "@/lib/flashCrypto/repository";
 import { getFlashCryptoMajorConfigBySymbol } from "@/lib/flashCrypto/majors";
+import {
+  buildFlashCryptoPriceQuestion,
+  formatFlashCryptoDurationLabel,
+} from "@/lib/flashCrypto/daily";
 import type { FlashMarket, FlashMarketKind, FlashMarketStatus } from "@/lib/flashMarkets/types";
 
 type LiveMicroDbRow = {
@@ -709,7 +713,13 @@ async function loadCryptoFlashCandidates(maxRows: number): Promise<FlashMarket[]
         String(payloadStart.token_image_uri || meta.token_image_uri || majorConfig?.imageUri || "").trim() || null;
       const cryptoType = String(payloadStart.type || meta.type || FLASH_CRYPTO_MICRO_TYPE).trim().toLowerCase();
       const cryptoMode = cryptoType === FLASH_CRYPTO_GRADUATION_MICRO_TYPE ? "graduation" : "price";
-      const priceStart = Number(payloadStart.price_start || meta.price_start || 0);
+      const priceStart = Number(
+        payloadStart.price_to_beat ||
+          payloadStart.price_start ||
+          meta.price_to_beat ||
+          meta.price_start ||
+          0,
+      );
       const priceEnd = Number(payloadEnd.price_end || meta.price_end || 0) || null;
       const progressStart = firstNumber([
         payloadStart.progress_start,
@@ -742,7 +752,7 @@ async function loadCryptoFlashCandidates(maxRows: number): Promise<FlashMarket[]
         meta.remaining_to_graduate_start,
       ]);
       const durationMinutes = Number(payloadStart.duration_minutes || meta.duration_minutes || 0);
-      const durationLabel = durationMinutes === 1 ? "1 minute" : `${durationMinutes} minutes`;
+      const durationLabel = formatFlashCryptoDurationLabel(durationMinutes);
       const windowStart =
         firstText([
           row.window_start,
@@ -771,10 +781,8 @@ async function loadCryptoFlashCandidates(maxRows: number): Promise<FlashMarket[]
         ]) || null;
       const defaultQuestion =
         cryptoMode === "graduation"
-          ? `Will $${tokenSymbol} graduate in ${durationMinutes === 60 ? "1 hour" : `${durationMinutes} minutes`}?`
-          : sourceType === "major"
-          ? `Will ${tokenSymbol} go UP in ${durationLabel}?`
-          : `Will $${tokenSymbol} go UP in ${durationMinutes} minutes?`;
+          ? `Will $${tokenSymbol} graduate in ${durationLabel}?`
+          : buildFlashCryptoPriceQuestion({ tokenSymbol, sourceType, durationMinutes });
 
       out.push({
         liveMicroId: row.id,

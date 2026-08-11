@@ -27,7 +27,11 @@ import { isSportSubcategory } from "@/utils/categories";
 import { getProfiles, type Profile } from "@/lib/profiles";
 import { getMarketByAddress } from "@/lib/markets";
 import { solToLamports } from "@/utils/solana";
+import type { FlashCryptoTradeTarget } from "@/components/CryptoDailyHeroCard";
 import type { FlashMarket } from "@/lib/flashMarkets/types";
+
+/** What FeedTradeSheet needs, from either a classic row or a flash market. */
+type FeedTradeTarget = FlashCryptoTradeTarget;
 
 type Market = {
   id?: string;
@@ -990,13 +994,35 @@ export default function Home() {
   );
 
   // ------- MOBILE TRADE SHEET STATE -------
+  // Holds the FeedTradeSheet shape directly so both classic feed cards and
+  // Crypto Daily flash cards can open the same sheet.
   const [tradeSheetOpen, setTradeSheetOpen] = useState(false);
-  const [tradeSheetMarket, setTradeSheetMarket] = useState<typeof prioritizedClassicFeedMarkets[number] | null>(null);
+  const [tradeSheetMarket, setTradeSheetMarket] = useState<FeedTradeTarget | null>(null);
   const [tradeSheetOutcome, setTradeSheetOutcome] = useState(0);
 
   const openTradeSheet = useCallback(
     (market: typeof prioritizedClassicFeedMarkets[number], outcomeIndex: number) => {
-      setTradeSheetMarket(market);
+      setTradeSheetMarket({
+        publicKey: market.publicKey,
+        dbId: market.id,
+        question: market.question,
+        creator: market.creator,
+        marketType: market.marketType,
+        outcomeNames: market.outcomeNames,
+        outcomeSupplies: market.outcomeSupplies,
+        yesSupply: market.yesSupply,
+        noSupply: market.noSupply,
+      });
+      setTradeSheetOutcome(outcomeIndex);
+      setTradeSheetOpen(true);
+    },
+    []
+  );
+
+  /** Crypto Daily cards hand us a ready-made target (they fetch their own row). */
+  const openFlashTradeSheet = useCallback(
+    (outcomeIndex: number, target: FeedTradeTarget) => {
+      setTradeSheetMarket(target);
       setTradeSheetOutcome(outcomeIndex);
       setTradeSheetOpen(true);
     },
@@ -1260,7 +1286,13 @@ export default function Home() {
                       className="relative h-[100dvh] w-full snap-start snap-always flex-shrink-0 overflow-hidden bg-black"
                       onClickCapture={() => saveFeedRestoreState(entryKey, index)}
                     >
-                      <FlashMarketCard market={entry.market} variant="hero" className="h-full rounded-none border-0" />
+                      <FlashMarketCard
+                        market={entry.market}
+                        variant="hero"
+                        className="h-full rounded-none border-0"
+                        onOutcomeTap={openFlashTradeSheet}
+                        onNavigate={() => saveFeedRestoreState(entryKey, index)}
+                      />
                       <div className="pointer-events-none absolute right-2 z-30 flex items-end" style={railPositionStyle}>
                         <div className="pointer-events-auto">
                           <HomeFeedActionRail
@@ -1316,21 +1348,7 @@ export default function Home() {
             <FeedTradeSheet
               open={tradeSheetOpen}
               onClose={() => setTradeSheetOpen(false)}
-              market={
-                tradeSheetMarket
-                  ? {
-                      publicKey: tradeSheetMarket.publicKey,
-                      dbId: tradeSheetMarket.id,
-                      question: tradeSheetMarket.question,
-                      creator: tradeSheetMarket.creator,
-                      marketType: tradeSheetMarket.marketType,
-                      outcomeNames: tradeSheetMarket.outcomeNames,
-                      outcomeSupplies: tradeSheetMarket.outcomeSupplies,
-                      yesSupply: tradeSheetMarket.yesSupply,
-                      noSupply: tradeSheetMarket.noSupply,
-                    }
-                  : null
-              }
+              market={tradeSheetMarket}
               defaultOutcomeIndex={tradeSheetOutcome}
               onBuySuccess={handleFeedBuySuccess}
             />

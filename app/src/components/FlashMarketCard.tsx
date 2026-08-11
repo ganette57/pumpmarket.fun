@@ -2,6 +2,13 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import CryptoDailyHeroCard, { type FlashCryptoTradeTarget } from "@/components/CryptoDailyHeroCard";
+import {
+  formatFlashCryptoCountdown,
+  formatFlashCryptoDurationChip,
+  formatFlashCryptoDurationLabel,
+  isFlashCryptoDailyDuration,
+} from "@/lib/flashCrypto/daily";
 import type { FlashMarket } from "@/lib/flashMarkets/types";
 
 type FlashMarketCardVariant = "explorer" | "hero";
@@ -10,6 +17,10 @@ type FlashMarketCardProps = {
   market: FlashMarket;
   variant?: FlashMarketCardVariant;
   className?: string;
+  /** Crypto Daily hero only: enables direct YES/NO trading from the feed. */
+  onOutcomeTap?: (outcomeIndex: number, target: FlashCryptoTradeTarget) => void;
+  /** Crypto Daily hero only: called before navigating to the trade page. */
+  onNavigate?: () => void;
 };
 
 function normalizeImageUrl(value: unknown): string | null {
@@ -22,10 +33,8 @@ function normalizeImageUrl(value: unknown): string | null {
 
 function formatMmSs(totalSec: number | null): string | null {
   if (totalSec == null) return null;
-  const safe = Math.max(0, Math.floor(totalSec));
-  const mm = Math.floor(safe / 60);
-  const ss = safe % 60;
-  return `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+  // HH:MM:SS once past an hour, so 24h crypto markets read correctly.
+  return formatFlashCryptoCountdown(totalSec);
 }
 
 function formatHourMinute(value: string | null | undefined): string | null {
@@ -180,7 +189,13 @@ function borderTone(status: FlashMarket["status"]): string {
   }
 }
 
-export default function FlashMarketCard({ market, variant = "explorer", className = "" }: FlashMarketCardProps) {
+export default function FlashMarketCard({
+  market,
+  variant = "explorer",
+  className = "",
+  onOutcomeTap,
+  onNavigate,
+}: FlashMarketCardProps) {
   const initialRemainingSec =
     market.status === "active" && market.remainingSec != null
       ? Math.max(0, Math.floor(Number(market.remainingSec) || 0))
@@ -341,6 +356,20 @@ export default function FlashMarketCard({ market, variant = "explorer", classNam
     );
     const didGraduate = market.didGraduateEnd === true || progressNow >= 100;
     const graduationState = graduationStatus(progressNow, didGraduate);
+    const isCryptoDaily = cryptoMode === "price" && isFlashCryptoDailyDuration(market.durationMinutes);
+
+    // Crypto Daily gets its own hero (price to beat, live chart, YES/NO).
+    // Legacy short flash crypto markets keep the card they were built for.
+    if (variant === "hero" && isCryptoDaily) {
+      return (
+        <CryptoDailyHeroCard
+          market={market}
+          className={className}
+          onOutcomeTap={onOutcomeTap}
+          onNavigate={onNavigate}
+        />
+      );
+    }
 
     if (variant === "hero") {
       return (
@@ -407,7 +436,9 @@ export default function FlashMarketCard({ market, variant = "explorer", classNam
                     {cryptoMode === "graduation" ? "Moon or Rug" : "Crypto"}
                   </span>
                   <span className="inline-flex items-center rounded-full border border-white/25 bg-black/45 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-white/90">
-                    {durationMinutes === 60 ? "1H Flash" : `${durationMinutes}M Flash`}
+                    {isFlashCryptoDailyDuration(durationMinutes)
+                      ? "24H Crypto"
+                      : `${formatFlashCryptoDurationChip(durationMinutes)} Flash`}
                   </span>
                 </div>
               </div>
@@ -415,8 +446,8 @@ export default function FlashMarketCard({ market, variant = "explorer", classNam
               <div className="flex-1 flex flex-col justify-end">
                 <div className="text-base sm:text-lg font-bold text-white leading-snug line-clamp-3 drop-shadow-lg">
                   {question || (cryptoMode === "graduation"
-                    ? `Will ${ticker} graduate in ${durationMinutes === 60 ? "1 hour" : `${durationMinutes} minutes`}?`
-                    : `Will ${ticker} go UP in ${durationMinutes} minutes?`)}
+                    ? `Will ${ticker} graduate in ${formatFlashCryptoDurationLabel(durationMinutes)}?`
+                    : `Will ${ticker} go UP in ${formatFlashCryptoDurationLabel(durationMinutes)}?`)}
                 </div>
                 {cryptoMode === "graduation" ? (
                   <div className="mt-2">
@@ -509,7 +540,7 @@ export default function FlashMarketCard({ market, variant = "explorer", classNam
                   <img src={tokenImg} alt="" className="h-4 w-4 rounded-full object-cover" />
                 )}
                 <span className="font-semibold">${market.tokenSymbol || "?"}</span>
-                <span className="text-white/50">{market.durationMinutes}m</span>
+                <span className="text-white/50">{formatFlashCryptoDurationChip(market.durationMinutes)}</span>
               </div>
             </div>
           </div>

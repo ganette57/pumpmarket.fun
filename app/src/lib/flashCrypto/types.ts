@@ -2,7 +2,12 @@ export type FlashCryptoCampaignStatus = "running" | "stopped" | "completed";
 export type FlashCryptoMode = "price" | "graduation";
 export type FlashCryptoMicroType = "flash_crypto_price" | "flash_crypto_graduation";
 export type FlashCryptoSourceType = "pump_fun" | "major";
-export type FlashCryptoDurationMinutes = 1 | 3 | 5 | 10 | 30 | 60;
+/**
+ * 1440 = the Crypto Daily (24H) price window — the only duration new price
+ * markets are created with. The shorter values stay in the union so historical
+ * rows (and the graduation mode, which keeps 10/30/60) still type-check.
+ */
+export type FlashCryptoDurationMinutes = 1 | 3 | 5 | 10 | 30 | 60 | 1440;
 
 export type FlashCryptoCampaign = {
   id: string;

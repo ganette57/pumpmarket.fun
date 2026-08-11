@@ -49,6 +49,9 @@ export async function createFlashCryptoLiveMicroRow(input: {
     createdByOperatorWallet: input.createdByOperatorWallet,
     extraStartPayload: {
       price_start: input.priceStart,
+      // Immutable reference captured at creation. Never written again — the
+      // resolution path only ever adds price_end to provider_payload_end.
+      price_to_beat: input.priceStart,
     },
   });
 }
@@ -215,6 +218,9 @@ export async function upsertFlashCryptoMarketRow(input: {
     campaignId: input.campaignId,
     extraSportMeta: {
       price_start: input.priceStart,
+      // Same immutable reference, exposed on the market row so every surface
+      // (feed card, carousel, trade page, admin) reads one value.
+      price_to_beat: input.priceStart,
     },
   });
 }

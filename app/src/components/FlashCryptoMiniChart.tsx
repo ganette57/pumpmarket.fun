@@ -13,6 +13,10 @@ import {
   type ISeriesApi,
   type UTCTimestamp,
 } from "lightweight-charts";
+import {
+  formatFlashCryptoCountdown,
+  isFlashCryptoDailyDuration,
+} from "@/lib/flashCrypto/daily";
 
 type PricePoint = {
   time: number; // ms epoch
@@ -35,6 +39,16 @@ type FlashCryptoMiniChartProps = {
   durationMinutes?: number | null;
   pollIntervalMs?: number;
   className?: string;
+  /**
+   * "compact" strips the header/rule chrome and shrinks the plot so the same
+   * chart can sit inside a feed card. The price-to-beat reference line and the
+   * live series are identical in both variants.
+   */
+  variant?: "full" | "compact";
+  /** Chart height in px. Defaults to the responsive 280/340 of the full card. */
+  height?: number;
+  /** Called on every accepted price sample, so a host card can show the price. */
+  onPriceSample?: (price: number) => void;
 };
 
 function formatPrice(price: number): string {
@@ -53,12 +67,8 @@ function pctStr(start: number, current: number): string {
   return `${sign}${pct.toFixed(2)}%`;
 }
 
-function formatCountdownMmSs(totalSec: number): string {
-  const safe = Math.max(0, Math.floor(totalSec));
-  const minutes = Math.floor(safe / 60);
-  const seconds = safe % 60;
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-}
+/** Shared with the feed cards: HH:MM:SS past an hour (24h markets), MM:SS below. */
+const formatCountdownMmSs = formatFlashCryptoCountdown;
 
 type SeriesPoint = { time: UTCTimestamp; value: number };
 
@@ -104,7 +114,12 @@ export default function FlashCryptoMiniChart({
   durationMinutes,
   pollIntervalMs = 2000,
   className = "",
+  variant = "full",
+  height,
+  onPriceSample,
 }: FlashCryptoMiniChartProps) {
+  const isCompact = variant === "compact";
+  const isDailyWindow = isFlashCryptoDailyDuration(durationMinutes);
   const [points, setPoints] = useState<PricePoint[]>([]);
   const [currentPrice, setCurrentPrice] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -118,13 +133,25 @@ export default function FlashCryptoMiniChart({
   const chartRef = useRef<IChartApi | null>(null);
   const areaSeriesRef = useRef<ISeriesApi<"Area"> | null>(null);
   const startPriceLineRef = useRef<IPriceLine | null>(null);
+  // Kept in a ref so a host card can pass an inline callback without
+  // re-creating the polling effect on every render.
+  const onPriceSampleRef = useRef(onPriceSample);
+  useEffect(() => {
+    onPriceSampleRef.current = onPriceSample;
+  }, [onPriceSample]);
 
   const windowEndMs = Date.parse(String(windowEnd || ""));
   const hasCountdown = !isEnded && Number.isFinite(windowEndMs);
   const remainingSec = hasCountdown ? Math.max(0, Math.ceil((windowEndMs - countdownNowMs) / 1000)) : 0;
   const pollTier = !hasCountdown ? "default" : remainingSec <= 10 ? "end-10" : remainingSec <= 30 ? "end-30" : "base";
   const isMemeSource = sourceType !== "major";
-  const adaptivePollMs = isMemeSource
+  // A 24h market spends nearly all its life far from the deadline, so the
+  // caller's pollIntervalMs governs there (the feed passes a slow cadence).
+  // The last-minute tiers are untouched, so short legacy windows behave as before.
+  const isFarFromDeadline = hasCountdown && remainingSec > 300;
+  const adaptivePollMs = isFarFromDeadline
+    ? Math.max(1000, pollIntervalMs)
+    : isMemeSource
     ? pollTier === "end-10"
       ? 700
       : pollTier === "end-30"
@@ -172,6 +199,7 @@ export default function FlashCryptoMiniChart({
 
       setCurrentPrice(price);
       setError(null);
+      onPriceSampleRef.current?.(price);
       setPoints((prev) => {
         const prevLast = prev.length ? prev[prev.length - 1].price : null;
         // Keep majors unchanged: avoid duplicate points when price is identical.
@@ -233,14 +261,18 @@ export default function FlashCryptoMiniChart({
   }, [adaptivePollMs, fetchPrice, isEnded, isMemeSource, pollTier, tokenMint]);
 
   useEffect(() => {
-    if (priceStart > 0) {
+    // Short flash windows seed the series with the start price so the very
+    // first frame has a line. A 24h market would render that seed as a fake
+    // cliff (start price stamped at "now"), so it starts from live samples and
+    // relies on the dashed price-to-beat reference instead.
+    if (priceStart > 0 && !isDailyWindow) {
       setPoints([{ time: Date.now(), price: priceStart }]);
     } else {
       setPoints([]);
     }
     setCurrentPrice(null);
     setError(null);
-  }, [tokenMint, priceStart]);
+  }, [tokenMint, priceStart, isDailyWindow]);
 
   useEffect(() => {
     if (!isEnded) return;
@@ -319,8 +351,14 @@ export default function FlashCryptoMiniChart({
     const container = chartContainerRef.current;
     if (!container) return;
 
-    const isSm = container.clientWidth >= 640;
-    const chartHeight = isSm ? 340 : 280;
+    const resolveHeight = (width: number) => {
+      if (Number.isFinite(Number(height)) && Number(height) > 0) return Math.floor(Number(height));
+      // Compact fills whatever box the host card gives it, so a responsive
+      // container class (feed vs carousel) is enough to resize the plot.
+      if (isCompact) return Math.max(64, Math.floor(container.clientHeight || 120));
+      return width >= 640 ? 340 : 280;
+    };
+    const chartHeight = resolveHeight(container.clientWidth);
     const chart = createChart(container, {
       width: Math.max(1, container.clientWidth),
       height: chartHeight,
@@ -362,8 +400,7 @@ export default function FlashCryptoMiniChart({
 
     const resizeChart = () => {
       const width = Math.max(1, container.clientWidth);
-      const h = width >= 640 ? 340 : 280;
-      chart.applyOptions({ width, height: h });
+      chart.applyOptions({ width, height: resolveHeight(width) });
     };
 
     resizeChart();
@@ -411,6 +448,24 @@ export default function FlashCryptoMiniChart({
     const seriesData = buildSeriesData(points);
     areaSeries.setData(seriesData);
 
+    // Keep the price-to-beat inside the visible range, with a little headroom.
+    // Without this the reference line can sit off-screen whenever the live
+    // price drifts away from it — exactly when the trader needs to see it.
+    areaSeries.applyOptions({
+      autoscaleInfoProvider: (original: () => { priceRange: { minValue: number; maxValue: number } } | null) => {
+        const base = original();
+        if (!(priceStart > 0)) return base;
+        if (!base) {
+          const pad = priceStart * 0.001;
+          return { priceRange: { minValue: priceStart - pad, maxValue: priceStart + pad } };
+        }
+        const minValue = Math.min(base.priceRange.minValue, priceStart);
+        const maxValue = Math.max(base.priceRange.maxValue, priceStart);
+        const pad = Math.max((maxValue - minValue) * 0.12, priceStart * 0.0002);
+        return { priceRange: { minValue: minValue - pad, maxValue: maxValue + pad } };
+      },
+    });
+
     if (startPriceLineRef.current) {
       areaSeries.removePriceLine(startPriceLineRef.current);
       startPriceLineRef.current = null;
@@ -430,6 +485,17 @@ export default function FlashCryptoMiniChart({
 
     chart.timeScale().fitContent();
   }, [chartReady, points, priceStart]);
+
+  // Compact: chart only. The host card owns the prices, the timer and the copy.
+  if (isCompact) {
+    return (
+      <div
+        ref={chartContainerRef}
+        className={`w-full overflow-hidden ${className}`}
+        style={Number(height) > 0 ? { height: `${Math.floor(Number(height))}px` } : undefined}
+      />
+    );
+  }
 
   return (
     <div
@@ -478,7 +544,7 @@ export default function FlashCryptoMiniChart({
 
       {/* ── Rule ── */}
       <div className="px-4 pb-2 sm:px-5 sm:pb-3 text-[10px] text-gray-600">
-        Rule: <span className="text-gray-400">YES wins if final price &gt; start price.</span>
+        Rule: <span className="text-gray-400">YES wins if the final price is above the price to beat.</span>
       </div>
 
       {error && <div className="px-4 pb-3 text-[10px] text-red-400">{error}</div>}

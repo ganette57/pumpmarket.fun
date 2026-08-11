@@ -3,7 +3,9 @@ import { isAdminRequest } from "@/lib/admin";
 import { assertLiveMicroGuards, getLiveMicroFlags } from "@/lib/liveMicro/config";
 import { ensureLiveMicroAutoTickStarted, getLiveMicroAutoTickStatus } from "@/lib/liveMicro/autoTick";
 import { resolveFlashCryptoMajorSelection } from "@/lib/flashCrypto/majors";
+import { FLASH_CRYPTO_DAILY_DURATION_MINUTES } from "@/lib/flashCrypto/daily";
 import {
+  listActiveFlashCryptoMarkets,
   listFlashCryptoGraduationSuggestions,
   startFlashCryptoCampaign,
   stopFlashCryptoCampaign,
@@ -19,6 +21,7 @@ type ActionType =
   | "start_campaign"
   | "stop_campaign"
   | "list_campaigns"
+  | "list_active"
   | "list_pending"
   | "list_suggestions"
   | "confirm_resolution";
@@ -78,13 +81,19 @@ export async function POST(req: Request) {
         || (majorSelection?.pair ?? "");
       if (!tokenMint) return jsonError("token_mint is required");
 
-      const durationRaw = Number(body.duration_minutes || body.durationMinutes || (mode === "graduation" ? 10 : 5));
+      const durationRaw = Number(body.duration_minutes || body.durationMinutes || (mode === "graduation" ? 10 : FLASH_CRYPTO_DAILY_DURATION_MINUTES));
+      // Crypto Daily: price markets are always 24h. Any legacy short value from
+      // an older client is coerced instead of rejected.
       const duration =
         mode === "graduation"
           ? ([10, 30, 60].includes(durationRaw) ? (durationRaw as 10 | 30 | 60) : 10)
-          : ([1, 3, 5].includes(durationRaw) ? (durationRaw as 1 | 3 | 5) : 5);
+          : (FLASH_CRYPTO_DAILY_DURATION_MINUTES as 1440);
 
-      const totalMarkets = Math.max(1, Math.min(100, Math.floor(Number(body.total_markets || body.totalMarkets || 10))));
+      const defaultTotalMarkets = mode === "graduation" ? 10 : 1;
+      const totalMarkets = Math.max(
+        1,
+        Math.min(100, Math.floor(Number(body.total_markets || body.totalMarkets || defaultTotalMarkets))),
+      );
 
       const result = await startFlashCryptoCampaign({
         tokenMint,
@@ -128,6 +137,16 @@ export async function POST(req: Request) {
         ok: true,
         action,
         campaigns,
+      });
+    }
+
+    if (action === "list_active") {
+      const limit = Math.max(1, Math.min(50, Math.floor(Number(body.limit || 25))));
+      const active = await listActiveFlashCryptoMarkets(limit);
+      return NextResponse.json({
+        ok: true,
+        action,
+        active,
       });
     }
 

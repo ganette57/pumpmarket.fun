@@ -11,6 +11,11 @@ import { persistResolutionProposalToMarkets } from "@/lib/liveMicro/repository";
 import { parsePumpTokenInput } from "./pumpToken";
 import { resolveFlashCryptoMajorSelection } from "./majors";
 import {
+  FLASH_CRYPTO_DAILY_DURATION_MINUTES,
+  buildFlashCryptoPriceQuestion,
+  formatFlashCryptoDurationLabel,
+} from "./daily";
+import {
   getFlashCryptoEndSnapshot,
   getFlashCryptoLivePrice,
   getFlashCryptoStartSnapshot,
@@ -26,6 +31,7 @@ import {
   createFlashCryptoLiveMicroRow,
   hasCampaignActiveMarket,
   listActiveFlashCryptoMicros,
+  listFlashCryptoMarketsForExplorer,
   listRecentFlashCryptoTokenUsage,
   markFlashCryptoGraduationResolved,
   markFlashCryptoResolved,
@@ -84,13 +90,14 @@ function normalizeDuration(mode: FlashCryptoMode, value: number): FlashCryptoDur
     if ([10, 30, 60].includes(v)) return v as FlashCryptoDurationMinutes;
     throw new Error("Graduation durationMinutes must be 10, 30, or 60");
   }
-  if ([1, 3, 5].includes(v)) return v as FlashCryptoDurationMinutes;
-  throw new Error("Price durationMinutes must be 1, 3, or 5");
+  // Crypto Daily: price markets are 24h only. The short 1/3/5m windows are no
+  // longer creatable — existing historical markets are untouched.
+  if (v === FLASH_CRYPTO_DAILY_DURATION_MINUTES) return v as FlashCryptoDurationMinutes;
+  throw new Error("Price durationMinutes must be 1440 (24h)");
 }
 
 function formatDurationLabel(minutes: number): string {
-  if (minutes === 60) return "1 hour";
-  return `${minutes} minutes`;
+  return formatFlashCryptoDurationLabel(minutes);
 }
 
 function modeToMicroType(mode: FlashCryptoMode): "flash_crypto_price" | "flash_crypto_graduation" {
@@ -209,8 +216,14 @@ export async function startFlashCryptoCampaign(input: StartCampaignInput): Promi
   });
 
   let firstMarket: CreateFlashCryptoMarketResult | null = null;
+  const firstWindowStartMs = campaign.nextLaunchAt;
   try {
-    firstMarket = await createFlashCryptoMarket(campaign);
+    // The auto-tick can fire while this first creation is still in flight, and
+    // hasCampaignActiveMarket() sees nothing until the row lands — which used
+    // to produce a duplicate market. Park nextLaunchAt past the first window
+    // until the real windowEnd is known.
+    campaign.nextLaunchAt = firstWindowStartMs + durationMinutes * 60_000;
+    firstMarket = await createFlashCryptoMarket({ ...campaign, nextLaunchAt: firstWindowStartMs });
     campaign.launchedCount++;
     advanceNextLaunchAt(campaign, firstMarket.windowEnd);
     campaign.marketIds.push(firstMarket.marketAddress);
@@ -220,6 +233,9 @@ export async function startFlashCryptoCampaign(input: StartCampaignInput): Promi
       marketAddress: firstMarket.marketAddress,
     });
   } catch (e: any) {
+    // Creation failed: let the runner retry from the original window instead of
+    // silently skipping one duration.
+    campaign.nextLaunchAt = firstWindowStartMs;
     campaign.lastError = String(e?.message || e || "Failed to create first market");
     log("first market failed", { campaignId: id, mode, error: campaign.lastError });
   }
@@ -319,7 +335,7 @@ export async function createFlashCryptoPriceMarket(
   const sourceType: FlashCryptoSourceType = token.sourceType || campaign.sourceType || "pump_fun";
   const majorSymbol = String(token.majorSymbol || campaign.majorSymbol || "").trim().toUpperCase() || null;
   const majorPair = String(token.majorPair || campaign.majorPair || "").trim().toUpperCase() || null;
-  const durationLabel = campaign.durationMinutes === 1 ? "1 minute" : `${campaign.durationMinutes} minutes`;
+  const durationLabel = formatFlashCryptoDurationLabel(campaign.durationMinutes);
 
   const windowStartIso = scheduledWindow.windowStartIso;
   const windowEndMs = scheduledWindow.windowEndMs;
@@ -334,20 +350,24 @@ export async function createFlashCryptoPriceMarket(
   const operatorWallet = getOperatorPublicKeyBase58();
   if (!operatorWallet) throw new Error("Operator wallet unavailable");
 
-  const question =
-    sourceType === "major"
-      ? `Will ${tokenSymbol} go UP in ${durationLabel}?`
-      : `Will $${tokenSymbol} go UP in ${campaign.durationMinutes} minutes?`;
+  const question = buildFlashCryptoPriceQuestion({
+    tokenSymbol,
+    sourceType,
+    durationMinutes: campaign.durationMinutes,
+  });
   const description = [
-    "Flash Crypto Price Market",
+    "Crypto Daily Price Market",
     `Token: ${sourceType === "major" ? tokenSymbol : `$${tokenSymbol}`} (${tokenName})`,
     `Identifier: ${token.mint}`,
     `Source Type: ${sourceType}`,
     `Major Symbol: ${majorSymbol ?? "n/a"}`,
     `Major Pair: ${majorPair ?? "n/a"}`,
+    `Price To Beat: ${priceStart}`,
     `Start Price: ${priceStart}`,
     `Start Source: ${token.source}`,
-    `Duration: ${campaign.durationMinutes}m`,
+    `Duration: ${durationLabel}`,
+    `Window End: ${windowEndIso}`,
+    `Rule: YES/UP wins if the final price is strictly greater than the price to beat.`,
     `Campaign: ${campaign.id}`,
   ].join("\n");
 
@@ -1049,6 +1069,160 @@ export async function listFlashCryptoGraduationSuggestions(params: {
   });
 
   return out.slice(0, cap);
+}
+
+// ── Active market overview (admin) ──
+
+export type FlashCryptoActiveMarket = {
+  marketAddress: string;
+  marketId: string | null;
+  liveMicroId: string;
+  mode: FlashCryptoMode;
+  question: string;
+  tokenMint: string;
+  tokenSymbol: string;
+  tokenName: string;
+  sourceType: FlashCryptoSourceType;
+  majorSymbol: string | null;
+  majorPair: string | null;
+  priceToBeat: number | null;
+  currentPrice: number | null;
+  currentPriceSource: string | null;
+  changePct: number | null;
+  leadingOutcome: "YES" | "NO" | null;
+  durationMinutes: number;
+  windowStart: string | null;
+  windowEnd: string | null;
+  secondsRemaining: number | null;
+  isActive: boolean;
+  resolutionStatus: string;
+  autoResolvedOutcome: "YES" | "NO" | null;
+  volume: number;
+};
+
+/**
+ * Everything the admin overview needs for the "live inventory" table: the
+ * immutable price to beat, the live price, the end time and the resolution
+ * state. One live-price call per distinct token, not per market.
+ */
+export async function listActiveFlashCryptoMarkets(limit = 25): Promise<FlashCryptoActiveMarket[]> {
+  const pairs = await listFlashCryptoMarketsForExplorer(Math.max(1, Math.min(200, Math.floor(limit) * 4)));
+  const nowMs = Date.now();
+
+  const rows: FlashCryptoActiveMarket[] = [];
+
+  for (const { liveMicro, market } of pairs) {
+    const marketAddress = String(liveMicro.linked_market_address || "").trim();
+    if (!marketAddress) continue;
+
+    const payloadStart = asObject(liveMicro.provider_payload_start);
+    const payloadEnd = asObject(liveMicro.provider_payload_end);
+    const meta = asObject(market?.sport_meta);
+
+    const microType = String(payloadStart.type || liveMicro.micro_market_type || "").trim().toLowerCase();
+    const mode = microTypeToMode(microType);
+
+    const windowEnd = String(liveMicro.window_end || "");
+    const windowEndMs = Date.parse(windowEnd);
+    const ended = Number.isFinite(windowEndMs) ? nowMs >= windowEndMs : false;
+    const engineStatus = String(liveMicro.engine_status || "").trim().toLowerCase();
+    const resolutionStatus = String(
+      payloadEnd.resolution_status || meta.resolution_status || market?.resolution_status || "open",
+    )
+      .trim()
+      .toLowerCase();
+    const isActive = engineStatus === "active" && !ended && resolutionStatus === "open";
+
+    // Keep the table focused on inventory that is live or awaiting resolution.
+    if (!isActive && !(engineStatus === "active" && ended)) continue;
+
+    const priceToBeatRaw = Number(payloadStart.price_to_beat ?? payloadStart.price_start ?? meta.price_to_beat ?? meta.price_start);
+    const priceToBeat = Number.isFinite(priceToBeatRaw) && priceToBeatRaw > 0 ? priceToBeatRaw : null;
+
+    rows.push({
+      marketAddress,
+      marketId: liveMicro.linked_market_id ?? market?.id ?? null,
+      liveMicroId: liveMicro.id,
+      mode,
+      question: String(market?.question || ""),
+      tokenMint: String(payloadStart.token_mint || meta.token_mint || ""),
+      tokenSymbol: String(payloadStart.token_symbol || meta.token_symbol || ""),
+      tokenName: String(payloadStart.token_name || meta.token_name || ""),
+      sourceType:
+        String(payloadStart.source_type || meta.source_type || "").trim().toLowerCase() === "major"
+          ? "major"
+          : "pump_fun",
+      majorSymbol: String(payloadStart.major_symbol || meta.major_symbol || "").trim().toUpperCase() || null,
+      majorPair: String(payloadStart.major_pair || meta.major_pair || "").trim().toUpperCase() || null,
+      priceToBeat,
+      currentPrice: null,
+      currentPriceSource: null,
+      changePct: null,
+      leadingOutcome: null,
+      durationMinutes: Number(payloadStart.duration_minutes || meta.duration_minutes || 0),
+      windowStart: String(liveMicro.window_start || "") || null,
+      windowEnd: windowEnd || null,
+      secondsRemaining: Number.isFinite(windowEndMs) ? Math.max(0, Math.ceil((windowEndMs - nowMs) / 1000)) : null,
+      isActive,
+      resolutionStatus,
+      autoResolvedOutcome:
+        String(payloadEnd.auto_resolved_outcome || meta.auto_resolved_outcome || "").toUpperCase() === "YES"
+          ? "YES"
+          : String(payloadEnd.auto_resolved_outcome || meta.auto_resolved_outcome || "").toUpperCase() === "NO"
+          ? "NO"
+          : null,
+      volume: Number(market?.total_volume || 0),
+    });
+  }
+
+  const scoped = rows
+    .sort((a, b) => Date.parse(String(b.windowEnd || "")) - Date.parse(String(a.windowEnd || "")))
+    .slice(0, Math.max(1, Math.min(50, Math.floor(limit))));
+
+  // One live price per distinct token, shared by every market on it.
+  const priceTargets = new Map<string, { mint: string; sourceType: FlashCryptoSourceType; majorSymbol: string | null; majorPair: string | null }>();
+  for (const row of scoped) {
+    if (row.mode !== "price") continue;
+    const mint = row.majorPair || row.tokenMint;
+    if (!mint || priceTargets.has(mint)) continue;
+    priceTargets.set(mint, {
+      mint,
+      sourceType: row.sourceType,
+      majorSymbol: row.majorSymbol,
+      majorPair: row.majorPair,
+    });
+  }
+
+  const priceByToken = new Map<string, { price: number; source: string }>();
+  await Promise.all(
+    Array.from(priceTargets.values()).map(async (target) => {
+      try {
+        const snap = await getFlashCryptoLivePrice(target.mint, {
+          sourceType: target.sourceType,
+          majorSymbol: target.majorSymbol,
+          majorPair: target.majorPair,
+        });
+        if (Number.isFinite(snap.price) && snap.price > 0) {
+          priceByToken.set(target.mint, { price: snap.price, source: snap.source });
+        }
+      } catch {
+        // A price hiccup must never break the admin overview.
+      }
+    }),
+  );
+
+  for (const row of scoped) {
+    const live = priceByToken.get(row.majorPair || row.tokenMint);
+    if (!live) continue;
+    row.currentPrice = live.price;
+    row.currentPriceSource = live.source;
+    if (row.priceToBeat && row.priceToBeat > 0) {
+      row.changePct = ((live.price - row.priceToBeat) / row.priceToBeat) * 100;
+      row.leadingOutcome = live.price > row.priceToBeat ? "YES" : "NO";
+    }
+  }
+
+  return scoped;
 }
 
 // ── List auto-resolved / proposed crypto markets ──
