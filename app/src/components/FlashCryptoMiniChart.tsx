@@ -55,6 +55,11 @@ type FlashCryptoMiniChartProps = {
    * the price API.
    */
   active?: boolean;
+  /**
+   * Which side the price axis sits on (rolling charts only). The immersive feed
+   * puts it on the left so it never sits under the right action rail.
+   */
+  priceAxisSide?: "left" | "right";
 };
 
 /**
@@ -65,6 +70,24 @@ type FlashCryptoMiniChartProps = {
 const ROLLING_WINDOW_SEC = 8 * 60;
 /** A little empty space at the right edge so the last point isn't glued to it. */
 const ROLLING_LEAD_SEC = 8;
+
+/**
+ * Y-AXIS SCALING (rolling / 24h charts)
+ *
+ * The scale is driven by the RECENT PRICE ACTION, not by the distance to the
+ * price to beat. Anchoring the range on a target that sits 0.5% away flattens a
+ * real 0.05% swing into a straight line, which made a live market look dead.
+ *
+ * The target is still folded into the range whenever it is close enough to be
+ * useful (within TARGET_INCLUSION_SPANS of the observed span). Past that it is
+ * left off-scale on purpose: the card already states the target and the % vs
+ * target in text, and a readable live line is worth more than a dashed line
+ * that squashes it.
+ */
+const SERIES_PAD_RATIO = 0.18;
+const TARGET_INCLUSION_SPANS = 1.8;
+/** Floor for a dead-flat series, as a fraction of price (~0.03%). */
+const MIN_SPAN_RATIO = 0.0003;
 
 function formatPrice(price: number): string {
   if (price === 0) return "0";
@@ -133,6 +156,7 @@ export default function FlashCryptoMiniChart({
   height,
   onPriceSample,
   active = true,
+  priceAxisSide = "right",
 }: FlashCryptoMiniChartProps) {
   const isCompact = variant === "compact";
   const isDailyWindow = isFlashCryptoDailyDuration(durationMinutes);
@@ -161,6 +185,7 @@ export default function FlashCryptoMiniChart({
   // that setup effect without re-creating the chart.
   const isRollingRef = useRef(isRolling);
   isRollingRef.current = isRolling;
+  const axisOnLeft = priceAxisSide === "left";
   // Track what the series already holds, so a single new sample can be
   // appended (animated) instead of replacing the whole dataset.
   const lastSeriesLenRef = useRef(0);
@@ -429,16 +454,29 @@ export default function FlashCryptoMiniChart({
         vertLines: { color: "rgba(255,255,255,0.04)", style: LineStyle.Solid },
         horzLines: { color: "rgba(255,255,255,0.06)", style: LineStyle.Solid },
       },
-      leftPriceScale: { visible: false, borderVisible: false },
-      rightPriceScale: { visible: false, borderVisible: false },
+      // Rolling (24h) charts show the price + time axes: with a tight Y-range
+      // the numbers are what tell the trader how big the move actually is.
+      leftPriceScale: {
+        visible: isRollingRef.current && axisOnLeft,
+        borderVisible: false,
+        scaleMargins: { top: 0.12, bottom: 0.12 },
+      },
+      rightPriceScale: {
+        visible: isRollingRef.current && !axisOnLeft,
+        borderVisible: false,
+        scaleMargins: { top: 0.12, bottom: 0.12 },
+      },
       timeScale: {
-        visible: false,
+        visible: isRollingRef.current,
         borderVisible: false,
         // A rolling viewport drives its own visible range, so the edges must
         // not be pinned to the data extent.
         fixLeftEdge: !isRollingRef.current,
         fixRightEdge: !isRollingRef.current,
+        // An 8-minute viewport puts several ticks inside the same minute, so
+        // without seconds the axis reads "12:27, 12:27".
         secondsVisible: true,
+        timeVisible: true,
       },
       handleScroll: false,
       handleScale: false,
@@ -454,6 +492,7 @@ export default function FlashCryptoMiniChart({
       crosshairMarkerVisible: false,
       priceLineVisible: false,
       lastValueVisible: false,
+      ...(isRollingRef.current && axisOnLeft ? { priceScaleId: "left" } : {}),
     });
 
     chartRef.current = chart;
@@ -508,12 +547,24 @@ export default function FlashCryptoMiniChart({
     if (!areaSeries || !chart) return;
 
     const seriesData = buildSeriesData(points);
+    const last = seriesData[seriesData.length - 1];
+
+    /**
+     * A young card holds only a few seconds of samples, and the library will
+     * not scroll past its own data extent — the axis collapsed to a 1-second
+     * window. A single whitespace point (a time with NO value) at the start of
+     * the rolling window extends the axis without drawing anything and without
+     * inventing a price. It is dropped once real samples span the window.
+     */
+    const anchorTs = Math.floor(Date.now() / 1000) - ROLLING_WINDOW_SEC;
+    const needsAnchor =
+      isRolling && (seriesData.length === 0 || Number(seriesData[0]!.time) > anchorTs);
 
     // Appending one point with update() lets the library animate the new
     // segment in, instead of the hard repaint a full setData() causes.
-    const last = seriesData[seriesData.length - 1];
     const canAppend =
       isRolling &&
+      !needsAnchor &&
       last != null &&
       seriesData.length === lastSeriesLenRef.current + 1 &&
       lastSeriesTimeRef.current != null &&
@@ -521,26 +572,59 @@ export default function FlashCryptoMiniChart({
 
     if (canAppend) {
       areaSeries.update(last!);
+    } else if (needsAnchor) {
+      areaSeries.setData([{ time: anchorTs as UTCTimestamp }, ...seriesData]);
     } else {
       areaSeries.setData(seriesData);
     }
     lastSeriesLenRef.current = seriesData.length;
     lastSeriesTimeRef.current = last ? Number(last.time) : null;
 
-    // Keep the price-to-beat inside the visible range, with a little headroom.
-    // Without this the reference line can sit off-screen whenever the live
-    // price drifts away from it — exactly when the trader needs to see it.
+    // Axis labels: BTC-sized numbers do not need cents to be readable, and a
+    // narrower axis leaves more width for the plot on a phone.
+    const priceRef = last?.value ?? priceStart;
+    areaSeries.applyOptions({
+      priceFormat: {
+        type: "price",
+        precision: priceRef >= 1000 ? 0 : priceRef >= 1 ? 2 : 6,
+        minMove: priceRef >= 1000 ? 1 : priceRef >= 1 ? 0.01 : 0.000001,
+      },
+    });
+
+    /**
+     * Scale on the recent price action; fold the target in only while it stays
+     * near that action. `original()` is the library's own min/max over the
+     * visible samples — the raw prices are never touched, only the viewport.
+     */
     areaSeries.applyOptions({
       autoscaleInfoProvider: (original: () => { priceRange: { minValue: number; maxValue: number } } | null) => {
         const base = original();
-        if (!(priceStart > 0)) return base;
         if (!base) {
-          const pad = priceStart * 0.001;
+          if (!(priceStart > 0)) return base;
+          const pad = priceStart * MIN_SPAN_RATIO;
           return { priceRange: { minValue: priceStart - pad, maxValue: priceStart + pad } };
         }
-        const minValue = Math.min(base.priceRange.minValue, priceStart);
-        const maxValue = Math.max(base.priceRange.maxValue, priceStart);
-        const pad = Math.max((maxValue - minValue) * 0.06, priceStart * 0.0002);
+
+        const seriesMin = base.priceRange.minValue;
+        const seriesMax = base.priceRange.maxValue;
+        const reference = seriesMax > 0 ? seriesMax : priceStart;
+        // A perfectly flat stretch still needs a non-zero span to draw into.
+        const span = Math.max(seriesMax - seriesMin, reference * MIN_SPAN_RATIO);
+
+        let minValue = seriesMin;
+        let maxValue = seriesMax;
+
+        if (priceStart > 0 && isRolling) {
+          const reach = span * TARGET_INCLUSION_SPANS;
+          if (priceStart > seriesMax && priceStart - seriesMax <= reach) maxValue = priceStart;
+          else if (priceStart < seriesMin && seriesMin - priceStart <= reach) minValue = priceStart;
+        } else if (priceStart > 0) {
+          // Short legacy flash windows keep the previous always-include rule.
+          minValue = Math.min(minValue, priceStart);
+          maxValue = Math.max(maxValue, priceStart);
+        }
+
+        const pad = Math.max((maxValue - minValue) * SERIES_PAD_RATIO, reference * MIN_SPAN_RATIO * 0.5);
         return { priceRange: { minValue: minValue - pad, maxValue: maxValue + pad } };
       },
     });
@@ -553,12 +637,14 @@ export default function FlashCryptoMiniChart({
     if (priceStart > 0) {
       startPriceLineRef.current = areaSeries.createPriceLine({
         price: priceStart,
-        color: "rgba(255,255,255,0.26)",
+        color: isRolling ? "rgba(255,255,255,0.38)" : "rgba(255,255,255,0.26)",
         lineWidth: 1,
         lineStyle: LineStyle.Dashed,
         lineVisible: true,
-        axisLabelVisible: false,
-        title: "",
+        // On rolling charts the reference carries its own label, so it stays
+        // identifiable as the target rather than an anonymous dashed line.
+        axisLabelVisible: isRolling,
+        title: isRolling ? "TARGET" : "",
       });
     }
 

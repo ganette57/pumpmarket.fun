@@ -264,6 +264,8 @@ export default function CryptoDailyHeroCard({
       variant="compact"
       className="h-full"
       active={isOnScreen}
+      // Feed: axis on the left, clear of the right action rail.
+      priceAxisSide={isCarousel ? "right" : "left"}
       onPriceSample={handlePriceSample}
     />
   ) : null;
@@ -275,6 +277,37 @@ export default function CryptoDailyHeroCard({
       </div>
       <div className="mt-1 text-[9px] uppercase tracking-[0.18em] text-white/45">
         {isEnded ? "Ended" : "Time left"}
+      </div>
+    </div>
+  );
+
+  /**
+   * Target and live price side by side, so the only comparison that decides
+   * this market is one glance wide. Deliberately short — it sits between the
+   * header and the chart on both surfaces.
+   */
+  const pricePanel = (
+    <div className="flex items-stretch divide-x divide-white/10 overflow-hidden rounded-xl border border-white/10 bg-white/[0.04]">
+      <div className="min-w-0 flex-1 px-3 py-2">
+        <div className="text-[9px] uppercase tracking-[0.14em] text-white/45">Price to beat</div>
+        <div className="mt-0.5 truncate text-base font-semibold tabular-nums text-white/85">
+          {formatFlashCryptoUsdPrice(priceToBeat)}
+        </div>
+      </div>
+      <div className="min-w-0 flex-1 px-3 py-2">
+        <div className="text-[9px] uppercase tracking-[0.14em] text-white/45">Current price</div>
+        <div className="mt-0.5 flex items-baseline gap-1.5">
+          <span
+            className={`truncate text-base font-black tabular-nums ${
+              isUp ? "text-pump-green" : isDown ? "text-red-300" : "text-white"
+            }`}
+          >
+            {currentPrice == null ? "—" : formatFlashCryptoUsdPrice(currentPrice)}
+          </span>
+          {changeVsTarget ? (
+            <span className={`shrink-0 text-[11px] font-bold tabular-nums ${changeTone}`}>{changeVsTarget}</span>
+          ) : null}
+        </div>
       </div>
     </div>
   );
@@ -336,11 +369,13 @@ export default function CryptoDailyHeroCard({
   const outcomePct = (index: number) => (percents ? `${percents[index]}%` : "—");
 
   const outcomeButtons = (stacked: boolean) => {
-    const base = `flex items-center justify-between gap-2 rounded-xl px-3 py-3 transition-transform duration-150 ease-out active:scale-[0.965] ${
-      stacked ? "w-full" : "min-w-0 flex-1"
+    // Stacked (desktop carousel) buttons are shorter so both always fit inside
+    // the slide's fixed height; the feed keeps the standard row height.
+    const base = `flex items-center justify-between gap-2 rounded-xl transition-transform duration-150 ease-out active:scale-[0.965] ${
+      stacked ? "w-full px-3 py-2.5" : "min-w-0 flex-1 px-3 py-3"
     }`;
     const label = "min-w-0 truncate text-[12px] font-bold uppercase tracking-wide text-black";
-    const pct = "shrink-0 text-[20px] font-bold text-black";
+    const pct = `shrink-0 font-bold text-black ${stacked ? "text-[17px]" : "text-[20px]"}`;
 
     if (isEnded) {
       return (
@@ -435,69 +470,50 @@ export default function CryptoDailyHeroCard({
       >
         {background}
 
-        <div className="relative z-10 flex h-full gap-5 p-5">
-          {/* LEFT — identity, prices, timer, outcomes */}
-          <div className="flex w-[32%] min-w-[240px] flex-col">
-            <Link href={`/trade/${marketAddress}`} onClick={onNavigate} className="flex min-w-0 items-center gap-3">
+        {/* min-h-0 on the flex children is what keeps the column inside the
+            slide's fixed height instead of pushing the outcomes past the
+            bottom edge. */}
+        <div className="relative z-10 flex h-full min-h-0 gap-4 p-4">
+          {/* LEFT — identity, question, prices, timer, outcomes (~30%) */}
+          <div className="flex w-[30%] min-w-[248px] max-w-[380px] min-h-0 flex-col">
+            <Link href={`/trade/${marketAddress}`} onClick={onNavigate} className="flex min-w-0 items-center gap-2.5">
               {tokenImage ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={tokenImage}
                   alt=""
-                  className="h-10 w-10 rounded-full border border-white/20 bg-black/40 object-cover"
+                  className="h-9 w-9 rounded-full border border-white/20 bg-black/40 object-cover"
                 />
               ) : (
-                <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-white/5 text-xs font-black text-white">
+                <div className="flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-white/5 text-[10px] font-black text-white">
                   {symbol.slice(0, 4)}
                 </div>
               )}
               <div className="min-w-0">
-                <div className="truncate text-xl font-black tracking-wide text-white">{pairLabel}</div>
-                <div className="mt-1">{badges}</div>
+                <div className="truncate text-lg font-black tracking-wide text-white">{pairLabel}</div>
+                <div className="mt-0.5">{badges}</div>
               </div>
             </Link>
 
             <Link
               href={`/trade/${marketAddress}`}
               onClick={onNavigate}
-              className="mt-4 block text-lg font-bold leading-snug text-white"
+              className="mt-3 block text-[15px] font-bold leading-snug text-white line-clamp-2"
             >
               {question}
             </Link>
 
-            <div className="mt-4 space-y-2">
-              <div className="flex items-baseline justify-between gap-3">
-                <span className="text-[10px] uppercase tracking-[0.14em] text-white/45">Price to beat</span>
-                <span className="text-base font-semibold tabular-nums text-white/85">
-                  {formatFlashCryptoUsdPrice(priceToBeat)}
-                </span>
-              </div>
-              <div className="flex items-baseline justify-between gap-3">
-                <span className="text-[10px] uppercase tracking-[0.14em] text-white/45">Current price</span>
-                <span
-                  className={`text-2xl font-black tabular-nums ${
-                    isUp ? "text-pump-green" : isDown ? "text-red-300" : "text-white"
-                  }`}
-                >
-                  {currentPrice == null ? "—" : formatFlashCryptoUsdPrice(currentPrice)}
-                </span>
-              </div>
-              {changeVsTarget ? (
-                <div className={`text-right text-xs font-bold tabular-nums ${changeTone}`}>
-                  {changeVsTarget} vs target
-                </div>
-              ) : null}
-            </div>
+            <div className="mt-3">{pricePanel}</div>
 
-            <div className="mt-4">{timer}</div>
+            <div className="mt-3">{timer}</div>
 
-            <div className="mt-auto pt-4">{outcomeButtons(true)}</div>
+            {/* mt-auto pins the outcomes to the bottom of the column; the
+                column can no longer grow past the card. */}
+            <div className="mt-auto pt-3">{outcomeButtons(true)}</div>
           </div>
 
           {/* RIGHT — the chart is the focus */}
-          <div className="min-w-0 flex-1">
-            <div className="h-full w-full">{chart}</div>
-          </div>
+          <div className="min-w-0 min-h-0 flex-1">{chart}</div>
         </div>
 
         {drawers}
@@ -541,31 +557,13 @@ export default function CryptoDailyHeroCard({
           {timer}
         </div>
 
-        {/* ── Prices ── */}
-        <div className="mt-4 flex items-end justify-between gap-4">
-          <div className="min-w-0">
-            <div className="text-[10px] uppercase tracking-[0.14em] text-white/45">Current price</div>
-            <div
-              className={`text-3xl font-black tabular-nums leading-tight ${
-                isUp ? "text-pump-green" : isDown ? "text-red-300" : "text-white"
-              }`}
-            >
-              {currentPrice == null ? "—" : formatFlashCryptoUsdPrice(currentPrice)}
-            </div>
-          </div>
-          <div className="shrink-0 text-right">
-            <div className="text-[10px] uppercase tracking-[0.14em] text-white/45">Price to beat</div>
-            <div className="text-lg font-semibold tabular-nums text-white/80">
-              {formatFlashCryptoUsdPrice(priceToBeat)}
-            </div>
-            {changeVsTarget ? (
-              <div className={`text-xs font-bold tabular-nums ${changeTone}`}>{changeVsTarget} vs target</div>
-            ) : null}
-          </div>
-        </div>
+        {/* ── Target vs live price, side by side ── */}
+        <div className="mt-3">{pricePanel}</div>
 
-        {/* ── Chart: live series + dashed price-to-beat reference ── */}
-        <div className="mt-2 min-h-[150px] flex-1">{chart}</div>
+        {/* ── Chart: live series + dashed price-to-beat reference ──
+            pr-14 stops the plot short of the action rail so the newest price
+            (the right edge) is never hidden behind it. */}
+        <div className="mt-2 min-h-[170px] flex-1 pr-14">{chart}</div>
 
         {/* ── Actions + question + YES/NO ──
             Everything above the buttons keeps clear of the feed's right action
