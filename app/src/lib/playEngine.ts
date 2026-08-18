@@ -224,8 +224,34 @@ function isSeasonUnavailable(raw: string): boolean {
 // Postgres RAISE EXCEPTION messages arrive prefixed with "play: ". Anything
 // that starts with that prefix is a deliberate, user-safe refusal. Anything
 // else is an internal fault and must not leak to the client.
-function toEngineError(error: { message?: string } | null): PlayEngineError {
+function toEngineError(
+  error: { message?: string; code?: string } | null
+): PlayEngineError {
   const raw = String(error?.message || "Play engine error");
+
+  // PGRST202 = PostgREST could not find the function. That is never a
+  // trading problem and never the user's fault: it means a migration in
+  // supabase/migrations/ has not been applied to THIS database. It used
+  // to fall through to the generic branch below and reach the user as the
+  // bare string "Play engine error", which is indistinguishable from a
+  // real engine fault and cost an end-to-end trace to identify. Say so
+  // plainly in the log, and give the client a 503 — the deployment is
+  // incomplete, not broken.
+  if (error?.code === "PGRST202") {
+    console.error(
+      "[playEngine] MISSING DATABASE FUNCTION — a migration has not been " +
+        "applied to this Supabase project. Apply the pending files in " +
+        "app/supabase/migrations/ and reload the PostgREST schema cache. " +
+        "Underlying error:",
+      raw
+    );
+    return new PlayEngineError(
+      "Play is not fully set up on this deployment.",
+      503,
+      raw
+    );
+  }
+
   if (raw.startsWith("play: ")) {
     const detail = raw.slice("play: ".length);
     if (isSeasonUnavailable(detail)) {
@@ -292,6 +318,34 @@ export async function ensureAccount(wallet: string): Promise<PlayAccount> {
   const { data, error } = await supabaseServer().rpc("play_ensure_account", {
     wallet_in: wallet,
   });
+  if (error) throw toEngineError(error);
+  return data as PlayAccount;
+}
+
+/**
+ * The Play account for a VERIFIED Privy user, created on first login.
+ *
+ * The DID is the lookup key, so a re-created embedded wallet resolves to
+ * the same account and the same balance. See
+ * supabase/migrations/20260813_play_privy_identity.sql for the full
+ * identity model.
+ *
+ * CALLER CONTRACT: both arguments must originate from a Privy access
+ * token this server has already verified (lib/privyServer.ts). Passing a
+ * DID or a wallet address straight from a request body would let a caller
+ * claim any Play account.
+ */
+export async function ensureAccountForPrivy(args: {
+  privyUserId: string;
+  wallet: string;
+}): Promise<PlayAccount> {
+  const { data, error } = await supabaseServer().rpc(
+    "play_ensure_account_for_privy",
+    {
+      privy_user_id_in: args.privyUserId,
+      wallet_in: args.wallet,
+    }
+  );
   if (error) throw toEngineError(error);
   return data as PlayAccount;
 }

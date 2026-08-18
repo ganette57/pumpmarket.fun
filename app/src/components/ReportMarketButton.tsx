@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 
 type ReportReason = "spam" | "inappropriate" | "scam" | "misleading" | "duplicate" | "other";
 
@@ -21,7 +21,7 @@ type Props = {
 };
 
 export default function ReportMarketButton({ marketAddress, variant = "icon", className = "" }: Props) {
-  const { publicKey } = useWallet();
+  const { publicKey } = useFunMarketWallet();
   
   const [isOpen, setIsOpen] = useState(false);
   const [selectedReason, setSelectedReason] = useState<ReportReason | null>(null);

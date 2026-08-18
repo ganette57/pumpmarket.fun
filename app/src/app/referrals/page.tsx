@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 import { Copy, Check, Users, Sparkles } from "lucide-react";
 import { getReferralSummary, type ReferralSummary } from "@/lib/funPoints";
 
@@ -14,7 +14,7 @@ import { getReferralSummary, type ReferralSummary } from "@/lib/funPoints";
 // here do not represent real earnings.
 
 export default function ReferralsPage() {
-  const { publicKey } = useWallet();
+  const { publicKey } = useFunMarketWallet();
   const wallet = publicKey?.toBase58() ?? null;
 
   const [referral, setReferral] = useState<ReferralSummary | null>(null);

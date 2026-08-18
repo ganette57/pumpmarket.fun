@@ -33,7 +33,7 @@ import { Wallet } from "lucide-react";
 import { useTradingMode } from "@/components/mode/ModeProvider";
 import { usePlaySession } from "@/components/play/PlaySessionProvider";
 import { useSolBalance } from "@/hooks/useSolBalance";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 import { formatBalanceSol, formatBalanceUsd } from "@/lib/compactBalance";
 
 /**
@@ -57,14 +57,21 @@ export default function ModeBalancePill({
   className?: string;
 }) {
   const { isPlay } = useTradingMode();
-  const { connected } = useWallet();
+  const { connected } = useFunMarketWallet();
   const play = usePlaySession();
 
   // Only Real mode reads the chain. In Play mode this hook makes no RPC
   // call at all.
   const sol = useSolBalance({ enabled: !isPlay && connected });
 
-  if (!connected) return null;
+  // What has to exist for a balance to exist DIFFERS by mode, and it did
+  // not before Google login. Play money belongs to a Play account, which a
+  // Google user has whether or not any wallet has resolved yet; Real money
+  // belongs to a wallet. Gating both on `connected` would blank the pill
+  // for a signed-in Play user in the moment before their embedded wallet
+  // loads — hiding a balance they definitely have.
+  const hasAccount = isPlay ? play.authenticated : connected;
+  if (!hasAccount) return null;
 
   // Play needs BOTH conditions: a live session, and a balance actually read
   // back from it. Either one missing means "unknown", not "empty".

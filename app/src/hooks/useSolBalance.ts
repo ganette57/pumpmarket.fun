@@ -14,9 +14,16 @@
 // The `enabled` flag is what keeps this cheap: in Play mode the hook never
 // touches the RPC at all, exactly as PlaySessionProvider never touches a
 // Play endpoint while in Real mode.
+//
+// It reads the ACTIVE FunMarket wallet, not the wallet adapter, so the
+// figure always belongs to the account a Real trade would actually spend
+// from — Privy embedded or external. Switching the active wallet reruns
+// the effect and clears the old number before the new read starts, so a
+// Phantom balance can never linger under a Privy address.
 
-import { useEffect, useState } from "react";
-import { useConnection, useWallet } from "@solana/wallet-adapter-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useConnection } from "@solana/wallet-adapter-react";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 
 /** How often to re-read while the tab is visible. */
 const POLL_MS = 60_000;
@@ -26,15 +33,32 @@ export type SolBalanceState = {
   lamports: number | null;
   /** A read is in flight and no value is known yet. */
   loading: boolean;
+  /**
+   * Re-read now, out of band with the poll.
+   *
+   * Exists for one caller: returning from the funding flow, where waiting
+   * up to POLL_MS to see money that has already landed feels broken. It
+   * runs the SAME read against the SAME connection and writes the SAME
+   * state as the poll — deliberately not a second balance source.
+   *
+   * Safe to call when disabled or disconnected: it no-ops.
+   */
+  refresh: () => void;
 };
 
 export function useSolBalance({ enabled = true }: { enabled?: boolean } = {}): SolBalanceState {
   const { connection } = useConnection();
-  const { publicKey, connected } = useWallet();
-  const wallet = publicKey?.toBase58() ?? null;
+  const { publicKey, connected, address: wallet } = useFunMarketWallet();
 
   const [lamports, setLamports] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
+  // Points at the live effect's read(). Held in a ref so refresh() has a
+  // stable identity and cannot re-trigger the effect that defines it.
+  const readRef = useRef<(() => void) | null>(null);
+
+  const refresh = useCallback(() => {
+    readRef.current?.();
+  }, []);
 
   useEffect(() => {
     if (!enabled || !connected || !publicKey) {
@@ -67,6 +91,7 @@ export function useSolBalance({ enabled = true }: { enabled?: boolean } = {}): S
       }
     }
 
+    readRef.current = () => void read();
     void read();
 
     const timer = setInterval(() => {
@@ -76,6 +101,7 @@ export function useSolBalance({ enabled = true }: { enabled?: boolean } = {}): S
 
     return () => {
       cancelled = true;
+      readRef.current = null;
       clearInterval(timer);
     };
     // `wallet` (the base58 string) rather than publicKey: the PublicKey
@@ -84,5 +110,5 @@ export function useSolBalance({ enabled = true }: { enabled?: boolean } = {}): S
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, connected, wallet, connection]);
 
-  return { lamports, loading };
+  return { lamports, loading, refresh };
 }

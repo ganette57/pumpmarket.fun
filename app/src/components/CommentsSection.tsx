@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
+import { usePrivyIdentity } from "@/components/privy/PrivyIdentityProvider";
 import { getProfiles, type Profile } from "@/lib/profiles";
 
 type CommentRow = {
@@ -120,7 +121,20 @@ export default function CommentsSection({
   composerAtBottom = false,
   onCountChange,
 }: CommentsSectionProps) {
-  const { publicKey, connected } = useWallet();
+  const { publicKey, connected } = useFunMarketWallet();
+  const privy = usePrivyIdentity();
+  /**
+   * The logged-out branch of every social action here. It used to be
+   * alert("Connect your wallet") — accurate and useless, since the alert
+   * offered no way to do it and implied a browser extension. Routes into
+   * the canonical Privy login; external wallets remain available the
+   * normal way, through the account menu.
+   */
+  const requireSignIn = () => {
+    if (privy.configured) privy.loginWithGoogle();
+    else alert("Connect your wallet to continue.");
+  };
+
   const userAddress = publicKey?.toBase58() || null;
 
   const [marketDbId, setMarketDbId] = useState<string | null>(null);
@@ -234,7 +248,7 @@ export default function CommentsSection({
     if (!marketDbId) return;
 
     if (!connected || !userAddress) {
-      alert("Please connect your wallet to comment.");
+      requireSignIn();
       return;
     }
 
@@ -302,8 +316,17 @@ export default function CommentsSection({
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value.slice(0, 500))}
-          placeholder={connected ? "Share your thoughts on this market..." : "Connect your wallet to comment..."}
-          disabled={!connected}
+          placeholder={
+            connected
+              ? "Share your thoughts on this market..."
+              : privy.configured
+              ? "Sign in to comment…"
+              : "Connect your wallet to comment..."
+          }
+          readOnly={!connected}
+          onClick={() => {
+            if (!connected) requireSignIn();
+          }}
           className={`w-full rounded-xl border border-gray-700 bg-black/20
                        px-4 py-3 text-white outline-none placeholder:text-gray-500 resize-none
                        focus:border-gray-500 ${
@@ -316,11 +339,11 @@ export default function CommentsSection({
           <div className="text-xs text-gray-500">{text.length}/500 characters</div>
 
           <button
-            onClick={() => void postComment(null)}
-            disabled={!canPost}
+            onClick={() => (connected ? void postComment(null) : requireSignIn())}
+            disabled={connected && !canPost}
             className={`inline-flex items-center gap-2 px-5 py-2 rounded-lg font-semibold transition
               ${
-                !canPost
+                connected && !canPost
                   ? "bg-gray-800/40 text-gray-500 cursor-not-allowed border border-gray-800"
                   : "bg-pump-green text-black hover:brightness-110"
               }`}
@@ -383,7 +406,7 @@ export default function CommentsSection({
 
                     <button
                       onClick={() => {
-                        if (!connected) return alert("Connect your wallet to reply.");
+                        if (!connected) return requireSignIn();
                         setReplyTo((p) => (p === c.id ? null : c.id));
                       }}
                       className="inline-flex items-center gap-2 text-gray-400 hover:text-gray-200"

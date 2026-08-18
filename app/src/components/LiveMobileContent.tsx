@@ -4,6 +4,7 @@
 
 import { useMemo, useState, useEffect, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { usePrivyIdentity } from "@/components/privy/PrivyIdentityProvider";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import Image from "next/image";
@@ -325,6 +326,9 @@ export function MobileBuySheet({
   defaultOutcomeIndex?: number;
   keepNavbar?: boolean;
 }) {
+  // Sign-in only — this sheet keeps taking `connected` as a prop and its
+  // trade call is unchanged.
+  const privy = usePrivyIdentity();
   const [selectedOutcome, setSelectedOutcome] = useState(0);
   const [amount, setAmount] = useState<number>(0);
   const presets = [0.01, 0.1, 1];
@@ -441,20 +445,30 @@ export function MobileBuySheet({
 
             {/* Buy button */}
             <button
-              disabled={!connected || amount === 0 || submitting}
+              disabled={connected && (amount === 0 || submitting)}
               onClick={() => {
+                // Logged out this used to be a disabled "Connect wallet".
+                // Same sheet, same trade call — the only change is that the
+                // button now has somewhere to send you when you have no
+                // identity yet.
+                if (!connected) {
+                  privy.loginWithGoogle();
+                  return;
+                }
                 const approxShares = Math.max(1, Math.floor(amount / 0.01));
                 onTrade(approxShares, selectedOutcome, "buy", amount);
                 onClose();
               }}
               className={`w-full py-4 rounded-xl font-bold text-lg transition-all ${
-                !connected || amount === 0 || submitting
+                connected && (amount === 0 || submitting)
                   ? "bg-gray-700 text-gray-400 cursor-not-allowed"
                   : "bg-pump-green text-black hover:bg-[#74ffb8]"
               }`}
             >
               {!connected
-                ? "Connect wallet"
+                ? privy.configured
+                  ? "Continue with Google"
+                  : "Connect wallet"
                 : submitting
                 ? "Submitting..."
                 : "Buy"}

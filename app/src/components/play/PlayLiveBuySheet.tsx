@@ -23,7 +23,6 @@
 // session system, no new store, no Real code path.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useWallet } from "@solana/wallet-adapter-react";
 import { usePlaySession } from "@/components/play/PlaySessionProvider";
 import { useMarketSnapshotActions } from "@/components/mode/MarketSnapshotProvider";
 import { PlayApiError, formatUsd, playClient, toCents } from "@/lib/playClient";
@@ -59,9 +58,6 @@ export default function PlayLiveBuySheet({
   onTraded?: (info: { outcomeName: string; shares: number }) => void;
 }) {
   const play = usePlaySession();
-  // `connected` only — all Play signing still goes through usePlaySession so
-  // the wallet→Play identity swap stays contained to PlaySessionProvider.
-  const { connected } = useWallet();
   const { invalidate: invalidateSnapshot } = useMarketSnapshotActions();
 
   const names = useMemo(() => {
@@ -236,9 +232,8 @@ export default function PlayLiveBuySheet({
   const ctaDisabled = closed || busy || (!needsSession && (!stakeString || insufficient));
 
   const ctaLabel = (() => {
-    if (!connected && needsSession) return "Connect wallet";
     if (busy) return play.authenticating ? "Enabling Play…" : "Submitting...";
-    if (needsSession && effectiveAmount <= 0) return "Enable Play";
+    if (needsSession && effectiveAmount <= 0) return play.signInLabel;
     if (insufficient) return "Insufficient balance";
     const name = String(names[selectedOutcome] || "SHARES").toUpperCase();
     if (effectiveAmount <= 0) return `Buy ${name}`;

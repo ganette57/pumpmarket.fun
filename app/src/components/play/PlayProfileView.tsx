@@ -25,7 +25,7 @@
 // as profit.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 import { Pencil, Share2 } from "lucide-react";
 import EditProfileModal from "@/components/EditProfileModal";
 import FlashMarketResultModal from "@/components/FlashMarketResultModal";
@@ -174,7 +174,7 @@ function StatDivider() {
 /* -------------------------------------------------------------------------- */
 
 export default function PlayProfileView({ wallet }: { wallet: string }) {
-  const { publicKey, connected } = useWallet();
+  const { publicKey, connected } = useFunMarketWallet();
   const viewerWallet = connected && publicKey ? publicKey.toBase58() : null;
   // Mirrors the Real profile: the Edit affordance follows the CONNECTED
   // wallet. Releasing the balance is a stricter, server-side check.

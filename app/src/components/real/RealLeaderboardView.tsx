@@ -33,7 +33,7 @@
 import { useMemo } from "react";
 import Link from "next/link";
 import { Medal, Trophy } from "lucide-react";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 import {
   useRealLeaderboard,
   type RealLeaderboardResponse,
@@ -849,7 +849,7 @@ function YourRankCard({
 /* -------------------------------------------------------------------------- */
 
 export default function RealLeaderboardView() {
-  const { publicKey, connected } = useWallet();
+  const { publicKey, connected } = useFunMarketWallet();
   const connectedWallet = connected && publicKey ? publicKey.toBase58() : null;
 
   const { data, error, pending, refresh } = useRealLeaderboard({

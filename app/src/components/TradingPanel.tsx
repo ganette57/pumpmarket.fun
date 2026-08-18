@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { lamportsToSol } from "@/utils/solana";
+import { usePrivyIdentity } from "@/components/privy/PrivyIdentityProvider";
 
 type MarketForTrade = {
   resolved: boolean;
@@ -114,6 +115,15 @@ export default function TradingPanel({
   title = "Trade",
 }: TradingPanelProps) {
   console.log("✅ TradingPanel pool =", marketBalanceLamports);
+
+  // Sign-in only. This panel does not own auth and does not learn anything
+  // about wallets — `connected` is still the prop the two call sites pass,
+  // and the trade path below is untouched. All this adds is somewhere for a
+  // logged-out user to GO, instead of a disabled button telling them to
+  // connect something with no way to do it.
+  const privy = usePrivyIdentity();
+  const needsAuth = !connected;
+  const authLabel = privy.configured ? "Continue with Google" : "Connect wallet";
 
   const outcomes = useMemo(() => {
     const names = (market.outcomeNames || []).map(String).filter(Boolean);
@@ -504,7 +514,9 @@ export default function TradingPanel({
         {/* Wallet / Resolved warnings */}
         {!connected && (
           <div className="mt-3 text-center p-3 bg-pump-dark rounded-xl">
-            <p className="text-gray-400 text-sm">Connect wallet to trade</p>
+            <p className="text-gray-400 text-sm">
+              Sign in to trade with real SOL. No extension needed.
+            </p>
           </div>
         )}
         {connected && market.resolved && (
@@ -523,10 +535,14 @@ export default function TradingPanel({
         }
       >
         <button
-          disabled={!!submitting || !connected || market.resolved || (side === "sell" && userCurrent <= 0)}
-          onClick={handleTrade}
+          disabled={
+            !!submitting ||
+            market.resolved ||
+            (!needsAuth && side === "sell" && userCurrent <= 0)
+          }
+          onClick={needsAuth ? () => privy.loginWithGoogle() : handleTrade}
           className={`w-full py-4 rounded-xl font-bold text-lg transition-all ${
-            submitting || !connected || market.resolved || (side === "sell" && userCurrent <= 0)
+            submitting || market.resolved || (!needsAuth && side === "sell" && userCurrent <= 0)
               ? "bg-gray-700 text-gray-300 cursor-not-allowed"
               : isBinaryStyle
               ? selectedIndex === 0
@@ -537,6 +553,8 @@ export default function TradingPanel({
         >
           {submitting
             ? "Submitting..."
+            : needsAuth
+            ? authLabel
             : side === "buy"
             ? `Buy ${String(outcomes[selectedIndex] || "SHARES").toUpperCase()}`
             : `Sell ${String(outcomes[selectedIndex] || "SHARES").toUpperCase()}`}

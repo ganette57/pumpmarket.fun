@@ -393,12 +393,22 @@ export type PlayTradeResponse = {
 /*  Transport                                                                  */
 /* -------------------------------------------------------------------------- */
 
-async function post<T>(path: string, body?: unknown): Promise<T> {
+async function post<T>(
+  path: string,
+  body?: unknown,
+  opts?: { bearer?: string }
+): Promise<T> {
   let res: Response;
   try {
     res = await fetch(path, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        // Only the Privy sign-in call sends one. It is a short-lived
+        // Privy access token, not a FunMarket credential — the session
+        // this endpoint returns is the httpOnly cookie, as always.
+        ...(opts?.bearer ? { Authorization: `Bearer ${opts.bearer}` } : {}),
+      },
       // The Play session is an httpOnly cookie — it must ride along.
       credentials: "include",
       body: JSON.stringify(body ?? {}),
@@ -440,6 +450,20 @@ export const playClient = {
   /** Step 2 of sign-in: exchange a signature for the Play session cookie. */
   verify(args: { wallet: string; nonce: string; signature: string }) {
     return post<PlayVerifyResponse>("/api/play/auth/verify", args);
+  },
+
+  /**
+   * The Google/Privy sign-in path — one call, no challenge, no signature.
+   *
+   * The token is the ONLY thing sent: the server derives the Privy user
+   * and their embedded wallet from it. Returns the same shape as verify()
+   * and sets the same play_session cookie, so every caller downstream is
+   * identical whichever door the user came through.
+   */
+  privyLogin(accessToken: string) {
+    return post<PlayVerifyResponse>("/api/play/auth/privy", undefined, {
+      bearer: accessToken,
+    });
   },
 
   logout() {

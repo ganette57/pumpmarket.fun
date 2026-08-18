@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
+import { usePrivyIdentity } from "@/components/privy/PrivyIdentityProvider";
 
 const MOBILE_HOME_RETAP_EVENT = "home-feed:retap";
 
@@ -44,12 +45,18 @@ function Item({
 
 export default function MobileNav() {
   const pathname = usePathname();
-  const { connected, publicKey } = useWallet();
+  const { connected, publicKey } = useFunMarketWallet();
+  const privy = usePrivyIdentity();
 
   const isActive = (p: string) => pathname === p || pathname?.startsWith(p + "/");
 
+  // Logged out this used to point at /dashboard, which renders nothing but
+  // "Connect wallet to view your dashboard." — a tab that looks like it
+  // failed. Keep the href for middle-click/SEO, but intercept the tap and
+  // send the user into the same Privy login the rest of the app uses.
   const profileHref =
     connected && publicKey ? `/profile/${publicKey.toBase58()}` : "/dashboard";
+  const needsSignIn = !(connected && publicKey) && privy.configured;
   const profileActive =
     connected && publicKey
       ? isActive(`/profile/${publicKey.toBase58()}`)
@@ -152,6 +159,14 @@ export default function MobileNav() {
           href={profileHref}
           label="Profile"
           active={profileActive}
+          onClick={
+            needsSignIn
+              ? (e: React.MouseEvent) => {
+                  e.preventDefault();
+                  privy.loginWithGoogle();
+                }
+              : undefined
+          }
           icon={
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <circle cx="12" cy="8" r="4" />

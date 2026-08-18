@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 import { isOfficialFixtureAdmin } from "@/lib/adminClient";
 import { ExternalLink, Pencil, Save, Trash2, X } from "lucide-react";
 
@@ -40,7 +40,7 @@ function toDraft(t: AdminTask): Draft {
 }
 
 export default function AdminRewardsPage() {
-  const { publicKey } = useWallet();
+  const { publicKey } = useFunMarketWallet();
   const wallet = publicKey?.toBase58() ?? null;
   const isAdmin = isOfficialFixtureAdmin(wallet);
 

@@ -49,7 +49,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Medal, Trophy } from "lucide-react";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 import { usePlayContest } from "@/components/play/usePlayContest";
 import {
   formatUsd,
@@ -890,7 +890,7 @@ export default function PlayLeaderboardView() {
   const { data, error, pending, refresh } = usePlayContest({
     limit: LEADERBOARD_LIMIT,
   });
-  const { publicKey, connected } = useWallet();
+  const { publicKey, connected } = useFunMarketWallet();
   const connectedWallet = connected && publicKey ? publicKey.toBase58() : null;
 
   const contest = data?.contest ?? null;

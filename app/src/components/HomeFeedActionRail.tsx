@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Bookmark, Heart, MessageCircle, Share2 } from "lucide-react";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
+import { usePrivyIdentity } from "@/components/privy/PrivyIdentityProvider";
 import { supabase } from "@/lib/supabaseClient";
 import { triggerHaptic } from "@/utils/haptics";
 
@@ -54,7 +55,20 @@ export default function HomeFeedActionRail({
   commentsCount = null,
   onOpenComments,
 }: HomeFeedActionRailProps) {
-  const { publicKey } = useWallet();
+  const { publicKey } = useFunMarketWallet();
+  const privy = usePrivyIdentity();
+  /**
+   * The logged-out branch of every social action here. It used to be
+   * alert("Connect your wallet") — accurate and useless, since the alert
+   * offered no way to do it and implied a browser extension. Routes into
+   * the canonical Privy login; external wallets remain available the
+   * normal way, through the account menu.
+   */
+  const requireSignIn = () => {
+    if (privy.configured) privy.loginWithGoogle();
+    else alert("Connect your wallet to continue.");
+  };
+
   const [liked, setLiked] = useState(false);
   const [likeCount, setLikeCount] = useState(0);
   const [likeBusy, setLikeBusy] = useState(false);
@@ -138,7 +152,7 @@ export default function HomeFeedActionRail({
   async function toggleLike() {
     if (likeBusy || likeInFlightRef.current) return;
     if (!userAddress) {
-      alert("Connect your wallet");
+      requireSignIn();
       return;
     }
     likeInFlightRef.current = true;
@@ -265,7 +279,7 @@ export default function HomeFeedActionRail({
   }, [userAddress, marketAddress, marketDbId]);
 
   async function toggleBookmark() {
-    if (!userAddress) return alert("Connect your wallet");
+    if (!userAddress) return requireSignIn();
     if (!marketAddress) return;
 
     setBusy(true);

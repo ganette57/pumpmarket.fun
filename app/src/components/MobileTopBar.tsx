@@ -21,8 +21,8 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
-import { useWallet } from "@solana/wallet-adapter-react";
+import AccountPanel from "@/components/wallet/AccountPanel";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 import ModeSwitch from "@/components/mode/ModeSwitch";
 import ModeBalancePill from "@/components/mode/ModeBalancePill";
 
@@ -32,7 +32,7 @@ export default function MobileTopBar({ showSearch }: { showSearch: boolean }) {
 
   const initialQ = useMemo(() => sp.get("q") || "", [sp]);
   const [q, setQ] = useState(initialQ);
-  const { connected, publicKey, disconnect } = useWallet();
+  const { connected, publicKey, disconnect } = useFunMarketWallet();
 const [menuOpen, setMenuOpen] = useState(false);
 const menuRef = useRef<HTMLDivElement | null>(null);
 const DOCS_URL = "https://funmarket.gitbook.io/funmarket/";
@@ -106,9 +106,7 @@ const avatarLabel = useMemo(() => {
 
   {menuOpen && (
     <div className="absolute right-0 mt-2 w-72 rounded-2xl border border-gray-800 bg-black/90 backdrop-blur shadow-xl overflow-hidden">
-      <div className="p-3">
-        <WalletMultiButton className="!h-10 !w-full !justify-center !rounded-xl !bg-pump-green !text-black hover:!opacity-90 !font-semibold" />
-      </div>
+      <AccountPanel onNavigate={() => setMenuOpen(false)} />
 
       <div className="h-px bg-gray-800" />
 

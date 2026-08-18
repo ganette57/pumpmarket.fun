@@ -1,7 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useWallet, useConnection } from "@solana/wallet-adapter-react";
+import { useConnection } from "@solana/wallet-adapter-react";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
+import { useWalletModal } from "@solana/wallet-adapter-react-ui";
+import { usePrivyIdentity } from "@/components/privy/PrivyIdentityProvider";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { BN } from "@coral-xyz/anchor";
 import { CheckCircle2 } from "lucide-react";
@@ -58,12 +61,16 @@ export default function FeedTradeSheet({
   defaultOutcomeIndex = 0,
   onBuySuccess,
 }: FeedTradeSheetProps) {
-  const { connected, publicKey, signTransaction } = useWallet();
+  const { connected, publicKey, signTransaction } = useFunMarketWallet();
   const { connection } = useConnection();
   const program = useProgram();
 
   const { isPlay } = useTradingMode();
   const play = usePlaySession();
+  // Sign-in for the Real path when logged out. Read only — this sheet does
+  // not own auth, it just routes into the canonical entry point.
+  const privy = usePrivyIdentity();
+  const { setVisible: setWalletModalVisible } = useWalletModal();
   const { invalidate: invalidateSnapshot } = useMarketSnapshotActions();
 
   const [selectedOutcome, setSelectedOutcome] = useState(0);
@@ -386,21 +393,27 @@ export default function FeedTradeSheet({
   /* ---------------------------------------------------------------------- */
   /*  CTA state                                                              */
   /* ---------------------------------------------------------------------- */
-  const needsWallet = !connected;
-  const needsPlaySession = isPlay && connected && !play.authenticated;
+  // Play spends virtual money: it needs an identity, which a Google user
+  // has without any wallet at all. Real spends SOL: it needs a wallet.
+  // Gating Play on `connected` is what used to make a browser extension a
+  // precondition for playing.
+  const needsWallet = !isPlay && !connected;
+  const needsPlaySession = isPlay && !play.authenticated;
   const busy = submitting || play.authenticating;
 
+  // needsWallet is NOT a disable reason any more: in that state the button
+  // is the sign-in action (see onCtaClick), and a disabled sign-in button
+  // is the dead end this fixes.
   const ctaDisabled =
-    needsWallet ||
     busy ||
     (!needsPlaySession && effectiveAmount <= 0) ||
     (isPlay && !needsPlaySession && (!playStakeString || insufficientPlayBalance));
 
   const ctaLabel = (() => {
-    if (needsWallet) return "Connect Wallet";
+    if (needsWallet) return privy.configured ? "Continue with Google" : "Connect wallet";
     if (busy) return play.authenticating ? "Enabling Play…" : "Submitting...";
     if (success) return "Done!";
-    if (needsPlaySession && effectiveAmount <= 0) return "Enable Play";
+    if (needsPlaySession && effectiveAmount <= 0) return play.signInLabel;
     if (insufficientPlayBalance) return "Insufficient balance";
     const label = outcomeNames[selectedOutcome] || "";
     if (effectiveAmount <= 0) return `Buy ${label}`.trim();
@@ -413,11 +426,24 @@ export default function FeedTradeSheet({
    * ensureSession() first and then trades, so one tap does both.
    */
   const onCtaClick = useCallback(() => {
+    // Real, logged out: this used to be a DISABLED button reading "Connect
+    // Wallet" — a dead end that told the user what they needed without
+    // offering any way to get it, and implied a browser extension was
+    // required to trade Real from the feed. Send them through the same
+    // Privy login every other surface uses; the embedded wallet it creates
+    // can sign Real transactions.
+    if (!isPlay && needsWallet) {
+      if (privy.configured) return privy.loginWithGoogle();
+      return setWalletModalVisible(true);
+    }
     if (!isPlay) return void handleBuy();
     if (needsPlaySession && effectiveAmount <= 0) return void play.ensureSession();
     return void handlePlayBuy();
   }, [
     isPlay,
+    needsWallet,
+    privy,
+    setWalletModalVisible,
     handleBuy,
     needsPlaySession,
     effectiveAmount,

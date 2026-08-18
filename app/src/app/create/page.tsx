@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useWallet, useConnection } from "@solana/wallet-adapter-react";
+import { useConnection } from "@solana/wallet-adapter-react";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
+import { usePrivyIdentity } from "@/components/privy/PrivyIdentityProvider";
 import { SystemProgram, Keypair } from "@solana/web3.js";
 import { BN } from "@coral-xyz/anchor";
 import { useRouter } from "next/navigation";
@@ -696,7 +698,10 @@ function CreationModal({
 }
 
 export default function CreateMarketPage() {
-  const { publicKey, connected, connecting, signTransaction } = useWallet();
+  const { publicKey, connected, connecting, signTransaction } = useFunMarketWallet();
+  // Sign-in entry point only. Product rules below (Real-only creation,
+  // canSubmit, validation) are unchanged.
+  const privy = usePrivyIdentity();
   const { connection } = useConnection();
   const router = useRouter();
   const program = useProgram();
@@ -1984,16 +1989,39 @@ export default function CreateMarketPage() {
         {/* Submit — market creation is a Real-mode action only. The whole
             page stays visible and unchanged in Play mode; only this button
             is disabled, with a one-line explanation. */}
-        <button
-          onClick={handleCreateMarket}
-          disabled={!canSubmit || loading || isPlayMode}
-          aria-busy={loading}
-          className={`w-full py-4 rounded-lg font-bold text-lg transition ${
-            canSubmit && !loading && !isPlayMode ? "btn-pump glow-green" : "bg-gray-700 text-gray-500 cursor-not-allowed"
-          }`}
-        >
-          {loading ? "Processing..." : isSportsMarket ? "Create Sports Market 🏆" : "Launch Market 🚀"}
-        </button>
+        <>
+          {/* No identity yet: the Launch button used to sit here permanently
+              disabled, with no hint that signing in was the missing piece.
+              Offer the same Privy login the rest of the app uses. Nothing
+              about the create flow itself changes — once signed in, the
+              original button renders exactly as before. */}
+          {!connected && !connecting && privy.configured && !isPlayMode ? (
+            <button
+              type="button"
+              onClick={() => privy.loginWithGoogle()}
+              className="w-full py-4 rounded-lg font-bold text-lg transition btn-pump glow-green"
+            >
+              Continue with Google
+            </button>
+          ) : (
+            <button
+              onClick={handleCreateMarket}
+              disabled={!canSubmit || loading || isPlayMode}
+              aria-busy={loading}
+              className={`w-full py-4 rounded-lg font-bold text-lg transition ${
+                canSubmit && !loading && !isPlayMode
+                  ? "btn-pump glow-green"
+                  : "bg-gray-700 text-gray-500 cursor-not-allowed"
+              }`}
+            >
+              {loading
+                ? "Processing..."
+                : isSportsMarket
+                ? "Create Sports Market 🏆"
+                : "Launch Market 🚀"}
+            </button>
+          )}
+        </>
         {isPlayMode && (
           <p className="mt-2 text-center text-sm text-gray-400">
             Market creation is available in Real mode.

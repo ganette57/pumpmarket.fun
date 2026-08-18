@@ -3,7 +3,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { PublicKey } from "@solana/web3.js";
-import { useConnection, useWallet } from "@solana/wallet-adapter-react";
+import { useConnection } from "@solana/wallet-adapter-react";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 import { useProgram } from "@/hooks/useProgram";
 import { sendSignedTx } from "@/lib/solanaSend";
 import AdminReportsTab from "@/components/AdminReportsTab";
@@ -279,7 +280,7 @@ function explainError(e: unknown): string {
 
 export default function AdminOverviewPage() {
   const { connection } = useConnection();
-  const { publicKey, signTransaction } = useWallet();
+  const { publicKey, signTransaction } = useFunMarketWallet();
   const program = useProgram();
 
   const [data, setData] = useState<Overview | null>(null);

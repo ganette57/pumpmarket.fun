@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 
 const STORAGE_KEY = "fm_ref_code";
 
@@ -13,7 +13,7 @@ const STORAGE_KEY = "fm_ref_code";
 //
 // This component is invisible. Drop it once near the root.
 export default function ReferralCapture() {
-  const { connected, publicKey } = useWallet();
+  const { connected, publicKey } = useFunMarketWallet();
   const triedRef = useRef(false);
 
   // Stash ref code on first load if present

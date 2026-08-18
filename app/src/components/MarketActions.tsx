@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
+import { usePrivyIdentity } from "@/components/privy/PrivyIdentityProvider";
 import { supabase } from "@/lib/supabaseClient";
 import { Bookmark, Share2, Flag } from "lucide-react";
 import ReportMarketButton from "@/components/ReportMarketButton";
@@ -23,7 +24,20 @@ export default function MarketActions({
   marketDbId,
   question,
 }: Props) {
-  const { publicKey } = useWallet();
+  const { publicKey } = useFunMarketWallet();
+  const privy = usePrivyIdentity();
+  /**
+   * The logged-out branch of every social action here. It used to be
+   * alert("Connect your wallet") — accurate and useless, since the alert
+   * offered no way to do it and implied a browser extension. Routes into
+   * the canonical Privy login; external wallets remain available the
+   * normal way, through the account menu.
+   */
+  const requireSignIn = () => {
+    if (privy.configured) privy.loginWithGoogle();
+    else alert("Connect your wallet to continue.");
+  };
+
 
   const [busy, setBusy] = useState(false);
   const [bookmarkRowId, setBookmarkRowId] = useState<string | null>(null);
@@ -103,7 +117,7 @@ export default function MarketActions({
   }, [userAddress, marketDbId, address]);
 
   async function toggleBookmark() {
-    if (!userAddress) return alert("Connect your wallet");
+    if (!userAddress) return requireSignIn();
     if (!address) return;
 
     setBusy(true);

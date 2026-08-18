@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 
 type Report = {
   id: string;
@@ -97,7 +97,7 @@ type Props = {
 const ITEMS_PER_PAGE = 15;
 
 export default function AdminReportsTab({ onBlockMarket }: Props) {
-  const { publicKey } = useWallet();
+  const { publicKey } = useFunMarketWallet();
   
   const [reports, setReports] = useState<Report[]>([]);
   const [counts, setCounts] = useState<ReportCounts>({ pending: 0, total: 0 });

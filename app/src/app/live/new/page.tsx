@@ -4,7 +4,9 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useWallet, useConnection } from "@solana/wallet-adapter-react";
+import { useConnection } from "@solana/wallet-adapter-react";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
+import { usePrivyIdentity } from "@/components/privy/PrivyIdentityProvider";
 import { createLiveSession } from "@/lib/liveSessions";
 import { useProgram } from "@/hooks/useProgram";
 import { createLiveFlashMarket } from "@/lib/liveMarketCreate";
@@ -17,7 +19,8 @@ import {
 
 export default function NewLiveSessionPage() {
   const router = useRouter();
-  const { publicKey, connected, signTransaction } = useWallet();
+  const { publicKey, connected, signTransaction } = useFunMarketWallet();
+  const privy = usePrivyIdentity();
   const { connection } = useConnection();
   const program = useProgram();
 
@@ -102,13 +105,29 @@ export default function NewLiveSessionPage() {
   }
 
   if (!connected || !publicKey) {
+    // Reachable by direct URL / back button even though /live now signs the
+    // user in before routing here. A whole page whose only content is a
+    // requirement, with no way to satisfy it, is the dead end this fixes.
     return (
       <div className="min-h-[70vh] flex items-center justify-center px-4">
         <div className="text-center">
-          <h1 className="text-xl font-bold text-white mb-2">Connect Wallet</h1>
+          <h1 className="text-xl font-bold text-white mb-2">
+            {privy.configured ? "Sign in to go live" : "Connect Wallet"}
+          </h1>
           <p className="text-sm text-gray-400">
-            You need to connect your wallet to go live.
+            {privy.configured
+              ? "You need an account to create a live market."
+              : "You need to connect your wallet to go live."}
           </p>
+          {privy.configured && (
+            <button
+              type="button"
+              onClick={() => privy.loginWithGoogle()}
+              className="mt-5 h-11 px-6 rounded-xl bg-pump-green text-black text-sm font-semibold transition hover:opacity-90"
+            >
+              Continue with Google
+            </button>
+          )}
         </div>
       </div>
     );

@@ -252,7 +252,7 @@ export default function PlayTradingPanel({
   const ctaLabel = (() => {
     if (busy) return play.authenticating ? "Enabling Play…" : "Submitting...";
     if (success) return "Done!";
-    if (needsSession && effectiveAmount <= 0) return "Enable Play";
+    if (needsSession && effectiveAmount <= 0) return play.signInLabel;
     if (insufficient) return "Insufficient balance";
     const name = String(outcomes[selectedIndex] || "SHARES").toUpperCase();
     if (effectiveAmount <= 0) return `Buy ${name}`;

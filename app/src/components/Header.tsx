@@ -3,8 +3,8 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
-import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
-import { useWallet } from '@solana/wallet-adapter-react';
+import AccountPanel from "@/components/wallet/AccountPanel";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 import { getProfile } from '@/lib/profiles';
 import ModeSwitch from '@/components/mode/ModeSwitch';
 
@@ -24,7 +24,7 @@ export default function Header() {
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
-  const { connected, publicKey, disconnect } = useWallet();
+  const { connected, publicKey, disconnect } = useFunMarketWallet();
 
   const [search, setSearch] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
@@ -185,10 +185,8 @@ export default function Header() {
 
               {menuOpen && (
                 <div className="absolute right-0 mt-2 w-64 rounded-xl border border-pump-border bg-pump-gray shadow-lg py-2 text-sm text-gray-100 z-[100]">
-                  {/* Wallet connect/disconnect (top) */}
-                  <div className="px-3 pb-2">
-                    <WalletMultiButton className="!h-10 !w-full !justify-center !rounded-lg !bg-pump-green !text-black hover:!opacity-90 !font-semibold" />
-                  </div>
+                  {/* Account: Google sign-in, Real wallet, add funds */}
+                  <AccountPanel onNavigate={() => setMenuOpen(false)} />
 
                   <div className="h-px bg-gray-700/50 my-1" />
 

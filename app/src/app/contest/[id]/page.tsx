@@ -7,7 +7,11 @@ import Image from "next/image";
 
 import { PublicKey, SendTransactionError } from "@solana/web3.js";
 import { Program, type Idl } from "@coral-xyz/anchor";
-import { useConnection, useWallet, useAnchorWallet } from "@solana/wallet-adapter-react";
+import { useConnection } from "@solana/wallet-adapter-react";
+import {
+  useFunMarketWallet,
+  useFunMarketAnchorWallet,
+} from "@/components/wallet/FunMarketWalletProvider";
 
 import idl from "@/idl/funmarket_pump.json";
 import { getProvider } from "@/utils/solana";
@@ -101,8 +105,8 @@ export default function ContestPage() {
   const id = safeId((params as any)?.id);
 
   const { connection } = useConnection();
-  const { publicKey, connected } = useWallet();
-  const anchorWallet = useAnchorWallet();
+  const { publicKey, connected } = useFunMarketWallet();
+  const anchorWallet = useFunMarketAnchorWallet();
   const walletBase58 = publicKey?.toBase58() || "";
 
   const [market, setMarket] = useState<DbMarket | null>(null);

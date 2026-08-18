@@ -4,7 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { createPortal } from "react-dom";
 
-import { useWallet, useConnection } from "@solana/wallet-adapter-react";
+import { useConnection } from "@solana/wallet-adapter-react";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { BN } from "@coral-xyz/anchor";
 
@@ -1867,7 +1868,9 @@ export default function TradePage() {
   const params = useParams();
   const id = safeParamId((params as any)?.id);
 
-  const { publicKey, connected, signTransaction } = useWallet();
+  // The active FunMarket wallet — Privy embedded or external. Everything
+  // below is unchanged: same publicKey, same signTransaction contract.
+  const { publicKey, connected, signTransaction } = useFunMarketWallet();
   const { connection } = useConnection();
   const program = useProgram();
 

@@ -4,7 +4,9 @@
 import { useEffect, useState, useCallback, useRef, useMemo, type UIEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useWallet, useConnection } from "@solana/wallet-adapter-react";
+import { useConnection } from "@solana/wallet-adapter-react";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
+import { usePrivyIdentity } from "@/components/privy/PrivyIdentityProvider";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { BN } from "@coral-xyz/anchor";
@@ -471,10 +473,11 @@ function MobileLiveTradeSlide({
 }
 
 export default function LivePage() {
-  const { publicKey, connected, signTransaction, signMessage } = useWallet();
+  const { publicKey, connected, signTransaction, signMessage } = useFunMarketWallet();
   const { connection } = useConnection();
   const program = useProgram();
   const { setVisible } = useWalletModal();
+  const privy = usePrivyIdentity();
   const router = useRouter();
   const isMobile = useIsMobile(1024);
   const { isPlay } = useTradingMode();
@@ -510,11 +513,17 @@ export default function LivePage() {
 
   const handleGoLive = useCallback(() => {
     if (!publicKey) {
-      setVisible(true);
+      // Was: the Solana wallet-adapter modal, i.e. "install Phantom to go
+      // live". Route into the canonical Privy login instead — the embedded
+      // wallet it creates signs the market-creation transaction just as an
+      // external wallet does. Falls back to the wallet modal only where
+      // Privy is not configured.
+      if (privy.configured) privy.loginWithGoogle();
+      else setVisible(true);
       return;
     }
     router.push("/live/new");
-  }, [publicKey, router, setVisible]);
+  }, [publicKey, router, setVisible, privy]);
 
   // Host status change — same signed flow as /live/[id] (signMessage + POST to
   // /api/live-sessions/[id]/status). No backend changes; updates local list.
@@ -1589,7 +1598,7 @@ export default function LivePage() {
               onClick={handleGoLive}
               className="mt-5 h-11 px-5 rounded-xl bg-pump-green text-black text-sm font-semibold"
             >
-              {publicKey ? "Start live" : "Connect wallet"}
+              {publicKey ? "Start live" : privy.configured ? "Continue with Google" : "Connect wallet"}
             </button>
           </div>
         </div>
@@ -1880,7 +1889,7 @@ export default function LivePage() {
             onClick={handleGoLive}
             className="mt-4 px-6 py-2 rounded-lg bg-pump-green text-black text-sm font-semibold hover:bg-[#74ffb8] transition"
           >
-            {publicKey ? "Start a session" : "Connect wallet to start"}
+            {publicKey ? "Start a session" : privy.configured ? "Continue with Google" : "Connect wallet to start"}
           </button>
         </div>
       ) : (

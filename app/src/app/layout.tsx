@@ -5,6 +5,9 @@ import { cookies } from "next/headers";
 import "./globals.css";
 
 import { WalletContextProvider } from "@/components/WalletProvider";
+import PrivyAppProvider from "@/components/privy/PrivyAppProvider";
+import { FunMarketWalletProvider } from "@/components/wallet/FunMarketWalletProvider";
+import { AddFundsProvider } from "@/components/wallet/AddFundsProvider";
 import AppShell from "@/components/AppShell";
 import LiveBuysTicker from "@/components/LiveBuysTicker";
 import GeoGateController from "@/components/GeoGateController";
@@ -45,22 +48,38 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body className={inter.className}>
         <ModeProvider initialMode={initialMode}>
-          <WalletContextProvider>
-            {/* Inside the wallet provider: the Play session signs with the
-                connected wallet (temporary identity until Privy). */}
-            <PlaySessionProvider>
-              <MarketSnapshotProvider>
-              <AppShell>
-              <GeoGateController />
-              <ReferralCapture />
-                {children}
+          {/* Privy outermost of the wallet providers: FunMarketWalletProvider
+              reads Privy AND the wallet adapter, so both must already be
+              mounted above it. */}
+          <PrivyAppProvider>
+            <WalletContextProvider>
+              {/* The one wallet the rest of the app knows about: Privy
+                  embedded or external, behind a single interface. */}
+              <FunMarketWalletProvider>
+                {/* Owns the one Add Funds modal. Mounted HERE, not inside
+                    the header dropdown that opens it: the header is
+                    `fixed … backdrop-blur`, which would capture the
+                    modal's fixed positioning, and the dropdown's
+                    click-outside would unmount it mid-use. */}
+                <AddFundsProvider>
+                {/* Play identity: a verified Privy login, or — for legacy
+                    users — a wallet signature. */}
+                <PlaySessionProvider>
+                  <MarketSnapshotProvider>
+                  <AppShell>
+                  <GeoGateController />
+                  <ReferralCapture />
+                    {children}
 
-                {/* Single ticker: bottom-14 on mobile (above nav), bottom-0 on desktop */}
-                <LiveBuysTicker variant="breaking" className="bottom-14 md:bottom-0" />
-              </AppShell>
-              </MarketSnapshotProvider>
-            </PlaySessionProvider>
-          </WalletContextProvider>
+                    {/* Single ticker: bottom-14 on mobile (above nav), bottom-0 on desktop */}
+                    <LiveBuysTicker variant="breaking" className="bottom-14 md:bottom-0" />
+                  </AppShell>
+                  </MarketSnapshotProvider>
+                </PlaySessionProvider>
+                </AddFundsProvider>
+              </FunMarketWalletProvider>
+            </WalletContextProvider>
+          </PrivyAppProvider>
         </ModeProvider>
       </body>
     </html>

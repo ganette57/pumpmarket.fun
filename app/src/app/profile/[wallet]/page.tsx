@@ -3,7 +3,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
+import { usePrivyIdentity } from "@/components/privy/PrivyIdentityProvider";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { supabase } from "@/lib/supabaseClient";
 import {
@@ -69,8 +70,9 @@ export default function PublicProfilePage() {
 function RealProfilePage() {
   const params = useParams<{ wallet: string }>();
   const wallet = String(params?.wallet || "").trim();
-  const { publicKey, connected } = useWallet();
+  const { publicKey, connected } = useFunMarketWallet();
   const { setVisible: setWalletModalVisible } = useWalletModal();
+  const privy = usePrivyIdentity();
   const viewerWallet = useMemo(
     () => (connected && publicKey ? publicKey.toBase58() : null),
     [connected, publicKey],
@@ -240,7 +242,8 @@ function RealProfilePage() {
                     if (followBusy) return;
                     if (!viewerWallet) {
                       setFollowError(null);
-                      setWalletModalVisible(true);
+                      if (privy.configured) privy.loginWithGoogle();
+                      else setWalletModalVisible(true);
                       return;
                     }
                     setFollowError(null);
@@ -286,7 +289,9 @@ function RealProfilePage() {
                 </button>
                 {!viewerWallet && (
                   <p className="mt-2 text-[11px] text-gray-500">
-                    Connect wallet to follow.
+                    {privy.configured
+                      ? "Sign in to follow."
+                      : "Connect wallet to follow."}
                   </p>
                 )}
                 {followError && (

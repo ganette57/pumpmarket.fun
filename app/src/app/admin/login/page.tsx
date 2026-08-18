@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 import { getAdminWallet } from "@/lib/adminClient";
 
 function shortAddr(a?: string) {
@@ -11,7 +11,7 @@ function shortAddr(a?: string) {
 }
 
 export default function AdminLoginPage() {
-  const { publicKey, connected } = useWallet();
+  const { publicKey, connected } = useFunMarketWallet();
   const wallet = publicKey?.toBase58() || "";
 
   const adminWallet = useMemo(() => {

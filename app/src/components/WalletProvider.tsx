@@ -2,7 +2,14 @@
 
 import { FC, ReactNode, useCallback, useEffect, useMemo } from "react";
 import { ConnectionProvider, WalletProvider } from "@solana/wallet-adapter-react";
-import { PhantomWalletAdapter, SolflareWalletAdapter } from "@solana/wallet-adapter-wallets";
+// Imported from the two adapter packages directly rather than from the
+// aggregate @solana/wallet-adapter-wallets. Same adapter classes — but the
+// aggregate pulls in every supported wallet including Trezor, whose
+// @solana-program/system@^0.7 pin is incompatible with the >=0.8 Privy
+// requires. Two imports instead of one, and the Trezor/Ledger trees leave
+// the bundle.
+import { PhantomWalletAdapter } from "@solana/wallet-adapter-phantom";
+import { SolflareWalletAdapter } from "@solana/wallet-adapter-solflare";
 import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
 import "@solana/wallet-adapter-react-ui/styles.css";
 

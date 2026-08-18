@@ -1,19 +1,49 @@
 "use client";
 
-import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
+import { useConnection } from "@solana/wallet-adapter-react";
 import { AnchorProvider, Idl, Program } from "@coral-xyz/anchor";
 import { useMemo } from "react";
 import idlJson from "@/idl/funmarket_pump.json";
 import { PROGRAM_ID } from "@/utils/solana";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 
+/**
+ * The Anchor program, bound to whichever FunMarket wallet is active.
+ *
+ * This used to read useAnchorWallet() from the Solana wallet adapter, so
+ * Real trading only worked with a browser extension. It now takes its
+ * signer from useFunMarketWallet(), which resolves to either the Privy
+ * embedded wallet or an external one.
+ *
+ * Nothing below the provider changed: Anchor's Wallet interface is
+ * exactly `publicKey` + `signTransaction` + `signAllTransactions`, both
+ * implementations supply all three, and the program, the IDL, the account
+ * derivation and the RPC are untouched.
+ */
 export function useProgram() {
   const { connection } = useConnection();
-  const wallet = useAnchorWallet();
+  const { publicKey, signTransaction, signAllTransactions } = useFunMarketWallet();
 
   return useMemo(() => {
-    if (!wallet) return null;
+    if (!publicKey || !signTransaction) return null;
 
-    const provider = new AnchorProvider(connection, wallet, {
+    // signAllTransactions is optional on the wallet but required by
+    // Anchor's interface. FunMarket never batches, so a sequential
+    // fallback is honest rather than a silent throw — and both real
+    // implementations provide the batched version anyway.
+    const wallet = {
+      publicKey,
+      signTransaction,
+      signAllTransactions:
+        signAllTransactions ??
+        (async <T,>(txs: T[]): Promise<T[]> => {
+          const out: T[] = [];
+          for (const tx of txs) out.push(await (signTransaction as any)(tx));
+          return out;
+        }),
+    };
+
+    const provider = new AnchorProvider(connection, wallet as any, {
       commitment: "confirmed",
       preflightCommitment: "confirmed",
     });
@@ -42,5 +72,5 @@ export function useProgram() {
       });
       return null;
     }
-  }, [connection, wallet]);
+  }, [connection, publicKey, signTransaction, signAllTransactions]);
 }

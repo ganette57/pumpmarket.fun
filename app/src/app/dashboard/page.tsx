@@ -3,7 +3,12 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useWallet, useConnection, useAnchorWallet } from "@solana/wallet-adapter-react";
+import { useConnection } from "@solana/wallet-adapter-react";
+import {
+  useFunMarketWallet,
+  useFunMarketAnchorWallet,
+} from "@/components/wallet/FunMarketWalletProvider";
+import { usePrivyIdentity } from "@/components/privy/PrivyIdentityProvider";
 import { PublicKey } from "@solana/web3.js";
 import { supabase } from "@/lib/supabaseClient";
 import { useProgram } from "@/hooks/useProgram";
@@ -630,8 +635,11 @@ function ActionModal({
 /* -------------------------------------------------------------------------- */
 
 export default function DashboardPage() {
-  const { publicKey, connected, connecting } = useWallet();
-  const anchorWallet = useAnchorWallet();
+  const { publicKey, connected, connecting } = useFunMarketWallet();
+  const privy = usePrivyIdentity();
+  // Same shape useAnchorWallet() returned; now backed by whichever
+  // FunMarket wallet is active.
+  const anchorWallet = useFunMarketAnchorWallet();
   const walletBase58 = publicKey?.toBase58() || "";
   const { connection } = useConnection();
   const program = useProgram();
@@ -898,8 +906,13 @@ export default function DashboardPage() {
   }, [connected, walletBase58, bookmarkIds]);
 
   /* ---------------- On-chain scan (claimables + refunds + creator fees) ---------------- */
+  // Which wallet the rows currently on screen were scanned for. See the
+  // clear-before-rescan note inside the effect.
+  const scannedWalletRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!connected || !publicKey || !program) {
+      scannedWalletRef.current = null;
       setClaimables([]);
       setRefundables([]);
       setCreatorFeeClaimables([]);
@@ -909,6 +922,33 @@ export default function DashboardPage() {
     let cancelled = false;
 
     (async () => {
+      // Drop the PREVIOUS wallet's rows before rescanning, not after.
+      //
+      // This effect reruns whenever the active FunMarket wallet changes
+      // (publicKey is part of its deps), but it only cleared the lists on
+      // the disconnected branch above. Switching embedded <-> external, or
+      // logging in as a different Privy user, therefore left the old
+      // wallet's claimables on screen for the whole round trip.
+      //
+      // The money was never at risk: every claim derives its PDA and its
+      // destination from the CURRENT publicKey, so a stale row could only
+      // ever produce a transaction the program rejects — never a payout to
+      // the previous wallet. This is about not showing someone another
+      // account's winnings. Same rule as useSolBalance: clear before the
+      // read, so a figure on screen always belongs to the wallet named
+      // next to it.
+      //
+      // Guarded by a ref so an unrelated dependency change (new txs, a
+      // refreshed market map) does not flicker the list for the same
+      // wallet.
+      const scanWallet = publicKey.toBase58();
+      if (scannedWalletRef.current !== scanWallet) {
+        scannedWalletRef.current = scanWallet;
+        setClaimables([]);
+        setRefundables([]);
+        setCreatorFeeClaimables([]);
+      }
+
       setLoadingClaimables(true);
       setLoadingCreatorFees(true);
 
@@ -1329,11 +1369,30 @@ export default function DashboardPage() {
       <div className="max-w-6xl mx-auto px-4 py-12">
         <h1 className="text-3xl md:text-4xl font-bold text-white mb-6">Dashboard</h1>
         <div className="card-pump">
-          <p className="text-gray-400">
-            {stillInitializing
-              ? "Connecting wallet…"
-              : "Connect wallet to view your dashboard."}
-          </p>
+          {stillInitializing ? (
+            <p className="text-gray-400">Connecting wallet…</p>
+          ) : (
+            <>
+              {/* Direct entry to /dashboard while logged out — reachable by
+                  URL, back button, or the mobile Profile tab's href. The
+                  page used to state the requirement and stop there; now it
+                  offers the same Privy login as everywhere else. */}
+              <p className="text-gray-400">
+                {privy.configured
+                  ? "Sign in to view your dashboard, positions and history."
+                  : "Connect wallet to view your dashboard."}
+              </p>
+              {privy.configured && (
+                <button
+                  type="button"
+                  onClick={() => privy.loginWithGoogle()}
+                  className="mt-4 h-11 w-full max-w-xs rounded-xl bg-pump-green px-5 font-semibold text-black transition hover:opacity-90"
+                >
+                  Continue with Google
+                </button>
+              )}
+            </>
+          )}
         </div>
       </div>
     );

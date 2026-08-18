@@ -4,7 +4,8 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { useWallet, useConnection } from "@solana/wallet-adapter-react";
+import { useConnection } from "@solana/wallet-adapter-react";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { BN } from "@coral-xyz/anchor";
 
@@ -316,7 +317,7 @@ export default function LiveViewerPage() {
   const router = useRouter();
   const sessionId = typeof params?.id === "string" ? params.id : Array.isArray(params?.id) ? params.id[0] : "";
 
-  const { publicKey, connected, signTransaction, signMessage } = useWallet();
+  const { publicKey, connected, signTransaction, signMessage } = useFunMarketWallet();
   const { connection } = useConnection();
   const program = useProgram();
   const isMobile = useIsMobile(1024);
