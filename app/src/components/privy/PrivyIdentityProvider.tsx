@@ -30,7 +30,7 @@ export type PrivyIdentityValue = {
   email: string | null;
   /** Fresh access token, auto-refreshed by Privy. Null when logged out. */
   getAccessToken: () => Promise<string | null>;
-  /** Opens Privy's Google login. */
+  /** Opens Privy's login modal: Google, then "Continue with a wallet". */
   loginWithGoogle: () => void;
   /** Opens Privy's full login modal (Google + Solana wallets). */
   login: () => void;
@@ -71,11 +71,15 @@ export function PrivyIdentityBridge({ children }: { children: ReactNode }) {
     return user?.email?.address ?? null;
   }, [user]);
 
-  // Scoped to Google so the primary CTA goes straight to the one method a
-  // normal user came for, instead of a modal full of wallets they do not
-  // have. `login()` with no options still offers everything.
+  // Google plus Privy's own wallet step, in that order: `showWalletLoginFirst:
+  // false` in PrivyAppProvider renders Google as the buttons and collapses
+  // every wallet behind a single "Continue with a wallet" row, so a normal
+  // user still sees the method they came for first while a Phantom user can
+  // authenticate up front instead of signing in with Google they do not want.
+  // The wallet list is Solana-only — that is `appearance.walletChainType` in
+  // PrivyAppProvider, which this runtime override inherits.
   const loginWithGoogle = useCallback(
-    () => login({ loginMethods: ["google"] }),
+    () => login({ loginMethods: ["google", "wallet"] }),
     [login]
   );
 
