@@ -7,6 +7,8 @@ import AccountPanel from "@/components/wallet/AccountPanel";
 import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 import { getProfile } from '@/lib/profiles';
 import ModeSwitch from '@/components/mode/ModeSwitch';
+import ModeBalancePill from '@/components/mode/ModeBalancePill';
+import { useOnboarding } from '@/components/onboarding/OnboardingProvider';
 
 // --- Hook pour fermer le menu avatar quand on clique en dehors ---
 function useClickOutside(ref: React.RefObject<HTMLDivElement>, onClose: () => void) {
@@ -25,6 +27,7 @@ export default function Header() {
   const pathname = usePathname();
   const sp = useSearchParams();
   const { connected, publicKey, disconnect } = useFunMarketWallet();
+  const onboarding = useOnboarding();
 
   const [search, setSearch] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
@@ -154,8 +157,13 @@ export default function Header() {
 
           {/* Right side */}
           <div className="ml-auto flex items-center gap-3 shrink-0">
+            {/* Balance for the CURRENT mode, immediately left of the control
+                it belongs to — the pair reads as one statement: this is your
+                money, and this is which money it is. */}
+            <ModeBalancePill variant="hero" />
+
             {/* Play / Real mode */}
-            <ModeSwitch size="md" variant="header" />
+            <ModeSwitch size="lg" variant="header" />
 
             {/* Create */}
             <Link
@@ -264,6 +272,19 @@ export default function Header() {
                   >
                     🔒 Privacy Policy
                   </a>
+
+                  {/* Replays the three-step tour. Same steps as first run;
+                      opening it here never resets the first-run flag. */}
+                  <button
+                    type="button"
+                    className="block w-full px-4 py-2 text-left font-bold text-pump-green hover:bg-pump-dark"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onboarding.open();
+                    }}
+                  >
+                    How it works
+                  </button>
 
                   {/* Disconnect */}
                   {connected && (

@@ -656,6 +656,22 @@ export const playClient = {
   },
 
   /**
+   * The public Play settings the UI is allowed to state out loud. Today that
+   * is one value: the starting bankroll a new Play account is credited with.
+   *
+   * Public — no session required, and the response carries nothing about the
+   * caller. Null means the value could not be read; render no amount rather
+   * than a guess.
+   */
+  async settings(): Promise<{ startingBankrollUsd: string | null }> {
+    const raw = await post<{ starting_bankroll_usd: string | null }>(
+      "/api/play/settings"
+    );
+    const v = raw?.starting_bankroll_usd;
+    return { startingBankrollUsd: v == null ? null : decimal(v) };
+  },
+
+  /**
    * The public Play leaderboard, ranked by authoritative realized P&L.
    *
    * Public — no session required. When a Play session cookie IS present the

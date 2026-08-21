@@ -15,6 +15,12 @@
 // fractions, NOT with flex + ml-auto: that way the switch stays optically
 // centred whether the balance pill reads "$850", "12.4K SOL" or is absent
 // entirely (no wallet connected).
+//
+// DELIBERATELY COMPACT. The immersive home feed enlarges its own copies of
+// these controls to 44px — see src/app/page.tsx — because there they float
+// over video as the only chrome on screen. That sizing is requested there by
+// name (ModeSwitch size="xl") and must not leak here: this bar sits on
+// ordinary pages that have their own content to lead with.
 
 "use client";
 
@@ -25,6 +31,7 @@ import AccountPanel from "@/components/wallet/AccountPanel";
 import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 import ModeSwitch from "@/components/mode/ModeSwitch";
 import ModeBalancePill from "@/components/mode/ModeBalancePill";
+import { useOnboarding } from "@/components/onboarding/OnboardingProvider";
 
 export default function MobileTopBar({ showSearch }: { showSearch: boolean }) {
   const router = useRouter();
@@ -33,6 +40,7 @@ export default function MobileTopBar({ showSearch }: { showSearch: boolean }) {
   const initialQ = useMemo(() => sp.get("q") || "", [sp]);
   const [q, setQ] = useState(initialQ);
   const { connected, publicKey, disconnect } = useFunMarketWallet();
+const onboarding = useOnboarding();
 const [menuOpen, setMenuOpen] = useState(false);
 const menuRef = useRef<HTMLDivElement | null>(null);
 const DOCS_URL = "https://funmarket.gitbook.io/funmarket/";
@@ -157,6 +165,19 @@ const avatarLabel = useMemo(() => {
 >
   🔒 Privacy Policy
 </a>
+
+{/* Replays the three-step tour. Same steps as first run; opening
+    it here never resets the first-run flag. */}
+<button
+  type="button"
+  onClick={() => {
+    setMenuOpen(false);
+    onboarding.open();
+  }}
+  className="block w-full px-4 py-3 text-left font-bold text-pump-green hover:bg-white/5"
+>
+  How it works
+</button>
 
       {connected && (
         <>
