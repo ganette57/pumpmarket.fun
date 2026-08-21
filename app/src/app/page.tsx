@@ -1271,26 +1271,36 @@ export default function Home() {
 
                 The FunMarket wordmark that used to sit here is gone: the
                 mode switch is the control users reach for, so it takes the
-                centre. Equal 1fr outer columns keep it optically centred
-                regardless of how wide the balance reads (or whether it
-                renders at all, with no wallet connected). */}
+                centre.
+
+                SIZING: the switch and the search button are 44px — the iOS
+                minimum touch target. The balance stays a compact chip: it
+                shares this row with a MATHEMATICALLY centred switch, and at
+                375px a centred 44px switch starts at x≈117, so every pixel
+                the chip grows past that point is a collision. Centring wins,
+                so the chip only gets a small type bump (11px → 13px).
+
+                CENTRING: the switch is absolutely positioned at the midpoint
+                rather than sitting in a flex row, so its position is fixed by
+                the viewport and not by how wide the balance happens to read.
+                The wrapper mirrors the row's own top padding and height so it
+                centres on the same 64px band, and stays pointer-events-none so
+                it cannot swallow taps meant for the two controls beside it. */}
             <div className="fixed top-0 left-0 right-0 z-[60] pointer-events-none">
-              <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 px-4 pt-[env(safe-area-inset-top,12px)] h-16">
-                <div className="flex min-w-0 items-center justify-start">
-                  <ModeBalancePill variant="overlay" className="pointer-events-auto" />
+              <div className="relative flex items-center justify-between gap-2 px-3 pt-[env(safe-area-inset-top,12px)] h-16 max-[389px]:px-2 max-[359px]:gap-1.5 max-[359px]:px-1.5">
+                <ModeBalancePill variant="overlay" className="pointer-events-auto" />
+
+                <div className="pointer-events-none absolute inset-x-0 top-[env(safe-area-inset-top,12px)] h-16 flex items-center justify-center">
+                  <ModeSwitch size="xl" variant="overlay" className="pointer-events-auto" />
                 </div>
 
-                <ModeSwitch size="sm" variant="overlay" className="pointer-events-auto" />
-
-                <div className="flex min-w-0 items-center justify-end">
-                  <Link
-                    href="/search"
-                    className="pointer-events-auto h-9 w-9 flex items-center justify-center rounded-full bg-black/40 backdrop-blur-sm border border-white/15"
-                    aria-label="Search markets"
-                  >
-                    <Search className="w-[18px] h-[18px] text-white/90" />
-                  </Link>
-                </div>
+                <Link
+                  href="/search"
+                  className="pointer-events-auto h-11 w-11 shrink-0 flex items-center justify-center rounded-full bg-black/40 backdrop-blur-sm border border-white/15"
+                  aria-label="Search markets"
+                >
+                  <Search className="w-[22px] h-[22px] text-white/90" />
+                </Link>
               </div>
             </div>
 

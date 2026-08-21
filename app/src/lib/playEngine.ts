@@ -390,6 +390,28 @@ export async function ensureDailyGrant(accountId: string): Promise<string> {
   return String(data);
 }
 
+/**
+ * The configured Play bankroll: play_settings.daily_grant_usd, the exact
+ * figure play_ensure_daily_grant credits an account with.
+ *
+ * Read-only, and deliberately the SAME row the grant itself reads — so the
+ * onboarding can state the starting bankroll without a second, drifting copy
+ * of the number living in the UI. Returns null when the settings row cannot
+ * be read; the caller then says nothing rather than inventing an amount.
+ *
+ * Decimal string, never a float, like every other money value here.
+ */
+export async function getPlayStartingBankroll(): Promise<string | null> {
+  const { data, error } = await supabaseServer()
+    .from("play_settings")
+    .select("daily_grant_usd")
+    .eq("id", 1)
+    .maybeSingle();
+  if (error) throw toEngineError(error);
+  const raw = (data as { daily_grant_usd?: unknown } | null)?.daily_grant_usd;
+  return raw === null || raw === undefined ? null : String(raw);
+}
+
 export async function currentSeason(): Promise<PlaySeason> {
   const { data, error } = await supabaseServer().rpc("play_current_season");
   if (error) throw toEngineError(error);

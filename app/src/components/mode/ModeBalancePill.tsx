@@ -2,7 +2,8 @@
 
 // src/components/mode/ModeBalancePill.tsx
 //
-// The balance shown on the left of the mobile header.
+// The balance shown immediately to the left of the PLAY/REAL control, in the
+// mobile top bar and the desktop header.
 //
 // It shows the balance for the mode you are actually in, from the same
 // source that mode spends from:
@@ -37,16 +38,39 @@ import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider"
 import { formatBalanceSol, formatBalanceUsd } from "@/lib/compactBalance";
 
 /**
- * `header`  — solid surfaces (mobile top bar)
- * `overlay` — on top of video/imagery (home feed), needs blur + contrast
+ * `header`  — solid surfaces, chip-sized (kept for any caller that wants the
+ *              bordered pill)
+ * `overlay` — on top of video/imagery (the immersive home feed), needs blur +
+ *             contrast. Stays a compact chip ON PURPOSE: it shares a 375px row
+ *             with a mathematically centred 44px mode switch, and the switch's
+ *             centring is what gives way first if this grows. A small type
+ *             bump (11px → 13px) is all the room there is.
+ * `hero`    — the top bars. No container at all: the number IS the element,
+ *             set large enough to be read at arm's length, and the wallet
+ *             glyph takes the accent of the mode the balance belongs to
+ *             (green in Play, white in Real). Sitting bare next to the
+ *             segmented control, a second bordered pill would compete with
+ *             it; the naked figure reads as the headline it is.
  *
  * Mirrors ModeSwitch's variants so the two always sit on the same surface.
  */
-type Variant = "header" | "overlay";
+type Variant = "header" | "overlay" | "hero";
 
 const CONTAINER: Record<Variant, string> = {
-  header: "border border-gray-600/70 bg-black/60",
-  overlay: "border border-white/20 bg-black/75 backdrop-blur-md",
+  header: "gap-1.5 rounded-full border border-gray-600/70 bg-black/60 px-2.5 py-1 text-[11px] tracking-tight",
+  overlay:
+    "gap-1.5 rounded-full border border-white/20 bg-black/75 px-2.5 py-1.5 text-[13px] tracking-tight backdrop-blur-md max-[389px]:gap-1 max-[389px]:px-2 max-[359px]:px-1.5",
+  // 18px on the mobile bar, 22px on the desktop one — one class, because the
+  // two bars never render at the same breakpoint.
+  hero: "gap-[7px] text-[18px] tracking-[-0.015em] md:gap-[9px] md:text-[22px]",
+};
+
+const ICON: Record<Variant, string> = {
+  header: "h-3.5 w-3.5",
+  // Dropped below 360px: the glyph is the one part of this chip that can go
+  // without the balance itself becoming less exact.
+  overlay: "h-4 w-4 max-[359px]:hidden",
+  hero: "h-[15px] w-[15px] md:h-[17px] md:w-[17px]",
 };
 
 export default function ModeBalancePill({
@@ -81,11 +105,13 @@ export default function ModeBalancePill({
       : null
     : formatBalanceSol(sol.lamports);
 
+  const hero = variant === "hero";
+
   return (
     <span
-      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold tabular-nums tracking-tight ${
-        value ? "text-white" : "text-gray-500"
-      } ${CONTAINER[variant]} ${className}`}
+      className={`inline-flex shrink-0 items-center tabular-nums ${
+        hero ? "font-extrabold leading-none" : "font-bold"
+      } ${value ? "text-white" : "text-gray-500"} ${CONTAINER[variant]} ${className}`}
       aria-label={
         value
           ? `${isPlay ? "Play" : "Wallet"} balance ${value}`
@@ -95,7 +121,15 @@ export default function ModeBalancePill({
       <Wallet
         aria-hidden="true"
         strokeWidth={2.25}
-        className={`h-3.5 w-3.5 shrink-0 ${value ? "text-gray-300" : "text-gray-600"}`}
+        className={`${ICON[variant]} shrink-0 ${
+          !value
+            ? "text-gray-600"
+            : hero
+            ? isPlay
+              ? "text-pump-green"
+              : "text-white"
+            : "text-gray-300"
+        }`}
       />
       {value ?? "—"}
     </span>

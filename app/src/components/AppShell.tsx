@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import Header from "@/components/Header";
 import MobileNav from "@/components/MobileNav";
 import MobileTopBar from "@/components/MobileTopBar";
+import { OnboardingProvider } from "@/components/onboarding/OnboardingProvider";
 import SiteFooter from "@/components/SiteFooter";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
@@ -21,6 +22,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const isHomeFeed = pathname === "/";
 
   return (
+    // The onboarding provider wraps the shell, not the page: the "How it
+    // works" entries live in the two headers, and the tour itself must
+    // outlive any route change.
+    <OnboardingProvider>
     <div className={isTrade ? "md:h-screen md:flex md:flex-col md:overflow-hidden" : ""}>
       {/* Desktop header */}
       <div className="hidden md:block flex-shrink-0">
@@ -55,5 +60,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       {/* Bottom nav mobile */}
       <MobileNav />
     </div>
+    </OnboardingProvider>
   );
 }
