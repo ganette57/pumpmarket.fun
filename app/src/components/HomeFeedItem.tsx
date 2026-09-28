@@ -42,9 +42,10 @@ interface HomeFeedItemProps {
   } | null;
   creatorAddress?: string | null;
   withActionRail?: boolean;
+  footballOutcomeIndices?: [number, number, number] | null;
   /** Called when user taps market title before navigating to full trade page. */
   onTitleTap?: () => void;
-  /** Called when user taps an outcome button (index 0 or 1). If not provided, falls back to Link. */
+  /** Called with the original outcome index, including all three football choices. */
   onOutcomeTap?: (outcomeIndex: number) => void;
 }
 
@@ -56,6 +57,7 @@ export default function HomeFeedItem({
   creatorProfile,
   creatorAddress,
   withActionRail = false,
+  footballOutcomeIndices = null,
   onTitleTap,
   onOutcomeTap,
 }: HomeFeedItemProps) {
@@ -112,6 +114,7 @@ export default function HomeFeedItem({
     market.outcomeNames && market.outcomeNames.length >= 2
       ? market.outcomeNames
       : ["YES", "NO"];
+  const visibleOutcomeIndices = footballOutcomeIndices ?? [0, 1];
 
   // Mode-specific economics come from a snapshot keyed by market AND mode.
   // The Real values the feed already loaded are passed as the fallback and
@@ -234,7 +237,7 @@ export default function HomeFeedItem({
         {/* Category badge + Chart/Activity quick actions (room here, away
             from the right rail). */}
         <div className="mb-2 flex items-center gap-2">
-          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wide bg-white/15 backdrop-blur-sm border border-white/10 text-white/90">
+          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wide bg-white/10 backdrop-blur-sm text-white/90">
             {safeCategory}
           </span>
           {showEndedBadge && (
@@ -251,7 +254,7 @@ export default function HomeFeedItem({
               triggerHaptic("light");
               setChartOpen(true);
             }}
-            className="inline-flex items-center justify-center w-7 h-7 rounded-full border border-white/15 bg-black/40 text-white/85 backdrop-blur-sm active:scale-95 transition"
+            className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-white/10 text-white/85 backdrop-blur-sm active:scale-95 transition"
           >
             <BarChart3 className="w-3.5 h-3.5" />
           </button>
@@ -264,7 +267,7 @@ export default function HomeFeedItem({
               triggerHaptic("light");
               setActivityOpen(true);
             }}
-            className="inline-flex items-center justify-center w-7 h-7 rounded-full border border-white/15 bg-black/40 text-white/85 backdrop-blur-sm active:scale-95 transition"
+            className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-white/10 text-white/85 backdrop-blur-sm active:scale-95 transition"
           >
             <ActivityIcon className="w-3.5 h-3.5" />
           </button>
@@ -327,44 +330,32 @@ export default function HomeFeedItem({
         </div>
 
         {/* ── Quick Trade: outcome buttons ── */}
-        <div className="flex gap-2">
-          {/* Outcome 1 (GREEN) — same color as MarketCard */}
-          <button
-            type="button"
-            onClick={() => {
-              triggerHaptic("light");
-              if (onOutcomeTap) onOutcomeTap(0);
-            }}
-            className="flex-1 bg-[#00FF87] rounded-xl py-3 px-3 flex items-center justify-between active:scale-[0.965] transition-transform duration-150 ease-out"
-          >
-            <span className="text-[12px] uppercase text-black font-bold tracking-wide truncate max-w-[60%]">
-              {outcomes[0].length > 12
-                ? outcomes[0].slice(0, 10) + "…"
-                : outcomes[0]}
-            </span>
-            <span className="text-[20px] font-bold text-black">
-              {percents[0]}%
-            </span>
-          </button>
-
-          {/* Outcome 2 (RED) — same color as MarketCard */}
-          <button
-            type="button"
-            onClick={() => {
-              triggerHaptic("light");
-              if (onOutcomeTap) onOutcomeTap(1);
-            }}
-            className="flex-1 bg-[#ff5c73] rounded-xl py-3 px-3 flex items-center justify-between active:scale-[0.965] transition-transform duration-150 ease-out"
-          >
-            <span className="text-[12px] uppercase text-black font-bold tracking-wide truncate max-w-[60%]">
-              {outcomes[1].length > 12
-                ? outcomes[1].slice(0, 10) + "…"
-                : outcomes[1]}
-            </span>
-            <span className="text-[20px] font-bold text-black">
-              {percents[1]}%
-            </span>
-          </button>
+        <div className={`grid gap-2 ${footballOutcomeIndices ? "grid-cols-3" : "grid-cols-2"}`}>
+          {visibleOutcomeIndices.map((index, displayIndex) => (
+            <button
+              key={index}
+              type="button"
+              title={outcomes[index]}
+              onClick={() => {
+                triggerHaptic("light");
+                if (onOutcomeTap) onOutcomeTap(index);
+              }}
+              className={`min-w-0 rounded-xl px-2.5 py-2 text-left active:scale-[0.965] transition-transform duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-pump-green ${
+                footballOutcomeIndices && displayIndex === 1
+                  ? "bg-white/10 text-white"
+                  : (footballOutcomeIndices ? displayIndex === 0 : index === 0)
+                  ? "bg-[#00FF87] text-black"
+                  : "bg-[#ff5c73] text-black"
+              }`}
+            >
+              <span className="block truncate text-[12px] leading-4 uppercase font-bold tracking-wide">
+                {outcomes[index]}
+              </span>
+              <span className="block text-[20px] leading-6 font-bold tabular-nums">
+                {percents[index] ?? "—"}%
+              </span>
+            </button>
+          ))}
         </div>
       </div>
 
