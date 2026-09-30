@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 import { usePrivyIdentity } from "@/components/privy/PrivyIdentityProvider";
 import { supabase } from "@/lib/supabaseClient";
-import { Bookmark, Share2, Flag } from "lucide-react";
+import { Bookmark, Share2, MoreHorizontal, Share } from "lucide-react";
 import ReportMarketButton from "@/components/ReportMarketButton";
 
 type Props = {
@@ -16,6 +16,8 @@ type Props = {
   marketDbId?: string | null; // uuid markets.id
 
   question: string;
+  subtle?: boolean;
+  mobileHeader?: boolean;
 };
 
 export default function MarketActions({
@@ -23,7 +25,20 @@ export default function MarketActions({
   marketAddress,
   marketDbId,
   question,
+  subtle = false,
+  mobileHeader = false,
 }: Props) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [reportRequest, setReportRequest] = useState(0);
+  const menuRoot = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const outside = (e: PointerEvent) => { if (!menuRoot.current?.contains(e.target as Node)) setMenuOpen(false); };
+    const escape = (e: KeyboardEvent) => { if (e.key === "Escape") { setMenuOpen(false); menuRoot.current?.querySelector<HTMLButtonElement>('[aria-label="Market actions"]')?.focus(); } };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", escape); };
+  }, [menuOpen]);
   const { publicKey } = useFunMarketWallet();
   const privy = usePrivyIdentity();
   /**
@@ -186,8 +201,19 @@ export default function MarketActions({
     }
   }
 
+  if (mobileHeader) return (
+    <div ref={menuRoot} className="relative flex items-center text-gray-200">
+      <button type="button" aria-label="Share market" title="Share" onClick={share} className="flex h-11 w-11 items-center justify-center rounded-full hover:bg-white/5 active:scale-95 transition duration-150"><Share size={22} strokeWidth={1.6} aria-hidden="true" /></button>
+      <button type="button" aria-label="Market actions" title="Market actions" aria-expanded={menuOpen} onClick={() => setMenuOpen(v => !v)} className="flex h-11 w-11 items-center justify-center rounded-full hover:bg-white/5 active:scale-95 transition duration-150"><MoreHorizontal size={22} strokeWidth={1.6} aria-hidden="true" /></button>
+      {menuOpen && <div role="group" aria-label="Market actions" className="absolute right-0 top-full mt-2 w-48 rounded-2xl border border-white/10 bg-zinc-950/95 p-1.5 shadow-lg backdrop-blur-xl">
+        <button type="button" disabled={busy} onClick={() => { setMenuOpen(false); void toggleBookmark(); }} className={`block w-full rounded-xl px-3 py-3 text-left text-sm hover:bg-white/5 ${bookmarked ? "text-pump-green" : ""}`}>{bookmarked ? "Remove bookmark" : "Bookmark"}</button>
+        <button type="button" onClick={() => { setMenuOpen(false); setReportRequest(v => v + 1); }} className="block w-full rounded-xl px-3 py-3 text-left text-sm hover:bg-white/5">Report</button>
+      </div>}
+      <ReportMarketButton marketAddress={address} hideTrigger openRequest={reportRequest} />
+    </div>);
+
   return (
-    <div className="flex items-center gap-2 shrink-0">
+    <div className={`flex items-center gap-2 shrink-0 ${subtle ? "[&_svg]:stroke-[1.6] [&_svg]:h-[18px] [&_svg]:w-[18px] [&>button]:h-9 [&>button]:w-9" : ""}`}>
       {/* Bookmark */}
       <button
         type="button"
@@ -196,7 +222,7 @@ export default function MarketActions({
         className={[
           "p-2 rounded-lg transition",
           "hover:bg-white/5 active:scale-[0.98]",
-          bookmarked ? "text-pump-green" : "text-gray-400",
+          bookmarked ? "text-pump-green" : subtle ? "text-gray-500" : "text-gray-400",
           busy ? "opacity-60" : "",
         ].join(" ")}
         title={bookmarked ? "Bookmarked" : "Bookmark"}
@@ -212,7 +238,7 @@ export default function MarketActions({
       <button
         type="button"
         onClick={share}
-        className="p-2 rounded-lg text-gray-400 hover:bg-white/5 active:scale-[0.98] transition"
+        className={`p-2 rounded-lg ${subtle ? "text-gray-500" : "text-gray-400"} hover:bg-white/5 active:scale-[0.98] transition`}
         title="Share"
         aria-label="Share market"
       >
@@ -220,7 +246,7 @@ export default function MarketActions({
       </button>
 
       {/* Report */}
-      <ReportMarketButton marketAddress={address} variant="icon" />
+      {!subtle && <ReportMarketButton marketAddress={address} variant="icon" />}
     </div>
   );
 }

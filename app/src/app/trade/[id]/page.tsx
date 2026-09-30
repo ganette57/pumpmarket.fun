@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { createPortal } from "react-dom";
+import MobileMarketToolbar, { mobileMarketLabel } from "@/components/trade/MobileMarketToolbar";
 
 import { useConnection } from "@solana/wallet-adapter-react";
 import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
@@ -12,12 +13,19 @@ import { BN } from "@coral-xyz/anchor";
 import { useProgram } from "@/hooks/useProgram";
 
 import CategoryImagePlaceholder from "@/components/CategoryImagePlaceholder";
+import MobileTopBar from "@/components/MobileTopBar";
 import MarketActions from "@/components/MarketActions";
 import CreatorSocialLinks from "@/components/CreatorSocialLinks";
 import CommentsSection from "@/components/CommentsSection";
 import TradingPanel from "@/components/TradingPanel";
 import PlayTradingPanel from "@/components/PlayTradingPanel";
+import MobileTradeOutcomes from "@/components/trade/MobileTradeOutcomes";
+import MobileProbabilityChart from "@/components/trade/MobileProbabilityChart";
+import TradeInfoSheet from "@/components/trade/TradeInfoSheet";
+import { currentValues } from "@/components/trade/chartGeometry";
+import { footballMatchOutcomeIndices } from "@/lib/feedOutcomes";
 import OddsHistoryChart from "@/components/OddsHistoryChart";
+import { usePlayOddsHistory } from "@/components/play/usePlayOddsHistory";
 import PlayOddsChart from "@/components/play/PlayOddsChart";
 import PlayActivity from "@/components/play/PlayActivity";
 import MarketActivityTab from "@/components/MarketActivity";
@@ -1333,6 +1341,7 @@ function getTradingLockOffsetMs(sport: string): number {
 }
 
 function SportScoreCard({
+  compact = false,
   event,
   meta,
   displayStatus,
@@ -1348,6 +1357,7 @@ function SportScoreCard({
   resolvedScorePair = null,
   lockToResolvedScore = false,
 }: {
+  compact?: boolean;
   event: SportEvent;
   meta?: any;
   displayStatus: DisplayStatus;
@@ -1424,6 +1434,26 @@ function SportScoreCard({
     : effectiveMicroState === "resolving"
     ? "border-sky-500/35 bg-sky-500/12 text-sky-200"
     : "border-gray-500/35 bg-gray-500/12 text-gray-200";
+
+  if (compact) return (
+    <section aria-label="Event score" className="mb-4 text-center">
+      <p className="mb-3 text-[10px] uppercase tracking-wider text-gray-500">
+        {isLiveMicro ? microBadgeLabel : displayStatus === "finished" ? "Final" : isLive ? `Live ${minute}` : displayStatus === "scheduled" ? "Scheduled" : "Match"}
+        {event.league ? ` · ${event.league}` : ""}
+      </p>
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+        {["home", "score", "away"].map(side => side === "score" ? <div key={side} className="text-3xl font-bold tabular-nums text-white">
+          {hasScore ? effectiveScorePair ? `${effectiveScorePair.home} — ${effectiveScorePair.away}` : formatScore(event.score, event.sport) : "vs"}
+        </div> : <div key={side} className="min-w-0">
+          {(side === "home" ? homeBadge : awayBadge) && <img src={(side === "home" ? homeBadge : awayBadge)!} alt="" className="mx-auto mb-2 h-10 w-10 object-contain" />}
+          <p className="break-words text-xs font-medium text-white">{side === "home" ? event.home_team : event.away_team}</p>
+        </div>)}
+      </div>
+      {isLiveMicro && remainingSec != null && <p className="mt-2 text-xs text-gray-400">{formatCountdownMmSs(remainingSec)} · {microStatus}</p>}
+      {displayStatus === "scheduled" && kickoffDate && <p className="mt-2 text-[10px] text-gray-500">{kickoffDate.toLocaleString()}</p>}
+      {stale && <p className="mt-2 text-[10px] text-gray-500">Score update delayed</p>}
+    </section>
+  );
 
   return (
     <div className={`rounded-xl border overflow-hidden ${
@@ -1886,6 +1916,8 @@ export default function TradePage() {
   const [positionShares, setPositionShares] = useState<number[] | null>(null);
   const [marketBalanceLamports, setMarketBalanceLamports] = useState<number | null>(null);
 
+  const [mobileTitleExpanded, setMobileTitleExpanded] = useState(false);
+  const [infoSheet, setInfoSheet] = useState<BottomTab | "resolution" | null>(null);
   const [oddsRange, setOddsRange] = useState<OddsRange>("all");
   const [oddsPoints, setOddsPoints] = useState<{ t: number; pct: number[] }[]>([]);
   const [bottomTab, setBottomTab] = useState<BottomTab>("discussion");
@@ -3054,6 +3086,7 @@ if (snap?.posAcc?.shares) {
   const { isPlay: isPlayTrading } = useTradingMode();
   const { publishRealSnapshots } = useMarketSnapshotActions();
   const snapshotKey = market?.publicKey ?? id ?? "";
+  const mobilePlayHistory = usePlayOddsHistory(snapshotKey, { enabled: isMobile && isPlayTrading });
 
   const realDisplayFallback = useMemo<MarketSnapshot>(() => {
     const sup = derived?.supplies ?? [];
@@ -4449,6 +4482,106 @@ const ended = endedByTime;
     />
   );
 
+  const footballIndices = footballMatchOutcomeIndices({
+    isSoccer: isSoccerLike, marketMode: market.marketMode,
+    sportMeta: market.sportMeta, outcomeNames: names,
+  });
+  const mobileIndices = footballIndices ?? names.map((_, index) => index);
+  const mobileColors = names.map((_, index) => footballIndices
+    ? index === footballIndices[0] ? "#00FF87" : index === footballIndices[1] ? "#a3a3a3" : "#FF5C73"
+    : ["#00FF87", "#FF5C73", "#b49bff", "#60c8ee", "#f5c66b"][index % 5]);
+  // A missing Play snapshot must never display the Real book as Play odds.
+  const mobileCurrent = isPlayTrading ? (modeSnapshot?.mode === "play" ? modeSnapshot.probabilities.map(p => p * 100) : []) : realPercentages;
+  const mobilePoints = isPlayTrading ? mobilePlayHistory.points : oddsPoints;
+  const mobileValues = currentValues(mobileCurrent, mobilePoints, names.length);
+  const mobileState = status === "cancelled" ? "Cancelled" : isResolvedOnChain ? "Resolved" : isProposed ? "Resolution proposed" : market.isBlocked ? "Locked" : ended ? "Ended" : marketClosed ? "Locked" : sportIsLive ? "Live" : "Open";
+  const mobileQuestion = footballIndices && sportEventForUi ? "Who wins the match?" : market.question;
+  const secondaryContent = (bottomTab === "discussion" ? (
+                  <CommentsSection marketId={market.publicKey} embedded={isMobile} />
+                ) : bottomTab === "activity" ? (
+                  isPlayTrading ? (
+                    // Authoritative Play trades for this market. Never the
+                    // Real (SOL) transactions — those stay on the Real branch.
+                    <div className="mt-4">
+                      <PlayActivity
+                        marketAddress={market.publicKey}
+                        outcomeNames={names}
+                        variant={isMobile ? "drawer" : "card"}
+                        limit={50}
+                      />
+                    </div>
+                  ) : (
+                    <MarketActivityTab
+                      marketDbId={market.dbId}
+                      marketAddress={market.publicKey}
+                      outcomeNames={names}
+                    />
+                  )
+                ) : (
+                  <div className="mt-4">
+                    {isSoccerNextGoalMicro && (
+                      <div className="mb-3 text-xs text-gray-400 space-y-1">
+                        {microLoopSequence != null && (
+                          <div>
+                            Window: <span className="text-gray-200">#{microLoopSequence}</span>
+                          </div>
+                        )}
+                        {microLoopPhaseLabel && (
+                          <div>
+                            Loop phase: <span className="text-gray-200">{microLoopPhaseLabel}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <div className="text-sm text-gray-300 whitespace-pre-wrap">
+                      {fullDescription ? (
+                        <>
+                          {descriptionExpanded || !shouldTruncate
+                            ? fullDescription
+                            : truncatedDescription}
+
+                          {shouldTruncate && (
+                            <button
+                              onClick={() => setDescriptionExpanded(!descriptionExpanded)}
+                              className="ml-2 text-[#00FF88] hover:underline"
+                            >
+                              {descriptionExpanded ? "See less" : "See more"}
+                            </button>
+                          )}
+                        </>
+                      ) : (
+                        <span className="text-gray-500">No rules provided.</span>
+                      )}
+                    </div>
+                  </div>
+                ));
+  const resolutionContent = (<ResolutionPanel
+                  marketAddress={market.publicKey}
+                  resolutionStatus={market.resolutionStatus ?? "open"}
+                  isFlashCrypto={isFlashCryptoMarket}
+                  cryptoFlashType={isFlashCryptoGraduationMarket ? "graduation" : isFlashCryptoMarket ? "price" : null}
+                  cryptoTokenMint={cryptoTokenMint || null}
+                  cryptoProvider={String(cryptoMeta.provider_name || cryptoMeta.provider_source || "pump_fun").trim() || null}
+                  cryptoSourceType={cryptoSourceType}
+                  cryptoMajorSymbol={cryptoMajorSymbol}
+                  cryptoMajorPair={cryptoMajorPair}
+                  proposedOutcomeLabel={proposedLabel}
+                  proposedAt={market.proposedAt}
+                  contestDeadline={market.contestDeadline}
+                  contestCount={market.contestCount ?? 0}
+                  proposedProofUrl={market.proposedProofUrl}
+                  proposedProofImage={market.proposedProofImage}
+                  proposedProofNote={market.proposedProofNote}
+                  resolved={!!market.resolved}
+                  winningOutcomeLabel={winningLabel}
+                  resolvedAt={market.resolvedAt}
+                  resolutionProofUrl={market.resolutionProofUrl}
+                  resolutionProofImage={market.resolutionProofImage}
+                  resolutionProofNote={market.resolutionProofNote}
+                  ended={ended}
+                  creatorResolveDeadline={market.creatorResolveDeadline ?? null}
+                />);
+
   return (
     <>
       {/* Trade Progress Modal */}
@@ -4478,6 +4611,68 @@ const ended = endedByTime;
         SCROLL CONTAINER - Un seul conteneur scrollable qui englobe tout.
         La colonne droite est sticky à l'intérieur.
       */}
+      {isMobile ? (
+        <>
+        <MobileTopBar showSearch={false} showClose actions={<MarketActions key={market.publicKey} mobileHeader marketAddress={market.publicKey} marketDbId={market.dbId ?? null} question={market.question} />} />
+        <div className="flex min-h-[calc(100svh-64px-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px))] flex-col bg-black px-4 pt-4 pb-6 [&>*]:shrink-0 md:h-full md:min-h-0 md:overflow-y-auto" data-mobile-trade>
+          {sportEventForUi && isSportLikeMarket ? (
+            <SportScoreCard compact
+                  event={sportEventForUi}
+                  meta={market?.sportMeta}
+                  displayStatus={ended ? "finished" : sharedSportDisplayStatus}
+                  minute={ended ? "" : sharedSportMinute}
+                  polling={liveScorePolling}
+                  stale={liveScoreFailures >= 3}
+                  lastPolledAt={liveScoreLastSuccessAt}
+                  isLiveMicro={isSoccerNextGoalMicro}
+                  microWindowEndMs={microWindowEndMs}
+                  microGoalObserved={microGoalObserved}
+                  microTradingLocked={microTradingLocked || !!market.isBlocked}
+                  microState={microHeroState}
+                  resolvedScorePair={unifiedTradeScorePair}
+                  lockToResolvedScore={isSoccerNextGoalMicro}
+                />
+          ) : null}
+          <div className="flex items-start gap-3">
+            {!isSportLikeMarket && tradeCardThumbUrl && <img src={tradeCardThumbUrl} alt="" onError={event => { event.currentTarget.style.display = "none"; }} className="h-10 w-10 shrink-0 rounded-lg object-cover" />}
+            <h1 className={`${isSportLikeMarket && sportEventForUi ? "text-center text-base font-medium" : "text-[clamp(20px,5.4vw,22px)] font-semibold leading-[1.15]"} min-w-0 flex-1 text-white`}>{isSportLikeMarket && sportEventForUi ? mobileQuestion : <button onClick={() => setMobileTitleExpanded(v => !v)} aria-expanded={mobileTitleExpanded} className={`text-left ${mobileTitleExpanded ? "" : "line-clamp-3"}`}>{mobileQuestion}</button>}</h1>
+          </div>
+          <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-gray-500">
+            <span>{mobileState}{winningLabel && isResolvedOnChain ? ` · ${winningLabel} wins` : ""}{!isSportLikeMarket ? ` · ${endLabel}` : ""}</span>
+
+          </div>
+          {activeLiveSession && <Link href={`/live/${activeLiveSession.id}`} className="inline-block py-2 text-xs text-pump-green">Watch live ↗</Link>}
+          <div className="my-2 flex min-h-[180px] flex-1 flex-col justify-center">
+            <MobileProbabilityChart key={`${market.publicKey}:${isPlayTrading}`} names={names} current={mobileValues} colors={mobileColors} points={mobilePoints} />
+          </div>
+          <div>
+            <MobileTradeOutcomes marketAddress={market.publicKey} isPlay={isPlayTrading} version={modeSnapshot?.updatedAt}
+              names={names} indices={mobileIndices} values={mobileValues} colors={mobileColors} drawIndex={footballIndices?.[1]}
+              closed={marketClosed || missingOutcomes} winningIndex={isResolvedOnChain ? market.winningOutcome : null} onChoose={openMobileTrade} />
+          </div>
+          <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-gray-500">
+            <span>Vol {isPlayTrading ? playVolumeLabel : `${formatVol(effectiveVol)} SOL`}</span>
+            {market.feedVideoUrl && <button className="py-2" onClick={() => setFeedVideoModalOpen(true)}>Watch video ↗</button>}
+            {sportEventForUi && isSportLikeMarket && isSoccerLike && (market.sportMeta as any)?.provider_event_id && <button className="py-2" onClick={() => setSoccerDrawerOpen(true)}>Match details ↗</button>}
+            {market.marketMode === "sport" && ["basketball", "nba", "ncaamb", "ncaawb", "wnba"].includes(sportKey) && (market.sportMeta as any)?.provider_event_id && <button className="py-2" onClick={() => setNbaDrawerOpen(true)}>Match stats ↗</button>}
+          </div>
+          {!isPlayTrading && userSharesForUi.some(qty => qty > 0) && <div className="mt-4 text-xs text-gray-400">
+            <span className="text-[10px] uppercase tracking-wider text-gray-500">Your position</span>
+            {userSharesForUi.map((qty, index) => qty > 0 && <div key={index} className="mt-1">{names[index]} · {qty.toLocaleString()} shares</div>)}
+          </div>}
+          <MobileMarketToolbar key={market.publicKey}
+            label={mobileMarketLabel(market.question, market.sportMeta as Record<string, unknown>)}
+            active={infoSheet} onOpen={tab => { if (tab !== "resolution") setBottomTab(tab); setInfoSheet(tab); }} />
+          {infoSheet && <TradeInfoSheet title={infoSheet[0].toUpperCase() + infoSheet.slice(1)} onClose={() => setInfoSheet(null)}>
+            {infoSheet === "resolution" ? <>
+              {market.isBlocked && <p className="mb-4 text-sm text-gray-400">{market.blockedReason || "Trading is locked."}</p>}
+              {resolutionContent}
+              {!ended && !isProposed && !isResolvedOnChain && status !== "finalized" && status !== "cancelled" && <p className="text-sm text-gray-400">No resolution has been proposed.</p>}
+            </> : secondaryContent}
+          </TradeInfoSheet>}
+        </div>
+        </>
+      ) : (
       <div
         ref={scrollContainerRef}
         className="h-full lg:overflow-y-auto"
@@ -5074,65 +5269,7 @@ const ended = endedByTime;
                   </button>
                 </div>
 
-                {bottomTab === "discussion" ? (
-                  <CommentsSection marketId={market.publicKey} />
-                ) : bottomTab === "activity" ? (
-                  isPlayTrading ? (
-                    // Authoritative Play trades for this market. Never the
-                    // Real (SOL) transactions — those stay on the Real branch.
-                    <div className="mt-4">
-                      <PlayActivity
-                        marketAddress={market.publicKey}
-                        outcomeNames={names}
-                        variant="card"
-                        limit={50}
-                      />
-                    </div>
-                  ) : (
-                    <MarketActivityTab
-                      marketDbId={market.dbId}
-                      marketAddress={market.publicKey}
-                      outcomeNames={names}
-                    />
-                  )
-                ) : (
-                  <div className="mt-4">
-                    {isSoccerNextGoalMicro && (
-                      <div className="mb-3 text-xs text-gray-400 space-y-1">
-                        {microLoopSequence != null && (
-                          <div>
-                            Window: <span className="text-gray-200">#{microLoopSequence}</span>
-                          </div>
-                        )}
-                        {microLoopPhaseLabel && (
-                          <div>
-                            Loop phase: <span className="text-gray-200">{microLoopPhaseLabel}</span>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    <div className="text-sm text-gray-300 whitespace-pre-wrap">
-                      {fullDescription ? (
-                        <>
-                          {descriptionExpanded || !shouldTruncate
-                            ? fullDescription
-                            : truncatedDescription}
-
-                          {shouldTruncate && (
-                            <button
-                              onClick={() => setDescriptionExpanded(!descriptionExpanded)}
-                              className="ml-2 text-[#00FF88] hover:underline"
-                            >
-                              {descriptionExpanded ? "See less" : "See more"}
-                            </button>
-                          )}
-                        </>
-                      ) : (
-                        <span className="text-gray-500">No rules provided.</span>
-                      )}
-                    </div>
-                  </div>
-                )}
+                {secondaryContent}
               </div>
             </div>
   
@@ -5206,32 +5343,7 @@ const ended = endedByTime;
                   )
                 ) : null}
   
-                <ResolutionPanel
-                  marketAddress={market.publicKey}
-                  resolutionStatus={market.resolutionStatus ?? "open"}
-                  isFlashCrypto={isFlashCryptoMarket}
-                  cryptoFlashType={isFlashCryptoGraduationMarket ? "graduation" : isFlashCryptoMarket ? "price" : null}
-                  cryptoTokenMint={cryptoTokenMint || null}
-                  cryptoProvider={String(cryptoMeta.provider_name || cryptoMeta.provider_source || "pump_fun").trim() || null}
-                  cryptoSourceType={cryptoSourceType}
-                  cryptoMajorSymbol={cryptoMajorSymbol}
-                  cryptoMajorPair={cryptoMajorPair}
-                  proposedOutcomeLabel={proposedLabel}
-                  proposedAt={market.proposedAt}
-                  contestDeadline={market.contestDeadline}
-                  contestCount={market.contestCount ?? 0}
-                  proposedProofUrl={market.proposedProofUrl}
-                  proposedProofImage={market.proposedProofImage}
-                  proposedProofNote={market.proposedProofNote}
-                  resolved={!!market.resolved}
-                  winningOutcomeLabel={winningLabel}
-                  resolvedAt={market.resolvedAt}
-                  resolutionProofUrl={market.resolutionProofUrl}
-                  resolutionProofImage={market.resolutionProofImage}
-                  resolutionProofNote={market.resolutionProofNote}
-                  ended={ended}
-                  creatorResolveDeadline={market.creatorResolveDeadline ?? null}
-                />
+                {resolutionContent}
   
                 {/* Related block */}
                 <div className="card-pump p-4">
@@ -5321,6 +5433,8 @@ const ended = endedByTime;
         </div>
       </div>
 
+      )}
+
       {/* Mobile drawer - FULLSCREEN from top to bottom nav (h-14 = 56px) */}
       {/* ✅ Don't open if blocked (marketClosed includes isBlocked) */}
       {isMobile && mobileTradeOpen && !marketClosed && (
@@ -5375,26 +5489,6 @@ const ended = endedByTime;
                 />
               )}
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Flash crypto mobile fixed bottom trade bar */}
-      {isMobile && isFlashCryptoMarket && isBinaryStyle && !marketClosed && !mobileTradeOpen && (
-        <div className="fixed inset-x-0 bottom-14 z-[150] pointer-events-auto">
-          <div className="bg-pump-dark/95 backdrop-blur-md border-t border-white/[0.06] px-4 py-3 flex gap-3">
-            <button
-              onClick={() => openMobileTrade(0)}
-              className="flex-1 py-3.5 rounded-xl bg-pump-green font-bold text-black text-base active:scale-[0.97] transition"
-            >
-              Buy {names[0] || "Yes"} <span className="opacity-70 ml-1">{(percentages[0] ?? 0).toFixed(0)}¢</span>
-            </button>
-            <button
-              onClick={() => openMobileTrade(1)}
-              className="flex-1 py-3.5 rounded-xl bg-[#ff5c73] font-bold text-white text-base active:scale-[0.97] transition"
-            >
-              Buy {names[1] || "No"} <span className="opacity-70 ml-1">{(100 - (percentages[0] ?? 0)).toFixed(0)}¢</span>
-            </button>
           </div>
         </div>
       )}

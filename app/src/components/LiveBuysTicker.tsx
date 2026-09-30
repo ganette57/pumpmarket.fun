@@ -118,6 +118,7 @@ export default function LiveBuysTicker({
       className={[
         "fixed left-0 right-0 bottom-0 z-[60] border-t border-white/15 bg-black/85 backdrop-blur",
         className,
+        pathname?.startsWith("/trade/") ? "hidden md:block" : "",
       ].join(" ")}
     >
       <div className="max-w-7xl mx-auto px-4 py-2 overflow-hidden flex items-center gap-3">

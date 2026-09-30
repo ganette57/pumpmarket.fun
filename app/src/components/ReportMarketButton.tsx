@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 
 type ReportReason = "spam" | "inappropriate" | "scam" | "misleading" | "duplicate" | "other";
@@ -18,9 +18,11 @@ type Props = {
   marketAddress: string;
   variant?: "icon" | "text" | "full";
   className?: string;
+  openRequest?: number;
+  hideTrigger?: boolean;
 };
 
-export default function ReportMarketButton({ marketAddress, variant = "icon", className = "" }: Props) {
+export default function ReportMarketButton({ marketAddress, variant = "icon", className = "", openRequest = 0, hideTrigger = false }: Props) {
   const { publicKey } = useFunMarketWallet();
   
   const [isOpen, setIsOpen] = useState(false);
@@ -37,6 +39,10 @@ export default function ReportMarketButton({ marketAddress, variant = "icon", cl
     setError(null);
     setSubmitted(false);
   }
+
+  useEffect(() => {
+    if (openRequest > 0) openModal();
+  }, [openRequest]);
 
   function closeModal() {
     setIsOpen(false);
@@ -120,7 +126,7 @@ export default function ReportMarketButton({ marketAddress, variant = "icon", cl
 
   return (
     <>
-      {buttonContent()}
+      {!hideTrigger && buttonContent()}
 
       {/* Modal - Full screen on mobile, centered on desktop */}
       {isOpen && (

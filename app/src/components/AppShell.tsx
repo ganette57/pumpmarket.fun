@@ -26,16 +26,16 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     // works" entries live in the two headers, and the tour itself must
     // outlive any route change.
     <OnboardingProvider>
-    <div className={isTrade ? "md:h-screen md:flex md:flex-col md:overflow-hidden" : ""}>
+    <div className={isTrade ? "max-md:min-h-svh max-md:bg-black md:h-screen md:flex md:flex-col md:overflow-hidden" : ""}>
       {/* Desktop header */}
       <div className="hidden md:block flex-shrink-0">
         <Header />
       </div>
 
       {/* Mobile header — hidden on /live, /live/[id], home feed, and /search (they have their own headers) */}
-      {!isLiveFeed && !isLiveDetail && !isHomeFeed && !isSearchPage && (
+      {!isTrade && !isLiveFeed && !isLiveDetail && !isHomeFeed && !isSearchPage && (
         <div className="md:hidden">
-          <MobileTopBar showSearch={!!isSearch} />
+          <MobileTopBar showSearch={!!isSearch} showClose={!!isTrade} />
         </div>
       )}
 
@@ -45,7 +45,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           isHomeFeed
             ? "h-[100dvh] overflow-hidden md:h-auto md:overflow-visible md:min-h-screen md:pb-0"
             : isTrade
-            ? "flex-1 min-h-0 overflow-hidden pb-32 md:pb-0"
+            ? "flex-1 min-h-0 overflow-hidden pb-[env(safe-area-inset-bottom,0px)] md:pb-0"
             : isLiveFeed
             ? "h-[calc(100dvh-3.5rem)] overflow-hidden md:h-auto md:overflow-visible md:min-h-screen md:pb-0"
             : "min-h-screen pb-32 md:pb-0"
@@ -58,7 +58,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 {!isTrade && <div className="hidden md:block"><SiteFooter /></div>}
 
       {/* Bottom nav mobile */}
-      <MobileNav />
+      {!isTrade && <MobileNav />}
     </div>
     </OnboardingProvider>
   );

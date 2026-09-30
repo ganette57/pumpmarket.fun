@@ -27,13 +27,14 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { X } from "lucide-react";
 import AccountPanel from "@/components/wallet/AccountPanel";
 import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 import ModeSwitch from "@/components/mode/ModeSwitch";
 import ModeBalancePill from "@/components/mode/ModeBalancePill";
 import { useOnboarding } from "@/components/onboarding/OnboardingProvider";
 
-export default function MobileTopBar({ showSearch }: { showSearch: boolean }) {
+export default function MobileTopBar({ showSearch, showClose = false, actions }: { showSearch: boolean; showClose?: boolean; actions?: React.ReactNode }) {
   const router = useRouter();
   const sp = useSearchParams();
 
@@ -82,7 +83,7 @@ const avatarLabel = useMemo(() => {
   return (
     <>
       <div
-        className={`fixed top-0 left-0 right-0 z-[70] border-b border-gray-800 bg-black/80 backdrop-blur ${showSearch ? "h-[116px]" : "h-16"}`}
+        className={`fixed top-0 left-0 right-0 z-[70] ${showClose ? "border-b border-white/[0.04] bg-black/35 backdrop-blur-xl backdrop-saturate-150" : "border-b border-gray-800 bg-black/80 backdrop-blur"} ${showSearch ? "h-[116px]" : "h-16"}`}
         // Kept off the notch / status bar in standalone (PWA) mode. The
         // spacer below carries the identical padding so nothing shifts.
         // content-box because Tailwind's preflight is border-box globally:
@@ -94,7 +95,14 @@ const avatarLabel = useMemo(() => {
         <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 h-16 px-3">
           {/* Left: active-mode balance */}
           <div className="flex min-w-0 items-center justify-start">
-            <ModeBalancePill variant="header" />
+            {showClose ? <button
+              type="button"
+              aria-label="Close market"
+              onClick={() => { if (window.history.length > 1) router.back(); else router.replace("/"); }}
+              className="flex h-11 w-11 items-center justify-center rounded-full text-gray-200 transition-colors hover:bg-white/5 hover:text-white focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-pump-green"
+            >
+              <X size={22} strokeWidth={1.6} aria-hidden="true" />
+            </button> : <ModeBalancePill variant="header" />}
           </div>
 
           {/* Centre: Play / Real mode — the primary control on mobile */}
@@ -102,7 +110,7 @@ const avatarLabel = useMemo(() => {
 
           {/* Right: menu / wallet */}
           <div className="flex min-w-0 items-center justify-end">
-<div className="shrink-0 relative" ref={menuRef}>
+{showClose ? <div className="flex h-11 w-[88px] items-center">{actions}</div> : <div className="shrink-0 relative" ref={menuRef}>
   <button
     type="button"
     onClick={() => setMenuOpen((v) => !v)}
@@ -196,7 +204,7 @@ const avatarLabel = useMemo(() => {
       )}
     </div>
   )}
-</div>
+</div>}
           </div>
         </div>
 
