@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 
 type ReportReason = "spam" | "inappropriate" | "scam" | "misleading" | "duplicate" | "other";
@@ -129,9 +130,10 @@ export default function ReportMarketButton({ marketAddress, variant = "icon", cl
       {!hideTrigger && buttonContent()}
 
       {/* Modal - Full screen on mobile, centered on desktop */}
-      {isOpen && (
-        <div className="fixed inset-0 z-[300] flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm">
-          <div className="bg-pump-dark border border-white/20 rounded-t-2xl sm:rounded-2xl w-full sm:max-w-md max-h-[90vh] sm:max-h-[85vh] sm:m-4 shadow-2xl flex flex-col">
+      {isOpen && createPortal(
+        // Escape the mobile header's backdrop-filter containing block.
+        <div role="dialog" aria-modal="true" aria-label="Report Market" className="fixed inset-x-0 top-0 h-[100dvh] sm:inset-0 sm:h-auto z-[300] flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm pt-[env(safe-area-inset-top)] sm:pt-0">
+          <div className="bg-pump-dark border border-white/20 rounded-t-2xl sm:rounded-2xl w-full sm:max-w-md max-h-full sm:max-h-[85vh] pb-[env(safe-area-inset-bottom)] sm:pb-0 sm:m-4 shadow-2xl flex flex-col">
             
             {submitted ? (
               // Success state
@@ -165,6 +167,7 @@ export default function ReportMarketButton({ marketAddress, variant = "icon", cl
                   </h3>
                   <button
                     onClick={closeModal}
+                    aria-label="Close report"
                     className="p-2 -mr-2 text-gray-400 hover:text-white transition"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -174,7 +177,7 @@ export default function ReportMarketButton({ marketAddress, variant = "icon", cl
                 </div>
 
                 {/* Scrollable content */}
-                <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 space-y-4">
                   <p className="text-sm text-gray-400">
                     Help us maintain a safe platform by reporting markets that violate our guidelines.
                   </p>
@@ -271,7 +274,8 @@ export default function ReportMarketButton({ marketAddress, variant = "icon", cl
               </>
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </>
   );

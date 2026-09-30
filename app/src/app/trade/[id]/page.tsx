@@ -4450,6 +4450,20 @@ const ended = endedByTime;
           (market as any)?.total_volume ??
           0
         );
+  // Reuse the page clock and canonical end fields; no separate polling timer.
+  const mobileEndMs = Number.isFinite(resolvedSportEndMs)
+    ? resolvedSportEndMs
+    : hasValidEnd ? market.resolutionTime * 1000 : NaN;
+  const mobileEndLabel = (() => {
+    if (!Number.isFinite(mobileEndMs)) return null;
+    if (isResolvedOnChain || endedByTime || nowMs >= mobileEndMs) return "Ended";
+    const minutes = Math.ceil((mobileEndMs - nowMs) / 60_000);
+    const days = Math.floor(minutes / 1440);
+    const hours = Math.floor((minutes % 1440) / 60);
+    if (days > 0) return `Ends in ${days}d ${hours}h`;
+    if (hours > 0) return `Ends in ${hours}h ${minutes % 60}m`;
+    return `Ends in ${minutes}m`;
+  })();
   const fullDescription = market?.description || "";
   const truncatedDescription = fullDescription.slice(0, 300);
   const shouldTruncate = fullDescription.length > 300;
@@ -4642,6 +4656,10 @@ const ended = endedByTime;
 
           </div>
           {activeLiveSession && <Link href={`/live/${activeLiveSession.id}`} className="inline-block py-2 text-xs text-pump-green">Watch live ↗</Link>}
+          <div className="mt-2 flex items-center justify-between gap-2 whitespace-nowrap text-[13px] font-medium leading-[15px] text-gray-400" data-mobile-market-metadata>
+            <span>Vol <strong className="font-bold">{isPlayTrading ? playVolumeLabel : `${formatVol(effectiveVol)} SOL`}</strong></span>
+            {mobileEndLabel && <span>{mobileEndLabel.startsWith("Ends in ") ? <>Ends in <strong className="font-bold">{mobileEndLabel.slice(8)}</strong></> : mobileEndLabel}</span>}
+          </div>
           <div className="my-2 flex min-h-[180px] flex-1 flex-col justify-center">
             <MobileProbabilityChart key={`${market.publicKey}:${isPlayTrading}`} names={names} current={mobileValues} colors={mobileColors} points={mobilePoints} />
           </div>
@@ -4650,8 +4668,7 @@ const ended = endedByTime;
               names={names} indices={mobileIndices} values={mobileValues} colors={mobileColors} drawIndex={footballIndices?.[1]}
               closed={marketClosed || missingOutcomes} winningIndex={isResolvedOnChain ? market.winningOutcome : null} onChoose={openMobileTrade} />
           </div>
-          <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-gray-500">
-            <span>Vol {isPlayTrading ? playVolumeLabel : `${formatVol(effectiveVol)} SOL`}</span>
+          <div className="flex items-center justify-between gap-2 text-[10px] text-gray-500">
             {market.feedVideoUrl && <button className="py-2" onClick={() => setFeedVideoModalOpen(true)}>Watch video ↗</button>}
             {sportEventForUi && isSportLikeMarket && isSoccerLike && (market.sportMeta as any)?.provider_event_id && <button className="py-2" onClick={() => setSoccerDrawerOpen(true)}>Match details ↗</button>}
             {market.marketMode === "sport" && ["basketball", "nba", "ncaamb", "ncaawb", "wnba"].includes(sportKey) && (market.sportMeta as any)?.provider_event_id && <button className="py-2" onClick={() => setNbaDrawerOpen(true)}>Match stats ↗</button>}
@@ -5435,19 +5452,19 @@ const ended = endedByTime;
 
       )}
 
-      {/* Mobile drawer - FULLSCREEN from top to bottom nav (h-14 = 56px) */}
+      {/* Mobile drawer — full dynamic viewport, above the market toolbar */}
       {/* ✅ Don't open if blocked (marketClosed includes isBlocked) */}
-      {isMobile && mobileTradeOpen && !marketClosed && (
-        <div className="fixed inset-0 z-[200] pointer-events-none">
-          {/* Backdrop: couvre tout l'écran sauf la bottom nav */}
+      {isMobile && mobileTradeOpen && !marketClosed && createPortal(
+        <div className="fixed inset-x-0 top-0 h-[100dvh] z-[200] pointer-events-none" data-mobile-trading-panel>
+          {/* Full viewport backdrop */}
           <button
-            className={`absolute inset-x-0 top-0 ${isMobile ? "bottom-14" : "bottom-0"} bg-black/60 pointer-events-auto`}
+            className="absolute inset-0 bg-black/60 pointer-events-auto"
             onClick={() => setMobileTradeOpen(false)}
             aria-label="Close overlay"
           />
 
-          {/* Drawer: du haut de l'écran jusqu'à la bottom nav, sans coins arrondis */}
-          <div className={`absolute inset-x-0 top-0 ${isMobile ? "bottom-14" : "bottom-0"} pointer-events-auto`}>
+          {/* Keep controls inside the iPhone safe areas. */}
+          <div className="absolute inset-0 bg-pump-dark pointer-events-auto" style={{ paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)" }}>
             <div className="h-full border-b border-gray-800 bg-pump-dark shadow-2xl overflow-hidden">
               {isPlayTrading ? (
                 <PlayTradingPanel
@@ -5490,7 +5507,8 @@ const ended = endedByTime;
               )}
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       <TradeBuyPopOverlay
