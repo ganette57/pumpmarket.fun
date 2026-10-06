@@ -4,6 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import { lamportsToSol } from "@/utils/solana";
 import { usePrivyIdentity } from "@/components/privy/PrivyIdentityProvider";
 
+import { feeBreakdownLamports, DEFAULT_BASE_PRICE_LAMPORTS,
+  DEFAULT_SLOPE_LAMPORTS_PER_SUPPLY, realBuyCost, realPayoutLamports } from "@/lib/realTradeQuote";
+
 type MarketForTrade = {
   resolved: boolean;
   bLamports?: number; // ✅ base price in lamports (you reused bLamports for UI base)
@@ -40,21 +43,6 @@ interface TradingPanelProps {
   onClose?: () => void;
   title?: string;
 }
-
-// Fees (match on-chain): 1% platform + 2% creator = 3%
-const PLATFORM_FEE_BPS = 100; // 1%
-const CREATOR_FEE_BPS = 200; // 2%
-
-function feeBreakdownLamports(amountLamports: number) {
-  const platform = Math.floor((amountLamports * PLATFORM_FEE_BPS) / 10_000);
-  const creator = Math.floor((amountLamports * CREATOR_FEE_BPS) / 10_000);
-  return { platform, creator, total: platform + creator };
-}
-
-// UI pricing model (matches on-chain behavior you’re seeing):
-// pricePerShare = base + supply * slope
-const DEFAULT_BASE_PRICE_LAMPORTS = 10_000_000; // 0.01 SOL
-const DEFAULT_SLOPE_LAMPORTS_PER_SUPPLY = 1_000; // +0.000001 SOL per existing supply
 
 function clampInt(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, Math.floor(n)));
@@ -209,13 +197,8 @@ export default function TradingPanel({
   const mainAccentAmountClass = isRedBuy ? "text-[#ff5c73]" : "text-pump-green";
 
   const buyCostLamports = useMemo(() => {
-    const pricePerUnit = basePriceLamports + currentSupply * slopeLamportsPerSupply;
-    const cost = safeShares * pricePerUnit;
-    const fees = feeBreakdownLamports(cost);
-    const totalPay = cost + fees.total;
-    const avgInclFees = totalPay / safeShares;
-    return { pricePerUnit, cost, fees, totalPay, avgInclFees };
-  }, [basePriceLamports, currentSupply, slopeLamportsPerSupply, safeShares]);
+    return realBuyCost(basePriceLamports, currentSupply, safeShares);
+  }, [basePriceLamports, currentSupply, safeShares]);
 
   const sellRefundLamports = useMemo(() => {
     // sell moves supply backward
@@ -243,24 +226,9 @@ export default function TradingPanel({
   const payoutIfWinSol = useMemo(() => {
     if (side !== "buy") return null;
   
-    const poolNow = Number(marketBalanceLamports ?? 0);
-    if (!Number.isFinite(poolNow) || poolNow <= 0) return null;
-  
-    const outcomeSupplyAfter = currentSupply + safeShares;
-    if (outcomeSupplyAfter <= 0) return null;
-  
-    const userSharesAfter = userCurrent + safeShares;
-  
-    // ✅ On-chain: pool increases by (cost + creator_fee). Platform fee leaves immediately.
-    const poolAfter =
-      poolNow +
-      buyCostLamports.cost +
-      buyCostLamports.fees.creator;
-  
-    const payoutLamports = (userSharesAfter / outcomeSupplyAfter) * poolAfter;
-    if (!Number.isFinite(payoutLamports) || payoutLamports <= 0) return null;
-  
-    return lamportsToSol(payoutLamports);
+    const payout = realPayoutLamports(Number(marketBalanceLamports ?? 0),
+      currentSupply, safeShares, userCurrent, buyCostLamports.cost, buyCostLamports.fees.creator);
+    return payout === null ? null : lamportsToSol(payout);
   }, [
     side,
     marketBalanceLamports,

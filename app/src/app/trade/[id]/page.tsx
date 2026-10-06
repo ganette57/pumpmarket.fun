@@ -1,5 +1,7 @@
 "use client";
 
+import { parseBLamports } from "@/lib/realTradeQuote";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { createPortal } from "react-dom";
@@ -418,26 +420,6 @@ function parseEndDateMs(raw: any): number {
   return sec > 0 ? sec * 1000 : NaN;
 }
 
-function parseBLamports(m: any): number | null {
-  const direct =
-    m?.b_lamports ??
-    m?.bLamports ??
-    m?.liquidity_lamports ??
-    m?.liquidity_param_lamports;
-
-  if (direct != null && Number(direct) > 0) return Math.floor(Number(direct));
-
-  const sol =
-    m?.b_sol ??
-    m?.bSol ??
-    m?.liquidity_sol ??
-    m?.liquidity_param_sol;
-
-  if (sol != null && Number(sol) > 0) return solToLamports(Number(sol));
-
-  // fallback: ton default 0.01 SOL
-  return solToLamports(0.01);
-}
 
 function shortTxSig(sig: string | null): string {
   if (!sig) return "";

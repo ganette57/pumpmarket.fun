@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { Activity as ActivityIcon, BarChart3, Clock, TrendingUp } from "lucide-react";
@@ -15,6 +15,29 @@ import {
   LiveActivityDrawer,
   LiveChartDrawer,
 } from "@/components/LiveMobileContent";
+
+import { useFeedMultipliers, formatFeedMultiplier } from "@/hooks/useFeedMultipliers";
+
+function FeedMultiplier({ value, mode }: { value: unknown; mode: "play" | "real" }) {
+  const text = formatFeedMultiplier(value);
+  const ref = useRef<HTMLSpanElement>(null);
+  const [fits, setFits] = useState(false);
+  useLayoutEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    const measure = () => setFits(node.scrollWidth <= node.clientWidth);
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    measure();
+    return () => observer.disconnect();
+  }, [text]);
+  if (!text) return null;
+  return <span ref={ref}
+    title={`Estimated total return for a new ${mode === "play" ? "$100" : "1 SOL budget"} position`}
+    className={`block h-3 overflow-hidden whitespace-nowrap text-[10px] leading-3 font-medium tabular-nums opacity-70 md:hidden ${fits ? "" : "invisible"}`}>
+    {text}
+  </span>;
+}
 
 interface HomeFeedItemProps {
   market: {
@@ -145,6 +168,9 @@ export default function HomeFeedItem({
   const { snapshot, mode } = useMarketSnapshot(market.publicKey, realFallback);
 
   const isPlayMode = mode === "play";
+  const multipliers = useFeedMultipliers(market.publicKey, mode,
+    `${snapshot?.volume}:${snapshot?.supplies.join(",")}:${snapshot?.updatedAt ?? ""}`,
+    isEnded || finishedMatch || !snapshot || snapshot.status !== "open");
 
   const percents = snapshot
     ? snapshot.probabilities.map((p) => (p * 100).toFixed(0))
@@ -354,6 +380,7 @@ export default function HomeFeedItem({
               <span className="block text-[20px] leading-6 font-bold tabular-nums">
                 {percents[index] ?? "—"}%
               </span>
+              <FeedMultiplier value={multipliers[index]} mode={mode} />
             </button>
           ))}
         </div>
