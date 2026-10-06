@@ -33,7 +33,7 @@ function FeedMultiplier({ value, mode }: { value: unknown; mode: "play" | "real"
   }, [text]);
   if (!text) return null;
   return <span ref={ref}
-    title={`Estimated total return for a new ${mode === "play" ? "$100" : "1 SOL budget"} position`}
+    title={`Estimated total return including your existing holdings, with a ${mode === "play" ? "$100 stake" : "1 SOL budget"}`}
     className={`block h-3 overflow-hidden whitespace-nowrap text-[10px] leading-3 font-medium tabular-nums opacity-70 md:hidden ${fits ? "" : "invisible"}`}>
     {text}
   </span>;

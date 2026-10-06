@@ -31,8 +31,8 @@ export function realPayoutLamports(pool: number, supply: number, shares: number,
 }
 
 /** Whole-share purchase within a 1 SOL budget, using the panel's exact fees. */
-export function realFeedMultiple(base: number, supply: number, pool: number): number | null {
-  if (![base, supply, pool].every(Number.isSafeInteger) || base <= 0 || supply < 0 || pool <= 0) return null;
+export function realFeedMultiple(base: number, supply: number, pool: number, held: number): number | null {
+  if (![base, supply, pool, held].every(Number.isSafeInteger) || base <= 0 || supply < 0 || pool <= 0 || held < 0) return null;
   let low = 0;
   let high = 100000; // TradingPanel buy limit
   while (low < high) {
@@ -42,7 +42,7 @@ export function realFeedMultiple(base: number, supply: number, pool: number): nu
   }
   if (!low) return null;
   const buy = realBuyCost(base, supply, low);
-  const payout = realPayoutLamports(pool, supply, low, 0, buy.cost, buy.fees.creator);
+  const payout = realPayoutLamports(pool, supply, low, held, buy.cost, buy.fees.creator);
   return payout === null ? null : payout / buy.totalPay;
 }
 

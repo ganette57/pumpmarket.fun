@@ -49,6 +49,8 @@ import { usePrivyIdentity } from "@/components/privy/PrivyIdentityProvider";
 type PlaySessionContextValue = {
   /** A live Play session exists for the CURRENT identity. */
   authenticated: boolean;
+  /** Identity bound to the active session; null during a switch. */
+  quoteIdentity: string | null;
   /** The sign-in handshake is in flight. */
   authenticating: boolean;
   /** Decimal string, never a float. Null until known. */
@@ -404,6 +406,7 @@ export function PlaySessionProvider({ children }: { children: ReactNode }) {
   const value = useMemo<PlaySessionContextValue>(
     () => ({
       authenticated,
+      quoteIdentity: authenticated && sessionIdentityRef.current === identityKey ? identityKey : null,
       authenticating,
       balanceUsd,
       loading,
@@ -416,6 +419,7 @@ export function PlaySessionProvider({ children }: { children: ReactNode }) {
       signInLabel,
     }),
     [
+      identityKey,
       authenticated,
       authenticating,
       balanceUsd,

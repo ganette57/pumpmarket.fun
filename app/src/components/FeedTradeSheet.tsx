@@ -79,7 +79,8 @@ export default function FeedTradeSheet({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
-  const [playQuote, setPlayQuote] = useState<{
+  const [playQuoteResult, setPlayQuote] = useState<{
+    key: string;
     payout: string;
     multiple: string | null;
   } | null>(null);
@@ -108,6 +109,9 @@ export default function FeedTradeSheet({
     return /^\d{1,12}(\.\d{1,2})?$/.test(s) ? s : null;
   }, [isPlay, effectiveAmount]);
 
+  const playQuoteKey = JSON.stringify([open, isPlay, market?.publicKey, selectedOutcome, playStakeString, play.authenticated, play.quoteIdentity, play.balanceUsd]);
+  const playQuote = playQuoteResult?.key === playQuoteKey ? playQuoteResult : null;
+
   const insufficientPlayBalance = useMemo(() => {
     if (!isPlay || !playStakeString || play.balanceUsd === null) return false;
     const need = toCents(playStakeString);
@@ -132,7 +136,7 @@ export default function FeedTradeSheet({
     setError(null);
     setSuccess(false);
     setPlayQuote(null);
-  }, [open, defaultOutcomeIndex, outcomeNames.length]);
+  }, [open, market?.publicKey, defaultOutcomeIndex, outcomeNames.length]);
 
   // Switching mode while the sheet is open invalidates the amount (units differ).
   useEffect(() => {
@@ -158,8 +162,8 @@ export default function FeedTradeSheet({
   /*  PLAY: live quote (informational — the server re-prices on execute)     */
   /* ---------------------------------------------------------------------- */
   useEffect(() => {
-    if (!open || !isPlay || !market || !play.authenticated || !playStakeString) {
-      setPlayQuote(null);
+    setPlayQuote(null);
+    if (!open || !isPlay || !market || !play.authenticated || !play.quoteIdentity || !playStakeString) {
       return;
     }
     let cancelled = false;
@@ -173,6 +177,7 @@ export default function FeedTradeSheet({
         .then((q) => {
           if (!cancelled) {
             setPlayQuote({
+              key: playQuoteKey,
               payout: q.estimated_payout_usd,
               multiple: q.estimated_multiple,
             });
@@ -187,10 +192,12 @@ export default function FeedTradeSheet({
       clearTimeout(t);
     };
   }, [
+    playQuoteKey,
     open,
     isPlay,
     market,
     play.authenticated,
+    play.quoteIdentity,
     playStakeString,
     selectedOutcome,
   ]);

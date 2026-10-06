@@ -2,46 +2,62 @@ import { NextResponse } from "next/server";
 import { BorshAccountsCoder, type Idl } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import idl from "@/idl/funmarket_pump.json";
-import { getConnection, PROGRAM_ID } from "@/utils/solana";
+import { getConnection, getUserPositionPDA, PROGRAM_ID } from "@/utils/solana";
 import { supabaseServer } from "@/lib/supabaseServer";
-import { playProRataPayoutUsd, type PlayProRataInput } from "@/lib/playPayoutMath";
+import { readPlaySession } from "@/lib/playAuth";
 import { realFeedMultiple, parseBLamports, DEFAULT_BASE_PRICE_LAMPORTS } from "@/lib/realTradeQuote";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// One public batch for all mounted mobile cards, never one quote per outcome.
+// One personalized batch for all mounted mobile cards, never one quote per outcome.
 export async function POST(req: Request) {
+  const respond = (multiples: Record<string, (number | null)[]>) =>
+    NextResponse.json({ multiples }, { headers: { "Cache-Control": "private, no-store" } });
   const multiples: Record<string, (number | null)[]> = {};
   try {
     const body = await req.json();
-    if (body.mode !== "play" && body.mode !== "real") return NextResponse.json({ multiples });
+    if (body.mode !== "play" && body.mode !== "real") return respond(multiples);
     const addresses = Array.from(new Set<string>(
       (Array.isArray(body.addresses) ? body.addresses : [])
         .filter((a: unknown) => typeof a === "string" && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a))
     )).slice(0, 100);
-    if (!addresses.length) return NextResponse.json({ multiples });
+    if (!addresses.length) return respond(multiples);
     if (body.mode === "play") {
-      const { data, error } = await supabaseServer().rpc("play_feed_quote_inputs", { addresses });
-      if (error) return NextResponse.json({ multiples }); // migration unavailable: omit
+      const session = readPlaySession(req);
+      if (!session) return respond(multiples);
+      const { data, error } = await supabaseServer().rpc("play_feed_quotes", {
+        wallet_in: session.wallet, addresses,
+      });
+      if (error) return respond(multiples); // migration unavailable: omit
       for (const addr of addresses) {
         if (!Array.isArray(data?.[addr])) continue;
-        multiples[addr] = data[addr].map((input: PlayProRataInput) => {
-          const payout = playProRataPayoutUsd(input);
-          // play_quote rounds payout/stake to four decimals before the UI.
-          return payout === null ? null : Number((Number(payout) / 100).toFixed(4));
+        multiples[addr] = data[addr].map((quote: { estimated_multiple?: unknown } | null) => {
+          const value = Number(quote?.estimated_multiple);
+          return Number.isFinite(value) && value > 0 ? value : null;
         });
       }
     } else {
-      const [infos, rows] = await Promise.all([
-        getConnection().getMultipleAccountsInfo(addresses.map(a => new PublicKey(a)), "confirmed"),
+      // REAL positions are public on-chain data. Use the same connected wallet
+      // as TradingPanel; this address grants no authority to execute anything.
+      if (typeof body.wallet !== "string") return respond(multiples);
+      const wallet = new PublicKey(body.wallet);
+      const marketKeys = addresses.map(a => new PublicKey(a));
+      // Keep each market and its position in the same RPC snapshot (limit 100).
+      const accountKeys = marketKeys.flatMap(key => [key, getUserPositionPDA(key, wallet)[0]]);
+      const [infoBatches, rows] = await Promise.all([
+        Promise.all(Array.from({ length: Math.ceil(accountKeys.length / 100) }, (_, i) =>
+          getConnection().getMultipleAccountsInfo(accountKeys.slice(i * 100, (i + 1) * 100), "confirmed"))),
         // Trade page reads the configured base from this same market row.
         supabaseServer().from("markets").select("*").in("market_address", addresses),
       ]);
-      if (rows.error) return NextResponse.json({ multiples });
+      if (rows.error) return respond(multiples);
       const byAddress = new Map((rows.data ?? []).map(row => [row.market_address, row]));
       const coder = new BorshAccountsCoder(idl as Idl);
-      infos.forEach((info, index) => {
+      const infos = infoBatches.flat();
+      marketKeys.forEach((marketKey, index) => {
+        const info = infos[index * 2];
+        const positionInfo = infos[index * 2 + 1];
         if (!info || !info.owner.equals(PROGRAM_ID)) return;
         try {
           const market = coder.decode("Market", info.data);
@@ -51,12 +67,20 @@ export async function POST(req: Request) {
           const row = byAddress.get(addresses[index]);
           if (!row || row.is_blocked || row.resolved || row.cancelled ||
             (row.resolution_status && row.resolution_status !== "open")) return;
+          let holdings = Array<number>(count).fill(0);
+          if (positionInfo) {
+            if (!positionInfo.owner.equals(PROGRAM_ID)) return;
+            const position = coder.decode("UserPosition", positionInfo.data);
+            if (!position.market.equals(marketKey) || !position.user.equals(wallet)) return;
+            holdings = position.shares.slice(0, count).map(Number);
+            if (holdings.length !== count) return;
+          }
           const base = parseBLamports(row) || DEFAULT_BASE_PRICE_LAMPORTS;
-          multiples[addresses[index]] = market.q.slice(0, count).map((s: unknown) =>
-            realFeedMultiple(base, Number(s), info.lamports));
+          multiples[addresses[index]] = market.q.slice(0, count).map((s: unknown, outcome: number) =>
+            realFeedMultiple(base, Number(s), info.lamports, holdings[outcome]));
         } catch { /* invalid account: omit */ }
       });
     }
   } catch { /* unavailable snapshot: preserve percentage-only cards */ }
-  return NextResponse.json({ multiples }, { headers: { "Cache-Control": "no-store" } });
+  return respond(multiples);
 }

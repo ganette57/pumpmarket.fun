@@ -196,6 +196,9 @@ export function MarketSnapshotProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const invalidate = useCallback((m: TradingMode, addr: string) => {
+    window.dispatchEvent(new CustomEvent("market-position-invalidated", {
+      detail: { mode: m, marketAddress: addr },
+    }));
     setEntries((prev) => {
       if (!prev[key(m, addr)]) return prev;
       const next = { ...prev };

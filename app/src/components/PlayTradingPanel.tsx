@@ -86,7 +86,8 @@ export default function PlayTradingPanel({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
-  const [quote, setQuote] = useState<{
+  const [quoteResult, setQuote] = useState<{
+    key: string;
     shares: string;
     payout: string;
     multiple: string | null;
@@ -129,6 +130,9 @@ export default function PlayTradingPanel({
 
   const closed = !!marketClosed || (playStatus != null && playStatus !== "open");
 
+  const quoteKey = JSON.stringify([marketAddress, selectedIndex, stakeString, closed, play.authenticated, play.quoteIdentity, play.balanceUsd]);
+  const quote = quoteResult?.key === quoteKey ? quoteResult : null;
+
   /** Load balance + this market's open Play position. */
   const refreshState = useCallback(async () => {
     if (!play.authenticated) return;
@@ -152,9 +156,9 @@ export default function PlayTradingPanel({
   useEffect(() => {
     quoteEpochRef.current += 1;
     const epoch = quoteEpochRef.current;
+    setQuote(null);
 
-    if (closed || !play.authenticated || !stakeString) {
-      setQuote(null);
+    if (closed || !play.authenticated || !play.quoteIdentity || !stakeString) {
       return;
     }
     const t = setTimeout(() => {
@@ -163,6 +167,7 @@ export default function PlayTradingPanel({
         .then((q) => {
           if (epoch !== quoteEpochRef.current) return; // stale — drop
           setQuote({
+            key: quoteKey,
             shares: q.shares,
             payout: q.estimated_payout_usd,
             multiple: q.estimated_multiple,
@@ -173,8 +178,8 @@ export default function PlayTradingPanel({
           if (epoch === quoteEpochRef.current) setQuote(null);
         });
     }, 250);
-    return () => clearTimeout(t);
-  }, [play.authenticated, stakeString, selectedIndex, marketAddress, closed]);
+    return () => { quoteEpochRef.current += 1; clearTimeout(t); };
+  }, [quoteKey, play.authenticated, play.quoteIdentity, stakeString, selectedIndex, marketAddress, closed]);
 
   const position = useMemo(() => {
     // Aggregate the user's open Play trades on the selected outcome.
