@@ -18,6 +18,8 @@ import { usePlaySession } from "@/components/play/PlaySessionProvider";
 import { PlayApiError, formatUsd, playClient, toCents } from "@/lib/playClient";
 import { useMarketSnapshotActions } from "@/components/mode/MarketSnapshotProvider";
 
+import { useRealQuotes } from "@/hooks/useRealQuotes";
+
 interface FeedTradeSheetProps {
   open: boolean;
   onClose: () => void;
@@ -101,6 +103,11 @@ export default function FeedTradeSheet({
     }
     return amount;
   }, [customAmount, amount]);
+
+  // Match the unchanged execution share count, rather than treating its amount as a budget.
+  const realQuotes = useRealQuotes(market?.publicKey ?? "", open && !isPlay,
+    JSON.stringify(market?.outcomeSupplies), { shares: effectiveAmount > 0 ? Math.max(1, Math.floor(effectiveAmount / 0.01)) : 0 });
+  const realQuote = realQuotes[selectedOutcome];
 
   /** Play stakes are USD with at most 2 decimals — matches the server rule. */
   const playStakeString = useMemo(() => {
@@ -566,6 +573,13 @@ export default function FeedTradeSheet({
               {isPlay ? "USD" : "SOL"}
             </span>
           </div>
+
+          {!isPlay && realQuote?.multiplier != null && realQuote.payout != null && (
+            <p className="text-xs text-gray-400">
+              Estimated total if win <span className="font-semibold text-white">{(realQuote.payout / 1e9).toFixed(2)} SOL · {realQuote.multiplier.toFixed(2)}x</span>
+              <span className="block">{realQuote.shares} shares · estimated spend {(realQuote.totalPay / 1e9).toFixed(4)} SOL</span>
+            </p>
+          )}
 
           {/* Play: estimated payout at the current book */}
           {isPlay && playQuote && !insufficientPlayBalance && (

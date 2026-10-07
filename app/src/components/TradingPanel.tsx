@@ -5,7 +5,7 @@ import { lamportsToSol } from "@/utils/solana";
 import { usePrivyIdentity } from "@/components/privy/PrivyIdentityProvider";
 
 import { feeBreakdownLamports, DEFAULT_BASE_PRICE_LAMPORTS,
-  DEFAULT_SLOPE_LAMPORTS_PER_SUPPLY, realBuyCost, realPayoutLamports } from "@/lib/realTradeQuote";
+  DEFAULT_SLOPE_LAMPORTS_PER_SUPPLY, realBuyCost, realQuote } from "@/lib/realTradeQuote";
 
 type MarketForTrade = {
   resolved: boolean;
@@ -196,9 +196,10 @@ export default function TradingPanel({
 
   const mainAccentAmountClass = isRedBuy ? "text-[#ff5c73]" : "text-pump-green";
 
-  const buyCostLamports = useMemo(() => {
-    return realBuyCost(basePriceLamports, currentSupply, safeShares);
-  }, [basePriceLamports, currentSupply, safeShares]);
+  const buyQuote = useMemo(() => realQuote(basePriceLamports, currentSupply,
+    Number(marketBalanceLamports ?? 0), userCurrent, { shares: safeShares }),
+    [basePriceLamports, currentSupply, marketBalanceLamports, userCurrent, safeShares]);
+  const buyCostLamports = buyQuote ?? realBuyCost(basePriceLamports, currentSupply, safeShares);
 
   const sellRefundLamports = useMemo(() => {
     // sell moves supply backward
@@ -220,38 +221,9 @@ export default function TradingPanel({
     return lamportsToSol(avgLamports);
   }, [side, buyCostLamports.avgInclFees, sellRefundLamports.avgInclFees]);
 
-  // ✅ Correct “To win” estimate for your on-chain model:
-  // fees are paid out immediately, so pool increases ONLY by the buy cost (excluding fees),
-  // and winnings are pro-rata of the pool vs winning outcome supply.
-  const payoutIfWinSol = useMemo(() => {
-    if (side !== "buy") return null;
-  
-    const payout = realPayoutLamports(Number(marketBalanceLamports ?? 0),
-      currentSupply, safeShares, userCurrent, buyCostLamports.cost, buyCostLamports.fees.creator);
-    return payout === null ? null : lamportsToSol(payout);
-  }, [
-    side,
-    marketBalanceLamports,
-    currentSupply,
-    safeShares,
-    userCurrent,
-    buyCostLamports.cost,
-    buyCostLamports.fees.creator,
-  ]);
-
-  // Real “x” multiple based on (estimated payout) / (actual pay incl fees)
-  const payoutMultipleX = useMemo(() => {
-    if (side !== "buy") return null;
-    if (payoutIfWinSol == null) return null;
-
-    const paySol = lamportsToSol(buyCostLamports.totalPay); // what user actually pays (incl fees)
-    if (!Number.isFinite(paySol) || paySol <= 0) return null;
-
-    const x = payoutIfWinSol / paySol;
-    if (!Number.isFinite(x) || x <= 0) return null;
-
-    return x;
-  }, [side, payoutIfWinSol, buyCostLamports.totalPay]);
+  const payoutIfWinSol = side === "buy" && buyQuote?.payout != null
+    ? lamportsToSol(buyQuote.payout) : null;
+  const payoutMultipleX = side === "buy" ? buyQuote?.multiplier ?? null : null;
 
   const handleAmountChange: React.ChangeEventHandler<HTMLInputElement> = (e) => {
     const raw = e.target.value.replace(/[^\d]/g, "");

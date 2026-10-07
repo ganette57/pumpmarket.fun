@@ -30,20 +30,43 @@ export function realPayoutLamports(pool: number, supply: number, shares: number,
   return Number.isFinite(payout) && payout > 0 ? payout : null;
 }
 
-/** Whole-share purchase within a 1 SOL budget, using the panel's exact fees. */
-export function realFeedMultiple(base: number, supply: number, pool: number, held: number): number | null {
-  if (![base, supply, pool, held].every(Number.isSafeInteger) || base <= 0 || supply < 0 || pool <= 0 || held < 0) return null;
-  let low = 0;
-  let high = 100000; // TradingPanel buy limit
-  while (low < high) {
-    const mid = Math.ceil((low + high) / 2);
-    if (realBuyCost(base, supply, mid).totalPay <= 1_000_000_000) low = mid;
-    else high = mid - 1;
+export type RealQuote = ReturnType<typeof realBuyCost> & {
+  shares: number;
+  resultingUserShares: number;
+  payout: number | null;
+  multiplier: number | null;
+};
+
+/** Authoritative TradingPanel buy quote. All amounts are lamports. */
+export function realQuote(base: number, supply: number, pool: number, held: number,
+  input: { shares: number } | { budget: number }): RealQuote | null {
+  if (![base, supply, pool, held].every(Number.isSafeInteger) || base <= 0 || supply < 0 || pool < 0 || held < 0) return null;
+  let shares: number;
+  if ("shares" in input) {
+    if (!Number.isFinite(input.shares) || input.shares <= 0) return null;
+    shares = Math.max(1, Math.floor(input.shares));
+  } else {
+    if (!Number.isSafeInteger(input.budget) || input.budget <= 0) return null;
+    let low = 0, high = 100000;
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      if (realBuyCost(base, supply, mid).totalPay <= input.budget) low = mid;
+      else high = mid - 1;
+    }
+    shares = low;
   }
-  if (!low) return null;
-  const buy = realBuyCost(base, supply, low);
-  const payout = realPayoutLamports(pool, supply, low, held, buy.cost, buy.fees.creator);
-  return payout === null ? null : payout / buy.totalPay;
+  if (!shares) return null;
+  const buy = realBuyCost(base, supply, shares);
+  if (!Number.isSafeInteger(buy.totalPay) || buy.totalPay <= 0) return null;
+  const payout = realPayoutLamports(pool, supply, shares, held, buy.cost, buy.fees.creator);
+  // Preserve TradingPanel's SOL conversion order exactly.
+  const multiple = payout === null ? null : (payout / 1e9) / (buy.totalPay / 1e9);
+  return { ...buy, shares, resultingUserShares: held + shares, payout,
+    multiplier: multiple !== null && Number.isFinite(multiple) && multiple > 0 ? multiple : null };
+}
+
+export function realFeedMultiple(base: number, supply: number, pool: number, held: number): number | null {
+  return realQuote(base, supply, pool, held, { budget: 1_000_000_000 })?.multiplier ?? null;
 }
 
 export function parseBLamports(m: any): number | null {

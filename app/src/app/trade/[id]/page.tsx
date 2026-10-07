@@ -4638,9 +4638,10 @@ const ended = endedByTime;
 
           </div>
           {activeLiveSession && <Link href={`/live/${activeLiveSession.id}`} className="inline-block py-2 text-xs text-pump-green">Watch live ↗</Link>}
-          <div className="mt-2 flex items-center justify-between gap-2 whitespace-nowrap text-[13px] font-medium leading-[15px] text-gray-400" data-mobile-market-metadata>
-            <span>Vol <strong className="font-bold">{isPlayTrading ? playVolumeLabel : `${formatVol(effectiveVol)} SOL`}</strong></span>
-            {mobileEndLabel && <span>{mobileEndLabel.startsWith("Ends in ") ? <>Ends in <strong className="font-bold">{mobileEndLabel.slice(8)}</strong></> : mobileEndLabel}</span>}
+          <div className="mt-2 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 whitespace-nowrap text-[13px] font-medium leading-[15px] text-gray-400" data-mobile-market-metadata>
+            <span className="min-w-0 truncate">Vol <strong className="font-bold">{isPlayTrading ? playVolumeLabel : `${formatVol(effectiveVol)} SOL`}</strong></span>
+            {sportEventForUi && isSportLikeMarket && isSoccerLike && (market.sportMeta as any)?.provider_event_id && <button className="col-start-2" onClick={() => setSoccerDrawerOpen(true)}>Match details ↗</button>}
+            {mobileEndLabel && <span className="col-start-3 min-w-0 truncate text-right">{mobileEndLabel.startsWith("Ends in ") ? <>Ends in <strong className="font-bold">{mobileEndLabel.slice(8)}</strong></> : mobileEndLabel}</span>}
           </div>
           <div className="my-2 flex min-h-[180px] flex-1 flex-col justify-center">
             <MobileProbabilityChart key={`${market.publicKey}:${isPlayTrading}`} names={names} current={mobileValues} colors={mobileColors} points={mobilePoints} />
@@ -4652,7 +4653,6 @@ const ended = endedByTime;
           </div>
           <div className="flex items-center justify-between gap-2 text-[10px] text-gray-500">
             {market.feedVideoUrl && <button className="py-2" onClick={() => setFeedVideoModalOpen(true)}>Watch video ↗</button>}
-            {sportEventForUi && isSportLikeMarket && isSoccerLike && (market.sportMeta as any)?.provider_event_id && <button className="py-2" onClick={() => setSoccerDrawerOpen(true)}>Match details ↗</button>}
             {market.marketMode === "sport" && ["basketball", "nba", "ncaamb", "ncaawb", "wnba"].includes(sportKey) && (market.sportMeta as any)?.provider_event_id && <button className="py-2" onClick={() => setNbaDrawerOpen(true)}>Match stats ↗</button>}
           </div>
           {!isPlayTrading && userSharesForUi.some(qty => qty > 0) && <div className="mt-4 text-xs text-gray-400">

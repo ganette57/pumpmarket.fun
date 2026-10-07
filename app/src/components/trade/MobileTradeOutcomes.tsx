@@ -4,6 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { usePlaySession } from "@/components/play/PlaySessionProvider";
 import { playClient, formatUsd } from "@/lib/playClient";
 
+import { useRealQuotes } from "@/hooks/useRealQuotes";
+import { formatFeedMultiplier } from "@/hooks/useFeedMultipliers";
+
 type Props = {
   marketAddress: string;
   isPlay: boolean;
@@ -19,6 +22,7 @@ type Props = {
 };
 
 export default function MobileTradeOutcomes({ marketAddress, isPlay, version, names, indices, values, colors, drawIndex, closed, winningIndex, onChoose }: Props) {
+  const realQuotes = useRealQuotes(marketAddress, !isPlay && !closed, version ?? "");
   const session = usePlaySession();
   const [quotes, setQuotes] = useState<{ key: string; payouts: (string | null)[] } | null>(null);
   const lastRequest = useRef(0);
@@ -56,7 +60,7 @@ export default function MobileTradeOutcomes({ marketAddress, isPlay, version, na
           {closed ? winningIndex === index ? "Winner" : "Trading closed" : payout != null ? <>
             <span className="block whitespace-nowrap font-semibold">$100 → {formatUsd(payout)}</span>
             <span className="block text-[9px]">Est. total if win</span>
-          </> : isPlay ? session.authenticated ? "Est. return —" : "Return after sign-in" : "Return in trade"}
+          </> : isPlay ? session.authenticated ? "Est. return —" : "Return after sign-in" : realQuotes[index]?.multiplier != null ? `${formatFeedMultiplier(realQuotes[index]?.multiplier)} return` : "Return in trade"}
         </span>
       </button>;
     })}

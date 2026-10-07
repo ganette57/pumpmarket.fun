@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import { usePlaySession } from "@/components/play/PlaySessionProvider";
 import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 
+import { useRealQuotes } from "@/hooks/useRealQuotes";
+
 type Mode = "play" | "real";
 type Delivery = (values: (number | null)[]) => void;
 const pending = new Map<string, { mode: Mode; wallet: string | null; queue: Map<string, Delivery[]> }>();
@@ -37,6 +39,7 @@ function enqueue(mode: Mode, identity: string, wallet: string | null, address: s
 }
 
 export function useFeedMultipliers(address: string, mode: Mode, revision: string, closed: boolean) {
+  const realQuotes = useRealQuotes(address, mode === "real" && !closed, revision);
   const play = usePlaySession();
   const wallet = useFunMarketWallet();
   const realWallet = wallet.connected ? wallet.publicKey?.toBase58() ?? null : null;
@@ -56,14 +59,14 @@ export function useFeedMultipliers(address: string, mode: Mode, revision: string
   const key = `${mode}:${identity}:${address}:${revision}:${closed}:${balance}:${positionRevision}`;
   const [result, setResult] = useState<{ key: string; values: (number | null)[] } | null>(null);
   useEffect(() => {
-    if (!identity || closed || !window.matchMedia("(max-width: 767px)").matches) return;
+    if (mode !== "play" || !identity || closed || !window.matchMedia("(max-width: 767px)").matches) return;
     let cancelled = false;
-    enqueue(mode, identity, mode === "real" ? realWallet : null, address, values => {
+    enqueue(mode, identity, null, address, values => {
       if (!cancelled) setResult({ key, values });
     });
     return () => { cancelled = true; };
   }, [address, mode, identity, realWallet, key, closed]);
-  return result?.key === key ? result.values : [];
+  return mode === "real" ? realQuotes.map(q => q?.multiplier ?? null) : result?.key === key ? result.values : [];
 }
 
 export function formatFeedMultiplier(value: unknown): string | null {
