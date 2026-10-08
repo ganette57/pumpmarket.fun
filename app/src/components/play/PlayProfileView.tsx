@@ -25,6 +25,7 @@
 // as profit.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 import { Pencil, Share2 } from "lucide-react";
 import EditProfileModal from "@/components/EditProfileModal";
@@ -134,7 +135,10 @@ function StatusCell({
       {shareable ? (
         <button
           type="button"
-          onClick={() => onShare(position)}
+          onClick={(event) => {
+            event.stopPropagation();
+            onShare(position);
+          }}
           aria-label={`Share this result: ${STATUS_LABEL[position.status]} on ${
             position.market_title || position.market_address
           }`}
@@ -174,6 +178,7 @@ function StatDivider() {
 /* -------------------------------------------------------------------------- */
 
 export default function PlayProfileView({ wallet }: { wallet: string }) {
+  const router = useRouter();
   const { publicKey, connected } = useFunMarketWallet();
   const viewerWallet = connected && publicKey ? publicKey.toBase58() : null;
   // Mirrors the Real profile: the Edit affordance follows the CONNECTED
@@ -377,6 +382,7 @@ export default function PlayProfileView({ wallet }: { wallet: string }) {
           error={error}
           onRetry={refresh}
           onShare={handleShare}
+          onOpenPosition={(position) => router.push(`/trade/${position.market_address}`)}
         />
       </section>
 
@@ -416,12 +422,14 @@ function PlayPositions({
   error,
   onRetry,
   onShare,
+  onOpenPosition,
 }: {
   positions: PlayProfilePositionView[];
   pending: boolean;
   error: boolean;
   onRetry: () => void;
   onShare: (p: PlayProfilePositionView) => void;
+  onOpenPosition: (p: PlayProfilePositionView) => void;
 }) {
   if (error) {
     return (
@@ -480,7 +488,16 @@ function PlayPositions({
             {positions.map((p) => (
               <tr
                 key={`${p.market_address}|${p.outcome_index}`}
-                className="border-b border-gray-800/60 last:border-0"
+                onClick={p.status === "open" ? () => onOpenPosition(p) : undefined}
+                onKeyDown={p.status === "open" ? (event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onOpenPosition(p);
+                  }
+                } : undefined}
+                role={p.status === "open" ? "link" : undefined}
+                tabIndex={p.status === "open" ? 0 : undefined}
+                className={`border-b border-gray-800/60 last:border-0 ${p.status === "open" ? "cursor-pointer transition hover:bg-white/[0.025] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-pump-green" : ""}`}
               >
                 <td className="py-3 pr-3 max-w-[280px] lg:max-w-[420px]">
                   <div className="text-white truncate" title={p.market_title ?? undefined}>
@@ -505,16 +522,18 @@ function PlayPositions({
                   <StatusCell position={p} onShare={onShare} />
                 </td>
                 <td
-                  className={`py-3 px-3 text-right tabular-nums font-semibold ${pnlToneClass(
-                    p.realized_pnl_usd
-                  )}`}
+                  className={`py-3 px-3 text-right tabular-nums font-semibold ${p.status === "open" && p.estimated_payout_usd != null ? "text-pump-green" : pnlToneClass(p.realized_pnl_usd)}`}
                   title={
-                    p.payout_usd != null
+                    p.status === "open" && p.estimated_payout_usd != null
+                      ? `Estimated payout ${formatUsd(p.estimated_payout_usd)}`
+                      : p.payout_usd != null
                       ? `Payout ${formatUsd(p.payout_usd)}`
                       : undefined
                   }
                 >
-                  {formatPnl(p.realized_pnl_usd)}
+                  {p.status === "open" && p.estimated_payout_usd != null
+                    ? formatUsd(p.estimated_payout_usd, { compact: true })
+                    : formatPnl(p.realized_pnl_usd)}
                 </td>
                 <td
                   className="py-3 pl-3 text-right text-gray-500 whitespace-nowrap"
@@ -533,7 +552,16 @@ function PlayPositions({
         {positions.map((p) => (
           <div
             key={`${p.market_address}|${p.outcome_index}`}
-            className="rounded-xl border border-gray-800 bg-pump-dark/40 p-3"
+            onClick={p.status === "open" ? () => onOpenPosition(p) : undefined}
+            onKeyDown={p.status === "open" ? (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onOpenPosition(p);
+              }
+            } : undefined}
+            role={p.status === "open" ? "link" : undefined}
+            tabIndex={p.status === "open" ? 0 : undefined}
+            className={`rounded-xl border border-gray-800 bg-pump-dark/40 p-3 ${p.status === "open" ? "cursor-pointer transition active:border-pump-green/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-pump-green" : ""}`}
           >
             <div className="text-sm text-white truncate">
               {p.market_title || shortAddr(p.market_address)}
@@ -548,11 +576,11 @@ function PlayPositions({
             <div className="mt-2 flex items-center justify-between gap-3">
               <StatusCell position={p} onShare={onShare} />
               <span
-                className={`text-sm font-bold tabular-nums ${pnlToneClass(
-                  p.realized_pnl_usd
-                )}`}
+                className={`max-w-[48%] truncate text-sm font-bold tabular-nums ${p.status === "open" && p.estimated_payout_usd != null ? "text-pump-green" : pnlToneClass(p.realized_pnl_usd)}`}
               >
-                {formatPnl(p.realized_pnl_usd)}
+                {p.status === "open" && p.estimated_payout_usd != null
+                  ? formatUsd(p.estimated_payout_usd, { compact: true })
+                  : formatPnl(p.realized_pnl_usd)}
               </span>
             </div>
 

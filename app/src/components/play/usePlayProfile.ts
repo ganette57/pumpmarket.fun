@@ -29,6 +29,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTradingMode } from "@/components/mode/ModeProvider";
+import {
+  useMarketSnapshotActions,
+  useMarketSnapshotsRevision,
+} from "@/components/mode/MarketSnapshotProvider";
 import { playClient, type PlayProfileView } from "@/lib/playClient";
 
 /** Minimum gap between focus-triggered refetches. */
@@ -56,10 +60,41 @@ export function usePlayProfile(
   const [loaded, setLoaded] = useState(false);
   // Bumped by refresh() only — the error state never retries on its own.
   const [reloadNonce, setReloadNonce] = useState(0);
+  const { watchPlayMarket } = useMarketSnapshotActions();
 
   const epochRef = useRef(0);
   /** When the last fetch resolved — drives the focus-refetch cooldown. */
   const lastFetchAtRef = useRef(0);
+  const openAddresses = Array.from(new Set(
+    (profile?.positions ?? [])
+      .filter((position) => position.status === "open")
+      .map((position) => position.market_address)
+      .filter(Boolean)
+  )).sort();
+  const booksRevision = useMarketSnapshotsRevision(openAddresses);
+  const lastBooksRevisionRef = useRef("");
+
+  // Register the open books with the existing visibility-aware shared Play
+  // watcher. This adds no per-card timer and is ref-counted by the provider.
+  useEffect(() => {
+    if (!active || openAddresses.length === 0) return;
+    const cleanups = openAddresses.map((address) => watchPlayMarket(address));
+    return () => cleanups.forEach((cleanup) => cleanup());
+  }, [active, openAddresses.join("|"), watchPlayMarket]);
+
+  // The payout is user-scoped and therefore comes from the profile response,
+  // while this revision is the public market change signal. Refetch only when
+  // that shared snapshot changes so held shares are repriced automatically.
+  useEffect(() => {
+    if (!active || !booksRevision) return;
+    if (!lastBooksRevisionRef.current) {
+      lastBooksRevisionRef.current = booksRevision;
+      return;
+    }
+    if (lastBooksRevisionRef.current === booksRevision) return;
+    lastBooksRevisionRef.current = booksRevision;
+    setReloadNonce((n) => n + 1);
+  }, [active, booksRevision]);
 
   // Reset when the target wallet changes or Play is left, so one wallet's
   // positions can never flash under another — or under Real.
@@ -69,6 +104,7 @@ export function usePlayProfile(
     setLoaded(false);
     setError(false);
     setLoading(false);
+    lastBooksRevisionRef.current = "";
   }, [addr, isPlay]);
 
   useEffect(() => {

@@ -19,7 +19,7 @@ import {
   type ResultCardInput,
   type ResultState,
 } from "./resultCard";
-import { playProRataPayoutUsd } from "./playPayoutMath";
+import { playCurrentPositionPayoutUsd, playProRataPayoutUsd } from "./playPayoutMath";
 import type { PlayHistoryTradeView, PlayProfilePositionView } from "./playClient";
 
 /* -------------------------------------------------------------------------- */
@@ -364,7 +364,13 @@ export function buildProvisionalPlayResultValues(
     const priced =
       perTrade.length === won.length && perTrade.every((p) => p !== null);
 
-    const payout = priced ? sumDecimals(perTrade) : null;
+    const payout = priced && book
+      ? playCurrentPositionPayoutUsd({
+          tradeShares: won.map((t) => t.shares),
+          totalWinningShares: book.total_winning_shares,
+          finalPoolUsd: book.virtual_pool_usd,
+        })
+      : null;
 
     // Settlement's realized P&L over the same rows: a winning trade earns
     // `payout - stake`, and any losing leg on this market still loses its

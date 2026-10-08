@@ -15,6 +15,7 @@
 // with no anon policies, so this is the only path in.
 
 import { supabaseServer } from "@/lib/supabaseServer";
+import { playCurrentPositionPayoutUsd } from "@/lib/playPayoutMath";
 
 /* -------------------------------------------------------------------------- */
 /*  Types                                                                      */
@@ -826,50 +827,83 @@ export async function getPlaySettlementBook(
   winningOutcome: number
 ): Promise<PlaySettlementBook | null> {
   if (!Number.isInteger(winningOutcome) || winningOutcome < 0) return null;
+  const books = await getPlaySettlementBooks([marketAddress], winningOutcome);
+  return books.get(`${marketAddress}|${winningOutcome}`) ?? null;
+}
+
+/** Batched settlement inputs for live profile/current-position displays. */
+export async function getPlaySettlementBooks(
+  marketAddresses: string[],
+  onlyOutcome?: number
+): Promise<Map<string, PlaySettlementBook>> {
+  const addresses = Array.from(new Set(marketAddresses.map(String).filter(Boolean)));
+  const out = new Map<string, PlaySettlementBook>();
+  if (!addresses.length) return out;
 
   const supa = supabaseServer();
-
-  const stateRes = await supa
+  const statesQuery = supa
     .from("play_market_states")
     .select("market_address,virtual_pool_usd,status,version")
-    .eq("market_address", marketAddress)
-    .maybeSingle();
-  if (stateRes.error) throw toEngineError(stateRes.error);
-  if (!stateRes.data) return null; // no Play economy on this market
-
-  // Summed in Node because this PostgREST has aggregate functions disabled
-  // (PGRST123), the same reason getPlayMarketSnapshots sums stakes here. The
-  // rows are a single column and never leave the server — only the total is
-  // serialized. `count` is exact so a server-side row cap can never be
-  // mistaken for a complete read.
-  const tradesRes = await supa
+    .in("market_address", addresses);
+  let tradesQuery = supa
     .from("play_trades")
-    .select("shares", { count: "exact" })
-    .eq("market_address", marketAddress)
-    .eq("status", "open")
-    .eq("outcome_index", winningOutcome)
-    .limit(PLAY_WINNING_MAX_TRADES);
+    .select("market_address,outcome_index,shares", { count: "exact" })
+    .in("market_address", addresses)
+    .eq("status", "open");
+  if (onlyOutcome !== undefined) {
+    tradesQuery = tradesQuery.eq("outcome_index", onlyOutcome);
+  }
+  const [statesRes, tradesRes] = await Promise.all([
+    statesQuery,
+    tradesQuery.limit(PLAY_WINNING_MAX_TRADES),
+  ]);
+  if (statesRes.error) throw toEngineError(statesRes.error);
   if (tradesRes.error) throw toEngineError(tradesRes.error);
 
-  const rows = (tradesRes.data as Array<{ shares?: unknown }>) || [];
+  const rows = (tradesRes.data as Array<{
+    market_address?: unknown;
+    outcome_index?: unknown;
+    shares?: unknown;
+  }>) || [];
   if (typeof tradesRes.count === "number" && tradesRes.count > rows.length) {
-    return null; // truncated read — an undercount would overstate every payout
+    return out;
   }
 
-  const total = sumSharesScaled(rows);
-  if (total === null) return null;
+  const grouped = new Map<string, Array<{ shares?: unknown }>>();
+  for (const row of rows) {
+    const address = String(row.market_address ?? "");
+    const outcome = Number(row.outcome_index);
+    if (!address || !Number.isInteger(outcome) || outcome < 0) continue;
+    const key = `${address}|${outcome}`;
+    const group = grouped.get(key) ?? [];
+    group.push({ shares: row.shares });
+    grouped.set(key, group);
+  }
 
-  const pool = String((stateRes.data as any).virtual_pool_usd ?? "");
-  if (!/^-?\d+(\.\d+)?$/.test(pool.trim())) return null;
+  const states = new Map<string, any>();
+  for (const state of statesRes.data || []) {
+    states.set(String((state as any).market_address), state);
+  }
 
-  return {
-    market_address: marketAddress,
-    winning_outcome: winningOutcome,
-    virtual_pool_usd: pool.trim(),
-    total_winning_shares: sharesFromScaled(total),
-    status: ((stateRes.data as any).status || "open") as PlayMarketStateStatus,
-    version: Number((stateRes.data as any).version) || 0,
-  };
+  for (const [bookKey, group] of Array.from(grouped.entries())) {
+    const split = bookKey.lastIndexOf("|");
+    const address = bookKey.slice(0, split);
+    const outcome = Number(bookKey.slice(split + 1));
+    const state = states.get(address);
+    if (!state) continue;
+    const total = sumSharesScaled(group);
+    const pool = String(state.virtual_pool_usd ?? "").trim();
+    if (total === null || total <= BigInt(0) || !/^-?\d+(\.\d+)?$/.test(pool)) continue;
+    out.set(bookKey, {
+      market_address: address,
+      winning_outcome: outcome,
+      virtual_pool_usd: pool,
+      total_winning_shares: sharesFromScaled(total),
+      status: (state.status || "open") as PlayMarketStateStatus,
+      version: Number(state.version) || 0,
+    });
+  }
+  return out;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1286,6 +1320,8 @@ export type PlayProfilePosition = {
   status: PlayTradeStatus;
   /** SUM(payout_usd) over SETTLED trades. Null while nothing has settled. */
   payout_usd: string | null;
+  /** Current total payout if this OPEN outcome wins. Never profit/P&L. */
+  estimated_payout_usd: string | null;
   /** SUM(realized_pnl_usd) over SETTLED trades. Null while none has settled. */
   realized_pnl_usd: string | null;
   first_trade_at: string;
@@ -1463,6 +1499,7 @@ export async function getPlayProfile(
     pnlCents: number;
     settledCount: number;
     tradeCount: number;
+    openTradeShares: string[];
     counts: Record<PlayTradeStatus, number>;
     firstAt: string;
     lastAt: string;
@@ -1489,6 +1526,7 @@ export async function getPlayProfile(
         pnlCents: 0,
         settledCount: 0,
         tradeCount: 0,
+        openTradeShares: [],
         counts: { open: 0, won: 0, lost: 0, refunded: 0 },
         firstAt: String(t.created_at),
         lastAt: String(t.created_at),
@@ -1507,6 +1545,7 @@ export async function getPlayProfile(
     const status = (String(t.status || "open") as PlayTradeStatus);
     if (status in g.counts) g.counts[status] += 1;
     else g.counts.open += 1;
+    if (status === "open") g.openTradeShares.push(String(t.shares ?? ""));
 
     // Settled rows carry BOTH money fields by CHECK constraint; open rows
     // carry neither, so an open position contributes nothing to any total.
@@ -1540,8 +1579,22 @@ export async function getPlayProfile(
     }
   }
 
+  // One batched read of the same inputs settlement uses. The position's own
+  // original trade rows stay separate so per-trade cent truncation is exact.
+  const settlementBooks = await getPlaySettlementBooks(addresses);
+
   const positions: PlayProfilePosition[] = Array.from(groups.values())
-    .map((g) => ({
+    .map((g) => {
+      const book = settlementBooks.get(`${g.market_address}|${g.outcome_index}`);
+      const estimatedPayout =
+        g.counts.open > 0 && book
+          ? playCurrentPositionPayoutUsd({
+              tradeShares: g.openTradeShares,
+              totalWinningShares: book.total_winning_shares,
+              finalPoolUsd: book.virtual_pool_usd,
+            })
+          : null;
+      return ({
       market_address: g.market_address,
       market_title: titles.get(g.market_address) ?? null,
       outcome_index: g.outcome_index,
@@ -1552,10 +1605,12 @@ export async function getPlayProfile(
       trade_count: g.tradeCount,
       status: groupStatus(g.counts),
       payout_usd: g.settledCount > 0 ? centsToDecimal(g.payoutCents) : null,
+      estimated_payout_usd: estimatedPayout,
       realized_pnl_usd: g.settledCount > 0 ? centsToDecimal(g.pnlCents) : null,
       first_trade_at: g.firstAt,
       last_trade_at: g.lastAt,
-    }))
+      });
+    })
     // Newest activity first — same ordering language as every Play surface.
     .sort((a, b) => msOf(b.last_trade_at) - msOf(a.last_trade_at));
 

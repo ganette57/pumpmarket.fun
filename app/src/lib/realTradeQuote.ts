@@ -30,6 +30,24 @@ export function realPayoutLamports(pool: number, supply: number, shares: number,
   return Number.isFinite(payout) && payout > 0 ? payout : null;
 }
 
+/**
+ * Estimated payout for shares the wallet ALREADY holds if this outcome wins.
+ *
+ * This deliberately delegates to the same helper as `realQuote`: a current
+ * position is the zero-purchase case (no new shares, cost or creator fee).
+ * Keeping that identity here prevents display surfaces from growing their own
+ * share-of-pool formula or accidentally quoting an additional buy.
+ */
+export function realCurrentPositionPayoutLamports(
+  pool: number,
+  supply: number,
+  held: number
+): number | null {
+  if (![pool, supply, held].every(Number.isSafeInteger)) return null;
+  if (pool <= 0 || supply <= 0 || held <= 0) return null;
+  return realPayoutLamports(pool, supply, 0, held, 0, 0);
+}
+
 export type RealQuote = ReturnType<typeof realBuyCost> & {
   shares: number;
   resultingUserShares: number;

@@ -21,8 +21,8 @@ export function mobileMarketLabel(title: string, meta?: Record<string, unknown> 
 }
 
 type Action = "discussion" | "activity" | "rules" | "resolution";
-export default function MobileMarketToolbar({ label, active, onOpen }: {
-  label: string; active: string | null; onOpen: (action: Action) => void;
+export default function MobileMarketToolbar({ label, payout, active, onOpen }: {
+  label: string; payout?: string | null; active: string | null; onOpen: (action: Action) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRoot = useRef<HTMLElement>(null);
@@ -51,7 +51,9 @@ export default function MobileMarketToolbar({ label, active, onOpen }: {
           <Icon size={22} strokeWidth={1.6} aria-hidden="true" />
         </button>;
       })}
-      <span title={label} className="pointer-events-none truncate border-l border-white/[0.12] px-4 text-center text-[12px] font-medium leading-7 text-white/90">{label}</span>
+      <span title={payout ? `Payout ${payout}` : label} className="pointer-events-none min-w-0 truncate border-l border-white/[0.12] px-2 text-center text-[12px] font-medium leading-7 text-white/90">
+        {payout ? <span className="inline-flex max-w-full items-baseline justify-center gap-1 whitespace-nowrap"><span className="text-white/50">Payout</span><span className="min-w-0 truncate font-bold text-pump-green">{payout}</span></span> : label}
+      </span>
       <button type="button" aria-label="More market information" title="More" aria-expanded={menuOpen} onClick={() => setMenuOpen(value => !value)} className={`${button} border-l border-white/[0.12] ${active === "rules" || active === "resolution" ? "text-pump-green" : "hover:text-white"}`}>
         <MoreHorizontal size={22} strokeWidth={1.6} aria-hidden="true" />
       </button>

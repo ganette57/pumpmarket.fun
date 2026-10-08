@@ -40,4 +40,11 @@ for (const input of [{ shares: 0 }, { shares: NaN }, { budget: 1 }, { budget: In
   assert.equal(quote.realQuote(1e7, 0, 1e7, 0, input), null);
 assert.equal(quote.realQuote(1e7, 0, 0, 0, { shares: 100 }).multiplier, null);
 assert.equal(quote.realQuote(1e7, 0, 1e7, NaN, { shares: 100 }), null);
+// Current holdings reuse the exact authoritative payout helper with no buy.
+assert.equal(quote.realCurrentPositionPayoutLamports(3_680_000_000, 200, 100), 1_840_000_000);
+assert.equal(quote.realCurrentPositionPayoutLamports(3_680_000_000, 200, 0), null);
+assert.equal(
+  quote.realCurrentPositionPayoutLamports(3_680_000_000, 200, 100),
+  quote.realPayoutLamports(3_680_000_000, 200, 0, 100, 0, 0)
+);
 console.log('PASS: TradingPanel regression, WWE holdings/zero holdings, budget boundary, fee rounding, invalid inputs');

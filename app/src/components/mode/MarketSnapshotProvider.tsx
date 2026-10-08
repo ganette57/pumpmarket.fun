@@ -67,6 +67,8 @@ export type MarketSnapshot = {
   /** Play only: no trades yet, showing the backend opening book. */
   seeded?: boolean;
   updatedAt?: string | null;
+  /** Play state version; increments on every authoritative book change. */
+  version?: number;
   /**
    * PLAY ONLY: actual cumulative USD staked per outcome, index-stable.
    * Undefined in Real — Real has no equivalent authoritative aggregation on
@@ -115,6 +117,7 @@ function sameSnapshot(a?: MarketSnapshot, b?: MarketSnapshot): boolean {
     a.volume !== b.volume ||
     !!a.seeded !== !!b.seeded ||
     (a.updatedAt ?? null) !== (b.updatedAt ?? null) ||
+    (a.version ?? null) !== (b.version ?? null) ||
     a.supplies.length !== b.supplies.length ||
     a.probabilities.length !== b.probabilities.length ||
     (a.stakeByOutcomeUsd?.length ?? -1) !== (b.stakeByOutcomeUsd?.length ?? -1)
@@ -153,6 +156,7 @@ function buildPlaySnapshot(
     status: s.status ?? "open",
     seeded: !!s.seeded,
     updatedAt: s.updated_at,
+    version: s.version,
     stakeByOutcomeUsd: s.stake_by_outcome_usd ?? [],
   };
 }
@@ -444,4 +448,22 @@ export function useMarketSnapshotActions() {
     invalidate: store?.invalidate ?? noop,
     watchPlayMarket: store?.watchPlayMarket ?? noopWatch,
   };
+}
+
+/**
+ * One stable change token for a set of markets in the active mode. Useful for
+ * batched position surfaces that need to refetch their user-scoped values
+ * when the shared public books move, without opening a second poller.
+ */
+export function useMarketSnapshotsRevision(marketAddresses: string[]): string {
+  const store = useSnapshotStore();
+  const addresses = Array.from(new Set(marketAddresses.filter(Boolean))).sort();
+  return addresses
+    .map((address) => {
+      const entry = store?.getEntry(address);
+      if (entry?.state !== "ready") return `${address}:pending`;
+      const snapshot = entry.snapshot;
+      return `${address}:${snapshot.mode}:${snapshot.version ?? snapshot.updatedAt ?? snapshot.supplies.join(",")}`;
+    })
+    .join("|");
 }

@@ -253,3 +253,36 @@ export function playProRataPayoutUsd(input: PlayProRataInput): string | null {
 
   return formatNumeric(truncNumeric(mulNumeric(quotient, pool), USD_SCALE));
 }
+
+/**
+ * Estimated payout for one CURRENT grouped Play position.
+ *
+ * Settlement truncates each trade independently before adding the results,
+ * so callers must pass the original held trade-share rows rather than only a
+ * grouped share total. This function is the shared fold used by profile and
+ * trade displays; it delegates every row to the authoritative payout mirror
+ * above and performs only an exact addition of the resulting cents.
+ */
+export function playCurrentPositionPayoutUsd(input: {
+  tradeShares: unknown[];
+  totalWinningShares: unknown;
+  finalPoolUsd: unknown;
+}): string | null {
+  if (!Array.isArray(input.tradeShares) || input.tradeShares.length === 0) {
+    return null;
+  }
+
+  let cents = BIG_ZERO;
+  for (const shares of input.tradeShares) {
+    const payout = playProRataPayoutUsd({
+      shares,
+      totalWinningShares: input.totalWinningShares,
+      finalPoolUsd: input.finalPoolUsd,
+    });
+    if (payout === null) return null;
+    const parsed = parseNumeric(payout, USD_SCALE);
+    if (!parsed) return null;
+    cents += parsed.u;
+  }
+  return formatNumeric({ u: cents, dscale: USD_SCALE });
+}

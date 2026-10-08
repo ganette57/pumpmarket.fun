@@ -1,6 +1,6 @@
 "use client";
 
-import { parseBLamports } from "@/lib/realTradeQuote";
+import { parseBLamports, realCurrentPositionPayoutLamports } from "@/lib/realTradeQuote";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
@@ -30,6 +30,7 @@ import OddsHistoryChart from "@/components/OddsHistoryChart";
 import { usePlayOddsHistory } from "@/components/play/usePlayOddsHistory";
 import PlayOddsChart from "@/components/play/PlayOddsChart";
 import PlayActivity from "@/components/play/PlayActivity";
+import { usePlaySession } from "@/components/play/PlaySessionProvider";
 import MarketActivityTab from "@/components/MarketActivity";
 import { useTradingMode } from "@/components/mode/ModeProvider";
 import {
@@ -47,7 +48,7 @@ import {
   type PlayResultValues,
 } from "@/lib/resultPayload";
 import { resolvePlayResultValues } from "@/lib/playLiveResult";
-import { playClient } from "@/lib/playClient";
+import { formatUsd, playClient, type PlayCurrentPositionPayoutView } from "@/lib/playClient";
 import type { PayoutQualifier, ResultMode } from "@/lib/resultCard";
 import { hasSeenResult, markResultSeen, resultSeenKey } from "@/lib/resultSeen";
 import NbaWidgetDrawer from "@/components/NbaWidgetDrawer";
@@ -1885,6 +1886,7 @@ export default function TradePage() {
   const { publicKey, connected, signTransaction } = useFunMarketWallet();
   const { connection } = useConnection();
   const program = useProgram();
+  const playSession = usePlaySession();
 
   const isMobile = useIsMobile(1024);
 
@@ -3066,7 +3068,7 @@ if (snap?.posAcc?.shares) {
   // shared MarketSnapshotProvider (no second store). The Real TradingPanel
   // still receives derived.supplies, so Real execution is untouched.
   const { isPlay: isPlayTrading } = useTradingMode();
-  const { publishRealSnapshots } = useMarketSnapshotActions();
+  const { publishRealSnapshots, watchPlayMarket } = useMarketSnapshotActions();
   const snapshotKey = market?.publicKey ?? id ?? "";
   const mobilePlayHistory = usePlayOddsHistory(snapshotKey, { enabled: isMobile && isPlayTrading });
 
@@ -3099,12 +3101,91 @@ if (snap?.posAcc?.shares) {
     realDisplayFallback
   );
 
+  // Reuse the provider's single visibility-aware Play watcher; this page does
+  // not create another interval. Its version is also the refresh key for the
+  // connected account's user-scoped current-position payout.
+  useEffect(() => {
+    if (!snapshotKey) return;
+    return watchPlayMarket(snapshotKey);
+  }, [snapshotKey, watchPlayMarket]);
+
+  const playPayoutKey = JSON.stringify([
+    isPlayTrading,
+    snapshotKey,
+    playSession.quoteIdentity,
+    modeSnapshot?.mode === "play" ? modeSnapshot.version ?? modeSnapshot.updatedAt : null,
+  ]);
+  const [playPositionPayouts, setPlayPositionPayouts] = useState<{
+    key: string;
+    positions: PlayCurrentPositionPayoutView[];
+  } | null>(null);
+  useEffect(() => {
+    setPlayPositionPayouts(null);
+    if (
+      !isPlayTrading ||
+      !snapshotKey ||
+      !playSession.authenticated ||
+      !playSession.quoteIdentity ||
+      modeSnapshot?.mode !== "play"
+    ) return;
+    let cancelled = false;
+    void playClient.currentPositionPayouts(snapshotKey).then((positions) => {
+      if (!cancelled) setPlayPositionPayouts({ key: playPayoutKey, positions });
+    }).catch(() => {
+      // Missing/expired session or an unavailable book means no estimate.
+    });
+    return () => { cancelled = true; };
+  }, [
+    isPlayTrading,
+    snapshotKey,
+    playSession.authenticated,
+    playSession.quoteIdentity,
+    playPayoutKey,
+    modeSnapshot?.mode,
+  ]);
+
   const userSharesForUi = useMemo(() => {
     const len = derived?.names?.length ?? 0;
     const out = Array(len).fill(0);
     for (let i = 0; i < len; i++) out[i] = Math.floor(Number(positionShares?.[i] || 0));
     return out;
   }, [positionShares, derived?.names?.length]);
+
+  const mobileCurrentPositionPayout = useMemo(() => {
+    if (isPlayTrading) {
+      const positions = playPositionPayouts?.key === playPayoutKey
+        ? playPositionPayouts.positions.filter((position) => Number(position.total_shares) > 0)
+        : [];
+      // The position model preserves one row per outcome. When multiple
+      // mutually exclusive outcomes are held there is no single truthful
+      // "if it wins" total, so keep the market label rather than aggregate.
+      if (positions.length !== 1 || positions[0].estimated_payout_usd == null) return null;
+      return formatUsd(positions[0].estimated_payout_usd, { compact: true });
+    }
+
+    const held = userSharesForUi
+      .map((shares, outcomeIndex) => ({ shares, outcomeIndex }))
+      .filter((position) => position.shares > 0);
+    if (held.length !== 1 || !derived || marketBalanceLamports == null) return null;
+    const position = held[0];
+    const payout = realCurrentPositionPayoutLamports(
+      Math.floor(marketBalanceLamports),
+      Math.floor(Number(derived.supplies[position.outcomeIndex] || 0)),
+      Math.floor(position.shares)
+    );
+    if (payout == null) return null;
+    return `${(payout / 1_000_000_000).toLocaleString(undefined, {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 4,
+    })} SOL`;
+  }, [
+    isPlayTrading,
+    playPositionPayouts,
+    playPayoutKey,
+    userSharesForUi,
+    derived,
+    marketBalanceLamports,
+  ]);
 
   const filteredOddsPoints = useMemo(() => {
     if (!oddsPoints.length) return [];
@@ -4640,7 +4721,7 @@ const ended = endedByTime;
           {activeLiveSession && <Link href={`/live/${activeLiveSession.id}`} className="inline-block py-2 text-xs text-pump-green">Watch live ↗</Link>}
           <div className="mt-2 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 whitespace-nowrap text-[13px] font-medium leading-[15px] text-gray-400" data-mobile-market-metadata>
             <span className="min-w-0 truncate">Vol <strong className="font-bold">{isPlayTrading ? playVolumeLabel : `${formatVol(effectiveVol)} SOL`}</strong></span>
-            {sportEventForUi && isSportLikeMarket && isSoccerLike && (market.sportMeta as any)?.provider_event_id && <button className="col-start-2" onClick={() => setSoccerDrawerOpen(true)}>Match details ↗</button>}
+            {sportEventForUi && isSportLikeMarket && isSoccerLike && (market.sportMeta as any)?.provider_event_id && <button className="col-start-2" onClick={() => setSoccerDrawerOpen(true)}>Match details</button>}
             {mobileEndLabel && <span className="col-start-3 min-w-0 truncate text-right">{mobileEndLabel.startsWith("Ends in ") ? <>Ends in <strong className="font-bold">{mobileEndLabel.slice(8)}</strong></> : mobileEndLabel}</span>}
           </div>
           <div className="my-2 flex min-h-[180px] flex-1 flex-col justify-center">
@@ -4661,6 +4742,7 @@ const ended = endedByTime;
           </div>}
           <MobileMarketToolbar key={market.publicKey}
             label={mobileMarketLabel(market.question, market.sportMeta as Record<string, unknown>)}
+            payout={mobileCurrentPositionPayout}
             active={infoSheet} onOpen={tab => { if (tab !== "resolution") setBottomTab(tab); setInfoSheet(tab); }} />
           {infoSheet && <TradeInfoSheet title={infoSheet[0].toUpperCase() + infoSheet.slice(1)} onClose={() => setInfoSheet(null)}>
             {infoSheet === "resolution" ? <>

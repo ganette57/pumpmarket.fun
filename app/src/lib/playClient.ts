@@ -262,6 +262,8 @@ export type PlayProfilePositionView = {
   status: "open" | "won" | "lost" | "refunded";
   /** Null while nothing in the group has settled. */
   payout_usd: string | null;
+  /** Total estimated payout for this OPEN current position if it wins. */
+  estimated_payout_usd: string | null;
   /** Null while nothing in the group has settled — NEVER a quoted value. */
   realized_pnl_usd: string | null;
   first_trade_at: string;
@@ -282,6 +284,13 @@ export type PlayProfileView = {
   position_count: number;
   positions: PlayProfilePositionView[];
   truncated: boolean;
+};
+
+export type PlayCurrentPositionPayoutView = {
+  market_address: string;
+  outcome_index: number;
+  total_shares: string;
+  estimated_payout_usd: string | null;
 };
 
 /** One ranked player on the public Play leaderboard. */
@@ -649,10 +658,28 @@ export const playClient = {
         total_stake_usd: decimal(r.total_stake_usd),
         total_shares: decimal(r.total_shares),
         payout_usd: r.payout_usd == null ? null : decimal(r.payout_usd),
+        estimated_payout_usd:
+          r.estimated_payout_usd == null ? null : decimal(r.estimated_payout_usd),
         realized_pnl_usd:
           r.realized_pnl_usd == null ? null : decimal(r.realized_pnl_usd),
       })),
     } as PlayProfileView;
+  },
+
+  /** Session owner's open outcomes for one market; read-only and live-priceable. */
+  async currentPositionPayouts(marketAddress: string) {
+    const raw = await post<{ positions: PlayCurrentPositionPayoutView[] }>(
+      "/api/play/position-payouts",
+      { market_address: marketAddress }
+    );
+    return (raw.positions ?? []).map((position) => ({
+      ...position,
+      total_shares: decimal(position.total_shares),
+      estimated_payout_usd:
+        position.estimated_payout_usd == null
+          ? null
+          : decimal(position.estimated_payout_usd),
+    }));
   },
 
   /**
