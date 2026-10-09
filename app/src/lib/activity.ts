@@ -77,7 +77,7 @@ async function fetchUserTransactions(
 }
 
 /** Same fallback ladder as dashboard's safeFetchMarketsByAddresses, scoped to fields we need. */
-async function fetchMarketsByAddresses(addrs: string[]): Promise<RawMarket[]> {
+export async function fetchMarketsByAddresses(addrs: string[]): Promise<RawMarket[]> {
   const uniq = Array.from(new Set(addrs.map(String).filter(Boolean))).slice(0, 200);
   if (!uniq.length) return [];
   const trySelects = [

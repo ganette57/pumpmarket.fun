@@ -23,6 +23,7 @@ import EditProfileModal from "@/components/EditProfileModal";
 import FollowListModal from "@/components/FollowListModal";
 import ActivityList from "@/components/ActivityList";
 import { useTradingMode } from "@/components/mode/ModeProvider";
+import RealOpenPositions from "@/components/RealOpenPositions";
 import PlayProfileView from "@/components/play/PlayProfileView";
 import { UserPlus, Check, Pencil } from "lucide-react";
 
@@ -62,11 +63,11 @@ export default function PublicProfilePage() {
   const params = useParams<{ wallet: string }>();
   const wallet = String(params?.wallet || "").trim();
 
-  if (isPlay) return <PlayProfileView wallet={wallet} />;
-  return <RealProfilePage />;
+  if (isPlay) return <PlayProfileView key={wallet} wallet={wallet} />;
+  return <RealProfilePage key={wallet} />;
 }
 
-/** The Real profile, unchanged. Everything below this line is production. */
+/** Existing Real profile with read-only open holdings. */
 function RealProfilePage() {
   const params = useParams<{ wallet: string }>();
   const wallet = String(params?.wallet || "").trim();
@@ -332,6 +333,8 @@ function RealProfilePage() {
         wallet={wallet}
         mode={listMode ?? "followers"}
       />
+
+      <RealOpenPositions wallet={wallet} />
 
       {/* TABS */}
       <section className="max-w-6xl mx-auto px-4 mt-8 md:mt-10">

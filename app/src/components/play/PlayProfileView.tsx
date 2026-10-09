@@ -488,9 +488,12 @@ function PlayPositions({
             {positions.map((p) => (
               <tr
                 key={`${p.market_address}|${p.outcome_index}`}
-                onClick={p.status === "open" ? () => onOpenPosition(p) : undefined}
+                onClick={p.status === "open" ? (event) => {
+                  if ((event.target as HTMLElement).closest("a,button,input,select,textarea,[role=button]")) return;
+                  onOpenPosition(p);
+                } : undefined}
                 onKeyDown={p.status === "open" ? (event) => {
-                  if (event.key === "Enter" || event.key === " ") {
+                  if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
                     event.preventDefault();
                     onOpenPosition(p);
                   }
@@ -531,8 +534,9 @@ function PlayPositions({
                       : undefined
                   }
                 >
+                  {p.status === "open" && <span className="block text-[10px] font-normal text-gray-500">Est. payout if resolved now</span>}
                   {p.status === "open" && p.estimated_payout_usd != null
-                    ? formatUsd(p.estimated_payout_usd, { compact: true })
+                    ? formatUsd(p.estimated_payout_usd)
                     : formatPnl(p.realized_pnl_usd)}
                 </td>
                 <td
@@ -552,9 +556,12 @@ function PlayPositions({
         {positions.map((p) => (
           <div
             key={`${p.market_address}|${p.outcome_index}`}
-            onClick={p.status === "open" ? () => onOpenPosition(p) : undefined}
+            onClick={p.status === "open" ? (event) => {
+                  if ((event.target as HTMLElement).closest("a,button,input,select,textarea,[role=button]")) return;
+                  onOpenPosition(p);
+                } : undefined}
             onKeyDown={p.status === "open" ? (event) => {
-              if (event.key === "Enter" || event.key === " ") {
+              if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
                 event.preventDefault();
                 onOpenPosition(p);
               }
@@ -576,10 +583,11 @@ function PlayPositions({
             <div className="mt-2 flex items-center justify-between gap-3">
               <StatusCell position={p} onShare={onShare} />
               <span
-                className={`max-w-[48%] truncate text-sm font-bold tabular-nums ${p.status === "open" && p.estimated_payout_usd != null ? "text-pump-green" : pnlToneClass(p.realized_pnl_usd)}`}
+                className={`${p.status === "open" ? "min-w-0 text-right" : "max-w-[48%] truncate"} text-sm font-bold tabular-nums ${p.status === "open" && p.estimated_payout_usd != null ? "text-pump-green" : pnlToneClass(p.realized_pnl_usd)}`}
               >
+                {p.status === "open" && <span className="block text-[10px] font-normal text-gray-500">Est. payout if resolved now</span>}
                 {p.status === "open" && p.estimated_payout_usd != null
-                  ? formatUsd(p.estimated_payout_usd, { compact: true })
+                  ? formatUsd(p.estimated_payout_usd)
                   : formatPnl(p.realized_pnl_usd)}
               </span>
             </div>

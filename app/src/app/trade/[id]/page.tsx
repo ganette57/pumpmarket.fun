@@ -48,7 +48,10 @@ import {
   type PlayResultValues,
 } from "@/lib/resultPayload";
 import { resolvePlayResultValues } from "@/lib/playLiveResult";
-import { formatUsd, playClient, type PlayCurrentPositionPayoutView } from "@/lib/playClient";
+import { formatUsd, playClient } from "@/lib/playClient";
+import { usePlayPositionPayouts } from "@/components/play/usePlayPositionPayouts";
+import { useRealWalletPosition } from "@/hooks/useRealWalletPosition";
+import { onlyHeldPosition } from "@/lib/realPositionDisplay";
 import type { PayoutQualifier, ResultMode } from "@/lib/resultCard";
 import { hasSeenResult, markResultSeen, resultSeenKey } from "@/lib/resultSeen";
 import NbaWidgetDrawer from "@/components/NbaWidgetDrawer";
@@ -3109,40 +3112,16 @@ if (snap?.posAcc?.shares) {
     return watchPlayMarket(snapshotKey);
   }, [snapshotKey, watchPlayMarket]);
 
-  const playPayoutKey = JSON.stringify([
-    isPlayTrading,
-    snapshotKey,
-    playSession.quoteIdentity,
-    modeSnapshot?.mode === "play" ? modeSnapshot.version ?? modeSnapshot.updatedAt : null,
-  ]);
-  const [playPositionPayouts, setPlayPositionPayouts] = useState<{
-    key: string;
-    positions: PlayCurrentPositionPayoutView[];
-  } | null>(null);
-  useEffect(() => {
-    setPlayPositionPayouts(null);
-    if (
-      !isPlayTrading ||
-      !snapshotKey ||
-      !playSession.authenticated ||
-      !playSession.quoteIdentity ||
-      modeSnapshot?.mode !== "play"
-    ) return;
-    let cancelled = false;
-    void playClient.currentPositionPayouts(snapshotKey).then((positions) => {
-      if (!cancelled) setPlayPositionPayouts({ key: playPayoutKey, positions });
-    }).catch(() => {
-      // Missing/expired session or an unavailable book means no estimate.
-    });
-    return () => { cancelled = true; };
-  }, [
-    isPlayTrading,
-    snapshotKey,
-    playSession.authenticated,
-    playSession.quoteIdentity,
-    playPayoutKey,
-    modeSnapshot?.mode,
-  ]);
+  const payoutWallet = connected && publicKey ? publicKey.toBase58() : null;
+  const playPositionPayouts = usePlayPositionPayouts({
+    enabled: isPlayTrading,
+    market: id ?? "",
+    wallet: payoutWallet,
+    identity: playSession.quoteIdentity,
+    revision: modeSnapshot?.mode === "play" ? modeSnapshot.version ?? modeSnapshot.updatedAt : null,
+    balance: playSession.balanceUsd,
+  });
+  const realPayoutShares = useRealWalletPosition(id ?? "", payoutWallet, !isPlayTrading);
 
   const userSharesForUi = useMemo(() => {
     const len = derived?.names?.length ?? 0;
@@ -3153,21 +3132,15 @@ if (snap?.posAcc?.shares) {
 
   const mobileCurrentPositionPayout = useMemo(() => {
     if (isPlayTrading) {
-      const positions = playPositionPayouts?.key === playPayoutKey
-        ? playPositionPayouts.positions.filter((position) => Number(position.total_shares) > 0)
-        : [];
-      // The position model preserves one row per outcome. When multiple
-      // mutually exclusive outcomes are held there is no single truthful
-      // "if it wins" total, so keep the market label rather than aggregate.
-      if (positions.length !== 1 || positions[0].estimated_payout_usd == null) return null;
-      return formatUsd(positions[0].estimated_payout_usd, { compact: true });
+      const position = onlyHeldPosition(playPositionPayouts, p => Number(p.total_shares));
+      if (!position || position.estimated_payout_usd == null) return null;
+      return formatUsd(position.estimated_payout_usd, { compact: true });
     }
 
-    const held = userSharesForUi
-      .map((shares, outcomeIndex) => ({ shares, outcomeIndex }))
-      .filter((position) => position.shares > 0);
-    if (held.length !== 1 || !derived || marketBalanceLamports == null) return null;
-    const position = held[0];
+    const position = onlyHeldPosition(
+      realPayoutShares.map((shares, outcomeIndex) => ({ shares, outcomeIndex })), p => p.shares,
+    );
+    if (!position || market?.publicKey !== id || !derived || marketBalanceLamports == null) return null;
     const payout = realCurrentPositionPayoutLamports(
       Math.floor(marketBalanceLamports),
       Math.floor(Number(derived.supplies[position.outcomeIndex] || 0)),
@@ -3181,8 +3154,9 @@ if (snap?.posAcc?.shares) {
   }, [
     isPlayTrading,
     playPositionPayouts,
-    playPayoutKey,
-    userSharesForUi,
+    realPayoutShares,
+    market?.publicKey,
+    id,
     derived,
     marketBalanceLamports,
   ]);
