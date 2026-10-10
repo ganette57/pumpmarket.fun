@@ -25,9 +25,16 @@ export function realBuyCost(base: number, supply: number, shares: number) {
 // Extracted unchanged from TradingPanel: creator fees remain in the pool.
 export function realPayoutLamports(pool: number, supply: number, shares: number,
   held: number, cost: number, creatorFee: number): number | null {
-  if (!Number.isFinite(pool) || pool <= 0 || supply + shares <= 0) return null;
-  const payout = ((held + shares) / (supply + shares)) * (pool + cost + creatorFee);
-  return Number.isFinite(payout) && payout > 0 ? payout : null;
+  const values = [pool, supply, shares, held, cost, creatorFee];
+  if (!values.every(Number.isSafeInteger) || pool <= 0 || supply + shares <= 0 ||
+      held < 0 || shares < 0 || held + shares > supply + shares || cost < 0 || creatorFee < 0) {
+    return null;
+  }
+  const payout =
+    (BigInt(held + shares) * BigInt(pool + cost + creatorFee)) /
+    BigInt(supply + shares);
+  const value = Number(payout);
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
 }
 
 /**
@@ -51,6 +58,11 @@ export function realCurrentPositionPayoutLamports(
 export type RealQuote = ReturnType<typeof realBuyCost> & {
   shares: number;
   resultingUserShares: number;
+  /** Current grouped-position claim before the hypothetical purchase. */
+  payoutBefore: number;
+  /** Grouped-position claim after the hypothetical purchase. */
+  payoutAfter: number | null;
+  /** Incremental grouped claim economically attributable to the new buy. */
   payout: number | null;
   multiplier: number | null;
 };
@@ -76,10 +88,20 @@ export function realQuote(base: number, supply: number, pool: number, held: numb
   if (!shares) return null;
   const buy = realBuyCost(base, supply, shares);
   if (!Number.isSafeInteger(buy.totalPay) || buy.totalPay <= 0) return null;
-  const payout = realPayoutLamports(pool, supply, shares, held, buy.cost, buy.fees.creator);
+  const payoutBefore = held > 0
+    ? realPayoutLamports(pool, supply, 0, held, 0, 0) ?? 0
+    : 0;
+  const payoutAfter = realPayoutLamports(
+    pool, supply, shares, held, buy.cost, buy.fees.creator
+  );
+  // REAL settles one grouped wallet position. The new purchase changes that
+  // single claim by payoutAfter - payoutBefore; unlike PLAY there is no
+  // independently settled trade row to quote.
+  const payout = payoutAfter === null ? null : payoutAfter - payoutBefore;
   // Preserve TradingPanel's SOL conversion order exactly.
   const multiple = payout === null ? null : (payout / 1e9) / (buy.totalPay / 1e9);
-  return { ...buy, shares, resultingUserShares: held + shares, payout,
+  return { ...buy, shares, resultingUserShares: held + shares,
+    payoutBefore, payoutAfter, payout,
     multiplier: multiple !== null && Number.isFinite(multiple) && multiple > 0 ? multiple : null };
 }
 
