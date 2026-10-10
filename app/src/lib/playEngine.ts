@@ -15,7 +15,10 @@
 // with no anon policies, so this is the only path in.
 
 import { supabaseServer } from "@/lib/supabaseServer";
-import { playCurrentPositionPayoutUsd } from "@/lib/playPayoutMath";
+import {
+  playCurrentPositionPayoutUsd,
+  playNewTradeQuoteUsd,
+} from "@/lib/playPayoutMath";
 
 /* -------------------------------------------------------------------------- */
 /*  Types                                                                      */
@@ -432,7 +435,34 @@ export async function quote(args: {
     stake_usd_in: args.stakeUsd,
   });
   if (error) throw toEngineError(error);
-  return data as PlayQuote;
+  const quoted = data as PlayQuote;
+  const totals = await getPlayQuoteShareTotals([
+    {
+      marketAddress: quoted.market_address,
+      stateVersion: quoted.state_version,
+      outcomeCount: quoted.outcome_count,
+    },
+  ]);
+  const currentTotal = totals.get(
+    `${quoted.market_address}|${quoted.outcome_index}`
+  );
+  const marginal =
+    currentTotal === undefined
+      ? null
+      : playNewTradeQuoteUsd({
+          newTradeShares: quoted.shares,
+          currentTotalWinningShares: currentTotal,
+          finalPoolUsdAfter: quoted.virtual_pool_usd_after,
+          newStakeUsd: quoted.stake_usd,
+        });
+  if (!marginal) {
+    throw new PlayEngineError("Play quote changed; please retry", 409);
+  }
+  return {
+    ...quoted,
+    estimated_payout_usd: marginal.payoutUsd,
+    estimated_multiple: marginal.multiple,
+  };
 }
 
 export async function executeTrade(args: {
@@ -805,6 +835,120 @@ function sharesFromScaled(scaled: bigint): string {
   return `${neg ? "-" : ""}${(abs / unit).toString()}.${(abs % unit)
     .toString()
     .padStart(8, "0")}`;
+}
+
+export type PlayQuoteBookTarget = {
+  marketAddress: string;
+  stateVersion: number;
+  outcomeCount: number;
+};
+
+/**
+ * Exact current open-share totals for purchase quotes, pinned to the state
+ * version returned by the pricing RPC.
+ *
+ * The reads are deliberately bracketed by state-version reads. Every Play
+ * trade increments that version in the same transaction as its trade row, so
+ * accepting only before=quoted=after prevents a mixed pricing/share snapshot.
+ * Missing outcome rows are real zeroes; truncation or a changed snapshot
+ * returns no totals, causing callers to omit/retry the informational quote.
+ */
+export async function getPlayQuoteShareTotals(
+  targets: PlayQuoteBookTarget[]
+): Promise<Map<string, string>> {
+  const normalized = Array.from(
+    new Map(
+      targets
+        .filter(
+          (target) =>
+            target.marketAddress &&
+            Number.isInteger(target.stateVersion) &&
+            target.stateVersion >= 0 &&
+            Number.isInteger(target.outcomeCount) &&
+            target.outcomeCount >= 2 &&
+            target.outcomeCount <= 10
+        )
+        .map((target) => [target.marketAddress, target])
+    ).values()
+  );
+  const out = new Map<string, string>();
+  if (!normalized.length) return out;
+
+  const addresses = normalized.map((target) => target.marketAddress);
+  const readStates = () =>
+    supabaseServer()
+      .from("play_market_states")
+      .select("market_address,status,version")
+      .in("market_address", addresses);
+
+  const before = await readStates();
+  if (before.error) throw toEngineError(before.error);
+  const trades = await supabaseServer()
+    .from("play_trades")
+    .select("market_address,outcome_index,shares", { count: "exact" })
+    .in("market_address", addresses)
+    .eq("status", "open")
+    .limit(PLAY_WINNING_MAX_TRADES);
+  if (trades.error) throw toEngineError(trades.error);
+  const after = await readStates();
+  if (after.error) throw toEngineError(after.error);
+  if (
+    typeof trades.count === "number" &&
+    trades.count > (trades.data?.length ?? 0)
+  ) {
+    return out;
+  }
+
+  const stateMap = (rows: any[] | null) =>
+    new Map(
+      (rows ?? []).map((row) => [
+        String(row.market_address),
+        { status: String(row.status), version: Number(row.version) },
+      ])
+    );
+  const beforeByAddress = stateMap(before.data as any[] | null);
+  const afterByAddress = stateMap(after.data as any[] | null);
+  const accepted = new Map<string, PlayQuoteBookTarget>();
+  for (const target of normalized) {
+    const a = beforeByAddress.get(target.marketAddress);
+    const b = afterByAddress.get(target.marketAddress);
+    if (
+      a?.status === "open" &&
+      b?.status === "open" &&
+      a.version === target.stateVersion &&
+      b.version === target.stateVersion
+    ) {
+      accepted.set(target.marketAddress, target);
+    }
+  }
+
+  const grouped = new Map<string, Array<{ shares?: unknown }>>();
+  for (const row of (trades.data ?? []) as Array<{
+    market_address?: unknown;
+    outcome_index?: unknown;
+    shares?: unknown;
+  }>) {
+    const address = String(row.market_address ?? "");
+    const outcome = Number(row.outcome_index);
+    const target = accepted.get(address);
+    if (!target || !Number.isInteger(outcome) || outcome < 0 || outcome >= target.outcomeCount) {
+      continue;
+    }
+    const key = `${address}|${outcome}`;
+    const group = grouped.get(key) ?? [];
+    group.push({ shares: row.shares });
+    grouped.set(key, group);
+  }
+
+  for (const target of Array.from(accepted.values())) {
+    for (let outcome = 0; outcome < target.outcomeCount; outcome += 1) {
+      const key = `${target.marketAddress}|${outcome}`;
+      const total = sumSharesScaled(grouped.get(key) ?? []);
+      if (total === null || total < BigInt(0)) continue;
+      out.set(key, sharesFromScaled(total));
+    }
+  }
+  return out;
 }
 
 /**

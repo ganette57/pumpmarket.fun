@@ -212,6 +212,19 @@ function truncNumeric(n: Numeric, dp: number): Numeric {
   return { u: n.u / pow10(n.dscale - dp), dscale: dp };
 }
 
+/** `round(n, dp)` — half away from zero, like PostgreSQL numeric round(). */
+function roundNumeric(n: Numeric, dp: number): Numeric {
+  if (n.dscale <= dp) {
+    return { u: n.u * pow10(dp - n.dscale), dscale: dp };
+  }
+  const factor = pow10(n.dscale - dp);
+  const negative = n.u < BIG_ZERO;
+  const abs = negative ? -n.u : n.u;
+  let rounded = abs / factor;
+  if ((abs % factor) * BIG_TWO >= factor) rounded += BIG_ONE;
+  return { u: negative ? -rounded : rounded, dscale: dp };
+}
+
 /* -------------------------------------------------------------------------- */
 /*  The settlement formula                                                     */
 /* -------------------------------------------------------------------------- */
@@ -285,4 +298,48 @@ export function playCurrentPositionPayoutUsd(input: {
     cents += parsed.u;
   }
   return formatNumeric({ u: cents, dscale: USD_SCALE });
+}
+
+/**
+ * Authoritative quote for ONE hypothetical new Play trade.
+ *
+ * Settlement pays and truncates each trade row independently, so the new
+ * purchase must be quoted as its own future row. Existing wallet holdings do
+ * not enter the numerator; they only remain part of the market-wide winning
+ * share denominator. `finalPoolUsdAfter` and `newTradeShares` are the exact
+ * post-purchase values returned by the pricing quote.
+ */
+export function playNewTradeQuoteUsd(input: {
+  newTradeShares: unknown;
+  currentTotalWinningShares: unknown;
+  finalPoolUsdAfter: unknown;
+  newStakeUsd: unknown;
+}): { payoutUsd: string; multiple: string } | null {
+  const shares = parseNumeric(input.newTradeShares, SHARES_SCALE);
+  const currentTotal = parseNumeric(input.currentTotalWinningShares, SHARES_SCALE);
+  const stake = parseNumeric(input.newStakeUsd, USD_SCALE);
+  if (!shares || !currentTotal || !stake) return null;
+  if (shares.u <= BIG_ZERO || currentTotal.u < BIG_ZERO || stake.u <= BIG_ZERO) {
+    return null;
+  }
+
+  const totalAfter = formatNumeric({
+    u: currentTotal.u + shares.u,
+    dscale: SHARES_SCALE,
+  });
+  const payoutUsd = playProRataPayoutUsd({
+    shares: input.newTradeShares,
+    totalWinningShares: totalAfter,
+    finalPoolUsd: input.finalPoolUsdAfter,
+  });
+  if (payoutUsd === null) return null;
+  const payout = parseNumeric(payoutUsd, USD_SCALE);
+  if (!payout) return null;
+  const multiple = divNumeric(payout, stake);
+  if (!multiple) return null;
+
+  return {
+    payoutUsd,
+    multiple: formatNumeric(roundNumeric(multiple, 4)),
+  };
 }

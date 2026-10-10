@@ -6,6 +6,8 @@ import { getConnection, getUserPositionPDA, PROGRAM_ID } from "@/utils/solana";
 import { supabaseServer } from "@/lib/supabaseServer";
 import { readPlaySession } from "@/lib/playAuth";
 import { realFeedMultiple, parseBLamports, DEFAULT_BASE_PRICE_LAMPORTS } from "@/lib/realTradeQuote";
+import { getPlayQuoteShareTotals } from "@/lib/playEngine";
+import { playNewTradeQuoteUsd } from "@/lib/playPayoutMath";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,10 +32,35 @@ export async function POST(req: Request) {
         wallet_in: session.wallet, addresses,
       });
       if (error) return respond(multiples); // migration unavailable: omit
+      const targets = addresses.flatMap(addr => {
+        const quotes = data?.[addr];
+        const first = Array.isArray(quotes) ? quotes.find(Boolean) : null;
+        const stateVersion = Number(first?.state_version);
+        const outcomeCount = Number(first?.outcome_count);
+        return Number.isInteger(stateVersion) && Number.isInteger(outcomeCount)
+          ? [{ marketAddress: addr, stateVersion, outcomeCount }]
+          : [];
+      });
+      const totals = await getPlayQuoteShareTotals(targets);
       for (const addr of addresses) {
         if (!Array.isArray(data?.[addr])) continue;
-        multiples[addr] = data[addr].map((quote: { estimated_multiple?: unknown } | null) => {
-          const value = Number(quote?.estimated_multiple);
+        multiples[addr] = data[addr].map((quote: {
+          outcome_index?: unknown;
+          shares?: unknown;
+          virtual_pool_usd_after?: unknown;
+          stake_usd?: unknown;
+        } | null) => {
+          const outcome = Number(quote?.outcome_index);
+          const total = totals.get(`${addr}|${outcome}`);
+          const marginal = total === undefined || !quote
+            ? null
+            : playNewTradeQuoteUsd({
+                newTradeShares: quote.shares,
+                currentTotalWinningShares: total,
+                finalPoolUsdAfter: quote.virtual_pool_usd_after,
+                newStakeUsd: quote.stake_usd,
+              });
+          const value = Number(marginal?.multiple);
           return Number.isFinite(value) && value > 0 ? value : null;
         });
       }
