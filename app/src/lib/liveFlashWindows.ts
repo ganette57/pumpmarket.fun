@@ -10,8 +10,8 @@
 //     end_at     = T0 + duration       <- market (and the result) ends here
 //
 // The trade window NEVER extends end_at. A 3-minute market launched at
-// 20:00:00 locks at 20:01:00 and still resolves on the 20:00:00–20:03:00
-// window; the final two minutes are watch-only.
+// 20:00:00 locks at 20:02:15 and still resolves on the 20:00:00–20:03:00
+// window; the final 45 seconds are watch-only.
 //
 // The host picks a DURATION only. The trade window is derived here and
 // nowhere else — do not inline these numbers in a component, an API route
@@ -28,18 +28,16 @@ export const DEFAULT_FLASH_DURATION_MIN = 5;
 /**
  * Duration (minutes) -> trading window (seconds).
  *
- * The shape of this curve is deliberate: short markets need a trade window
- * that is a large FRACTION of the market (a 1-minute market with a 20-second
- * window still leaves 40 seconds of watching), while long markets cap the
- * window well below half so the watch-only phase stays the main event.
+ * The shape of this curve is deliberate: LIVE markets keep most of their
+ * short duration tradable while retaining a final watch-only/result phase.
  */
 const TRADE_WINDOW_SECONDS: Readonly<Record<number, number>> = {
-  1: 20,
-  3: 60,
-  5: 90,
-  10: 180,
-  15: 300,
-  30: 600,
+  1: 45,
+  3: 135,
+  5: 240,
+  10: 480,
+  15: 720,
+  30: 1500,
 };
 
 /** Absolute floor for a derived window, so no market is untradable. */
@@ -228,7 +226,7 @@ export function formatMmSs(totalSeconds: number): string {
  *
  * For a market of D minutes: lock = T0 + W(D) and end = T0 + 60D, so
  * end − lock = 60D − W(D). Across the supported durations that quantity is
- * 40 / 120 / 210 / 420 / 600 / 1200 seconds — strictly increasing and
+ * 15 / 45 / 60 / 120 / 180 / 300 seconds — strictly increasing and
  * therefore uniquely invertible. So the market's own two timestamps pin down
  * its duration, and hence its start.
  *
@@ -260,8 +258,8 @@ export type TradeWindowUrgency = "green" | "yellow" | "orange" | "red";
 
 export function tradeWindowUrgency(fractionRemaining: number): TradeWindowUrgency {
   const f = Number.isFinite(fractionRemaining) ? fractionRemaining : 0;
-  if (f > 0.5) return "green";
-  if (f > 0.25) return "yellow";
+  if (f > 0.6) return "green";
+  if (f >= 0.3) return "yellow";
   if (f > 0.1) return "orange";
   return "red";
 }

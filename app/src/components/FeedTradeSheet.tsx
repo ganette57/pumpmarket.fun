@@ -19,6 +19,7 @@ import { PlayApiError, formatUsd, playClient, toCents } from "@/lib/playClient";
 import { useMarketSnapshotActions } from "@/components/mode/MarketSnapshotProvider";
 
 import { useRealQuotes } from "@/hooks/useRealQuotes";
+import type { LiveTradeSuccessDetails } from "@/components/LiveTradeSuccessOverlay";
 
 interface FeedTradeSheetProps {
   open: boolean;
@@ -46,6 +47,8 @@ interface FeedTradeSheetProps {
     deltaShares: number,
     costSol: number
   ) => void;
+  /** Presentation-only callback, emitted after confirmed success as the sheet closes. */
+  onTradeSuccess?: (details: LiveTradeSuccessDetails) => void;
 }
 
 function clampInt(n: number, min: number, max: number) {
@@ -62,6 +65,7 @@ export default function FeedTradeSheet({
   market,
   defaultOutcomeIndex = 0,
   onBuySuccess,
+  onTradeSuccess,
 }: FeedTradeSheetProps) {
   const { connected, publicKey, signTransaction } = useFunMarketWallet();
   const { connection } = useConnection();
@@ -253,7 +257,15 @@ export default function FeedTradeSheet({
       triggerHaptic("success");
       // Intentionally NOT calling onBuySuccess: that optimistically mutates
       // the Real feed state. Play refreshes through its own snapshot above.
-      setTimeout(() => onClose(), 800);
+      setTimeout(() => {
+        onClose();
+        onTradeSuccess?.({
+          mode: "play",
+          outcomeName: outcomeNames[safeOutcome] || `Outcome #${safeOutcome + 1}`,
+          shares: Math.max(0, Number(res.trade?.shares) || 0),
+          amount: Number(res.trade?.stake_usd) || null,
+        });
+      }, 800);
     } catch (e) {
       if (e instanceof PlayApiError) {
         // An expired session must re-prompt, never fall through to Real.
@@ -278,6 +290,7 @@ export default function FeedTradeSheet({
     outcomeNames.length,
     play,
     onClose,
+    onTradeSuccess,
     invalidateSnapshot,
   ]);
 
@@ -377,6 +390,12 @@ export default function FeedTradeSheet({
       onBuySuccess?.(safeOutcome, approxShares, effectiveAmount);
       setTimeout(() => {
         onClose();
+        onTradeSuccess?.({
+          mode: "real",
+          outcomeName: name,
+          shares: approxShares,
+          amount: effectiveAmount,
+        });
       }, 800);
     } catch (err: any) {
       console.error("FeedTradeSheet buy error:", err);
@@ -402,6 +421,7 @@ export default function FeedTradeSheet({
     connection,
     onClose,
     onBuySuccess,
+    onTradeSuccess,
   ]);
 
   /* ---------------------------------------------------------------------- */

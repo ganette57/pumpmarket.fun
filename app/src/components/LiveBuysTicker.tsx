@@ -1,13 +1,21 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
+import {
+  collectUnseenLiveTrades,
+  publishLiveTradeActivity,
+} from "@/lib/liveTradeActivity";
 
 type TxRow = {
   id: string;
   created_at: string;
   is_buy: boolean;
+  user_address: string;
+  is_yes: boolean | null;
   shares: number | string | null;
+  cost: number | string | null;
+  outcome_index: number | null;
   outcome_name: string | null;
   market_address: string | null;
   __market_question?: string;
@@ -32,6 +40,7 @@ export default function LiveBuysTicker({
   );
   const [loadedOnce, setLoadedOnce] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const seenTradeIdsRef = useRef<Set<string> | null>(null);
 
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 1023px)");
@@ -51,7 +60,14 @@ export default function LiveBuysTicker({
         return;
       }
       const json = await res.json();
-      setRows((json.items || []) as TxRow[]);
+      const nextRows = (json.items || []) as TxRow[];
+      const unseen = collectUnseenLiveTrades(
+        nextRows,
+        seenTradeIdsRef.current,
+      );
+      seenTradeIdsRef.current = unseen.seenIds;
+      for (const trade of unseen.newTrades) publishLiveTradeActivity(trade);
+      setRows(nextRows);
     } catch (err) {
       console.error("LiveBuysTicker fetch error:", err);
       setRows([]);

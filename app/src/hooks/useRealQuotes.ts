@@ -65,7 +65,8 @@ function enqueue(connection: ReturnType<typeof useConnection>["connection"], pro
 }
 
 export function useRealQuotes(address: string, enabled: boolean, revision: string,
-  input: { shares: number } | { budget: number } = { budget: 1e9 }) {
+  input: { shares: number } | { budget: number } = { budget: 1e9 },
+  options: { expectedSupplies?: number[] } = {}) {
   const { connection } = useConnection();
   const program = useProgram();
   const wallet = useFunMarketWallet();
@@ -90,7 +91,12 @@ export function useRealQuotes(address: string, enabled: boolean, revision: strin
     } });
     return () => { cancelled = true; };
   }, [address, enabled, identity, key, connection, program]);
-  const snapshot = result?.key === key ? result.snapshot : null;
+  const snapshot = result?.key === key && result.snapshot &&
+    (!options.expectedSupplies ||
+      result.snapshot.supplies.length === options.expectedSupplies.length &&
+      result.snapshot.supplies.every((value, index) => value === options.expectedSupplies?.[index]))
+    ? result.snapshot
+    : null;
   // Input changes calculate synchronously from one snapshot: no previous quote frame.
   return snapshot ? snapshot.supplies.map((s, i): RealQuote | null =>
     realQuote(snapshot.base, s, snapshot.pool, snapshot.holdings[i], input)) : [];

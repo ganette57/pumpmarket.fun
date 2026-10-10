@@ -13,6 +13,10 @@ import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { BN } from "@coral-xyz/anchor";
 
 import { useProgram } from "@/hooks/useProgram";
+import { useTradeActivityPopups } from "@/hooks/useTradeActivityPopups";
+import LiveTradeSuccessOverlay, {
+  useLiveTradeSuccess,
+} from "@/components/LiveTradeSuccessOverlay";
 
 import CategoryImagePlaceholder from "@/components/CategoryImagePlaceholder";
 import MobileTopBar from "@/components/MobileTopBar";
@@ -41,7 +45,9 @@ import {
 import ResolutionPanel from "@/components/ResolutionPanel";
 import MarketCard from "@/components/MarketCard";
 import BlockedMarketBanner from "@/components/BlockedMarketBanner";
-import TradeBuyPopOverlay from "@/components/TradeBuyPopOverlay";
+import {
+  LiveTradeActivityPopups,
+} from "@/components/LiveMobileContent";
 import FlashMarketResultModal, { type FlashMarketResultState } from "@/components/FlashMarketResultModal";
 import {
   buildRealResultValues,
@@ -1922,6 +1928,7 @@ export default function TradePage() {
   // Trade modal state
   const [tradeStep, setTradeStep] = useState<TradeStep>("idle");
   const [tradeResult, setTradeResult] = useState<TradeResult>(null);
+  const { success: tradeSuccess, showTradeSuccess } = useLiveTradeSuccess();
   const [flashResultModalOpen, setFlashResultModalOpen] = useState(false);
   const [flashResultPayload, setFlashResultPayload] = useState<FlashResultPayload | null>(null);
   const [flashRawOutcomeHint, setFlashRawOutcomeHint] = useState<{ outcomeIndex: number; version: string } | null>(null);
@@ -3071,6 +3078,10 @@ if (snap?.posAcc?.shares) {
   // shared MarketSnapshotProvider (no second store). The Real TradingPanel
   // still receives derived.supplies, so Real execution is untouched.
   const { isPlay: isPlayTrading } = useTradingMode();
+  const tradeActivityToasts = useTradeActivityPopups({
+    marketAddress: id,
+    mode: isPlayTrading ? "play" : "real",
+  });
   const { publishRealSnapshots, watchPlayMarket } = useMarketSnapshotActions();
   const snapshotKey = market?.publicKey ?? id ?? "";
   const mobilePlayHistory = usePlayOddsHistory(snapshotKey, { enabled: isMobile && isPlayTrading });
@@ -3536,16 +3547,29 @@ useEffect(() => {
       // close drawer on success (mobile)
       if (isMobile) setMobileTradeOpen(false);
 
-      // Show success modal
-      setTradeStep("done");
-      setTradeResult({
-        success: true,
-        side,
-        shares: safeShares,
-        outcomeName: name,
-        costSol: safeCostSol,
-        txSig,
-      });
+      if (side === "buy") {
+        // The existing progress modal has completed confirmation + refresh.
+        // Clear it before showing the shared non-blocking BUY confirmation.
+        setTradeStep("idle");
+        setTradeResult(null);
+        showTradeSuccess({
+          mode: "real",
+          outcomeName: name,
+          shares: safeShares,
+          amount: safeCostSol,
+        });
+      } else {
+        // Preserve the existing SELL success result; STEP 4B is BUY-only.
+        setTradeStep("done");
+        setTradeResult({
+          success: true,
+          side,
+          shares: safeShares,
+          outcomeName: name,
+          costSol: safeCostSol,
+          txSig,
+        });
+      }
 
     } catch (error: any) {
       console.error(`${side.toUpperCase()} shares error:`, error);
@@ -4641,6 +4665,7 @@ const ended = endedByTime;
         result={tradeResult}
         onClose={closeTradeModal}
       />
+      <LiveTradeSuccessOverlay success={tradeSuccess} />
 
       {/* Feed Video Preview Modal */}
       <VideoPreviewModal
@@ -4698,8 +4723,9 @@ const ended = endedByTime;
             {sportEventForUi && isSportLikeMarket && isSoccerLike && (market.sportMeta as any)?.provider_event_id && <button className="col-start-2" onClick={() => setSoccerDrawerOpen(true)}>Match details</button>}
             {mobileEndLabel && <span className="col-start-3 min-w-0 truncate text-right">{mobileEndLabel.startsWith("Ends in ") ? <>Ends in <strong className="font-bold">{mobileEndLabel.slice(8)}</strong></> : mobileEndLabel}</span>}
           </div>
-          <div className="my-2 flex min-h-[180px] flex-1 flex-col justify-center">
+          <div className="relative my-2 flex min-h-[180px] flex-1 flex-col justify-center">
             <MobileProbabilityChart key={`${market.publicKey}:${isPlayTrading}`} names={names} current={mobileValues} colors={mobileColors} points={mobilePoints} />
+            <LiveTradeActivityPopups trades={tradeActivityToasts} />
           </div>
           <div>
             <MobileTradeOutcomes marketAddress={market.publicKey} isPlay={isPlayTrading} version={modeSnapshot?.updatedAt}
@@ -5242,7 +5268,9 @@ const ended = endedByTime;
               </div>
 
               {/* Odds history */}
-              <div className="bg-black border border-gray-800 rounded-xl p-5 md:p-6">
+              <div className="relative bg-black border border-gray-800 rounded-xl p-5 md:p-6">
+
+                <LiveTradeActivityPopups trades={tradeActivityToasts} />
 
                 {isPlayTrading ? (
                   // Play history — authoritative Play probabilities over time,
@@ -5369,6 +5397,14 @@ const ended = endedByTime;
                       marketClosed={marketClosed}
                       marketClosedTitle={closedPanelTitle}
                       marketClosedMessage={closedPanelMessage}
+                      onTraded={({ outcomeName, shares, stakeUsd }) =>
+                        showTradeSuccess({
+                          mode: "play",
+                          outcomeName,
+                          shares,
+                          amount: Number(stakeUsd) || null,
+                        })
+                      }
                     />
                   ) : (
                     <TradingPanel
@@ -5516,6 +5552,15 @@ const ended = endedByTime;
                   marketClosed={marketClosed}
                   marketClosedTitle={closedPanelTitle}
                   marketClosedMessage={closedPanelMessage}
+                  onTraded={({ outcomeName, shares, stakeUsd }) => {
+                    setMobileTradeOpen(false);
+                    showTradeSuccess({
+                      mode: "play",
+                      outcomeName,
+                      shares,
+                      amount: Number(stakeUsd) || null,
+                    });
+                  }}
                 />
               ) : (
                 <TradingPanel
@@ -5548,11 +5593,6 @@ const ended = endedByTime;
         </div>,
         document.body
       )}
-
-      <TradeBuyPopOverlay
-        marketAddress={market.publicKey}
-        marketId={market.dbId ?? null}
-      />
 
       {/* NBA Widget Drawer — basketball match stats */}
       <NbaWidgetDrawer

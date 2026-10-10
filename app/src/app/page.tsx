@@ -15,6 +15,9 @@ import { SkeletonCard, SkeletonFeaturedCard } from "@/components/SkeletonCard";
 import HomeFeedItem from "@/components/HomeFeedItem";
 import { footballMatchOutcomeIndices } from "@/lib/feedOutcomes";
 import FeedTradeSheet from "@/components/FeedTradeSheet";
+import LiveTradeSuccessOverlay, {
+  useLiveTradeSuccess,
+} from "@/components/LiveTradeSuccessOverlay";
 import HomeFeedActionRail from "@/components/HomeFeedActionRail";
 import HomeFeedCommentsSheet from "@/components/HomeFeedCommentsSheet";
 import ModeSwitch from "@/components/mode/ModeSwitch";
@@ -1002,6 +1005,7 @@ export default function Home() {
   const [tradeSheetOpen, setTradeSheetOpen] = useState(false);
   const [tradeSheetMarket, setTradeSheetMarket] = useState<FeedTradeTarget | null>(null);
   const [tradeSheetOutcome, setTradeSheetOutcome] = useState(0);
+  const { success: tradeSuccess, showTradeSuccess } = useLiveTradeSuccess();
 
   const openTradeSheet = useCallback(
     (market: typeof prioritizedClassicFeedMarkets[number], outcomeIndex: number) => {
@@ -1380,12 +1384,14 @@ export default function Home() {
             </div>
 
             {/* Quick trade bottom sheet */}
+            <LiveTradeSuccessOverlay success={tradeSuccess} />
             <FeedTradeSheet
               open={tradeSheetOpen}
               onClose={() => setTradeSheetOpen(false)}
               market={tradeSheetMarket}
               defaultOutcomeIndex={tradeSheetOutcome}
               onBuySuccess={handleFeedBuySuccess}
+              onTradeSuccess={showTradeSuccess}
             />
 
             <HomeFeedCommentsSheet

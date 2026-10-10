@@ -14,8 +14,9 @@ export const dynamic = "force-dynamic";
 
 // One personalized batch for all mounted mobile cards, never one quote per outcome.
 export async function POST(req: Request) {
+  const stateVersions: Record<string, number> = {};
   const respond = (multiples: Record<string, (number | null)[]>) =>
-    NextResponse.json({ multiples }, { headers: { "Cache-Control": "private, no-store" } });
+    NextResponse.json({ multiples, stateVersions }, { headers: { "Cache-Control": "private, no-store" } });
   const multiples: Record<string, (number | null)[]> = {};
   try {
     const body = await req.json();
@@ -44,6 +45,9 @@ export async function POST(req: Request) {
       const totals = await getPlayQuoteShareTotals(targets);
       for (const addr of addresses) {
         if (!Array.isArray(data?.[addr])) continue;
+        const first = data[addr].find(Boolean);
+        const stateVersion = Number(first?.state_version);
+        if (Number.isInteger(stateVersion)) stateVersions[addr] = stateVersion;
         multiples[addr] = data[addr].map((quote: {
           outcome_index?: unknown;
           shares?: unknown;

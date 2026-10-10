@@ -13,7 +13,7 @@ export async function GET() {
   try {
     const { data: txs, error: txErr } = await sb
       .from("transactions")
-      .select("id,created_at,is_buy,shares,outcome_name,market_address")
+      .select("id,created_at,market_address,user_address,is_buy,is_yes,shares,cost,outcome_index,outcome_name")
       .eq("is_buy", true)
       .order("created_at", { ascending: false })
       .limit(20);

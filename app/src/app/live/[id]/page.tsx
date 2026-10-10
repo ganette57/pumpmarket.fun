@@ -10,6 +10,10 @@ import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { BN } from "@coral-xyz/anchor";
 
 import { useProgram } from "@/hooks/useProgram";
+import { useTradeActivityPopups } from "@/hooks/useTradeActivityPopups";
+import LiveTradeSuccessOverlay, {
+  useLiveTradeSuccess,
+} from "@/components/LiveTradeSuccessOverlay";
 import TradingPanel from "@/components/TradingPanel";
 import PlayTradingPanel from "@/components/PlayTradingPanel";
 import { useTradingMode } from "@/components/mode/ModeProvider";
@@ -29,6 +33,7 @@ import { buildRealResultValues } from "@/lib/resultPayload";
 import type { PayoutQualifier, ResultMode } from "@/lib/resultCard";
 import { hasSeenResult, markResultSeen, resultSeenKey } from "@/lib/resultSeen";
 import { fetchPlayLiveResult, playLiveSeenKey } from "@/lib/playLiveResult";
+import { linkedLiveMarketRequiresResolution } from "@/lib/liveSessionLifecycle";
 import {
   StreamPlayer,
   StreamUnavailable,
@@ -36,6 +41,7 @@ import {
   MobileBuySheet,
   formatVol,
   LiveMobileContent,
+  LiveTradeActivityPopups,
   MobileImmersiveSlide,
   TradeWindowBar,
 } from "@/components/LiveMobileContent";
@@ -52,7 +58,6 @@ import {
   getLiveSession,
   subscribeLiveSession,
   fetchRecentTrades,
-  subscribeRecentTrades,
   fetchQueuedNextMarketConfig,
   serializeQueuedNextMarketConfig,
   type LiveSession,
@@ -223,36 +228,6 @@ function fmtMmSs(totalSec: number): string {
   return `${String(Math.floor(safe / 60)).padStart(2, "0")}:${String(safe % 60).padStart(2, "0")}`;
 }
 
-/* ── BUY toasts (bottom-up) ─────────────────────────────────────────── */
-
-function BuyToasts({ toasts }: { toasts: (RecentTrade & { _key: number })[] }) {
-  if (toasts.length === 0) return null;
-
-  return (
-    <div className="fixed bottom-20 left-4 z-[150] flex flex-col-reverse gap-2 pointer-events-none">
-      {toasts.map((t) => {
-        const wallet = t.user_address
-          ? `${t.user_address.slice(0, 4)}...${t.user_address.slice(-4)}`
-          : "anon";
-        const name = t.outcome_name || (t.is_yes === true ? "YES" : t.is_yes === false ? "NO" : "");
-        const costLabel = typeof t.cost === "number" && t.cost > 0 ? `${t.cost.toFixed(3)} SOL` : "";
-
-        return (
-          <div
-            key={t._key}
-            className="bg-pump-green/15 border border-pump-green/40 rounded-xl px-3 py-2 text-xs text-white shadow-lg backdrop-blur-sm animate-slideUp"
-          >
-            <span className="font-semibold text-pump-green">BUY</span>{" "}
-            <span className="text-gray-300">{wallet}</span>{" "}
-            <span className="font-medium">{name}</span>
-            {costLabel && <span className="text-gray-400 ml-1">{costLabel}</span>}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 /* ── Giant immersive countdown overlay ──────────────────────────────── */
 
 type CountdownPhase = "normal" | "warning" | "panic";
@@ -325,6 +300,7 @@ export default function LiveViewerPage() {
 
   const [session, setSession] = useState<LiveSession | null>(null);
   const [market, setMarket] = useState<UiMarket | null>(null);
+  const [marketActivityRevision, setMarketActivityRevision] = useState(0);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [queuedNext, setQueuedNext] = useState<QueuedNextMarketConfig | null>(
@@ -381,8 +357,15 @@ export default function LiveViewerPage() {
 
   // Live Activity + toasts
   const [recentTrades, setRecentTrades] = useState<RecentTrade[]>([]);
-  const [buyToasts, setBuyToasts] = useState<(RecentTrade & { _key: number })[]>([]);
-  const toastCounter = useRef(0);
+  const { success: tradeSuccess, showTradeSuccess } = useLiveTradeSuccess();
+  const activityToasts = useTradeActivityPopups({
+    marketAddress: session?.market_address,
+    mode: isPlay ? "play" : "real",
+    onRealTrade: (trade) => {
+      setRecentTrades((prev) => [trade, ...prev].slice(0, 20));
+      setMarketActivityRevision((value) => value + 1);
+    },
+  });
 
   const inFlightRef = useRef<Record<string, boolean>>({});
 
@@ -444,23 +427,6 @@ export default function LiveViewerPage() {
   useEffect(() => {
     if (!session?.market_address) return;
     fetchRecentTrades(session.market_address, 20).then(setRecentTrades);
-  }, [session?.market_address]);
-
-  useEffect(() => {
-    if (!session?.market_address) return;
-    const unsub = subscribeRecentTrades(session.market_address, (trade) => {
-      // Prepend to activity list
-      setRecentTrades((prev) => [trade, ...prev].slice(0, 20));
-      // Add BUY toast (only for buy trades)
-      if (trade.is_buy) {
-        const key = ++toastCounter.current;
-        setBuyToasts((prev) => [...prev, { ...trade, _key: key }].slice(-3));
-        setTimeout(() => {
-          setBuyToasts((prev) => prev.filter((t) => t._key !== key));
-        }, 4000);
-      }
-    });
-    return unsub;
   }, [session?.market_address]);
 
   /* ── Load market ───────────────────────────────────────────────── */
@@ -551,7 +517,7 @@ export default function LiveViewerPage() {
   useEffect(() => {
     if (!session?.market_address) return;
     loadMarket(session.market_address);
-  }, [session?.market_address, program, loadMarket]);
+  }, [session?.market_address, program, loadMarket, marketActivityRevision]);
 
   // Resolve the queued next-market CONFIG (if any) for the Up Next strip and
   // the post-resolve auto-start. Tolerates a missing column gracefully.
@@ -871,9 +837,18 @@ export default function LiveViewerPage() {
   const eco = useLiveMarketEconomics({
     address: market?.publicKey ?? null,
     realPercentages: derived?.percentages ?? [],
+    realSupplies: derived?.supplies ?? [],
     realVolumeLamports: market?.totalVolume ?? 0,
     realStatus: market?.resolved ? "resolved" : "open",
     outcomeCount: derived?.names.length ?? 0,
+    closed:
+      !!market?.resolved ||
+      !!market?.isBlocked ||
+      !!session && ["locked", "ended", "resolved", "cancelled"].includes(session.status) ||
+      market?.resolutionStatus === "proposed" ||
+      (market?.resolutionTime != null && Date.now() >= market.resolutionTime * 1000) ||
+      (parseTimestampMs(market?.tradingLockAt) != null &&
+        Date.now() >= (parseTimestampMs(market?.tradingLockAt) as number)),
   });
   const displayPercentages =
     eco.isPlay && derived ? eco.percentages : derived?.percentages ?? [];
@@ -902,6 +877,15 @@ export default function LiveViewerPage() {
 
   const marketClosed = market?.resolved || market?.isBlocked || sessionLocked
     || market?.resolutionStatus === "proposed";
+  const hostEndDisabled = linkedLiveMarketRequiresResolution({
+    marketAddress: session?.market_address,
+    market: market
+      ? {
+          resolved: market.resolved,
+          resolutionStatus: market.resolutionStatus,
+        }
+      : null,
+  });
 
   /* ── Immersive mode (LIVE only) ───────────────────────────────── */
 
@@ -1203,6 +1187,17 @@ export default function LiveViewerPage() {
 
       const safeCostSol = typeof costSol === "number" && Number.isFinite(costSol) ? costSol : null;
 
+      // sendSignedTx resolves only after the existing confirmed transaction
+      // path succeeds. Never show success from the button click itself.
+      if (side === "buy") {
+        showTradeSuccess({
+          mode: "real",
+          outcomeName: name,
+          shares: safeShares,
+          amount: safeCostSol,
+        });
+      }
+
       try {
         if (market.dbId) {
           await recordTransaction({
@@ -1368,7 +1363,7 @@ export default function LiveViewerPage() {
               }
               derived={
                 derived
-                  ? { names: derived.names, percentages: displayPercentages }
+                  ? { names: derived.names, percentages: displayPercentages, multipliers: eco.multipliers }
                   : null
               }
               economics={
@@ -1393,6 +1388,7 @@ export default function LiveViewerPage() {
                     session={session}
                     onStatusChange={handleStatusChange}
                     error={statusError}
+                    endDisabled={hostEndDisabled}
                   />
                 ) : null
               }
@@ -1408,6 +1404,7 @@ export default function LiveViewerPage() {
               }
               onCreateNextMarket={isHost ? handleCreateNextMarket : undefined}
               queuedNext={queuedNext}
+              activityOverlay={<LiveTradeActivityPopups trades={activityToasts} />}
             />
           </div>
         ) : (
@@ -1435,6 +1432,7 @@ export default function LiveViewerPage() {
               derived={derived ? {
                 names: derived.names,
                 percentages: displayPercentages,
+                multipliers: eco.multipliers,
               } : null}
               volumeLabel={eco.isPlay ? eco.volumeLabel : undefined}
               sessionLocked={sessionLocked}
@@ -1447,7 +1445,7 @@ export default function LiveViewerPage() {
             />
 
             {isHost && (
-              <HostControls session={session} onStatusChange={handleStatusChange} error={statusError} />
+              <HostControls session={session} onStatusChange={handleStatusChange} error={statusError} endDisabled={hostEndDisabled} />
             )}
           </div>
         )
@@ -1491,6 +1489,8 @@ export default function LiveViewerPage() {
                       isFinal={countdown.isFinal}
                     />
                   )}
+
+                  <LiveTradeActivityPopups trades={activityToasts} />
 
                   {/* ── Camera overlay: top ────────────────────── */}
                   {/* pointer-events-none — purely decorative, never blocks
@@ -1555,6 +1555,7 @@ export default function LiveViewerPage() {
                         session={session}
                         onStatusChange={handleStatusChange}
                         error={statusError}
+                        endDisabled={hostEndDisabled}
                       />
                     </div>
                     {!queuedNext && handleCreateNextMarket && (
@@ -1606,6 +1607,14 @@ export default function LiveViewerPage() {
                       layout="desktop"
                       playStatus={eco.status}
                       marketClosed={!!marketClosed || tradingClosed}
+                      onTraded={({ outcomeName, shares, stakeUsd }) =>
+                        showTradeSuccess({
+                          mode: "play",
+                          outcomeName,
+                          shares,
+                          amount: Number(stakeUsd) || null,
+                        })
+                      }
                     />
                   )}
 
@@ -1714,7 +1723,7 @@ export default function LiveViewerPage() {
                 )}
 
                 {isHost && (
-                  <HostControls session={session} onStatusChange={handleStatusChange} error={statusError} />
+                  <HostControls session={session} onStatusChange={handleStatusChange} error={statusError} endDisabled={hostEndDisabled} />
                 )}
 
                 {market && (
@@ -1758,6 +1767,14 @@ export default function LiveViewerPage() {
                       layout="desktop"
                       playStatus={eco.status}
                       marketClosed={!!marketClosed || tradingClosed}
+                      onTraded={({ outcomeName, shares, stakeUsd }) =>
+                        showTradeSuccess({
+                          mode: "play",
+                          outcomeName,
+                          shares,
+                          amount: Number(stakeUsd) || null,
+                        })
+                      }
                     />
                   )}
 
@@ -1803,6 +1820,8 @@ export default function LiveViewerPage() {
           sessionLocked={tradingClosed}
           defaultOutcomeIndex={defaultOutcomeIndex}
           keepNavbar
+          marketAddress={market.publicKey}
+          quoteRevision={eco.quoteRevision}
         />
       )}
       {isMobile && market && derived && isPlay && (
@@ -1814,41 +1833,20 @@ export default function LiveViewerPage() {
           defaultOutcomeIndex={defaultOutcomeIndex}
           sessionLocked={tradingClosed}
           playStatus={eco.status}
+          quoteRevision={eco.quoteRevision}
           keepNavbar
-          onTraded={({ outcomeName, shares }) => {
-            // Reuse the existing Live BUY toast (SOL cost omitted → no SOL
-            // shown for Play). Play data only; never touches Real state.
-            const key = Date.now();
-            setBuyToasts((prev) =>
-              [
-                ...prev,
-                {
-                  id: `play-${key}`,
-                  created_at: new Date().toISOString(),
-                  user_address: publicKey?.toBase58() ?? "",
-                  is_buy: true,
-                  is_yes:
-                    derived.names.length === 2
-                      ? derived.names.indexOf(outcomeName) === 0
-                      : null,
-                  shares,
-                  cost: 0,
-                  outcome_index: derived.names.indexOf(outcomeName),
-                  outcome_name: outcomeName,
-                  _key: key,
-                },
-              ].slice(-3)
-            );
-            setTimeout(
-              () => setBuyToasts((prev) => prev.filter((t) => t._key !== key)),
-              2500
-            );
-          }}
+          onTraded={({ outcomeName, shares, stakeUsd }) =>
+            showTradeSuccess({
+              mode: "play",
+              outcomeName,
+              shares,
+              amount: Number(stakeUsd) || null,
+            })
+          }
         />
       )}
 
-      {/* BUY toasts */}
-      <BuyToasts toasts={buyToasts} />
+      <LiveTradeSuccessOverlay success={tradeSuccess} />
 
       {/* Viewer win/lose modal — host suppressed via hostJustResolvedRef. */}
       {resultModal && (

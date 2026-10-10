@@ -20,6 +20,10 @@ import {
   type QueuedNextMarketConfig,
 } from "@/lib/liveSessions";
 import { useProgram } from "@/hooks/useProgram";
+import { useTradeActivityPopups } from "@/hooks/useTradeActivityPopups";
+import LiveTradeSuccessOverlay, {
+  useLiveTradeSuccess,
+} from "@/components/LiveTradeSuccessOverlay";
 import {
   getMarketByAddress,
   recordTransaction,
@@ -32,8 +36,10 @@ import {
 } from "@/utils/solana";
 import { sendSignedTx } from "@/lib/solanaSend";
 import {
+  LiveTradeActivityPopups,
   MobileBuySheet,
   MobileImmersiveSlide,
+  type LiveTradeActivityToast,
 } from "@/components/LiveMobileContent";
 import LiveHostControls from "@/components/LiveHostControls";
 import ModeSwitch from "@/components/mode/ModeSwitch";
@@ -50,6 +56,7 @@ import { fetchPlayLiveResult, playLiveSeenKey } from "@/lib/playLiveResult";
 import { proposeLiveResolution } from "@/lib/liveResolve";
 import { createLiveFlashMarket } from "@/lib/liveMarketCreate";
 import { parseTimestampMs } from "@/lib/liveFlashWindows";
+import { linkedLiveMarketRequiresResolution } from "@/lib/liveSessionLifecycle";
 import bs58 from "bs58";
 
 type DesktopTab = "live" | "feed";
@@ -393,6 +400,7 @@ function MobileLiveTradeSlide({
   hostSlot,
   onResolve,
   onCreateNextMarket,
+  activityToasts,
 }: {
   session: LiveSession;
   market: MobileMarketSnapshot | null;
@@ -405,19 +413,27 @@ function MobileLiveTradeSlide({
     outcomes: string[];
     durationMin: number;
   }) => Promise<void>;
+  activityToasts?: LiveTradeActivityToast[];
 }) {
   const display = deriveOutcomeDisplay(market);
   const tradingLocked =
-    session.status === "locked" || !!market?.resolved || !!market?.isBlocked;
+    session.status === "locked" ||
+    !!market?.resolved ||
+    !!market?.isBlocked ||
+    market?.resolutionStatus === "proposed" ||
+    (market?.resolutionTime != null && Date.now() >= market.resolutionTime * 1000) ||
+    isTradeLockedNow(market?.tradingLockAt);
 
   // Mode-aware economics for THIS live market. Real is untouched (economics
   // left undefined below when not Play); Play reads the Play book only.
   const eco = useLiveMarketEconomics({
     address: market?.publicKey ?? null,
     realPercentages: display.percentages,
+    realSupplies: display.supplies,
     realVolumeLamports: market?.totalVolume ?? 0,
     realStatus: market?.resolved ? "resolved" : "open",
     outcomeCount: display.names.length,
+    closed: tradingLocked,
   });
 
   return (
@@ -441,6 +457,7 @@ function MobileLiveTradeSlide({
             ? {
                 names: display.names,
                 percentages: eco.isPlay ? eco.percentages : display.percentages,
+                multipliers: eco.multipliers,
               }
             : null
         }
@@ -450,6 +467,9 @@ function MobileLiveTradeSlide({
             : undefined
         }
         isPlay={eco.isPlay}
+        activityOverlay={
+          activityToasts ? <LiveTradeActivityPopups trades={activityToasts} /> : null
+        }
         active={active}
         sessionLocked={tradingLocked}
         onOutcomeTap={(idx) => onOutcomeTap(session, idx)}
@@ -499,12 +519,7 @@ export default function LivePage() {
   const [mobileTradeOutcomeIndex, setMobileTradeOutcomeIndex] = useState(0);
   const [submittingTrade, setSubmittingTrade] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
-  const [lastBuyToast, setLastBuyToast] = useState<{
-    outcome: string;
-    shares: number;
-    key: number;
-  } | null>(null);
-
+  const { success: tradeSuccess, showTradeSuccess } = useLiveTradeSuccess();
   const liveScrollerRef = useRef<HTMLDivElement | null>(null);
   const inFlightTradeRef = useRef(false);
   const failedMarketLoadsRef = useRef<Set<string>>(new Set());
@@ -687,6 +702,16 @@ export default function LivePage() {
     },
     []
   );
+
+  const popupSession = isMobile ? mobileActiveSessions[mobileLiveIndex] : null;
+  const activityToasts = useTradeActivityPopups({
+    marketAddress: popupSession?.market_address,
+    mode: isPlay ? "play" : "real",
+    enabled: isMobile && !!popupSession,
+    onRealTrade: () => {
+      if (popupSession) void loadSessionMarketSnapshot(popupSession);
+    },
+  });
 
   // Host resolve (feed) — reuses the existing propose flow, then refreshes the
   // session's market snapshot so the result panel shows immediately.
@@ -1061,9 +1086,11 @@ export default function LivePage() {
   const tradeEco = useLiveMarketEconomics({
     address: tradeMarket?.publicKey ?? null,
     realPercentages: tradeMarketDisplay?.percentages ?? [],
+    realSupplies: tradeMarketDisplay?.supplies ?? [],
     realVolumeLamports: tradeMarket?.totalVolume ?? 0,
     realStatus: tradeMarket?.resolved ? "resolved" : "open",
     outcomeCount: tradeMarketDisplay?.names.length ?? 0,
+    closed: tradeClosed,
   });
 
   const handleTrade = useCallback(
@@ -1153,6 +1180,17 @@ export default function LivePage() {
             ? costSol
             : null;
 
+        // sendSignedTx has completed successfully at this point; clicks and
+        // rejected/failed transactions never reach the confirmation overlay.
+        if (side === "buy") {
+          showTradeSuccess({
+            mode: "real",
+            outcomeName,
+            shares: safeShares,
+            amount: safeCostSol,
+          });
+        }
+
         try {
           if (tradeMarket.dbId) {
             await recordTransaction({
@@ -1195,20 +1233,6 @@ export default function LivePage() {
         await loadSessionMarketSnapshot(tradeSession);
         setMobileTradeOpen(false);
 
-        // Brief "Bought YES · N shares" toast (own buy only).
-        if (side === "buy") {
-          const toastKey = Date.now();
-          setLastBuyToast({
-            outcome: outcomeName,
-            shares: safeShares,
-            key: toastKey,
-          });
-          setTimeout(() => {
-            setLastBuyToast((prev) =>
-              prev?.key === toastKey ? null : prev,
-            );
-          }, 2500);
-        }
       } catch (e: any) {
         const msg = String(e?.message || "");
         if (!msg.toLowerCase().includes("user rejected")) {
@@ -1230,6 +1254,7 @@ export default function LivePage() {
       tradeClosed,
       connection,
       loadSessionMarketSnapshot,
+      showTradeSuccess,
     ]
   );
 
@@ -1634,6 +1659,9 @@ export default function LivePage() {
                   // remount's muted autoplay is blocked in mobile webviews →
                   // the stream comes back paused. The sheet only overlays.
                   active={index === mobileLiveIndex}
+                  activityToasts={
+                    index === mobileLiveIndex ? activityToasts : undefined
+                  }
                   onOutcomeTap={openQuickTrade}
                   hostSlot={
                     connected &&
@@ -1644,6 +1672,15 @@ export default function LivePage() {
                           handleLiveStatusChange(session, s)
                         }
                         error={statusError}
+                        endDisabled={linkedLiveMarketRequiresResolution({
+                          marketAddress: session.market_address,
+                          market: mobileMarketBySession[session.id]
+                            ? {
+                                resolved: mobileMarketBySession[session.id].resolved,
+                                resolutionStatus: mobileMarketBySession[session.id].resolutionStatus,
+                              }
+                            : null,
+                        })}
                       />
                     ) : undefined
                   }
@@ -1718,22 +1755,7 @@ export default function LivePage() {
             </div>
           )}
 
-        {/* Buy-success floating pop. Auto-dismisses; never blocks the stream. */}
-        {lastBuyToast && (
-          <div
-            key={lastBuyToast.key}
-            className="pointer-events-none fixed bottom-20 left-1/2 -translate-x-1/2 z-[150] animate-slideUp"
-          >
-            <div className="rounded-xl bg-pump-green/15 border border-pump-green/45 px-4 py-2 text-sm text-white shadow-lg backdrop-blur-sm">
-              <span className="font-semibold text-pump-green">Bought</span>{" "}
-              <span className="font-bold">{lastBuyToast.outcome}</span>
-              <span className="text-gray-300"> · </span>
-              <span className="font-medium tabular-nums">
-                {lastBuyToast.shares} share{lastBuyToast.shares === 1 ? "" : "s"}
-              </span>
-            </div>
-          </div>
-        )}
+        <LiveTradeSuccessOverlay success={tradeSuccess} />
 
         {/* Quick Trade sheet — mode-branched. Real keeps the exact validated
             MobileBuySheet + Solana handleTrade. Play uses the same visual
@@ -1754,6 +1776,8 @@ export default function LivePage() {
               void handleTrade(shares, outcomeIndex, side, costSol)
             }
             keepNavbar
+            marketAddress={tradeMarket.publicKey}
+            quoteRevision={tradeEco.quoteRevision}
           />
         )}
         {mobileTradeOpen && tradeSession && tradeMarket && isPlay && (
@@ -1765,18 +1789,16 @@ export default function LivePage() {
             defaultOutcomeIndex={mobileTradeOutcomeIndex}
             sessionLocked={tradeClosed}
             playStatus={tradeEco.status}
+            quoteRevision={tradeEco.quoteRevision}
             keepNavbar
-            onTraded={({ outcomeName, shares }) => {
-              const toastKey = Date.now();
-              setLastBuyToast({ outcome: outcomeName, shares, key: toastKey });
-              setTimeout(
-                () =>
-                  setLastBuyToast((prev) =>
-                    prev?.key === toastKey ? null : prev
-                  ),
-                2500
-              );
-            }}
+            onTraded={({ outcomeName, shares, stakeUsd }) =>
+              showTradeSuccess({
+                mode: "play",
+                outcomeName,
+                shares,
+                amount: Number(stakeUsd) || null,
+              })
+            }
           />
         )}
 

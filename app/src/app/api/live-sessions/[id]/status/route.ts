@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import nacl from "tweetnacl";
 import bs58 from "bs58";
 import { supabaseServer } from "@/lib/supabaseServer";
+import { linkedLiveMarketRequiresResolution } from "@/lib/liveSessionLifecycle";
 
 const VALID_STATUSES = ["live", "locked", "ended", "resolved", "cancelled"] as const;
 type ValidStatus = (typeof VALID_STATUSES)[number];
@@ -119,6 +120,35 @@ export async function POST(
         { error: "Forbidden — you are not the host of this session" },
         { status: 403 }
       );
+    }
+
+    // Ending the stream session must not orphan an unresolved linked market.
+    // This host route is not an admin/emergency control, so it fails closed
+    // when the lifecycle row cannot be read.
+    if (newStatus === "ended" && session.market_address) {
+      const { data: linkedMarket, error: marketError } = await supabase
+        .from("markets")
+        .select("resolved,cancelled,resolution_status")
+        .eq("market_address", session.market_address)
+        .maybeSingle();
+      if (
+        marketError ||
+        linkedLiveMarketRequiresResolution({
+          marketAddress: session.market_address,
+          market: linkedMarket
+            ? {
+                resolved: !!linkedMarket.resolved,
+                cancelled: !!linkedMarket.cancelled,
+                resolutionStatus: linkedMarket.resolution_status,
+              }
+            : null,
+        })
+      ) {
+        return NextResponse.json(
+          { error: "Propose a result or cancel the linked market before ending the session." },
+          { status: 409 },
+        );
+      }
     }
 
     // ── Build patch (same logic as client handleStatusChange) ────

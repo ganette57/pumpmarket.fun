@@ -41,6 +41,7 @@ export default function PlayLiveBuySheet({
   defaultOutcomeIndex,
   sessionLocked,
   playStatus,
+  quoteRevision = "",
   keepNavbar,
   onTraded,
 }: {
@@ -53,9 +54,15 @@ export default function PlayLiveBuySheet({
   sessionLocked: boolean;
   /** Play market status; anything but "open" blocks trading. */
   playStatus?: string;
+  /** Current authoritative market snapshot identity; activity re-quotes. */
+  quoteRevision?: string;
   keepNavbar?: boolean;
   /** Fires after a successful Play trade so the page can show its own toast. */
-  onTraded?: (info: { outcomeName: string; shares: number }) => void;
+  onTraded?: (info: {
+    outcomeName: string;
+    shares: number;
+    stakeUsd: string;
+  }) => void;
 }) {
   const play = usePlaySession();
   const { invalidate: invalidateSnapshot } = useMarketSnapshotActions();
@@ -138,9 +145,11 @@ export default function PlayLiveBuySheet({
   useEffect(() => {
     quoteEpochRef.current += 1;
     const epoch = quoteEpochRef.current;
+    // A changed market revision must never leave the previous multiplier on
+    // screen while the replacement request is in flight.
+    setQuote(null);
 
     if (!open || closed || !play.authenticated || !stakeString) {
-      setQuote(null);
       return;
     }
     const t = setTimeout(() => {
@@ -162,7 +171,7 @@ export default function PlayLiveBuySheet({
         });
     }, 250);
     return () => clearTimeout(t);
-  }, [open, play.authenticated, stakeString, selectedOutcome, marketAddress, closed]);
+  }, [open, play.authenticated, stakeString, selectedOutcome, marketAddress, closed, quoteRevision]);
 
   const handleBuy = useCallback(async () => {
     if (closed || !stakeString || submitting || inFlightRef.current) return;
@@ -192,7 +201,8 @@ export default function PlayLiveBuySheet({
       void play.refreshState();
       onTraded?.({
         outcomeName,
-        shares: Math.max(0, Math.round(Number(res.trade?.shares) || 0)),
+        shares: Math.max(0, Number(res.trade?.shares) || 0),
+        stakeUsd: res.trade?.stake_usd ?? stakeString,
       });
       onClose();
     } catch (e) {

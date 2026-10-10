@@ -11,10 +11,13 @@ export default function LiveHostControls({
   session,
   onStatusChange,
   error,
+  endDisabled = false,
 }: {
   session: LiveSession;
   onStatusChange: (s: LiveSessionStatus) => void;
   error?: string | null;
+  /** Linked market still needs a result proposal/cancellation (or is loading). */
+  endDisabled?: boolean;
 }) {
   // UI only exposes Live / Locked / Ended. Resolved + Cancelled remain valid
   // statuses on the backend but are not user-driven from this panel anymore.
@@ -48,21 +51,31 @@ export default function LiveHostControls({
             </p>
           ) : (
             <div className="flex flex-wrap gap-1.5">
-              {statusFlow.map((s) => (
+              {statusFlow.map((s) => {
+                const disabled = session.status === s || (s === "ended" && endDisabled);
+                return (
                 <button
                   key={s}
-                  disabled={session.status === s}
+                  disabled={disabled}
                   onClick={() => onStatusChange(s)}
+                  title={s === "ended" && endDisabled ? "Propose a result or cancel the linked market before ending the session." : undefined}
                   className={`px-2.5 py-1 rounded-md text-[11px] font-semibold border transition ${
                     session.status === s
                       ? "bg-pump-green/15 border-pump-green text-pump-green"
+                      : disabled
+                      ? "bg-pump-dark/30 border-gray-800 text-gray-600 cursor-not-allowed"
                       : "bg-pump-dark/40 border-gray-800 text-gray-400 hover:border-gray-600 hover:text-gray-200"
                   }`}
                 >
                   {s.charAt(0).toUpperCase() + s.slice(1)}
                 </button>
-              ))}
+              )})}
             </div>
+          )}
+          {!isTerminal && endDisabled && (
+            <p className="text-[11px] text-amber-300/80">
+              Propose a result or cancel the linked market before ending the session.
+            </p>
           )}
           {error && (
             <p className="text-[11px] text-red-400 bg-red-900/20 rounded-md px-2 py-1">

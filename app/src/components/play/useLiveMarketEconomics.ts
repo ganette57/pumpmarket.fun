@@ -33,6 +33,7 @@ import {
 } from "@/components/mode/MarketSnapshotProvider";
 import { formatUsd } from "@/lib/playClient";
 import { formatVol } from "@/components/LiveMobileContent";
+import { useFeedMultipliers } from "@/hooks/useFeedMultipliers";
 
 export type LiveEconomics = {
   /** True when the active mode is Play. */
@@ -55,25 +56,35 @@ export type LiveEconomics = {
   status: string;
   /** Play mode but the Play book has not arrived — gate trading/economics. */
   playPending: boolean;
+  /** Authoritative marginal purchase multipliers for the reference purchase. */
+  multipliers: (number | null)[];
+  /** Changes whenever the displayed market book changes. */
+  quoteRevision: string;
 };
 
 export function useLiveMarketEconomics(input: {
   address: string | null | undefined;
   /** Real per-outcome percentages already computed by the page (0..100). */
   realPercentages: number[];
+  /** Real supplies behind realPercentages, for quote/snapshot matching. */
+  realSupplies?: number[];
   /** Real total volume in lamports (markets.total_volume). */
   realVolumeLamports: number;
   /** Real market status ("open" | "resolved" | …). */
   realStatus: string;
   /** Number of outcomes — used only for the Play loading placeholder. */
   outcomeCount: number;
+  /** Effective Live lifecycle gate; closed markets never request quotes. */
+  closed?: boolean;
 }): LiveEconomics {
   const {
     address,
     realPercentages,
+    realSupplies = [],
     realVolumeLamports,
     realStatus,
     outcomeCount,
+    closed = false,
   } = input;
   const { publishRealSnapshots, watchPlayMarket } = useMarketSnapshotActions();
 
@@ -116,6 +127,29 @@ export function useLiveMarketEconomics(input: {
 
   const { snapshot, mode } = useMarketSnapshot(address ?? "", realFallback);
   const isPlay = mode === "play";
+  const quoteRevision = isPlay
+    ? JSON.stringify([
+        snapshot?.mode,
+        snapshot?.version,
+        snapshot?.updatedAt,
+        snapshot?.status,
+        snapshot?.volume,
+        snapshot?.supplies,
+      ])
+    : JSON.stringify([address, realStatus, realVolumeLamports, realSupplies, realPercentages]);
+  const quoteClosed = closed || (isPlay && (!snapshot || snapshot.status !== "open"));
+  const multipliers = useFeedMultipliers(
+    address ?? "",
+    mode,
+    quoteRevision,
+    quoteClosed || !address,
+    {
+      allowWide: true,
+      expectedPlayVersion:
+        isPlay && snapshot?.mode === "play" ? snapshot.version : undefined,
+      expectedRealSupplies: !isPlay ? realSupplies : undefined,
+    }
+  );
 
   return useMemo<LiveEconomics>(() => {
     if (!isPlay) {
@@ -141,6 +175,8 @@ export function useLiveMarketEconomics(input: {
             : null,
         status: realStatus,
         playPending: false,
+        multipliers,
+        quoteRevision,
       };
     }
 
@@ -155,6 +191,8 @@ export function useLiveMarketEconomics(input: {
         perSide: () => null,
         status: "open",
         playPending: true,
+        multipliers: [],
+        quoteRevision,
       };
     }
 
@@ -179,6 +217,8 @@ export function useLiveMarketEconomics(input: {
       },
       status: snapshot.status || "open",
       playPending: false,
+      multipliers,
+      quoteRevision,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -188,5 +228,7 @@ export function useLiveMarketEconomics(input: {
     realVolumeLamports,
     realStatus,
     outcomeCount,
+    multipliers,
+    quoteRevision,
   ]);
 }

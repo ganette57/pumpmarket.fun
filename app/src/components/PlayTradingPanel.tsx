@@ -47,6 +47,12 @@ interface PlayTradingPanelProps {
   marketClosed?: boolean;
   marketClosedTitle?: string;
   marketClosedMessage?: string;
+  /** Fires only after /api/play/trade returns a confirmed persisted trade. */
+  onTraded?: (info: {
+    outcomeName: string;
+    shares: number;
+    stakeUsd: string;
+  }) => void;
 }
 
 const PRESETS = [5, 10, 100];
@@ -67,6 +73,7 @@ export default function PlayTradingPanel({
   marketClosed,
   marketClosedTitle = "Trading locked",
   marketClosedMessage = "Trading is temporarily locked. It will resume or close at the scheduled end time.",
+  onTraded,
 }: PlayTradingPanelProps) {
   const play = usePlaySession();
   const { invalidate: invalidateSnapshot } = useMarketSnapshotActions();
@@ -218,6 +225,11 @@ export default function PlayTradingPanel({
       play.applyBalance(res.balance_usd);
       invalidateSnapshot("play", marketAddress); // refresh Play odds + volume
       await refreshState(); // refresh position + balance
+      onTraded?.({
+        outcomeName: outcomes[outcome] || `Outcome #${outcome + 1}`,
+        shares: Math.max(0, Number(res.trade?.shares) || 0),
+        stakeUsd: res.trade?.stake_usd ?? stakeString,
+      });
       setSuccess(true);
       setAmount(0);
       setCustom("");
@@ -242,11 +254,12 @@ export default function PlayTradingPanel({
     stakeString,
     submitting,
     selectedIndex,
-    outcomes.length,
+    outcomes,
     play,
     marketAddress,
     invalidateSnapshot,
     refreshState,
+    onTraded,
   ]);
 
   const needsSession = !play.authenticated;

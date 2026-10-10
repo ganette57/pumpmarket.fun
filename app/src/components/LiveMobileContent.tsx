@@ -2,15 +2,21 @@
 // Used in both /live/[id] (detail) and /live (feed) to guarantee identical rendering.
 "use client";
 
-import { useMemo, useState, useEffect, useRef, type ReactNode } from "react";
+import { useMemo, useState, useEffect, useRef, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { usePrivyIdentity } from "@/components/privy/PrivyIdentityProvider";
+import { useRealQuotes } from "@/hooks/useRealQuotes";
+import { formatFeedMultiplier } from "@/hooks/useFeedMultipliers";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import Image from "next/image";
 import CategoryImagePlaceholder from "@/components/CategoryImagePlaceholder";
 import { lamportsToSol } from "@/utils/solana";
-import { fetchPastMarketAddresses, type LiveSession } from "@/lib/liveSessions";
+import {
+  fetchPastMarketAddresses,
+  type LiveSession,
+  type LiveTradeActivityToast,
+} from "@/lib/liveSessions";
 import {
   parseStream,
   providerAttribution,
@@ -55,6 +61,107 @@ export function formatVol(volLamports: number) {
   if (sol >= 1000) return `${(sol / 1000).toFixed(0)}k`;
   if (sol >= 100) return `${sol.toFixed(0)}`;
   return sol.toFixed(2);
+}
+
+export type { LiveTradeActivityToast } from "@/lib/liveSessions";
+
+function compactTradeNumber(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  if (Number.isInteger(value)) return String(value);
+  return value.toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
+}
+
+/** Shared incoming-trade overlay for the deep-link viewer and swipe feed. */
+export function LiveTradeActivityPopups({
+  trades,
+}: {
+  trades: LiveTradeActivityToast[];
+}) {
+  if (trades.length === 0) return null;
+
+  return (
+    <div
+      aria-live="polite"
+      aria-label="Live trade activity"
+      className="pointer-events-none absolute left-3 top-[54%] z-[70] flex -translate-y-1/2 flex-col-reverse gap-1.5"
+    >
+      {trades.map((trade) => {
+        const wallet = trade.user_label || (trade.user_address
+          ? `${trade.user_address.slice(0, 4)}...${trade.user_address.slice(-4)}`
+          : null);
+        const explicitName = trade.outcome_name?.trim() || "";
+        const outcome =
+          explicitName ||
+          (trade.is_yes === true
+            ? "YES"
+            : trade.is_yes === false
+            ? "NO"
+            : trade.outcome_index != null
+            ? `Outcome ${trade.outcome_index + 1}`
+            : "Outcome");
+        const normalized = explicitName.toUpperCase();
+        const positive = normalized
+          ? normalized === "YES"
+          : trade.is_yes === true;
+        const negative = normalized
+          ? normalized === "NO"
+          : trade.is_yes === false;
+        const accent = positive
+          ? "border-pump-green/80 bg-pump-green text-black shadow-[0_0_14px_rgba(109,255,164,0.34)]"
+          : negative
+          ? "border-[#ff5c73]/80 bg-[#ff5c73] text-white shadow-[0_0_14px_rgba(255,92,115,0.32)]"
+          : "border-sky-300/75 bg-sky-300 text-slate-950 shadow-[0_0_14px_rgba(125,211,252,0.28)]";
+        const shares = Math.max(0, Number(trade.shares) || 0);
+        const cost = Number(trade.cost) || 0;
+
+        return (
+          <div
+            key={trade._key}
+            className="fm-live-trade-popup w-[9.25rem] min-[390px]:w-[10rem] md:w-[11rem] overflow-hidden rounded-xl border border-white/15 bg-black/[0.88] shadow-[0_10px_28px_rgba(0,0,0,0.48)] backdrop-blur-md"
+          >
+            <div className="flex items-center justify-between gap-2 px-2.5 pt-2">
+              <span className="text-[9px] font-black tracking-[0.18em] text-white">
+                BUY
+              </span>
+              {wallet && (
+                <span className="truncate text-[8px] font-medium text-white/48">
+                  {wallet}
+                </span>
+              )}
+            </div>
+            <div className="px-2.5 pb-2 pt-1">
+              <span
+                className={`inline-flex max-w-full rounded-md border px-1.5 py-0.5 text-[11px] font-black leading-tight ${accent}`}
+              >
+                <span className="truncate">{outcome}</span>
+              </span>
+              <div className="mt-1 flex min-w-0 items-baseline gap-1 text-white">
+                <span className="truncate text-[11px] font-bold tabular-nums">
+                  {compactTradeNumber(shares)} share{shares === 1 ? "" : "s"}
+                </span>
+                {cost > 0 && (
+                  <span className="shrink-0 text-[8px] font-medium tabular-nums text-white/52">
+                    · {trade.cost_currency === "USD" ? "$" : ""}{compactTradeNumber(cost)}{trade.cost_currency === "USD" ? "" : " SOL"}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+
+      <style>{`
+        .fm-live-trade-popup{animation:fm-live-trade-popup 4s cubic-bezier(.2,.82,.2,1) both;transform-origin:left center;will-change:transform,opacity}
+        @keyframes fm-live-trade-popup{
+          0%{opacity:0;transform:translate3d(-22px,0,0) scale(.94)}
+          10%{opacity:1;transform:translate3d(0,0,0) scale(1.015)}
+          15%,78%{opacity:1;transform:translate3d(0,0,0) scale(1)}
+          100%{opacity:0;transform:translate3d(-12px,0,0) scale(.98)}
+        }
+        @media (prefers-reduced-motion:reduce){.fm-live-trade-popup{animation:none!important;will-change:auto}}
+      `}</style>
+    </div>
+  );
 }
 
 /* ── StreamPlayer ────────────────────────────────────────────────── */
@@ -310,6 +417,8 @@ export function MobileBuySheet({
   sessionLocked,
   defaultOutcomeIndex,
   keepNavbar,
+  marketAddress,
+  quoteRevision = "",
 }: {
   open: boolean;
   onClose: () => void;
@@ -325,6 +434,8 @@ export function MobileBuySheet({
   sessionLocked: boolean;
   defaultOutcomeIndex?: number;
   keepNavbar?: boolean;
+  marketAddress: string;
+  quoteRevision?: string;
 }) {
   // Sign-in only — this sheet keeps taking `connected` as a prop and its
   // trade call is unchanged.
@@ -332,6 +443,14 @@ export function MobileBuySheet({
   const [selectedOutcome, setSelectedOutcome] = useState(0);
   const [amount, setAmount] = useState<number>(0);
   const presets = [0.01, 0.1, 1];
+  const approxShares = Math.max(1, Math.floor(amount / 0.01));
+  const realQuotes = useRealQuotes(
+    marketAddress,
+    open && !sessionLocked && amount > 0,
+    quoteRevision,
+    { shares: approxShares }
+  );
+  const selectedQuote = realQuotes[selectedOutcome] ?? null;
 
   // Reset on open when defaultOutcomeIndex is provided (feed context)
   useEffect(() => {
@@ -443,6 +562,22 @@ export function MobileBuySheet({
               </>
             )}
 
+            {amount > 0 && (
+              <div className="mb-4 flex items-center justify-between rounded-xl bg-pump-dark/80 border border-gray-800 px-4 py-3">
+                <span className="text-sm text-gray-400">Estimated return</span>
+                <span className="flex items-baseline gap-2">
+                  {selectedQuote?.payout != null && (
+                    <span className="text-base font-bold text-white tabular-nums">
+                      {(selectedQuote.payout / 1_000_000_000).toFixed(4)} SOL
+                    </span>
+                  )}
+                  <span className={`text-sm font-extrabold ${selectedOutcome === 1 && derived.names.length === 2 ? "text-[#ff5c73]" : "text-pump-green"}`}>
+                    {formatFeedMultiplier(selectedQuote?.multiplier) ?? "Updating…"}
+                  </span>
+                </span>
+              </div>
+            )}
+
             {/* Buy button */}
             <button
               disabled={connected && (amount === 0 || submitting)}
@@ -455,7 +590,6 @@ export function MobileBuySheet({
                   privy.loginWithGoogle();
                   return;
                 }
-                const approxShares = Math.max(1, Math.floor(amount / 0.01));
                 onTrade(approxShares, selectedOutcome, "buy", amount);
                 onClose();
               }}
@@ -504,6 +638,7 @@ export type LiveMobileContentMarket = {
 export type LiveMobileContentDerived = {
   names: string[];
   percentages: number[];
+  multipliers?: (number | null)[];
 };
 
 export function LiveMobileContent({
@@ -608,8 +743,8 @@ export function LiveMobileContent({
           </div>
 
           {/* Outcome bars */}
-          <div className="grid grid-cols-2 gap-2">
-            {derived.names.slice(0, 2).map((name, idx) => {
+          <div className={`grid gap-2 ${derived.names.length === 3 ? "grid-cols-3" : "grid-cols-2"}`}>
+            {derived.names.slice(0, 4).map((name, idx) => {
               const pct = (derived.percentages[idx] ?? 0).toFixed(1);
               const isYes = idx === 0;
               return (
@@ -634,6 +769,9 @@ export function LiveMobileContent({
                     }`}
                   >
                     {pct}%
+                  </div>
+                  <div className={`text-base font-extrabold tabular-nums ${isYes ? "text-pump-green" : "text-[#ff5c73]"}`}>
+                    {formatFeedMultiplier(derived.multipliers?.[idx]) ?? "—"}
                   </div>
                 </button>
               );
@@ -1329,43 +1467,38 @@ export function TradeWindowBar({ state }: { state: TradeWindowState }) {
   const open = state.open;
   const accent = open ? URGENCY_ACCENT[state.urgency] : null;
 
-  // Pulse only in the final stretch, and only while trading is actually
-  // open — a locked bar must read as inert.
-  const pulse = open && state.secondsToLock <= 5;
-
   return (
     <div
-      className="relative rounded-lg p-px transition-colors duration-500"
+      className={`relative rounded-lg p-px transition-colors duration-500 ${
+        open ? `fm-trade-active fm-trade-${state.urgency}` : ""
+      }`}
       style={{
-        // Saturated edge + outer glow. The gradient keeps the left end at
-        // full strength and fades right, so the strip still reads as a
-        // direction rather than an evenly lit box.
+        "--fm-trade-accent": accent ?? "255, 255, 255",
         background: accent
-          ? `linear-gradient(90deg, rgba(${accent},1), rgba(${accent},0.45))`
+          ? `rgb(${accent})`
           : "rgba(255,255,255,0.08)",
         boxShadow: accent
-          ? `0 0 20px -5px rgba(${accent},0.75), 0 0 40px -18px rgba(${accent},0.9)`
+          ? `0 0 18px -4px rgba(${accent},0.85), 0 0 38px -18px rgba(${accent},1)`
           : "none",
-      }}
+      } as CSSProperties}
     >
-      <div className="relative overflow-hidden rounded-[7px] bg-black/85 px-3 py-1.5">
+      <div className="relative overflow-hidden rounded-[7px] bg-[#080808] px-2.5 sm:px-3 py-1.5">
         {/* Drain track. Anchored LEFT so the fill's right edge sweeps
             leftward — the bar empties from the right, full at T0 and gone at
-            lock_at. Kept a translucent wash, never a solid neon block: the
-            label and timer sit on top of it and must stay readable. */}
+            lock_at. Active fill is deliberately opaque and saturated; text
+            uses compact dark chips so it stays legible over every colour and
+            over the empty portion of the track. */}
         <div
           aria-hidden
           className="pointer-events-none absolute inset-y-0 left-0 right-0"
         >
           <div
-            className="h-full transition-[width] duration-1000 ease-linear"
+            className={`relative h-full overflow-hidden transition-[width] duration-1000 ease-linear ${
+              open ? "fm-trade-fill" : ""
+            }`}
             style={{
               width: `${Math.round(state.fractionRemaining * 100)}%`,
-              // Brightest at the draining edge, so the eye tracks the edge
-              // that is actually moving.
-              background: accent
-                ? `linear-gradient(90deg, rgba(${accent},0.18) 0%, rgba(${accent},0.42) 100%)`
-                : "transparent",
+              background: accent ? `rgb(${accent})` : "transparent",
             }}
           />
         </div>
@@ -1380,24 +1513,18 @@ export function TradeWindowBar({ state }: { state: TradeWindowState }) {
               }}
             />
             <span
-              className="text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"
-              style={{
-                color: accent ? `rgb(${accent})` : "rgba(255,255,255,0.45)",
-                textShadow: accent ? `0 0 12px rgba(${accent},0.6)` : "none",
-              }}
+              className={`text-[9px] min-[390px]:text-[10px] font-extrabold uppercase tracking-wider whitespace-nowrap ${
+                open ? "text-white" : "text-white/55"
+              } drop-shadow-[0_1px_2px_rgba(0,0,0,1)]`}
             >
-              {open ? "Place your bet" : "Trading locked"}
+              {open ? "Place your bet" : "Trading locked · Watch only"}
             </span>
           </span>
 
           <span
-            className={`text-[11px] font-bold tabular-nums tracking-wide whitespace-nowrap ${
-              pulse ? "fm-lock-pulse" : ""
+            className={`shrink-0 rounded-md bg-black/85 px-1.5 py-0.5 text-[11px] font-black tabular-nums tracking-wide whitespace-nowrap shadow-sm ${
+              open ? "text-white" : "text-white/55"
             }`}
-            style={{
-              color: accent ? `rgb(${accent})` : "rgba(255,255,255,0.45)",
-              textShadow: accent ? `0 0 12px rgba(${accent},0.65)` : "none",
-            }}
           >
             {open
               ? formatMmSs(state.secondsToLock)
@@ -1406,13 +1533,20 @@ export function TradeWindowBar({ state }: { state: TradeWindowState }) {
         </div>
       </div>
 
-      {/* Final-seconds pulse. Lives WITH the component rather than in the
-          mobile slide, so the desktop strip animates too. CSS-only (no JS
-          loop); the <style> tag never participates in layout. */}
+      {/* One fraction-driven animation system for mobile, feed and desktop.
+          Locked bars receive none of these classes and are completely inert. */}
       <style>{`
-        .fm-lock-pulse{animation:fm-lock-beat 1s ease-in-out infinite}
-        @keyframes fm-lock-beat{0%,100%{opacity:1}50%{opacity:0.45}}
-        @media (prefers-reduced-motion:reduce){.fm-lock-pulse{animation:none}}
+        .fm-trade-fill{animation:fm-trade-fill-breathe var(--fm-trade-breathe) ease-in-out infinite}
+        .fm-trade-fill::after{content:"";position:absolute;inset:-20% 0;width:52%;background:linear-gradient(90deg,transparent,rgba(255,255,255,var(--fm-trade-highlight)),transparent);filter:blur(1px);transform:translateX(-165%) skewX(-12deg);animation:fm-trade-sweep var(--fm-trade-speed) linear infinite}
+        .fm-trade-active{animation:fm-trade-glow var(--fm-trade-breathe) ease-in-out infinite}
+        .fm-trade-green{--fm-trade-speed:2.5s;--fm-trade-breathe:2.4s;--fm-trade-highlight:.52;--fm-trade-peak:1.08;--fm-trade-glow:.72}
+        .fm-trade-yellow{--fm-trade-speed:1.95s;--fm-trade-breathe:1.85s;--fm-trade-highlight:.6;--fm-trade-peak:1.13;--fm-trade-glow:.82}
+        .fm-trade-orange{--fm-trade-speed:1.4s;--fm-trade-breathe:1.2s;--fm-trade-highlight:.7;--fm-trade-peak:1.2;--fm-trade-glow:.92}
+        .fm-trade-red{--fm-trade-speed:.95s;--fm-trade-breathe:.78s;--fm-trade-highlight:.82;--fm-trade-peak:1.28;--fm-trade-glow:1}
+        @keyframes fm-trade-sweep{to{transform:translateX(295%) skewX(-12deg)}}
+        @keyframes fm-trade-fill-breathe{0%,100%{filter:brightness(1)}50%{filter:brightness(var(--fm-trade-peak))}}
+        @keyframes fm-trade-glow{0%,100%{box-shadow:0 0 16px -5px rgba(var(--fm-trade-accent),.68)}50%{box-shadow:0 0 30px -3px rgba(var(--fm-trade-accent),var(--fm-trade-glow))}}
+        @media (prefers-reduced-motion:reduce){.fm-trade-active,.fm-trade-fill,.fm-trade-fill::after{animation:none!important}}
       `}</style>
     </div>
   );
@@ -1623,10 +1757,11 @@ export function MobileImmersiveSlide({
   queuedNext,
   economics,
   isPlay,
+  activityOverlay,
 }: {
   session: LiveSession;
   market: MobileImmersiveSlideMarket | null;
-  derived: { names: string[]; percentages: number[] } | null;
+  derived: { names: string[]; percentages: number[]; multipliers?: (number | null)[] } | null;
   active: boolean;
   sessionLocked: boolean;
   onOutcomeTap: (outcomeIndex: number) => void;
@@ -1659,6 +1794,8 @@ export function MobileImmersiveSlide({
   economics?: LiveSlideEconomics;
   /** Play mode: chart/activity HUD drawers show neutral placeholders. */
   isPlay?: boolean;
+  /** Incoming trade activity, anchored inside the video overlay region. */
+  activityOverlay?: ReactNode;
 }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
   // HUD drawers — local to the slide so toggling them never touches the
@@ -1994,7 +2131,7 @@ export function MobileImmersiveSlide({
           its bounding box shrinks from inset-0 to aspect-video. The 16:9
           iframe now fills a 16:9 container exactly → no letterbox bars. */}
       <div
-        className={`absolute inset-x-0 ${STREAM_TOP} aspect-video bg-black`}
+        className={`absolute inset-x-0 ${STREAM_TOP} z-0 aspect-video bg-black`}
       >
         {session.status === "disabled" ? (
           <StreamUnavailable className="absolute inset-0 w-full h-full bg-black flex items-center justify-center" />
@@ -2013,6 +2150,7 @@ export function MobileImmersiveSlide({
         ) : (
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(109,255,164,0.12),transparent_42%),linear-gradient(180deg,#020304_0%,#04070c_100%)]" />
         )}
+        {activityOverlay}
       </div>
 
       {/* STRUCTURED STACK — slide-root[1]. Top bar (fixed height matching
@@ -2286,7 +2424,7 @@ export function MobileImmersiveSlide({
               <>
                 {/* Continuous horizontal progress bar. Wrapper is non-clipping
                     so the VS bubble can straddle the bar's lower edge. */}
-                <div className="relative">
+                {derived.names.length === 2 ? <div className="relative">
                 <div className="relative flex rounded-xl overflow-hidden h-10 border border-white/[0.06]">
                   {derived.names.slice(0, 2).map((name, idx) => {
                     const pctNum = derived.percentages[idx] ?? 0;
@@ -2346,7 +2484,16 @@ export function MobileImmersiveSlide({
                       VS
                     </span>
                   </div>
-                </div>
+                </div> : (
+                  <div className={`grid gap-1.5 ${derived.names.length === 3 ? "grid-cols-3" : "grid-cols-2"}`}>
+                    {derived.names.slice(0, 4).map((name, idx) => (
+                      <div key={idx} className="min-w-0 rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1.5 text-center">
+                        <div className="truncate text-[10px] font-bold uppercase text-white/65">{name}</div>
+                        <div className="text-sm font-black tabular-nums text-white">{(derived.percentages[idx] ?? 0).toFixed(1)}%</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 {/* Per-side money row. Play: actual cumulative stake per
                     outcome. Real: the legacy volume × probability estimate. */}
@@ -2488,15 +2635,15 @@ export function MobileImmersiveSlide({
                 </span>
               </div>
             ) : derived && !locked ? (
-              <div className="grid grid-cols-2 gap-3 h-[88px]">
-                {derived.names.slice(0, 2).map((name, idx) => {
+              <div className={`grid gap-2 ${derived.names.length === 3 ? "grid-cols-3" : "grid-cols-2"} ${derived.names.length > 3 ? "grid-rows-2" : ""}`}>
+                {derived.names.slice(0, 4).map((name, idx) => {
                   const pct = (derived.percentages[idx] ?? 0).toFixed(1);
                   const isYes = idx === 0;
                   return (
                     <button
                       key={idx}
                       onClick={() => onOutcomeTap(idx)}
-                      className={`group relative h-full overflow-hidden rounded-2xl border backdrop-blur-xl px-3.5 py-2 active:scale-[0.97] transition-all duration-150 ${
+                      className={`group relative min-h-[88px] overflow-hidden rounded-2xl border backdrop-blur-xl px-2.5 py-2 active:scale-[0.97] transition-all duration-150 ${
                         isYes
                           ? "bg-gradient-to-br from-pump-green/25 via-pump-green/10 to-pump-green/5 border-pump-green/50 shadow-[0_0_36px_-8px_rgba(109,255,164,0.45)]"
                           : "bg-gradient-to-br from-[#ff5c73]/25 via-[#ff5c73]/10 to-[#ff5c73]/5 border-[#ff5c73]/50 shadow-[0_0_36px_-8px_rgba(255,92,115,0.45)]"
@@ -2516,7 +2663,7 @@ export function MobileImmersiveSlide({
                             isYes ? "text-pump-green" : "text-[#ff5c73]"
                           }`}
                           style={{
-                            fontSize: "clamp(28px, 8.5vw, 38px)",
+                            fontSize: derived.names.length === 3 ? "clamp(18px, 5vw, 25px)" : "clamp(24px, 7.5vw, 36px)",
                             textShadow: isYes
                               ? "0 0 18px rgba(109,255,164,0.55)"
                               : "0 0 18px rgba(255,92,115,0.55)",
@@ -2530,6 +2677,9 @@ export function MobileImmersiveSlide({
                           }`}
                         >
                           {pct}%
+                        </div>
+                        <div className={`text-base font-black tabular-nums mt-0.5 ${isYes ? "text-pump-green" : "text-[#ff5c73]"}`}>
+                          {formatFeedMultiplier(derived.multipliers?.[idx]) ?? "—"}
                         </div>
                       </div>
                       {/* Arrow chip — absolutely placed so it doesn't push

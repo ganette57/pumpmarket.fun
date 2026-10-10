@@ -6,7 +6,7 @@ import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider"
 import { useRealQuotes } from "@/hooks/useRealQuotes";
 
 type Mode = "play" | "real";
-type Delivery = (values: (number | null)[]) => void;
+type Delivery = (values: (number | null)[], stateVersion: number | null) => void;
 const pending = new Map<string, { mode: Mode; wallet: string | null; queue: Map<string, Delivery[]> }>();
 let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -30,7 +30,11 @@ function enqueue(mode: Mode, identity: string, wallet: string | null, address: s
         }).then(r => r.ok ? r.json() : null).catch(() => null).then(data => {
           for (const [address, callbacks] of batch) {
             const values = data?.multiples?.[address];
-            callbacks.forEach(callback => callback(Array.isArray(values) ? values : []));
+            const stateVersion = Number(data?.stateVersions?.[address]);
+            callbacks.forEach(callback => callback(
+              Array.isArray(values) ? values : [],
+              Number.isInteger(stateVersion) ? stateVersion : null
+            ));
           }
         });
       }
@@ -38,8 +42,10 @@ function enqueue(mode: Mode, identity: string, wallet: string | null, address: s
   }, 40);
 }
 
-export function useFeedMultipliers(address: string, mode: Mode, revision: string, closed: boolean) {
-  const realQuotes = useRealQuotes(address, mode === "real" && !closed, revision);
+export function useFeedMultipliers(address: string, mode: Mode, revision: string, closed: boolean,
+  options: { allowWide?: boolean; expectedPlayVersion?: number; expectedRealSupplies?: number[] } = {}) {
+  const realQuotes = useRealQuotes(address, mode === "real" && !closed, revision,
+    { budget: 1e9 }, { expectedSupplies: options.expectedRealSupplies });
   const play = usePlaySession();
   const wallet = useFunMarketWallet();
   const realWallet = wallet.connected ? wallet.publicKey?.toBase58() ?? null : null;
@@ -59,13 +65,17 @@ export function useFeedMultipliers(address: string, mode: Mode, revision: string
   const key = `${mode}:${identity}:${address}:${revision}:${closed}:${balance}:${positionRevision}`;
   const [result, setResult] = useState<{ key: string; values: (number | null)[] } | null>(null);
   useEffect(() => {
-    if (mode !== "play" || !identity || closed || !window.matchMedia("(max-width: 767px)").matches) return;
+    if (mode !== "play" || !identity || closed ||
+      (!options.allowWide && !window.matchMedia("(max-width: 767px)").matches)) return;
     let cancelled = false;
-    enqueue(mode, identity, null, address, values => {
-      if (!cancelled) setResult({ key, values });
+    enqueue(mode, identity, null, address, (values, stateVersion) => {
+      if (!cancelled &&
+        (options.expectedPlayVersion == null || stateVersion === options.expectedPlayVersion)) {
+        setResult({ key, values });
+      }
     });
     return () => { cancelled = true; };
-  }, [address, mode, identity, realWallet, key, closed]);
+  }, [address, mode, identity, realWallet, key, closed, options.allowWide, options.expectedPlayVersion]);
   return mode === "real" ? realQuotes.map(q => q?.multiplier ?? null) : result?.key === key ? result.values : [];
 }
 

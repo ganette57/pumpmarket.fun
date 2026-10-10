@@ -2,6 +2,12 @@
 import { supabase } from "@/lib/supabaseClient";
 import { isAllowedStreamUrl, parseStream } from "@/lib/streamProviders";
 import { findBlockedStream } from "@/lib/blockedStreams";
+import {
+  isTradeForLiveMarket,
+  normalizeLiveMarketIdentifier,
+  subscribePublishedLiveTradeActivity,
+} from "@/lib/liveTradeActivity";
+export { enqueueLiveTradeActivity } from "@/lib/liveTradeActivity";
 
 /* -------------------------------------------------------------------------- */
 /*  Types                                                                      */
@@ -425,6 +431,7 @@ export async function getActiveLiveSessionForMarket(
 export type RecentTrade = {
   id: string;
   created_at: string;
+  market_address: string | null;
   user_address: string;
   is_buy: boolean;
   is_yes: boolean | null;
@@ -432,7 +439,15 @@ export type RecentTrade = {
   cost: number;
   outcome_index: number | null;
   outcome_name: string | null;
+  /** Absent on legacy REAL rows; the shared activity hook normalizes it. */
+  activity_mode?: "real" | "play";
+  /** Server-sanitized public label (used by PLAY); never an internal ID. */
+  user_label?: string | null;
+  /** Currency for `cost`; legacy REAL rows default to SOL in the renderer. */
+  cost_currency?: "SOL" | "USD";
 };
+
+export type LiveTradeActivityToast = RecentTrade & { _key: number };
 
 export async function fetchRecentTrades(
   marketAddress: string,
@@ -441,7 +456,7 @@ export async function fetchRecentTrades(
   if (!marketAddress) return [];
   const { data, error } = await supabase
     .from("transactions")
-    .select("id,created_at,user_address,is_buy,is_yes,shares,cost,outcome_index,outcome_name")
+    .select("id,created_at,market_address,user_address,is_buy,is_yes,shares,cost,outcome_index,outcome_name")
     .eq("market_address", marketAddress)
     .order("created_at", { ascending: false })
     .limit(limit);
@@ -457,23 +472,35 @@ export function subscribeRecentTrades(
   marketAddress: string,
   cb: (trade: RecentTrade) => void
 ) {
+  const expectedMarketAddress = normalizeLiveMarketIdentifier(marketAddress);
+  const deliveredIds = new Set<string>();
+  const deliver = (trade: RecentTrade) => {
+    if (!isTradeForLiveMarket(trade, expectedMarketAddress)) return;
+    if (!trade.id || deliveredIds.has(trade.id)) return;
+    deliveredIds.add(trade.id);
+    cb(trade);
+  };
+  const unsubscribePublished = subscribePublishedLiveTradeActivity((trade) => {
+    deliver(trade as RecentTrade);
+  });
   const channel = supabase
-    .channel(`live_trades_${marketAddress}`)
+    .channel(`live_trades_${expectedMarketAddress}`)
     .on(
       "postgres_changes",
       {
         event: "INSERT",
         schema: "public",
         table: "transactions",
-        filter: `market_address=eq.${marketAddress}`,
       },
       (payload) => {
-        if (payload.new) cb(payload.new as RecentTrade);
+        const trade = payload.new as RecentTrade | undefined;
+        if (trade) deliver(trade);
       }
     )
     .subscribe();
 
   return () => {
+    unsubscribePublished();
     supabase.removeChannel(channel);
   };
 }
