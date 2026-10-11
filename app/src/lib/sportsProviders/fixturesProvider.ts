@@ -120,11 +120,114 @@ function estimatedEndTime(startIso: string, sport: string): string {
 //
 // Free plan limitation: `from/to` and `next` parameters are PAID-only.
 // We use: GET /fixtures?date=YYYY-MM-DD&league=ID&season=YEAR&timezone=TZ
-// One call per day per league. Days clamped to 3 max, 3 leagues = 9 calls max
+// One call per day per league. Days clamped to 3 max, 5 leagues = 15 calls max
 // per cache miss. With 15min cache that's well under the 100/day free quota.
 // ---------------------------------------------------------------------------
 
 const API_FOOTBALL_HOST = "v3.football.api-sports.io";
+
+export type ApiFootballLiveMinute = {
+  fixtureId: string;
+  elapsed: number;
+  statusShort: string;
+};
+
+const API_FOOTBALL_LIVE_CACHE_TTL_MS = 60_000;
+let apiFootballLiveCache: { ts: number; fixtures: any[] } | null = null;
+let apiFootballLiveRequest: Promise<any[]> | null = null;
+
+function normalizeFixtureText(value: unknown): string {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+async function apiFootballLiveFixtures(): Promise<any[]> {
+  if (
+    apiFootballLiveCache &&
+    Date.now() - apiFootballLiveCache.ts <= API_FOOTBALL_LIVE_CACHE_TTL_MS
+  ) {
+    return apiFootballLiveCache.fixtures;
+  }
+  if (apiFootballLiveRequest) return apiFootballLiveRequest;
+
+  apiFootballLiveRequest = (async () => {
+    const key = getApiSportsKey();
+    if (!key) return [];
+    try {
+      const res = await fetch(`https://${API_FOOTBALL_HOST}/fixtures?live=all`, {
+        method: "GET",
+        headers: { "x-apisports-key": key },
+        cache: "no-store",
+      });
+      if (!res.ok) return [];
+      const json = await res.json();
+      if (json?.errors && Object.keys(json.errors).length > 0) return [];
+      return Array.isArray(json?.response) ? json.response : [];
+    } catch {
+      return [];
+    }
+  })();
+
+  try {
+    const fixtures = await apiFootballLiveRequest;
+    apiFootballLiveCache = { ts: Date.now(), fixtures };
+    return fixtures;
+  } finally {
+    apiFootballLiveRequest = null;
+  }
+}
+
+/**
+ * Resolve a live API-Football fixture without mixing provider identifiers.
+ * Exact teams plus a near-identical kickoff are required; ambiguous matches
+ * deliberately return null.
+ */
+export async function findApiFootballLiveMinute(params: {
+  homeTeam: string;
+  awayTeam: string;
+  league?: string | null;
+  startTime: string;
+}): Promise<ApiFootballLiveMinute | null> {
+  const expectedHome = normalizeFixtureText(params.homeTeam);
+  const expectedAway = normalizeFixtureText(params.awayTeam);
+  const expectedLeague = normalizeFixtureText(params.league);
+  const expectedStartMs = Date.parse(params.startTime);
+  if (!expectedHome || !expectedAway || !Number.isFinite(expectedStartMs)) return null;
+
+  const fixtures = await apiFootballLiveFixtures();
+  const matches = fixtures.filter((entry) => {
+    if (normalizeFixtureText(entry?.teams?.home?.name) !== expectedHome) return false;
+    if (normalizeFixtureText(entry?.teams?.away?.name) !== expectedAway) return false;
+
+    const fixtureStartMs = Date.parse(String(entry?.fixture?.date || ""));
+    if (!Number.isFinite(fixtureStartMs) || Math.abs(fixtureStartMs - expectedStartMs) > 5 * 60_000) {
+      return false;
+    }
+
+    const fixtureLeague = normalizeFixtureText(entry?.league?.name);
+    return (
+      !expectedLeague ||
+      !fixtureLeague ||
+      expectedLeague.includes(fixtureLeague) ||
+      fixtureLeague.includes(expectedLeague)
+    );
+  });
+
+  if (matches.length !== 1) return null;
+  const fixture = matches[0];
+  const statusShort = String(fixture?.fixture?.status?.short || "").toUpperCase();
+  if (!["1H", "HT", "2H", "ET", "BT", "P", "INT", "LIVE", "SUSP"].includes(statusShort)) {
+    return null;
+  }
+
+  const elapsed = Number(fixture?.fixture?.status?.elapsed);
+  const fixtureId = String(fixture?.fixture?.id || "").trim();
+  if (!fixtureId || !Number.isFinite(elapsed) || elapsed < 0) return null;
+  return { fixtureId, elapsed: Math.floor(elapsed), statusShort };
+}
 
 // Top leagues to fetch. We keep this small to stay within free-plan quota.
 // Expand as needed: Serie A = 135, Bundesliga = 78, Champions League = 2, etc.
@@ -132,6 +235,8 @@ const API_FOOTBALL_LEAGUES = [
   { id: 61,  name: "Ligue 1" },
   { id: 39,  name: "Premier League" },
   { id: 140, name: "La Liga" },
+  { id: 78,  name: "Bundesliga" },
+  { id: 5,   name: "UEFA Nations League" },
 ];
 
 // Max days to fetch per request to stay within free-plan quota
@@ -262,7 +367,7 @@ async function apiFootballListUpcoming(params: {
   const clampedDays = Math.min(days, API_FOOTBALL_MAX_DAYS);
 
   const all: NormalizedMatch[] = [];
-  // Fetch each day × each league in parallel (max 9 concurrent requests)
+  // Fetch each day × each league in parallel (max 15 concurrent requests)
   const fetches: Promise<void>[] = [];
 
   for (let d = 0; d < clampedDays; d++) {

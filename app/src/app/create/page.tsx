@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 import { usePrivyIdentity } from "@/components/privy/PrivyIdentityProvider";
@@ -9,7 +9,7 @@ import { BN } from "@coral-xyz/anchor";
 import { useRouter } from "next/navigation";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
-import { Calendar, Upload, X, Plus, Trash2, Info, AlertTriangle, CheckCircle, Loader2, Search, Trophy } from "lucide-react";
+import { ArrowLeft, Calendar, Upload, X, Plus, Trash2, Info, AlertTriangle, CheckCircle, Loader2, Search, Trophy } from "lucide-react";
 import Image from "next/image";
 
 import { validateMarketQuestion, validateMarketDescription } from "@/utils/bannedWords";
@@ -323,6 +323,180 @@ function WarningBox({ children }: { children: React.ReactNode }) {
     <div className="flex gap-3 p-4 rounded-xl bg-yellow-500/10 border border-yellow-500/20">
       <AlertTriangle className="w-5 h-5 text-yellow-400 flex-shrink-0 mt-0.5" />
       <div className="text-sm text-yellow-200">{children}</div>
+    </div>
+  );
+}
+
+const CATEGORY_ICONS: Partial<Record<CategoryId, string>> = {
+  sports: "⚽",
+  crypto: "₿",
+  politics: "🏛️",
+  gaming: "🎮",
+  esport: "🕹️",
+  finance: "📈",
+  entertainment: "🎬",
+  celebrity: "⭐",
+  tech: "💻",
+  science: "🧪",
+  culture: "🎭",
+  fun: "🎉",
+  other: "•••",
+};
+
+function WizardProgress({ activeStep }: { activeStep: number }) {
+  return (
+    <div className="grid grid-cols-4 gap-2" aria-label={`Step ${activeStep} of 4`}>
+      {[1, 2, 3, 4].map((step) => (
+        <div
+          key={step}
+          className={`h-1 rounded-full transition-colors ${
+            step <= activeStep ? "bg-pump-green" : "bg-white/15"
+          }`}
+        />
+      ))}
+    </div>
+  );
+}
+
+function CategoryStep({
+  category,
+  onSelect,
+  onNext,
+  onClose,
+}: {
+  category: CreateCategoryId;
+  onSelect: (category: CreateCategoryId) => void;
+  onNext: () => void;
+  onClose: () => void;
+}) {
+  const sportsSelected = category === "sports" || isSportSubcategory(category);
+  const sportsCategory = CATEGORIES.find((item) => item.id === "sports");
+  const regularCategories = CATEGORIES.filter(
+    (item) => item.id !== "all" && item.id !== "sports"
+  );
+  const sportOptions = [
+    { id: "sports" as const, label: "General" },
+    ...SPORT_SUBCATEGORIES.filter((sport) => sport.id !== "tennis").map((sport) => ({
+      id: sport.id,
+      label: sport.id === "soccer" ? "Football" : sport.label,
+    })),
+  ];
+  const renderSportSelector = (className: string) =>
+    sportsSelected ? (
+      <div className={`col-span-full py-1 ${className}`}>
+        <p className="mb-2 text-xs font-medium text-gray-500">Choose a sport</p>
+        <div className="flex flex-wrap gap-2">
+          {sportOptions.map((sport) => {
+            const selected = category === sport.id;
+            return (
+              <button
+                key={sport.id}
+                type="button"
+                onClick={() => onSelect(sport.id)}
+                aria-pressed={selected}
+                className={`rounded-full border px-3 py-2 text-sm font-semibold transition ${
+                  selected
+                    ? "border-pump-green bg-pump-green text-black"
+                    : "border-white/10 bg-white/[0.035] text-gray-300 hover:border-white/25 hover:text-white"
+                }`}
+              >
+                {sport.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    ) : null;
+
+  return (
+    <div className="min-h-[calc(100svh-4rem)] bg-black px-4 pb-48 pt-5 sm:px-6 md:min-h-[calc(100vh-5rem)] md:pb-32 md:pt-8">
+      <div className="mx-auto w-full max-w-2xl">
+        <div className="flex items-center gap-4">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close create market"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-gray-400 transition hover:bg-white/10 hover:text-white"
+          >
+            <X className="h-5 w-5" />
+          </button>
+          <div className="flex-1">
+            <WizardProgress activeStep={1} />
+          </div>
+          <div className="h-10 w-10 shrink-0" aria-hidden="true" />
+        </div>
+
+        <div className="mt-9 sm:mt-12">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-pump-green">
+            Step 1 of 4
+          </p>
+          <h1 className="mt-3 text-4xl font-bold tracking-tight text-white sm:text-5xl">
+            Create your market
+          </h1>
+          <p className="mt-3 text-base text-gray-400 sm:text-lg">
+            What do you want people to predict?
+          </p>
+        </div>
+
+        <div className="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-3">
+          {sportsCategory && (
+            <button
+              type="button"
+              onClick={() => onSelect("sports")}
+              aria-pressed={sportsSelected}
+              className={`flex min-h-20 items-center gap-3 rounded-2xl border px-4 py-3 text-left transition ${
+                sportsSelected
+                  ? "border-pump-green bg-pump-green/10 text-white shadow-[0_0_24px_rgba(34,197,94,0.08)]"
+                  : "border-white/10 bg-white/[0.035] text-gray-200 hover:border-white/25 hover:bg-white/[0.06]"
+              }`}
+            >
+              <span className="text-2xl" aria-hidden="true">{CATEGORY_ICONS.sports}</span>
+              <span className="font-semibold">{sportsCategory.label}</span>
+            </button>
+          )}
+
+          {regularCategories.map((item) => {
+            const selected = category === item.id;
+            const label = item.id === "esport" ? "Esports" : item.label;
+            return (
+              <Fragment key={item.id}>
+                <button
+                  type="button"
+                  onClick={() => onSelect(item.id)}
+                  aria-pressed={selected}
+                  className={`flex min-h-20 items-center gap-3 rounded-2xl border px-4 py-3 text-left transition ${
+                    selected
+                      ? "border-pump-green bg-pump-green/10 text-white shadow-[0_0_24px_rgba(34,197,94,0.08)]"
+                      : "border-white/10 bg-white/[0.035] text-gray-200 hover:border-white/25 hover:bg-white/[0.06]"
+                  }`}
+                >
+                  <span className="text-2xl" aria-hidden="true">{CATEGORY_ICONS[item.id]}</span>
+                  <span className="font-semibold">{label}</span>
+                </button>
+                {item.id === "politics" && renderSportSelector("sm:hidden")}
+                {item.id === "finance" && renderSportSelector("hidden sm:block")}
+              </Fragment>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="fixed bottom-[6.25rem] left-0 right-0 z-40 px-4 md:bottom-14 md:px-6">
+        <div className="mx-auto max-w-2xl rounded-2xl bg-black/90 pt-3 backdrop-blur-xl">
+          <button
+            type="button"
+            onClick={onNext}
+            disabled={!category}
+            className={`w-full rounded-xl py-4 text-base font-bold transition ${
+              category
+                ? "bg-pump-green text-black shadow-[0_0_28px_rgba(34,197,94,0.2)] hover:brightness-105"
+                : "cursor-not-allowed bg-white/10 text-gray-600"
+            }`}
+          >
+            Next
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -707,6 +881,11 @@ export default function CreateMarketPage() {
   const program = useProgram();
   // Play mode leaves this page fully visible but blocks submission.
   const { isPlay: isPlayMode } = useTradingMode();
+  const [currentStep, setCurrentStep] = useState<1 | 2 | 3 | 4>(1);
+  const [activeMediaPanel, setActiveMediaPanel] = useState<"image" | "video" | null>(null);
+  const [dateTimePicker, setDateTimePicker] = useState<"date" | "time" | null>(null);
+  const [draftDateTime, setDraftDateTime] = useState<Date | null>(null);
+  const selectedTimeOptionRef = useRef<HTMLButtonElement | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [creationStep, setCreationStep] = useState<CreationStep>("idle");
@@ -745,6 +924,14 @@ export default function CreateMarketPage() {
   // Sports-specific fields
   const [resolutionSource, setResolutionSource] = useState<string>("official_league");
   const [proofLink, setProofLink] = useState<string>("");
+
+  useEffect(() => {
+    if (dateTimePicker !== "time") return;
+    const frame = requestAnimationFrame(() => {
+      selectedTimeOptionRef.current?.scrollIntoView({ block: "center" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [dateTimePicker]);
 
   // Sport event fields (for sport_events table)
   const [sportHomeTeam, setSportHomeTeam] = useState("");
@@ -1435,599 +1622,673 @@ export default function CreateMarketPage() {
     return options;
   }, []);
 
-  return (
-    <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-12">
-      {/* Creation Progress Modal */}
-      <CreationModal step={creationStep} error={creationError} onClose={closeCreationModal} marketAddress={createdMarketAddress} />
+  const step2CanContinue =
+    question.trim().length >= 10 &&
+    !questionError &&
+    !outcomesError &&
+    (!sideMarketMode || sportProviderEventId.trim().length > 0);
 
-      <div className="mb-7 sm:mb-8">
-        <h1 className="text-3xl sm:text-4xl font-bold text-white mb-2">Create Market</h1>
-        <p className="text-gray-400">Launch a prediction market. Keep it clean - Make it Fun.</p>
+  const stepTwo = (
+    <div className="mx-auto min-h-screen max-w-2xl px-4 pb-48 pt-8 sm:px-6 sm:pt-10">
+      <div className="mb-8">
+        <div className="mb-7 flex items-center gap-4">
+          <button
+            type="button"
+            onClick={() => setCurrentStep(1)}
+            aria-label="Back to category"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-gray-400 transition hover:bg-white/10 hover:text-white"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </button>
+          <div className="flex-1"><WizardProgress activeStep={2} /></div>
+          <div className="h-10 w-10 shrink-0" aria-hidden="true" />
+        </div>
+        <p className="mb-2 text-xs font-bold uppercase tracking-[0.2em] text-pump-green">Step 2 of 4</p>
+        <h1 className="text-3xl font-black tracking-tight text-white sm:text-4xl">Ask a question</h1>
+        <p className="mt-2 text-sm text-gray-400 sm:text-base">Add the details people will see and trade on.</p>
       </div>
 
-      <div className="card-pump">
-        {/* Category - First so sports mode activates early */}
-        <div className="mb-6">
-          <label className="block text-white font-semibold mb-2">Category *</label>
-          <select
-            value={category}
-            onChange={(e) => {
-              const nextCategory = e.target.value as CreateCategoryId;
-              setCategory(nextCategory);
-              const mappedSport = pickerSportFromCategory(nextCategory);
-              if (mappedSport) setSportType(mappedSport);
-            }}
-            className={`input-pump w-full ${!category ? "text-gray-500" : ""}`}
-          >
-            {categoryOptions.map((opt) => (
-              <option key={opt.value} value={opt.value} disabled={opt.disabled}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-          {isSportSubcategory(category as string) && (
-            <p className="text-xs text-gray-500 mt-2">
-              This market will appear under Sports → {SPORT_SUBCATEGORIES.find((s) => s.id === category)?.label}
-            </p>
-          )}
-        </div>
-
-        {/* Sports Info Box — official admin match flow only */}
-        {isMatchMode && (
-          <div className="mb-6">
-            <InfoBox>
-              <p className="font-semibold mb-1">Sports Match Market</p>
-              <p>Live trading enabled. Trading auto-locks 2 minutes before end time. After the match ends, you have 24h to propose the outcome.</p>
-            </InfoBox>
-          </div>
-        )}
-
-        {/* Pick a match — OFFICIAL fixture picking (admin only). FROZEN. */}
-        {isMatchMode && (
-          <div className="mb-6">
-            <div className="flex items-center justify-between mb-2">
-              <label className="block text-white font-semibold">
-                Select a match (optional)
-              </label>
-              {sportProviderEventId && (
-                <span className="text-xs font-medium text-pump-green flex items-center gap-1">
-                  <CheckCircle className="w-3.5 h-3.5" /> Linked
-                </span>
-              )}
+      <div className="space-y-5">
+        {(isMatchMode || sideMarketMode) && (
+          <section className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 sm:p-5">
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="font-bold text-white">Fixture</h2>
+                <p className="text-xs text-gray-500">{isMatchMode ? "Link an official match to auto-fill its details." : "Choose a match. Trading closes at kickoff."}</p>
+              </div>
+              {sportProviderEventId && <span className="flex items-center gap-1 text-xs font-bold text-pump-green"><CheckCircle className="h-3.5 w-3.5" /> Linked</span>}
             </div>
-            <p className="text-xs text-gray-500 mb-3">
-              Pick from upcoming matches to auto-fill teams, times, and enable live score tracking.
-            </p>
-
-            {/* Selected match banner */}
             {sportProviderEventId ? (
-              <div className="flex items-center justify-between p-3 mb-3 rounded-lg bg-pump-green/10 border border-pump-green/30">
-                <div className="flex-1 min-w-0">
-                  <span className="text-sm text-white font-medium">
-                    {sportHomeTeam} vs {sportAwayTeam}
-                    {sportLeague ? <span className="text-gray-400 ml-2">({sportLeague})</span> : null}
-                  </span>
-                  {sportStartTime && (
-                    <p className="mt-1 text-xs text-gray-400">
-                      Your time: {formatYourTime(sportStartTime)} ·{" "}
-                      {isValidIanaTimeZone(sportEventTimezone)
-                        ? `Match time: ${formatMatchTime(sportStartTime, sportEventTimezone)}`
-                        : `UTC: ${formatMatchTime(sportStartTime)}`}
-                      {!isValidIanaTimeZone(sportEventTimezone) && " (timezone unknown)"}
-                    </p>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 ml-3">
-                  <button
-                    type="button"
-                    onClick={openMatchPicker}
-                    className="text-xs text-gray-400 hover:text-white underline"
-                  >
-                    Change
-                  </button>
-                  <button
-                    type="button"
-                    onClick={clearSelectedMatch}
-                    className="text-xs text-gray-400 hover:text-white underline"
-                  >
-                    Clear
-                  </button>
+              <div className="rounded-xl border border-pump-green/30 bg-pump-green/10 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold text-white">{sportHomeTeam} vs {sportAwayTeam}</p>
+                    {sportLeague && <p className="text-xs text-gray-400">{sportLeague}</p>}
+                    {sportStartTime && <p className="mt-1 text-xs text-gray-400">{sideMarketMode ? "Kickoff" : "Your time"}: {formatYourTime(sportStartTime)}</p>}
+                  </div>
+                  <div className="flex shrink-0 gap-3">
+                    <button type="button" onClick={openMatchPicker} className="text-xs text-gray-300 hover:text-white">Change</button>
+                    <button type="button" onClick={isMatchMode ? clearSelectedMatch : clearSideMatch} className="text-xs text-gray-400 hover:text-white">Clear</button>
+                  </div>
                 </div>
               </div>
             ) : (
-              <button
-                type="button"
-                onClick={openMatchPicker}
-                className="px-4 py-2.5 rounded-lg text-sm font-semibold transition flex items-center gap-2 bg-white/10 text-white border border-white/20 hover:bg-white/15 hover:border-white/30"
-              >
-                <Trophy className="w-4 h-4 text-pump-green" />
-                Pick a match
+              <button type="button" onClick={openMatchPicker} className="flex items-center gap-2 rounded-xl border border-white/15 bg-black/20 px-4 py-2.5 text-sm font-bold text-white hover:border-pump-green/50">
+                <Trophy className="h-4 w-4 text-pump-green" /> Pick a match{sideMarketMode ? " *" : ""}
               </button>
             )}
-
-            <MatchPickerModal
-              open={matchPickerOpen}
-              onClose={() => setMatchPickerOpen(false)}
-              onSelectMatch={selectMatch}
-              sportType={sportType}
-              onSportTypeChange={setSportType}
-              excludeOfficial
-            />
-          </div>
-        )}
-
-        {/* Pick a match — USER side market fixture selector. */}
-        {sideMarketMode && (
-          <div className="mb-6">
-            <label className="block text-white font-semibold mb-2">
-              Select a match *
-            </label>
-            <p className="text-xs text-gray-500 mb-3">
-              Choose the match your prediction is about. Trading closes at kickoff.
-            </p>
-
-            {sportProviderEventId ? (
-              <div className="flex items-start justify-between p-3 rounded-lg bg-pump-green/10 border border-pump-green/30">
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-semibold text-white">
-                    {sportHomeTeam} vs {sportAwayTeam}
-                  </div>
-                  {sportLeague && (
-                    <div className="mt-0.5 text-xs text-gray-400">{sportLeague}</div>
-                  )}
-                  {sportStartTime && (
-                    <div className="mt-0.5 text-xs text-gray-400">
-                      Kickoff: {formatYourTime(sportStartTime)}
-                      {isValidIanaTimeZone(sportEventTimezone)
-                        ? ` · ${formatMatchTime(sportStartTime, sportEventTimezone)}`
-                        : ""}
-                    </div>
-                  )}
-                  <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-pump-green">
-                    <CheckCircle className="w-3 h-3" /> Trading closes at kickoff
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 ml-3 shrink-0">
-                  <button
-                    type="button"
-                    onClick={openMatchPicker}
-                    className="text-xs text-gray-400 hover:text-white underline"
-                  >
-                    Change
-                  </button>
-                  <button
-                    type="button"
-                    onClick={clearSideMatch}
-                    className="text-xs text-gray-400 hover:text-white underline"
-                  >
-                    Clear
-                  </button>
-                </div>
+            {isMatchMode && (
+              <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
+                <input value={sportHomeTeam} onChange={(e) => setSportHomeTeam(e.target.value)} className="input-pump w-full" placeholder="Home team" maxLength={100} aria-label="Home team" />
+                <input value={sportAwayTeam} onChange={(e) => setSportAwayTeam(e.target.value)} className="input-pump w-full" placeholder="Away team" maxLength={100} aria-label="Away team" />
               </div>
+            )}
+            {isMatchMode ? (
+              <MatchPickerModal
+                open={matchPickerOpen}
+                onClose={() => setMatchPickerOpen(false)}
+                onSelectMatch={selectMatch}
+                sportType={sportType}
+                onSportTypeChange={setSportType}
+                excludeOfficial
+              />
             ) : (
-              <button
-                type="button"
-                onClick={openMatchPicker}
-                className="px-4 py-2.5 rounded-lg text-sm font-semibold transition flex items-center gap-2 bg-white/10 text-white border border-white/20 hover:bg-white/15 hover:border-white/30"
-              >
-                <Trophy className="w-4 h-4 text-pump-green" />
-                Pick a match
-              </button>
+              <MatchPickerModal
+                open={matchPickerOpen}
+                onClose={() => setMatchPickerOpen(false)}
+                onSelectMatch={selectSideMatch}
+                sportType={sportType}
+                onSportTypeChange={setSportType}
+              />
             )}
-
-            <MatchPickerModal
-              open={matchPickerOpen}
-              onClose={() => setMatchPickerOpen(false)}
-              onSelectMatch={selectSideMatch}
-              sportType={sportType}
-              onSportTypeChange={setSportType}
-            />
-          </div>
+          </section>
         )}
 
-        {/* Teams / Players (auto-filled by fixture selection, or manual entry) */}
-        {isMatchMode && (
-          <div className="mb-6">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-white font-semibold mb-2">
-                  Home Team *
-                </label>
-                <input
-                  type="text"
-                  value={sportHomeTeam}
-                  onChange={(e) => setSportHomeTeam(e.target.value)}
-                  className="input-pump w-full"
-                  placeholder="e.g. Real Madrid"
-                  maxLength={100}
-                />
-              </div>
-              <div>
-                <label className="block text-white font-semibold mb-2">
-                  Away Team *
-                </label>
-                <input
-                  type="text"
-                  value={sportAwayTeam}
-                  onChange={(e) => setSportAwayTeam(e.target.value)}
-                  className="input-pump w-full"
-                  placeholder="e.g. Barcelona"
-                  maxLength={100}
-                />
-              </div>
-            </div>
+        <section className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 sm:p-5">
+          <div className="mb-2 flex items-baseline justify-between gap-3">
+            <label htmlFor="market-question" className="font-bold text-white">Question</label>
+            <span className="text-xs text-gray-500">{question.length}/200</span>
           </div>
-        )}
-
-        {/* Question / Match */}
-        <div className="mb-6">
-          <label className="block text-white font-semibold mb-2">
-            {isMatchMode ? "Match *" : "Question *"}{" "}
-            <span className="text-gray-500 font-normal text-sm ml-2">({question.length}/200)</span>
-          </label>
           <input
-            type="text"
+            id="market-question"
             value={question}
             onChange={(e) => handleQuestionChange(e.target.value)}
             maxLength={200}
             className={`input-pump w-full ${questionError ? "input-error" : ""}`}
-            placeholder={
-              isMatchMode
-                ? "e.g. Alcaraz vs Zverev - Australian Open Final"
-                : marketType === 0
-                ? "Will SOL reach $500 in 2025?"
-                : "Which team wins the Super Bowl?"
-            }
+            placeholder={isMatchMode ? "e.g. Alcaraz vs Zverev - Australian Open Final" : marketType === 0 ? "Will SOL reach $500 in 2025?" : "Which team wins the Super Bowl?"}
           />
-          {questionError && <p className="text-pump-red text-sm mt-2 font-semibold">❌ {questionError}</p>}
-        </div>
+          {questionError && <p className="mt-2 text-sm font-semibold text-pump-red">❌ {questionError}</p>}
+        </section>
 
-        {/* Description / Notes */}
-        <div className="mb-6">
-          <label className="block text-white font-semibold mb-2">
-            {isMatchMode ? "Notes (optional)" : "Description (optional)"}{" "}
-            <span className="text-gray-500 font-normal text-sm ml-2">({description.length}/500)</span>
-          </label>
-          <textarea
-            value={description}
-            onChange={(e) => handleDescriptionChange(e.target.value)}
-            maxLength={5000}
-            rows={3}
-            className={`input-pump w-full ${descriptionError ? "input-error" : ""}`}
-            placeholder={isMatchMode ? "Any additional context about the match..." : "Describe the resolution conditions..."}
-          />
-          {descriptionError && <p className="text-pump-red text-sm mt-2 font-semibold">❌ {descriptionError}</p>}
-        </div>
-
-        {/* Sports-specific: Resolution Source */}
-        {isMatchMode && (
-          <div className="mb-6">
-            <label className="block text-white font-semibold mb-2">Resolution Source *</label>
-            <select
-              value={resolutionSource}
-              onChange={(e) => setResolutionSource(e.target.value)}
-              className="input-pump w-full"
-            >
-              {RESOLUTION_SOURCES.map((src) => (
-                <option key={src.value} value={src.value}>
-                  {src.label}
-                </option>
-              ))}
-            </select>
-            <p className="text-xs text-gray-500 mt-2">Where will you check the official result?</p>
-          </div>
-        )}
-
-        {/* Sports-specific: Proof Link */}
-        {isMatchMode && (
-          <div className="mb-6">
-            <label className="block text-white font-semibold mb-2">Proof Link (recommended)</label>
-            <input
-              type="url"
-              value={proofLink}
-              onChange={(e) => setProofLink(e.target.value)}
-              className="input-pump w-full"
-              placeholder="https://www.atptour.com/en/scores/..."
-            />
-            <p className="text-xs text-gray-500 mt-2">Link to the official match page (helps with disputes)</p>
-          </div>
-        )}
-
-        {/* Market type */}
-        <div className="mb-6">
-          <label className="block text-white font-semibold mb-2">Market type *</label>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <TypeCard
-              active={marketType === 0}
-              onClick={() => setMarketType(0)}
-              title="Binary"
-              desc={isMatchMode ? "2 players/teams. Head-to-head." : "Exactly 2 outcomes (YES/NO)."}
-            />
-            <TypeCard
-              active={marketType === 1}
-              onClick={() => setMarketType(1)}
-              title="Multi-choice"
-              desc={isMatchMode ? "Tournament winner, podium, etc." : "2–10 outcomes."}
-            />
-          </div>
-        </div>
-
-        {/* Outcomes */}
-        <div className="mb-6">
-          <div className="flex items-end justify-between gap-3 mb-2">
-            <label className="block text-white font-semibold">
-              {isMatchMode ? "Players / Teams *" : "Outcomes *"}{" "}
-              <span className="text-gray-500 font-normal text-sm ml-2">({marketType === 0 ? "must be 2" : "2 to 10"})</span>
-            </label>
-
-            {marketType === 1 && (
+        <section className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 sm:p-5">
+          <div className="mb-3 flex items-center justify-between"><h2 className="font-bold text-white">Market type</h2><span className="text-xs text-gray-500">Choose one</span></div>
+          <div className="grid grid-cols-2 rounded-xl border border-white/10 bg-black/25 p-1">
+            {([0, 1] as const).map((type) => (
               <button
+                key={type}
                 type="button"
-                onClick={addOutcome}
-                disabled={outcomeInputs.length >= 10}
-                className={[
-                  "px-3 py-2 rounded-lg text-sm font-semibold transition flex items-center gap-2",
-                  outcomeInputs.length >= 10
-                    ? "bg-gray-700 text-gray-400 cursor-not-allowed"
-                    : "bg-pump-green text-black hover:opacity-90",
-                ].join(" ")}
+                onClick={() => setMarketType(type)}
+                className={`rounded-lg px-3 py-2.5 text-sm font-bold transition ${marketType === type ? "bg-pump-green text-black" : "text-gray-400 hover:text-white"}`}
               >
-                <Plus className="w-4 h-4" />
-                Add
+                {type === 0 ? "Binary" : "Multi-choice"}
+              </button>
+            ))}
+          </div>
+          <div className="mt-4 flex items-center justify-between gap-3">
+            <h3 className="text-sm font-bold text-white">{isMatchMode ? "Players / Teams" : "Outcomes"}</h3>
+            {marketType === 1 && (
+              <button type="button" onClick={addOutcome} disabled={outcomeInputs.length >= 10} className="flex items-center gap-1 rounded-lg bg-pump-green/15 px-2.5 py-1.5 text-xs font-bold text-pump-green disabled:cursor-not-allowed disabled:bg-gray-800 disabled:text-gray-500">
+                <Plus className="h-3.5 w-3.5" /> Add outcome
               </button>
             )}
           </div>
-
-          <div className="space-y-2">
-            {outcomeInputs.map((val, idx) => {
-              const showRemove = marketType === 1 && outcomeInputs.length > 2;
-
-              return (
-                <div key={idx} className="flex items-center gap-2">
-                  <div className="w-12 text-xs text-gray-500 font-mono flex-shrink-0">
-                    {marketType === 0 ? (isMatchMode ? (idx === 0 ? "P1" : "P2") : idx === 0 ? "YES" : "NO") : `#${idx + 1}`}
-                  </div>
-
-                  <input
-                    value={val}
-                    onChange={(e) => updateOutcomeAt(idx, e.target.value)}
-                    className={`input-pump w-full ${outcomesError ? "input-error" : ""}`}
-                    placeholder={
-                      isMatchMode
-                        ? idx === 0
-                          ? "e.g. Alcaraz"
-                          : "e.g. Zverev"
-                        : marketType === 0
-                        ? idx === 0
-                          ? "YES"
-                          : "NO"
-                        : `Option ${idx + 1}`
-                    }
-                  />
-
-                  {showRemove ? (
-                    <button
-                      type="button"
-                      onClick={() => removeOutcome(idx)}
-                      className="w-10 h-10 rounded-lg border border-white/10 bg-black/30 hover:border-white/20 transition flex items-center justify-center"
-                      title="Remove"
-                    >
-                      <Trash2 className="w-4 h-4 text-gray-300" />
-                    </button>
-                  ) : (
-                    <div className="w-10 h-10" />
-                  )}
-                </div>
-              );
-            })}
-          </div>
-
-          {outcomesError && <p className="text-pump-red text-sm mt-2 font-semibold">❌ {outcomesError}</p>}
-        </div>
-
-        {/* Image */}
-        <div className="mb-6">
-          <label className="block text-white font-semibold mb-2">Market Image (Optional)</label>
-
-          {!imagePreview ? (
-            <>
-              <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-gray-700 rounded-lg cursor-pointer hover:border-pump-green transition-colors bg-pump-dark/50">
-                <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                  <Upload className="w-10 h-10 text-gray-500 mb-2" />
-                  <p className="text-sm text-gray-400 mb-1">
-                    <span className="font-semibold text-pump-green">Click to upload</span> or drag and drop
-                  </p>
-                  <p className="text-xs text-gray-500">PNG, JPG, GIF up to 5MB</p>
-                </div>
-                <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
-              </label>
-
-              {imageError && <p className="text-pump-red text-sm mt-2 font-semibold">❌ {imageError}</p>}
-
-              {category && (
-                <div className="mt-4">
-                  <p className="text-sm text-gray-400 mb-2">Default placeholder for {category}:</p>
-                  <div className="relative w-full h-48 rounded-lg overflow-hidden">
-                    <CategoryImagePlaceholder category={category} className="w-full h-full" />
-                  </div>
-                </div>
-              )}
-            </>
-          ) : (
-            <>
-              <div className="mt-4 relative">
-                <div className="relative w-full h-48 rounded-lg overflow-hidden bg-pump-dark border border-gray-700">
-                  <Image src={imagePreview} alt="Uploaded preview" fill className="object-cover" />
-                  <div className="absolute inset-0 bg-gradient-to-t from-pump-dark/80 to-transparent" />
-                </div>
-
-                <button
-                  type="button"
-                  onClick={removeImage}
-                  className="absolute top-2 right-2 w-8 h-8 bg-pump-red hover:bg-red-600 rounded-full flex items-center justify-center transition-colors shadow-lg"
-                  title="Remove image"
-                >
-                  <X className="w-5 h-5 text-white" />
-                </button>
-              </div>
-
-              {imageFile && (
-                <div className="mt-2 flex items-center justify-between text-sm">
-                  <span className="text-gray-400 truncate flex-1">{imageFile.name}</span>
-                  <span className="text-gray-500 ml-2">{(imageFile.size / 1024).toFixed(0)} KB</span>
-                </div>
-              )}
-            </>
-          )}
-        </div>
-
-        {/* Feed Video (Optional) */}
-        <div className="mb-6">
-          <FeedVideoUpload
-            file={feedVideoFile}
-            previewUrl={feedVideoPreview}
-            thumbnailBlob={feedVideoThumbnail}
-            onChange={(f, url, thumb) => {
-              setFeedVideoFile(f);
-              setFeedVideoPreview(url);
-              setFeedVideoThumbnail(thumb);
-            }}
-          />
-        </div>
-
-        {/* End Date / Match End Time */}
-        {sideMarketMode ? (
-          // Side markets: end / trading lock is fixed to kickoff (read-only).
-          <div className="mb-6">
-            <label className="block text-white font-semibold mb-2">
-              Trading closes
-            </label>
-            <div className="flex items-center gap-2 rounded-lg border border-gray-700 bg-black/30 px-4 py-3 text-sm">
-              <Calendar className="w-4 h-4 text-gray-500" />
-              {sportStartTime ? (
-                <span className="text-white">
-                  At kickoff · {formatYourTime(sportStartTime)}
-                  {isValidIanaTimeZone(sportEventTimezone)
-                    ? ` (${formatMatchTime(sportStartTime, sportEventTimezone)})`
-                    : ""}
-                </span>
-              ) : (
-                <span className="text-gray-400">
-                  Select a match to set the closing time.
-                </span>
-              )}
-            </div>
-            <p className="text-xs text-gray-500 mt-2">
-              This market resolves at kickoff — no live trading.
-            </p>
-          </div>
-        ) : (
-          <div className="mb-6">
-            <label className="block text-white font-semibold mb-2">
-              {isMatchMode ? "Match End Time *" : "End Date & Time *"}
-            </label>
-            <div className="relative">
-              <DatePicker
-                selected={isMatchMode && sportEndTime ? sportEndTime : resolutionDate}
-                onChange={(date: Date | null) => {
-                  if (!date) return;
-                  if (hasLinkedFixture) return;
-                  if (isMatchMode) {
-                    setSportEndTime(date);
-                    // Also push resolution date forward if needed
-                    if (!resolutionDate || date > resolutionDate) {
-                      setResolutionDate(date);
-                    }
-                  } else {
-                    setResolutionDate(date);
-                  }
-                }}
-                showTimeSelect
-                timeFormat="HH:mm"
-                timeIntervals={15}
-                dateFormat="MMMM d, yyyy h:mm aa"
-                minDate={new Date()}
-                readOnly={hasLinkedFixture}
-                className="input-pump w-full pl-10"
-                placeholderText={isMatchMode ? "Select match end time" : "Select end date and time"}
-              />
-              <Calendar className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-500 pointer-events-none" />
-            </div>
-            {isMatchMode && (
-              <>
-                {sportEndTime && (
-                  <p className="text-xs text-gray-500 mt-2">
-                    Your time: {formatYourTime(sportEndTime)} ·{" "}
-                    {isValidIanaTimeZone(sportEventTimezone)
-                      ? `Match time: ${formatMatchTime(sportEndTime, sportEventTimezone)}`
-                      : `UTC: ${formatMatchTime(sportEndTime)}`}
-                    {!isValidIanaTimeZone(sportEventTimezone) && " (timezone unknown)"}
-                  </p>
+          <div className={`mt-2.5 ${marketType === 0 ? "grid gap-2.5 min-[420px]:grid-cols-2" : "space-y-2"}`}>
+            {outcomeInputs.map((value, index) => (
+              <div key={index} className="flex items-center gap-2">
+                <span className="w-7 shrink-0 text-center text-[11px] font-bold text-gray-500">{index + 1}</span>
+                <input value={value} onChange={(e) => updateOutcomeAt(index, e.target.value)} className={`input-pump min-w-0 flex-1 ${outcomesError ? "input-error" : ""}`} placeholder={marketType === 0 ? (index === 0 ? "YES" : "NO") : `Option ${index + 1}`} aria-label={`Outcome ${index + 1}`} />
+                {marketType === 1 && outcomeInputs.length > 2 && (
+                  <button type="button" onClick={() => removeOutcome(index)} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/10 text-gray-400 hover:text-white" aria-label={`Remove outcome ${index + 1}`}>
+                    <Trash2 className="h-4 w-4" />
+                  </button>
                 )}
-                <p className="text-xs text-gray-500 mt-2">Live trading enabled. Trading auto-locks 2 minutes before end time.</p>
-              </>
-            )}
+              </div>
+            ))}
           </div>
-        )}
+          {outcomesError && <p className="mt-2 text-sm font-semibold text-pump-red">❌ {outcomesError}</p>}
+        </section>
 
-        {/* Cancellation Policy Warning (Match only) */}
         {isMatchMode && (
-          <div className="mb-6">
-            <WarningBox>
-              <p className="font-semibold mb-2">Cancellation Policy</p>
-              <ul className="list-disc list-inside space-y-1 text-yellow-200/80">
-                <li>
-                  If the match is postponed, suspended, or abandoned and no official result is available within 24h, the
-                  market may be cancelled and all bets refunded.
-                </li>
-                <li>If you fail to propose an outcome within 24h after the match, admin may cancel the market.</li>
-              </ul>
-            </WarningBox>
-          </div>
+          <details className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 sm:p-5">
+            <summary className="cursor-pointer text-sm font-bold text-white">Resolution details</summary>
+            <div className="mt-4 space-y-3">
+              <select value={resolutionSource} onChange={(e) => setResolutionSource(e.target.value)} className="input-pump w-full" aria-label="Resolution source">
+                {RESOLUTION_SOURCES.map((source) => <option key={source.value} value={source.value}>{source.label}</option>)}
+              </select>
+              <input type="url" value={proofLink} onChange={(e) => setProofLink(e.target.value)} className="input-pump w-full" placeholder="Proof link (recommended)" aria-label="Proof link" />
+            </div>
+          </details>
         )}
 
-        {/* Submit — market creation is a Real-mode action only. The whole
-            page stays visible and unchanged in Play mode; only this button
-            is disabled, with a one-line explanation. */}
-        <>
-          {/* No identity yet: the Launch button used to sit here permanently
-              disabled, with no hint that signing in was the missing piece.
-              Offer the same Privy login the rest of the app uses. Nothing
-              about the create flow itself changes — once signed in, the
-              original button renders exactly as before. */}
-          {!connected && !connecting && privy.configured && !isPlayMode ? (
+        <section className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 sm:p-5">
+          <div className="mb-3">
+            <h2 className="font-bold text-white">Media</h2>
+            <p className="text-xs text-gray-500">Optional image or short video</p>
+          </div>
+          <div className="grid grid-cols-2 gap-2.5">
             <button
               type="button"
-              onClick={() => privy.loginWithGoogle()}
-              className="w-full py-4 rounded-lg font-bold text-lg transition btn-pump glow-green"
+              onClick={() => setActiveMediaPanel((panel) => panel === "image" ? null : "image")}
+              className={`flex min-h-16 items-center gap-3 rounded-xl border px-3 text-left transition ${activeMediaPanel === "image" ? "border-pump-green/60 bg-pump-green/10" : "border-white/10 bg-black/20 hover:border-white/20"}`}
             >
+              <Upload className={`h-5 w-5 shrink-0 ${imagePreview ? "text-pump-green" : "text-gray-400"}`} />
+              <span><span className="block text-sm font-bold text-white">Image</span><span className="block text-[11px] text-gray-500">{imagePreview ? "Preview ready" : "PNG, JPG or GIF"}</span></span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveMediaPanel((panel) => panel === "video" ? null : "video")}
+              className={`flex min-h-16 items-center gap-3 rounded-xl border px-3 text-left transition ${activeMediaPanel === "video" ? "border-pump-green/60 bg-pump-green/10" : "border-white/10 bg-black/20 hover:border-white/20"}`}
+            >
+              <Upload className={`h-5 w-5 shrink-0 ${feedVideoPreview ? "text-pump-green" : "text-gray-400"}`} />
+              <span><span className="block text-sm font-bold text-white">Video</span><span className="block text-[11px] text-gray-500">{feedVideoPreview ? "Preview ready" : "Add a feed clip"}</span></span>
+            </button>
+          </div>
+
+          {(imagePreview || activeMediaPanel === "image") && (
+            <div className="mt-3 rounded-xl border border-white/10 bg-black/20 p-3">
+              {imagePreview ? (
+                <div className="flex items-center gap-3">
+                  <div className="relative h-20 w-28 shrink-0 overflow-hidden rounded-lg bg-pump-dark">
+                    <Image src={imagePreview} alt="Uploaded preview" fill className="object-cover" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-white">{imageFile?.name || "Market image"}</p>
+                    {imageFile && <p className="text-xs text-gray-500">{(imageFile.size / 1024).toFixed(0)} KB</p>}
+                    <div className="mt-2 flex gap-3">
+                      <label className="cursor-pointer text-xs font-semibold text-pump-green hover:underline">
+                        Replace<input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                      </label>
+                      <button type="button" onClick={removeImage} className="text-xs font-semibold text-gray-400 hover:text-white">Remove</button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-white/20 px-4 py-5 text-sm font-semibold text-gray-300 transition hover:border-pump-green/60 hover:text-white">
+                  <Upload className="h-4 w-4 text-pump-green" /> Choose an image
+                  <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                </label>
+              )}
+              {imageError && <p className="mt-2 text-sm font-semibold text-pump-red">❌ {imageError}</p>}
+            </div>
+          )}
+
+          <div className={activeMediaPanel === "video" || feedVideoPreview ? "mt-3 block" : "hidden"}>
+            <FeedVideoUpload
+              file={feedVideoFile}
+              previewUrl={feedVideoPreview}
+              thumbnailBlob={feedVideoThumbnail}
+              onChange={(file, url, thumbnail) => {
+                setFeedVideoFile(file);
+                setFeedVideoPreview(url);
+                setFeedVideoThumbnail(thumbnail);
+              }}
+            />
+          </div>
+        </section>
+      </div>
+
+      <div className="fixed inset-x-0 bottom-[6.25rem] z-30 px-4 md:bottom-14">
+        <div className="mx-auto max-w-2xl">
+          <button type="button" onClick={() => setCurrentStep(3)} disabled={!step2CanContinue} className={`w-full rounded-xl py-4 text-base font-black transition ${step2CanContinue ? "btn-pump glow-green" : "cursor-not-allowed bg-gray-800 text-gray-500"}`}>
+            Next
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const editableDateTime = isMatchMode && sportEndTime ? sportEndTime : resolutionDate;
+  const updateEditableDateTime = (date: Date | null) => {
+    if (!date) return;
+    if (hasLinkedFixture) return;
+    if (isMatchMode) {
+      setSportEndTime(date);
+      if (!resolutionDate || date > resolutionDate) {
+        setResolutionDate(date);
+      }
+    } else {
+      setResolutionDate(date);
+    }
+  };
+  const displayDate = (date: Date) =>
+    new Intl.DateTimeFormat(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    }).format(date);
+  const displayTime = (date: Date) =>
+    new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(date);
+  const activeDraftDateTime = draftDateTime || editableDateTime;
+  const selectedTimeMinutes =
+    activeDraftDateTime.getHours() * 60 + activeDraftDateTime.getMinutes();
+  const intervalTimeOptions = Array.from({ length: 96 }, (_, index) => index * 15);
+  const timeOptions = intervalTimeOptions.includes(selectedTimeMinutes)
+    ? intervalTimeOptions
+    : [...intervalTimeOptions, selectedTimeMinutes].sort((a, b) => a - b);
+  const closeDateTimePicker = () => {
+    setDateTimePicker(null);
+    setDraftDateTime(null);
+  };
+  const confirmDateTimePicker = () => {
+    if (draftDateTime) updateEditableDateTime(draftDateTime);
+    closeDateTimePicker();
+  };
+
+  const dateTimePickerModal = dateTimePicker ? (
+    <div className="fixed inset-0 z-[100] flex bg-black/95 sm:items-center sm:justify-center sm:p-6" role="dialog" aria-modal="true" aria-label={dateTimePicker === "date" ? "Select date" : "Select time"}>
+      <div className="flex h-[100dvh] w-full flex-col overflow-hidden bg-black sm:h-[min(760px,calc(100vh-3rem))] sm:max-w-xl sm:rounded-3xl sm:border sm:border-white/10 sm:bg-[#0b0b0b] sm:shadow-2xl">
+        <div className="flex h-16 shrink-0 items-center border-b border-white/10 px-4 sm:px-5">
+          <button
+            type="button"
+            onClick={closeDateTimePicker}
+            className="flex h-11 w-11 items-center justify-center rounded-full text-gray-400 transition hover:bg-white/10 hover:text-white"
+            aria-label="Cancel"
+          >
+            <X className="h-5 w-5" />
+          </button>
+          <h2 className="flex-1 pr-11 text-center text-base font-black text-white">
+            {dateTimePicker === "date" ? "Select date" : "Select time"}
+          </h2>
+        </div>
+
+        {dateTimePicker === "date" ? (
+          <div className="create-market-date-picker flex min-h-0 flex-1 items-start justify-center overflow-y-auto overscroll-contain px-4 py-6 sm:px-8">
+            <DatePicker
+              inline
+              selected={activeDraftDateTime}
+              minDate={new Date()}
+              onChange={(date: Date | null) => {
+                if (!date) return;
+                const nextDate = new Date(date);
+                nextDate.setHours(
+                  activeDraftDateTime.getHours(),
+                  activeDraftDateTime.getMinutes(),
+                  activeDraftDateTime.getSeconds(),
+                  activeDraftDateTime.getMilliseconds()
+                );
+                setDraftDateTime(nextDate);
+              }}
+              renderCustomHeader={({ date, decreaseMonth, increaseMonth, prevMonthButtonDisabled, nextMonthButtonDisabled }) => (
+                <div className="mb-4 flex items-center justify-between px-1">
+                  <button
+                    type="button"
+                    onClick={decreaseMonth}
+                    disabled={prevMonthButtonDisabled}
+                    className="flex h-12 w-12 items-center justify-center rounded-full border border-white/10 text-2xl text-white transition hover:border-pump-green/50 disabled:cursor-not-allowed disabled:text-gray-700"
+                    aria-label="Previous month"
+                  >
+                    ‹
+                  </button>
+                  <span className="text-lg font-black text-white">
+                    {new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(date)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={increaseMonth}
+                    disabled={nextMonthButtonDisabled}
+                    className="flex h-12 w-12 items-center justify-center rounded-full border border-white/10 text-2xl text-white transition hover:border-pump-green/50 disabled:cursor-not-allowed disabled:text-gray-700"
+                    aria-label="Next month"
+                  >
+                    ›
+                  </button>
+                </div>
+              )}
+            />
+          </div>
+        ) : (
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-8">
+            <p className="mb-4 text-center text-3xl font-black text-white">{displayTime(activeDraftDateTime)}</p>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {timeOptions.map((minutes) => {
+                const optionDate = new Date(activeDraftDateTime);
+                optionDate.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
+                const selected = minutes === selectedTimeMinutes;
+                return (
+                  <button
+                    key={minutes}
+                    ref={selected ? selectedTimeOptionRef : undefined}
+                    type="button"
+                    onClick={() => setDraftDateTime(optionDate)}
+                    className={`min-h-14 rounded-xl border px-4 text-base font-bold transition ${selected ? "border-pump-green bg-pump-green text-black" : "border-white/10 bg-white/[0.035] text-gray-200 hover:border-white/25"}`}
+                  >
+                    {displayTime(optionDate)}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div className="grid shrink-0 grid-cols-2 gap-3 border-t border-white/10 bg-black/95 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:p-5">
+          <button type="button" onClick={closeDateTimePicker} className="rounded-xl border border-white/15 py-3.5 font-bold text-gray-200 transition hover:bg-white/5">
+            Cancel
+          </button>
+          <button type="button" onClick={confirmDateTimePicker} className="btn-pump rounded-xl py-3.5 font-black">
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  const stepThree = (
+    <div className="mx-auto min-h-screen max-w-2xl px-4 pb-48 pt-8 sm:px-6 sm:pt-10">
+      <div className="mb-8">
+        <div className="mb-7 flex items-center gap-4">
+          <button
+            type="button"
+            onClick={() => setCurrentStep(2)}
+            aria-label="Back to market"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-gray-400 transition hover:bg-white/10 hover:text-white"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </button>
+          <div className="flex-1"><WizardProgress activeStep={3} /></div>
+          <div className="h-10 w-10 shrink-0" aria-hidden="true" />
+        </div>
+        <p className="mb-2 text-xs font-bold uppercase tracking-[0.2em] text-pump-green">Step 3 of 4</p>
+        <h1 className="text-3xl font-black tracking-tight text-white sm:text-4xl">When will it end?</h1>
+        <p className="mt-2 text-sm text-gray-400 sm:text-base">Choose when trading closes.</p>
+      </div>
+
+      {sideMarketMode ? (
+        <section className="rounded-2xl border border-white/10 bg-white/[0.035] p-5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm font-bold text-white">
+              <Calendar className="h-4 w-4 text-pump-green" /> Match kickoff
+            </div>
+            <span className="rounded-full bg-pump-green/10 px-2.5 py-1 text-[11px] font-bold text-pump-green">Automatic</span>
+          </div>
+          <div className="mt-5 grid grid-cols-2 gap-3">
+            <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+              <p className="text-xs text-gray-500">Date</p>
+              <p className="mt-1 font-bold text-white">{displayDate(resolutionDate)}</p>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+              <p className="text-xs text-gray-500">Time</p>
+              <p className="mt-1 font-bold text-white">{displayTime(resolutionDate)}</p>
+            </div>
+          </div>
+          <p className="mt-3 text-xs text-gray-400">Trading closes automatically at kickoff.</p>
+        </section>
+      ) : isMatchMode && hasLinkedFixture ? (
+        <section className="rounded-2xl border border-white/10 bg-white/[0.035] p-5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm font-bold text-white">
+              <Calendar className="h-4 w-4 text-pump-green" /> Trading closes
+            </div>
+            <span className="rounded-full bg-pump-green/10 px-2.5 py-1 text-[11px] font-bold text-pump-green">Automatic from fixture</span>
+          </div>
+          <div className="mt-5 grid grid-cols-2 gap-3">
+            <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+              <p className="text-xs text-gray-500">Date</p>
+              <p className="mt-1 font-bold text-white">{displayDate(resolutionDate)}</p>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+              <p className="text-xs text-gray-500">Time</p>
+              <p className="mt-1 font-bold text-white">{displayTime(resolutionDate)}</p>
+            </div>
+          </div>
+          {sportStartTime && (
+            <div className="mt-4 flex items-center justify-between border-t border-white/10 pt-4 text-sm">
+              <span className="text-gray-500">Kickoff</span>
+              <span className="font-semibold text-gray-200">{displayDate(sportStartTime)} · {displayTime(sportStartTime)}</span>
+            </div>
+          )}
+        </section>
+      ) : (
+        <section className="rounded-2xl border border-white/10 bg-white/[0.035] p-5">
+          <div className="mb-4 flex items-center gap-2 text-sm font-bold text-white">
+            <Calendar className="h-4 w-4 text-pump-green" /> End date &amp; time
+          </div>
+          <div className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-2">
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold text-gray-500">End date</label>
+              <button
+                type="button"
+                onClick={() => {
+                  setDraftDateTime(new Date(editableDateTime));
+                  setDateTimePicker("date");
+                }}
+                className="input-pump flex w-full items-center justify-between text-left font-semibold text-white"
+              >
+                {displayDate(editableDateTime)}
+                <Calendar className="h-4 w-4 text-gray-500" />
+              </button>
+            </div>
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold text-gray-500">Time</label>
+              <button
+                type="button"
+                onClick={() => {
+                  setDraftDateTime(new Date(editableDateTime));
+                  setDateTimePicker("time");
+                }}
+                className="input-pump flex w-full items-center justify-between text-left font-semibold text-white"
+              >
+                {displayTime(editableDateTime)}
+                <span className="text-xs font-bold text-pump-green">Change</span>
+              </button>
+            </div>
+          </div>
+          <p className="mt-3 text-xs text-gray-400">Trading closes at this time.</p>
+        </section>
+      )}
+
+      <div className="fixed inset-x-0 bottom-[6.25rem] z-30 px-4 md:bottom-14">
+        <div className="mx-auto max-w-2xl">
+          <button type="button" onClick={() => setCurrentStep(4)} className="btn-pump glow-green w-full rounded-xl py-4 text-base font-black transition">
+            Next
+          </button>
+        </div>
+      </div>
+      {dateTimePickerModal}
+    </div>
+  );
+
+  const reviewCategoryLabel =
+    category === "soccer"
+      ? "Football"
+      : SPORT_SUBCATEGORIES.find((sport) => sport.id === category)?.label ||
+        CATEGORIES.find((item) => item.id === category)?.label ||
+        "Uncategorized";
+  const reviewResolutionSource =
+    RESOLUTION_SOURCES.find((source) => source.value === resolutionSource)?.label || resolutionSource;
+  const hasReviewMedia = Boolean(imagePreview || feedVideoFile || feedVideoPreview);
+
+  const stepFour = (
+    <div className="mx-auto min-h-screen max-w-2xl px-4 pb-64 pt-8 sm:px-6 sm:pt-10">
+      <div className="mb-8">
+        <div className="mb-7 flex items-center gap-4">
+          <button
+            type="button"
+            onClick={() => setCurrentStep(3)}
+            aria-label="Back to date and time"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-gray-400 transition hover:bg-white/10 hover:text-white"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </button>
+          <div className="flex-1"><WizardProgress activeStep={4} /></div>
+          <div className="h-10 w-10 shrink-0" aria-hidden="true" />
+        </div>
+        <p className="mb-2 text-xs font-bold uppercase tracking-[0.2em] text-pump-green">Step 4 of 4</p>
+        <h1 className="text-3xl font-black tracking-tight text-white sm:text-4xl">Review &amp; launch</h1>
+        <p className="mt-2 text-sm text-gray-400 sm:text-base">Make sure everything looks right.</p>
+      </div>
+
+      <div className="space-y-4">
+        <section className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035]">
+          {imagePreview && (
+            <div className="relative h-36 w-full bg-pump-dark sm:h-44">
+              <Image src={imagePreview} alt="Market preview" fill className="object-cover" />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
+            </div>
+          )}
+          <div className="p-5">
+            <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold uppercase tracking-wide">
+              <span className="rounded-full bg-pump-green/10 px-2.5 py-1 text-pump-green">{reviewCategoryLabel}</span>
+              <span className="rounded-full border border-white/10 px-2.5 py-1 text-gray-400">{marketType === 0 ? "Binary" : "Multi-choice"}</span>
+            </div>
+            <h2 className="mt-4 text-xl font-black leading-snug text-white sm:text-2xl">{question}</h2>
+            <div className="mt-4 flex items-center justify-between gap-3 border-t border-white/10 pt-4 text-sm">
+              <span className="text-gray-500">Closes</span>
+              <span className="text-right font-bold text-white">{displayDate(resolutionDate)} · {displayTime(resolutionDate)}</span>
+            </div>
+
+            {sportProviderEventId && (
+              <div className="mt-4 rounded-xl border border-pump-green/20 bg-pump-green/[0.06] p-3">
+                <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-pump-green">
+                  <CheckCircle className="h-3.5 w-3.5" /> Linked fixture
+                </div>
+                <p className="mt-2 text-sm font-bold text-white">{sportHomeTeam} vs {sportAwayTeam}</p>
+                {sportLeague && <p className="mt-0.5 text-xs text-gray-400">{sportLeague}</p>}
+                {sportStartTime && <p className="mt-1 text-xs text-gray-500">Kickoff · {displayDate(sportStartTime)} · {displayTime(sportStartTime)}</p>}
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 sm:p-5">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="font-bold text-white">Outcomes</h2>
+            <button type="button" onClick={() => setCurrentStep(2)} className="min-h-10 px-2 text-sm font-bold text-pump-green hover:underline">Edit</button>
+          </div>
+          <div className={`mt-3 grid gap-2 ${outcomes.length === 2 ? "grid-cols-2" : "grid-cols-1 min-[420px]:grid-cols-2"}`}>
+            {outcomes.map((outcome, index) => (
+              <div key={`${outcome}-${index}`} className="rounded-xl border border-white/10 bg-black/20 px-3 py-3 text-center text-sm font-bold text-white">
+                {outcome}
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 sm:p-5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="font-bold text-white">Closes</h2>
+              <p className="mt-1 text-sm font-semibold text-gray-300">{displayDate(resolutionDate)} · {displayTime(resolutionDate)}</p>
+              {(sideMarketMode || hasLinkedFixture) && <p className="mt-1 text-xs text-pump-green">Automatic from fixture</p>}
+            </div>
+            <button type="button" onClick={() => setCurrentStep(3)} className="min-h-10 px-2 text-sm font-bold text-pump-green hover:underline">Edit</button>
+          </div>
+        </section>
+
+        {hasReviewMedia && (
+          <section className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 sm:p-5">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="font-bold text-white">Media</h2>
+              <button type="button" onClick={() => setCurrentStep(2)} className="min-h-10 px-2 text-sm font-bold text-pump-green hover:underline">Edit</button>
+            </div>
+            <div className="mt-3 flex items-center gap-3">
+              {imagePreview && (
+                <div className="relative h-20 w-28 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-pump-dark">
+                  <Image src={imagePreview} alt="Attached market image" fill className="object-cover" />
+                </div>
+              )}
+              {(feedVideoFile || feedVideoPreview) && (
+                <div className="flex min-h-20 flex-1 items-center gap-3 rounded-xl border border-white/10 bg-black/20 px-4">
+                  <Upload className="h-5 w-5 shrink-0 text-pump-green" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-white">Feed video attached</p>
+                    {feedVideoFile?.name && <p className="truncate text-xs text-gray-500">{feedVideoFile.name}</p>}
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
+        <section className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 sm:p-5">
+          <div className="mb-3 flex items-baseline justify-between gap-3">
+            <div>
+              <label htmlFor="review-description" className="font-bold text-white">Resolution details</label>
+              <p className="mt-0.5 text-xs text-gray-500">Explain how this market should be resolved.</p>
+            </div>
+            <span className="shrink-0 text-xs text-gray-500">{description.length}/500</span>
+          </div>
+          <textarea
+            id="review-description"
+            value={description}
+            onChange={(event) => handleDescriptionChange(event.target.value)}
+            maxLength={5000}
+            rows={3}
+            className={`input-pump w-full resize-none ${descriptionError ? "input-error" : ""}`}
+            placeholder="Add resolution conditions or useful context..."
+          />
+          {descriptionError && <p className="mt-2 text-sm font-semibold text-pump-red">❌ {descriptionError}</p>}
+
+          {isMatchMode && (
+            <div className="mt-4 space-y-2 border-t border-white/10 pt-4 text-sm">
+              <div className="flex items-start justify-between gap-4">
+                <span className="text-gray-500">Source</span>
+                <span className="text-right font-semibold text-gray-200">{reviewResolutionSource}</span>
+              </div>
+              {proofLink.trim() && (
+                <div className="flex items-start justify-between gap-4">
+                  <span className="text-gray-500">Proof</span>
+                  <span className="max-w-[70%] truncate text-right font-semibold text-gray-200">{proofLink.trim()}</span>
+                </div>
+              )}
+              <button type="button" onClick={() => setCurrentStep(2)} className="min-h-10 text-sm font-bold text-pump-green hover:underline">Edit sports resolution</button>
+            </div>
+          )}
+        </section>
+      </div>
+
+      <div className="fixed inset-x-0 bottom-[6.25rem] z-30 px-4 md:bottom-14">
+        <div className="mx-auto max-w-2xl rounded-2xl bg-black/90 pt-3 backdrop-blur-xl">
+          {!connected && !connecting && privy.configured && !isPlayMode ? (
+            <button type="button" onClick={() => privy.loginWithGoogle()} className="btn-pump glow-green w-full rounded-xl py-4 text-base font-black transition">
               Continue with Google
             </button>
           ) : (
             <button
+              type="button"
               onClick={handleCreateMarket}
               disabled={!canSubmit || loading || isPlayMode}
               aria-busy={loading}
-              className={`w-full py-4 rounded-lg font-bold text-lg transition ${
-                canSubmit && !loading && !isPlayMode
-                  ? "btn-pump glow-green"
-                  : "bg-gray-700 text-gray-500 cursor-not-allowed"
-              }`}
+              className={`w-full rounded-xl py-4 text-base font-black transition ${canSubmit && !loading && !isPlayMode ? "btn-pump glow-green" : "cursor-not-allowed bg-gray-800 text-gray-500"}`}
             >
-              {loading
-                ? "Processing..."
-                : isSportsMarket
-                ? "Create Sports Market 🏆"
-                : "Launch Market 🚀"}
+              {loading ? "Processing..." : "Create market"}
             </button>
           )}
-        </>
-        {isPlayMode && (
-          <p className="mt-2 text-center text-sm text-gray-400">
-            Market creation is available in Real mode.
-          </p>
-        )}
+          {isPlayMode && <p className="mt-2 text-center text-xs text-gray-400">Market creation is available in Real mode.</p>}
+        </div>
       </div>
     </div>
+  );
+
+  return (
+    <>
+      <CreationModal step={creationStep} error={creationError} onClose={closeCreationModal} marketAddress={createdMarketAddress} />
+      <div className={currentStep === 1 ? "block" : "hidden"}>
+        <CategoryStep
+          category={category}
+          onSelect={(nextCategory) => {
+            setCategory(nextCategory);
+            const mappedSport = pickerSportFromCategory(nextCategory);
+            if (mappedSport) setSportType(mappedSport);
+          }}
+          onNext={() => setCurrentStep(2)}
+          onClose={() => router.back()}
+        />
+      </div>
+      <div className={currentStep === 2 ? "block" : "hidden"}>{stepTwo}</div>
+      {currentStep === 3 && stepThree}
+      {currentStep === 4 && stepFour}
+    </>
   );
 }

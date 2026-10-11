@@ -210,7 +210,9 @@ const TARGET_LEAGUES: LeagueConfig[] = [
   { id: 4335, name: "Spanish La Liga",          sport: "soccer",            keywords: ["la liga", "spanish", "primera"],        tz: "Europe/Madrid" },
   { id: 4328, name: "English Premier League",   sport: "soccer",            keywords: ["premier league", "english premier"],    tz: "Europe/London" },
   { id: 4332, name: "Italian Serie A",          sport: "soccer",            keywords: ["serie a", "italian"],                  tz: "Europe/Rome" },
+  { id: 4331, name: "German Bundesliga",        sport: "soccer",            keywords: ["bundesliga", "german"],                tz: "Europe/Berlin" },
   { id: 4480, name: "UEFA Champions League",    sport: "soccer",            keywords: ["uefa champions league", "champions league", "ucl"], tz: "UTC" },
+  { id: 4490, name: "UEFA Nations League",      sport: "soccer",            keywords: ["uefa nations league", "nations league"], tz: "UTC" },
   { id: 4429, name: "FIFA World Cup",           sport: "soccer",            keywords: ["world cup", "fifa"],                   tz: "UTC" },
   // Basketball
   { id: 4387, name: "NBA",                      sport: "basketball",        keywords: ["nba", "national basketball"],           tz: "America/New_York" },
@@ -259,6 +261,7 @@ function setCache(key: string, data: any) {
 // Short cache for live lookups (10s)
 const LIVE_CACHE_TTL_MS = 10_000;
 const liveCache = new Map<string, { ts: number; data: any }>();
+const liveFeedRequests = new Map<string, Promise<any[]>>();
 
 function getLiveCached<T>(key: string): T | null {
   const entry = liveCache.get(key);
@@ -277,6 +280,62 @@ function setLiveCache(key: string, data: any) {
     Array.from(liveCache.entries()).forEach(([k, v]) => {
       if (now - v.ts > LIVE_CACHE_TTL_MS) liveCache.delete(k);
     });
+  }
+}
+
+async function fetchV2LiveScoreFeed(sport: string): Promise<any[]> {
+  const cacheKey = `tsdb:v2:livescore:${sport}`;
+  const cached = getLiveCached<any[]>(cacheKey);
+  if (cached) return cached;
+
+  const pending = liveFeedRequests.get(cacheKey);
+  if (pending) return pending;
+
+  const request = (async () => {
+    const json = await fetchV2Json(`livescore/${sport}`);
+    const feed = Array.isArray(json?.livescore) ? json.livescore : [];
+    setLiveCache(cacheKey, feed);
+    return feed;
+  })().finally(() => {
+    liveFeedRequests.delete(cacheKey);
+  });
+
+  liveFeedRequests.set(cacheKey, request);
+  return request;
+}
+
+export type NflLiveProgress = {
+  provider_event_id: string;
+  home_score: number | null;
+  away_score: number | null;
+  status_text: string | null;
+  progress: string | null;
+  updated: string | null;
+};
+
+/** Match an NFL event directly by TheSportsDB idEvent in the V2 live feed. */
+export async function fetchNflLiveProgress(eventId: string): Promise<NflLiveProgress | null> {
+  if (!eventId || !isPremium()) return null;
+
+  try {
+    const feed = await fetchV2LiveScoreFeed("american_football");
+    const event = feed.find((candidate) => String(candidate?.idEvent || "") === String(eventId));
+    if (!event) return null;
+
+    const homeScore = event.intHomeScore == null ? null : Number(event.intHomeScore);
+    const awayScore = event.intAwayScore == null ? null : Number(event.intAwayScore);
+
+    return {
+      provider_event_id: String(event.idEvent),
+      home_score: Number.isFinite(homeScore) ? homeScore : null,
+      away_score: Number.isFinite(awayScore) ? awayScore : null,
+      status_text: typeof event.strStatus === "string" && event.strStatus.trim() ? event.strStatus.trim() : null,
+      progress: typeof event.strProgress === "string" && event.strProgress.trim() ? event.strProgress.trim() : null,
+      updated: typeof event.updated === "string" && event.updated.trim() ? event.updated.trim() : null,
+    };
+  } catch (e: any) {
+    dbg("NFL V2 live progress error:", e?.message);
+    return null;
   }
 }
 

@@ -482,7 +482,104 @@ function resolveDisplayStatus(event: any): DisplayStatus {
   return "unknown";
 }
 
-function statusBadgeLabel(status: DisplayStatus, minute: string): string {
+function nflScoreCardState(status: DisplayStatus, event?: SportEvent): {
+  statusLabel: string;
+  progressLabel: string;
+} {
+  const raw = asObject(event?.raw);
+  const v2Status = String(raw.nfl_v2_status || "").trim();
+  const v2Progress = String(raw.nfl_v2_progress || "").trim();
+  const fallbackStatus = String(raw.status_text || "").trim();
+  const providerStates = [v2Status, v2Progress, fallbackStatus].filter(Boolean);
+  const hasExactState = (pattern: RegExp) => providerStates.some((value) => pattern.test(value));
+
+  if (status === "finished" || hasExactState(/^(?:ft|final|game finished)$/i)) {
+    return { statusLabel: "FINAL", progressLabel: "" };
+  }
+  if (status === "scheduled") return { statusLabel: "SCHEDULED", progressLabel: "" };
+  if (hasExactState(/^(?:ht|half[ -]?time|halftime)$/i)) {
+    return { statusLabel: "HALFTIME", progressLabel: "" };
+  }
+
+  if (status === "live") {
+    const verifiedProgress = v2Progress.match(/^(\d{1,2}):([0-5]\d)\s*-\s*(1st|2nd|3rd|4th)$/i);
+    if (verifiedProgress) {
+      const minutes = Number(verifiedProgress[1]);
+      const quarter = ({ "1st": "Q1", "2nd": "Q2", "3rd": "Q3", "4th": "Q4" } as const)[
+        verifiedProgress[3].toLowerCase() as "1st" | "2nd" | "3rd" | "4th"
+      ];
+      if (Number.isInteger(minutes) && minutes >= 0 && minutes <= 15) {
+        return {
+          statusLabel: "LIVE",
+          progressLabel: `${quarter} · ${String(minutes).padStart(2, "0")}:${verifiedProgress[2]}`,
+        };
+      }
+    }
+
+    if (
+      hasExactState(/^(?:ot|overtime)$/i) ||
+      /^\d{1,2}:[0-5]\d\s*-\s*(?:ot|overtime)$/i.test(v2Progress)
+    ) {
+      return { statusLabel: "LIVE", progressLabel: "OT" };
+    }
+
+    const providerQuarter = providerStates.find((value) => /^q[1-4]$/i.test(value));
+    return {
+      statusLabel: "LIVE",
+      progressLabel: providerQuarter ? providerQuarter.toUpperCase() : "",
+    };
+  }
+
+  return { statusLabel: "—", progressLabel: "" };
+}
+
+function statusBadgeLabel(status: DisplayStatus, minute: string, event?: SportEvent): string {
+  const sport = String(event?.sport || "").trim().toLowerCase();
+  const isFootball = sport === "soccer" || sport === "football";
+
+  if (isFootball) {
+    const raw = asObject(event?.raw);
+    const providerProgressMinute = (() => {
+      for (const value of [raw.progress, raw.strProgress]) {
+        if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+          return `${Math.floor(value)}'`;
+        }
+        if (typeof value !== "string") continue;
+        const match = value.trim().match(/^(\d{1,3})(?:\s*(?:'|min(?:ute)?s?|:.*))?$/i);
+        if (match) return `${Number(match[1])}'`;
+      }
+      return "";
+    })();
+    const authoritativeMinute = minute || providerProgressMinute;
+    const providerHints = [
+      raw.status_text,
+      raw.progress,
+      raw.strStatus,
+      raw.strProgress,
+    ]
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter(Boolean);
+    const hasProviderHint = (pattern: RegExp) => providerHints.some((hint) => pattern.test(hint));
+
+    // Preserve provider-specific exceptional states instead of presenting them
+    // as a normal match clock. The minute is never inferred locally.
+    if (hasProviderHint(/\b(postponed|pst)\b/)) return "POSTPONED";
+    if (hasProviderHint(/\b(cancelled|canceled|canc)\b/)) return "CANCELLED";
+    if (hasProviderHint(/\b(suspended|susp)\b/)) return "SUSPENDED";
+    if (hasProviderHint(/\b(abandoned|abd)\b/)) return "ABANDONED";
+    if (hasProviderHint(/\b(interrupted|int)\b/)) return "INTERRUPTED";
+    if (hasProviderHint(/\b(after extra time|aet)\b/)) return "AET";
+    if (hasProviderHint(/\b(penalties|penalty shootout|pen)\b/)) return "PEN";
+    if (hasProviderHint(/\b(extra time|et|break time|bt)\b/)) return "ET";
+    if (hasProviderHint(/\b(half[ -]?time|halftime|interval|ht)\b/)) {
+      return authoritativeMinute ? `HT · ${authoritativeMinute}` : "HT";
+    }
+    if (status === "finished" || hasProviderHint(/\b(full[ -]?time|finished|ft)\b/)) return "FT";
+    if (status === "live") return authoritativeMinute ? `LIVE · ${authoritativeMinute}` : "LIVE";
+    if (status === "scheduled") return "SCHEDULED";
+    return "—";
+  }
+
   if (status === "live") return minute ? `LIVE ${minute}` : "LIVE";
   if (status === "finished") return "FINAL";
   if (status === "scheduled") return "SCHEDULED";
@@ -1371,6 +1468,21 @@ function SportScoreCard({
   const awayBadge = pickBadge(event, meta, "away");
   const homeGoals = pickGoalDetails(event, meta, "home");
   const awayGoals = pickGoalDetails(event, meta, "away");
+  const statusLabel = statusBadgeLabel(displayStatus, minute, event);
+  const isFootball = ["soccer", "football"].includes(String(event.sport || "").toLowerCase());
+  const isNfl = ["american_football", "nfl"].includes(String(event.sport || "").toLowerCase());
+  const nflState = nflScoreCardState(displayStatus, event);
+  const [footballStatusLabel, footballMinuteLabel = ""] = statusLabel.split(" · ");
+  const footballStatusClass = footballStatusLabel === "LIVE"
+    ? "inline-flex items-center rounded-full bg-red-600 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white"
+    : footballStatusLabel === "SCHEDULED"
+      ? `inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${sportStatusColor(displayStatus)}`
+      : "text-xs font-bold uppercase tracking-wide text-gray-200";
+  const nflStatusClass = nflState.statusLabel === "LIVE"
+    ? "inline-flex items-center rounded-full bg-red-600 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white"
+    : nflState.statusLabel === "SCHEDULED"
+      ? `inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${sportStatusColor(displayStatus)}`
+      : "text-xs font-bold uppercase tracking-wide text-gray-200";
 
   const scorePair = extractScorePair(event);
   const effectiveScorePair = lockToResolvedScore ? (resolvedScorePair ?? null) : (resolvedScorePair ?? scorePair);
@@ -1429,10 +1541,50 @@ function SportScoreCard({
 
   if (compact) return (
     <section aria-label="Event score" className="mb-4 text-center">
-      <p className="mb-3 text-[10px] uppercase tracking-wider text-gray-500">
-        {isLiveMicro ? microBadgeLabel : displayStatus === "finished" ? "Final" : isLive ? `Live ${minute}` : displayStatus === "scheduled" ? "Scheduled" : "Match"}
-        {event.league ? ` · ${event.league}` : ""}
-      </p>
+      {isFootball && !isLiveMicro ? (
+        <div className="mb-2 flex flex-col items-center gap-1">
+          {event.league && (
+            <p className="max-w-full truncate text-[10px] uppercase tracking-wider text-gray-500">
+              {event.league}
+            </p>
+          )}
+          <span className={footballStatusClass}>
+            {footballStatusLabel === "LIVE" && (
+              <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
+            )}
+            {footballStatusLabel}
+          </span>
+          {footballMinuteLabel && (
+            <span className="text-2xl font-black leading-none tabular-nums text-white">
+              {footballMinuteLabel}
+            </span>
+          )}
+        </div>
+      ) : isNfl && !isLiveMicro ? (
+        <div className="mb-2 flex flex-col items-center gap-1">
+          {event.league && (
+            <p className="max-w-full truncate text-[10px] uppercase tracking-wider text-gray-500">
+              {event.league}
+            </p>
+          )}
+          <span className={nflStatusClass}>
+            {nflState.statusLabel === "LIVE" && (
+              <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
+            )}
+            {nflState.statusLabel}
+          </span>
+          {nflState.progressLabel && (
+            <span className="text-2xl font-black leading-none tabular-nums text-white">
+              {nflState.progressLabel}
+            </span>
+          )}
+        </div>
+      ) : (
+        <p className="mb-3 text-[10px] uppercase tracking-wider text-gray-500">
+          {isLiveMicro ? microBadgeLabel : statusLabel}
+          {event.league ? ` · ${event.league}` : ""}
+        </p>
+      )}
       <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
         {["home", "score", "away"].map(side => side === "score" ? <div key={side} className="text-3xl font-bold tabular-nums text-white">
           {hasScore ? effectiveScorePair ? `${effectiveScorePair.home} — ${effectiveScorePair.away}` : formatScore(event.score, event.sport) : "vs"}
@@ -1544,21 +1696,66 @@ function SportScoreCard({
           </>
         ) : (
           <>
-            {/* Status + league */}
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <span className={`px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wide ${sportStatusColor(displayStatus)}`}>
-                  {isLive && (
-                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-white mr-1.5 animate-pulse" />
-                  )}
-                  {statusBadgeLabel(displayStatus, minute)}
-                </span>
+            {isFootball ? (
+              <div className="relative mb-4 flex flex-col items-center gap-1.5 text-center">
                 {event.league && (
-                  <span className="text-xs text-gray-500 truncate max-w-[140px]">{event.league}</span>
+                  <p className="max-w-[240px] truncate text-[11px] uppercase tracking-wider text-gray-500">
+                    {event.league}
+                  </p>
+                )}
+                <span className={footballStatusClass}>
+                  {footballStatusLabel === "LIVE" && (
+                    <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
+                  )}
+                  {footballStatusLabel}
+                </span>
+                {footballMinuteLabel && (
+                  <span className="text-3xl font-black leading-none tabular-nums text-white">
+                    {footballMinuteLabel}
+                  </span>
+                )}
+                {polling && (
+                  <span className="absolute right-0 top-1/2 inline-block h-3 w-3 -translate-y-1/2 rounded-full border border-gray-500 border-t-transparent animate-spin" />
                 )}
               </div>
-              {polling && <span className="inline-block w-3 h-3 border border-gray-500 border-t-transparent rounded-full animate-spin" />}
-            </div>
+            ) : isNfl ? (
+              <div className="relative mb-4 flex flex-col items-center gap-1.5 text-center">
+                {event.league && (
+                  <p className="max-w-[240px] truncate text-[11px] uppercase tracking-wider text-gray-500">
+                    {event.league}
+                  </p>
+                )}
+                <span className={nflStatusClass}>
+                  {nflState.statusLabel === "LIVE" && (
+                    <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
+                  )}
+                  {nflState.statusLabel}
+                </span>
+                {nflState.progressLabel && (
+                  <span className="text-3xl font-black leading-none tabular-nums text-white">
+                    {nflState.progressLabel}
+                  </span>
+                )}
+                {polling && (
+                  <span className="absolute right-0 top-1/2 inline-block h-3 w-3 -translate-y-1/2 rounded-full border border-gray-500 border-t-transparent animate-spin" />
+                )}
+              </div>
+            ) : (
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <span className={`px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wide ${sportStatusColor(displayStatus)}`}>
+                    {isLive && (
+                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-white mr-1.5 animate-pulse" />
+                    )}
+                    {statusLabel}
+                  </span>
+                  {event.league && (
+                    <span className="text-xs text-gray-500 truncate max-w-[140px]">{event.league}</span>
+                  )}
+                </div>
+                {polling && <span className="inline-block w-3 h-3 border border-gray-500 border-t-transparent rounded-full animate-spin" />}
+              </div>
+            )}
 
             {/* Teams + Score */}
             <div className="flex items-center justify-between gap-2">
@@ -2304,6 +2501,7 @@ if (snap?.posAcc?.shares) {
       const providerEventId = String(meta?.provider_event_id || "");
       const metaSport = String(meta?.sport || "").toLowerCase();
       const isNba = metaSport === "basketball" || metaSport === "nba";
+      const isNfl = metaSport === "american_football" || metaSport === "nfl";
       const isTheSportsDb = provider === "thesportsdb" || provider === "the-sports-db";
       // Keep backward compatibility for older NBA rows missing provider metadata.
       if ((!isNba && !isTheSportsDb) || !providerEventId || market?.marketMode !== "sport") {
@@ -2324,7 +2522,9 @@ if (snap?.posAcc?.shares) {
       // For legacy NBA rows without provider metadata, sport= keeps server routing deterministic.
       const liveUrl = isNba
         ? `/api/sports/live?sport=basketball&event_id=${encodeURIComponent(providerEventId)}`
-        : `/api/sports/live?provider=thesportsdb&event_id=${encodeURIComponent(providerEventId)}`;
+        : isNfl
+          ? `/api/sports/live?provider=thesportsdb&sport=american_football&scope=official&event_id=${encodeURIComponent(providerEventId)}`
+          : `/api/sports/live?provider=thesportsdb&sport=soccer&scope=official&event_id=${encodeURIComponent(providerEventId)}`;
 
       const poll = async () => {
         if (cancelled) return;
@@ -2953,6 +3153,14 @@ if (snap?.posAcc?.shares) {
       if (liveScore.status) ev.status = liveScore.status;
       if (liveScoreLastSuccessAt) ev.last_update = new Date(liveScoreLastSuccessAt).toISOString();
       const liveScoreRaw = asObject(liveScore.raw);
+      // Keep the current provider status/progress available to the existing
+      // score-card presenter. These fields come from the polled provider
+      // response and are never advanced or inferred on the client.
+      if (liveScoreRaw.status_text !== undefined) ev.raw.status_text = liveScoreRaw.status_text;
+      if (liveScoreRaw.progress !== undefined) ev.raw.progress = liveScoreRaw.progress;
+      if (liveScoreRaw.nfl_v2_status !== undefined) ev.raw.nfl_v2_status = liveScoreRaw.nfl_v2_status;
+      if (liveScoreRaw.nfl_v2_progress !== undefined) ev.raw.nfl_v2_progress = liveScoreRaw.nfl_v2_progress;
+      if (liveScoreRaw.nfl_v2_updated !== undefined) ev.raw.nfl_v2_updated = liveScoreRaw.nfl_v2_updated;
       const liveScoreHomeBadge =
         normalizeVisualUrl(
           liveScore.home_badge ??
@@ -4344,6 +4552,30 @@ useEffect(() => {
   ? false
   : sportIsFinished || market.sportTradingState === "ended_by_sport" || sportFinishedByTiming;
 const ended = endedByTime;
+  const footballProvider = String((market.sportMeta as any)?.provider || "").trim().toLowerCase();
+  const isLinkedTheSportsDbFootball =
+    market.marketMode === "sport" &&
+    isSoccerLike &&
+    !!String((market.sportMeta as any)?.provider_event_id || "").trim() &&
+    (footballProvider === "thesportsdb" || footballProvider === "the-sports-db");
+  const isLinkedTheSportsDbNfl =
+    market.marketMode === "sport" &&
+    (sportKey === "american_football" || sportKey === "nfl") &&
+    !!String((market.sportMeta as any)?.provider_event_id || "").trim() &&
+    (footballProvider === "thesportsdb" || footballProvider === "the-sports-db");
+  const keepsProviderScoreCardStatus = isLinkedTheSportsDbFootball || isLinkedTheSportsDbNfl;
+  // Provider clocks are informational: for linked TheSportsDB football/NFL,
+  // do not turn the match status into FT merely because market trading ended.
+  const scoreCardDisplayStatus = keepsProviderScoreCardStatus
+    ? sharedSportDisplayStatus
+    : ended
+      ? "finished"
+      : sharedSportDisplayStatus;
+  const scoreCardMinute = keepsProviderScoreCardStatus
+    ? sharedSportMinute
+    : ended
+      ? ""
+      : sharedSportMinute;
   const sportEndMs = sportPredefinedEndMs;
   const sportLockMs = Number.isFinite(sportEndMs) ? sportEndMs - sportLockOffsetMs : NaN;
   const sportLocked = !sportFinished && (
@@ -4695,8 +4927,8 @@ const ended = endedByTime;
             <SportScoreCard compact
                   event={sportEventForUi}
                   meta={market?.sportMeta}
-                  displayStatus={ended ? "finished" : sharedSportDisplayStatus}
-                  minute={ended ? "" : sharedSportMinute}
+                  displayStatus={scoreCardDisplayStatus}
+                  minute={scoreCardMinute}
                   polling={liveScorePolling}
                   stale={liveScoreFailures >= 3}
                   lastPolledAt={liveScoreLastSuccessAt}
@@ -4789,13 +5021,13 @@ const ended = endedByTime;
                 </Link>
               )}
 
-              {/* Sport score card — when ended (on-chain), badge shows FINAL regardless of provider */}
+              {/* Linked football/NFL cards keep provider status independent from market end. */}
               {sportEventForUi && isSportLikeMarket && (
                 <SportScoreCard
                   event={sportEventForUi}
                   meta={market?.sportMeta}
-                  displayStatus={ended ? "finished" : sharedSportDisplayStatus}
-                  minute={ended ? "" : sharedSportMinute}
+                  displayStatus={scoreCardDisplayStatus}
+                  minute={scoreCardMinute}
                   polling={liveScorePolling}
                   stale={liveScoreFailures >= 3}
                   lastPolledAt={liveScoreLastSuccessAt}

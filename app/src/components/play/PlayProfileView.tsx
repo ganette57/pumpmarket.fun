@@ -431,6 +431,14 @@ function PlayPositions({
   onShare: (p: PlayProfilePositionView) => void;
   onOpenPosition: (p: PlayProfilePositionView) => void;
 }) {
+  const [positionFilter, setPositionFilter] = useState<"open" | "closed">("open");
+  const filteredPositions = useMemo(
+    () => positions.filter((position) =>
+      positionFilter === "open" ? position.status === "open" : position.status !== "open"
+    ),
+    [positions, positionFilter],
+  );
+
   if (error) {
     return (
       <div className="py-14 flex flex-col items-center justify-center text-center gap-2">
@@ -471,6 +479,36 @@ function PlayPositions({
 
   return (
     <>
+      <div
+        role="tablist"
+        aria-label="Position status"
+        className="mb-4 grid w-full max-w-xs grid-cols-2 rounded-xl border border-white/10 bg-white/[0.035] p-1"
+      >
+        {(["open", "closed"] as const).map((filter) => {
+          const active = positionFilter === filter;
+          return (
+            <button
+              key={filter}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => setPositionFilter(filter)}
+              className={`min-h-10 rounded-lg px-4 text-sm font-bold transition ${active ? "bg-pump-green text-black" : "text-gray-400 hover:text-white"}`}
+            >
+              {filter === "open" ? "Open" : "Closed"}
+            </button>
+          );
+        })}
+      </div>
+
+      {filteredPositions.length === 0 ? (
+        <div className="py-12 text-center">
+          <p className="text-sm text-gray-400">
+            {positionFilter === "open" ? "No open positions." : "No closed positions."}
+          </p>
+        </div>
+      ) : (
+        <>
       {/* Desktop / tablet: Market · Pick · Stake · Result · PnL · Date */}
       <div className="hidden md:block overflow-x-auto">
         <table className="w-full text-sm">
@@ -485,22 +523,22 @@ function PlayPositions({
             </tr>
           </thead>
           <tbody>
-            {positions.map((p) => (
+            {filteredPositions.map((p) => (
               <tr
                 key={`${p.market_address}|${p.outcome_index}`}
-                onClick={p.status === "open" ? (event) => {
+                onClick={(event) => {
                   if ((event.target as HTMLElement).closest("a,button,input,select,textarea,[role=button]")) return;
                   onOpenPosition(p);
-                } : undefined}
-                onKeyDown={p.status === "open" ? (event) => {
+                }}
+                onKeyDown={(event) => {
                   if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
                     event.preventDefault();
                     onOpenPosition(p);
                   }
-                } : undefined}
-                role={p.status === "open" ? "link" : undefined}
-                tabIndex={p.status === "open" ? 0 : undefined}
-                className={`border-b border-gray-800/60 last:border-0 ${p.status === "open" ? "cursor-pointer transition hover:bg-white/[0.025] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-pump-green" : ""}`}
+                }}
+                role="link"
+                tabIndex={0}
+                className="cursor-pointer border-b border-gray-800/60 transition last:border-0 hover:bg-white/[0.025] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-pump-green"
               >
                 <td className="py-3 pr-3 max-w-[280px] lg:max-w-[420px]">
                   <div className="text-white truncate" title={p.market_title ?? undefined}>
@@ -553,22 +591,22 @@ function PlayPositions({
 
       {/* Mobile: one card per grouped position */}
       <div className="md:hidden space-y-2">
-        {positions.map((p) => (
+        {filteredPositions.map((p) => (
           <div
             key={`${p.market_address}|${p.outcome_index}`}
-            onClick={p.status === "open" ? (event) => {
-                  if ((event.target as HTMLElement).closest("a,button,input,select,textarea,[role=button]")) return;
-                  onOpenPosition(p);
-                } : undefined}
-            onKeyDown={p.status === "open" ? (event) => {
+            onClick={(event) => {
+              if ((event.target as HTMLElement).closest("a,button,input,select,textarea,[role=button]")) return;
+              onOpenPosition(p);
+            }}
+            onKeyDown={(event) => {
               if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
                 event.preventDefault();
                 onOpenPosition(p);
               }
-            } : undefined}
-            role={p.status === "open" ? "link" : undefined}
-            tabIndex={p.status === "open" ? 0 : undefined}
-            className={`rounded-xl border border-gray-800 bg-pump-dark/40 p-3 ${p.status === "open" ? "cursor-pointer transition active:border-pump-green/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-pump-green" : ""}`}
+            }}
+            role="link"
+            tabIndex={0}
+            className="cursor-pointer rounded-xl border border-gray-800 bg-pump-dark/40 p-3 transition active:border-pump-green/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-pump-green"
           >
             <div className="text-sm text-white truncate">
               {p.market_title || shortAddr(p.market_address)}
@@ -603,6 +641,8 @@ function PlayPositions({
           </div>
         ))}
       </div>
+        </>
+      )}
     </>
   );
 }
