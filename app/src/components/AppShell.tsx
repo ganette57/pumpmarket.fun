@@ -20,6 +20,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const isLiveDetail = pathname?.startsWith("/live/") && pathname !== "/live";
   // Home feed is fullscreen immersive — no mobile top bar, no padding
   const isHomeFeed = pathname === "/";
+  // Create keeps the app header, but owns the rest of the mobile viewport.
+  const isCreate = pathname === "/create" || pathname?.startsWith("/create/");
 
   return (
     // The onboarding provider wraps the shell, not the page: the "How it
@@ -48,6 +50,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             ? "flex-1 min-h-0 overflow-hidden pb-[env(safe-area-inset-bottom,0px)] md:pb-0"
             : isLiveFeed
             ? "h-[calc(100dvh-3.5rem)] overflow-hidden md:h-auto md:overflow-visible md:min-h-screen md:pb-0"
+            : isCreate
+            ? "min-h-[calc(100dvh_-_4rem_-_env(safe-area-inset-top,0px))] pb-0 max-md:bg-black md:min-h-screen"
             : "min-h-screen pb-32 md:pb-0"
         }
       >
@@ -58,7 +62,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 {!isTrade && <div className="hidden md:block"><SiteFooter /></div>}
 
       {/* Bottom nav mobile */}
-      {!isTrade && <MobileNav />}
+      {!isTrade && !isCreate && <MobileNav />}
     </div>
     </OnboardingProvider>
   );

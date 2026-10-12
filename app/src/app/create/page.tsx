@@ -409,7 +409,7 @@ function CategoryStep({
     ) : null;
 
   return (
-    <div className="min-h-[calc(100svh-4rem)] bg-black px-4 pb-48 pt-5 sm:px-6 md:min-h-[calc(100vh-5rem)] md:pb-32 md:pt-8">
+    <div className="min-h-[calc(100dvh_-_4rem_-_env(safe-area-inset-top,0px))] bg-black px-4 pb-48 pt-5 sm:px-6 md:min-h-[calc(100vh-5rem)] md:pb-32 md:pt-8">
       <div className="mx-auto w-full max-w-2xl">
         <div className="flex items-center gap-4">
           <button
@@ -481,8 +481,8 @@ function CategoryStep({
         </div>
       </div>
 
-      <div className="fixed bottom-[6.25rem] left-0 right-0 z-40 px-4 md:bottom-14 md:px-6">
-        <div className="mx-auto max-w-2xl rounded-2xl bg-black/90 pt-3 backdrop-blur-xl">
+      <div className="fixed inset-x-0 bottom-0 z-40 bg-black/90 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur-xl md:bottom-14 md:bg-transparent md:px-6 md:pb-0 md:pt-0 md:backdrop-blur-none">
+        <div className="mx-auto max-w-2xl md:rounded-2xl md:bg-black/90 md:pt-3 md:backdrop-blur-xl">
           <button
             type="button"
             onClick={onNext}
@@ -1629,7 +1629,7 @@ export default function CreateMarketPage() {
     (!sideMarketMode || sportProviderEventId.trim().length > 0);
 
   const stepTwo = (
-    <div className="mx-auto min-h-screen max-w-2xl px-4 pb-48 pt-8 sm:px-6 sm:pt-10">
+    <div className="mx-auto min-h-[calc(100dvh_-_4rem_-_env(safe-area-inset-top,0px))] max-w-2xl px-4 pb-48 pt-8 sm:px-6 sm:pt-10 md:min-h-screen">
       <div className="mb-8">
         <div className="mb-7 flex items-center gap-4">
           <button
@@ -1641,7 +1641,15 @@ export default function CreateMarketPage() {
             <ArrowLeft className="h-5 w-5" />
           </button>
           <div className="flex-1"><WizardProgress activeStep={2} /></div>
-          <div className="h-10 w-10 shrink-0" aria-hidden="true" />
+          <button
+            type="button"
+            onClick={() => router.back()}
+            aria-label="Close create market"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-gray-400 transition hover:bg-white/10 hover:text-white md:hidden"
+          >
+            <X className="h-5 w-5" />
+          </button>
+          <div className="hidden h-10 w-10 shrink-0 md:block" aria-hidden="true" />
         </div>
         <p className="mb-2 text-xs font-bold uppercase tracking-[0.2em] text-pump-green">Step 2 of 4</p>
         <h1 className="text-3xl font-black tracking-tight text-white sm:text-4xl">Ask a question</h1>
@@ -1837,7 +1845,7 @@ export default function CreateMarketPage() {
         </section>
       </div>
 
-      <div className="fixed inset-x-0 bottom-[6.25rem] z-30 px-4 md:bottom-14">
+      <div className="fixed inset-x-0 bottom-0 z-30 bg-black/90 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur-xl md:bottom-14 md:bg-transparent md:pb-0 md:pt-0 md:backdrop-blur-none">
         <div className="mx-auto max-w-2xl">
           <button type="button" onClick={() => setCurrentStep(3)} disabled={!step2CanContinue} className={`w-full rounded-xl py-4 text-base font-black transition ${step2CanContinue ? "btn-pump glow-green" : "cursor-not-allowed bg-gray-800 text-gray-500"}`}>
             Next
@@ -1985,7 +1993,7 @@ export default function CreateMarketPage() {
   ) : null;
 
   const stepThree = (
-    <div className="mx-auto min-h-screen max-w-2xl px-4 pb-48 pt-8 sm:px-6 sm:pt-10">
+    <div className="mx-auto min-h-[calc(100dvh_-_4rem_-_env(safe-area-inset-top,0px))] max-w-2xl px-4 pb-48 pt-8 sm:px-6 sm:pt-10 md:min-h-screen">
       <div className="mb-8">
         <div className="mb-7 flex items-center gap-4">
           <button
@@ -1997,7 +2005,15 @@ export default function CreateMarketPage() {
             <ArrowLeft className="h-5 w-5" />
           </button>
           <div className="flex-1"><WizardProgress activeStep={3} /></div>
-          <div className="h-10 w-10 shrink-0" aria-hidden="true" />
+          <button
+            type="button"
+            onClick={() => router.back()}
+            aria-label="Close create market"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-gray-400 transition hover:bg-white/10 hover:text-white md:hidden"
+          >
+            <X className="h-5 w-5" />
+          </button>
+          <div className="hidden h-10 w-10 shrink-0 md:block" aria-hidden="true" />
         </div>
         <p className="mb-2 text-xs font-bold uppercase tracking-[0.2em] text-pump-green">Step 3 of 4</p>
         <h1 className="text-3xl font-black tracking-tight text-white sm:text-4xl">When will it end?</h1>
@@ -2088,7 +2104,7 @@ export default function CreateMarketPage() {
         </section>
       )}
 
-      <div className="fixed inset-x-0 bottom-[6.25rem] z-30 px-4 md:bottom-14">
+      <div className="fixed inset-x-0 bottom-0 z-30 bg-black/90 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur-xl md:bottom-14 md:bg-transparent md:pb-0 md:pt-0 md:backdrop-blur-none">
         <div className="mx-auto max-w-2xl">
           <button type="button" onClick={() => setCurrentStep(4)} className="btn-pump glow-green w-full rounded-xl py-4 text-base font-black transition">
             Next
@@ -2110,7 +2126,7 @@ export default function CreateMarketPage() {
   const hasReviewMedia = Boolean(imagePreview || feedVideoFile || feedVideoPreview);
 
   const stepFour = (
-    <div className="mx-auto min-h-screen max-w-2xl px-4 pb-64 pt-8 sm:px-6 sm:pt-10">
+    <div className="mx-auto min-h-[calc(100dvh_-_4rem_-_env(safe-area-inset-top,0px))] max-w-2xl px-4 pb-64 pt-8 sm:px-6 sm:pt-10 md:min-h-screen">
       <div className="mb-8">
         <div className="mb-7 flex items-center gap-4">
           <button
@@ -2122,7 +2138,15 @@ export default function CreateMarketPage() {
             <ArrowLeft className="h-5 w-5" />
           </button>
           <div className="flex-1"><WizardProgress activeStep={4} /></div>
-          <div className="h-10 w-10 shrink-0" aria-hidden="true" />
+          <button
+            type="button"
+            onClick={() => router.back()}
+            aria-label="Close create market"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-gray-400 transition hover:bg-white/10 hover:text-white md:hidden"
+          >
+            <X className="h-5 w-5" />
+          </button>
+          <div className="hidden h-10 w-10 shrink-0 md:block" aria-hidden="true" />
         </div>
         <p className="mb-2 text-xs font-bold uppercase tracking-[0.2em] text-pump-green">Step 4 of 4</p>
         <h1 className="text-3xl font-black tracking-tight text-white sm:text-4xl">Review &amp; launch</h1>
@@ -2248,8 +2272,8 @@ export default function CreateMarketPage() {
         </section>
       </div>
 
-      <div className="fixed inset-x-0 bottom-[6.25rem] z-30 px-4 md:bottom-14">
-        <div className="mx-auto max-w-2xl rounded-2xl bg-black/90 pt-3 backdrop-blur-xl">
+      <div className="fixed inset-x-0 bottom-0 z-30 bg-black/90 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur-xl md:bottom-14 md:bg-transparent md:pb-0 md:pt-0 md:backdrop-blur-none">
+        <div className="mx-auto max-w-2xl md:rounded-2xl md:bg-black/90 md:pt-3 md:backdrop-blur-xl">
           {!connected && !connecting && privy.configured && !isPlayMode ? (
             <button type="button" onClick={() => privy.loginWithGoogle()} className="btn-pump glow-green w-full rounded-xl py-4 text-base font-black transition">
               Continue with Google
