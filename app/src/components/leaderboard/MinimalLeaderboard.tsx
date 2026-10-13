@@ -31,9 +31,16 @@ export type LeaderboardSummary =
       percent: number;
     };
 
+export type LeaderboardViewerPosition =
+  | { kind: "loading" }
+  | { kind: "ranked"; rank: number; score: string }
+  | { kind: "empty"; message: string };
+
 type Props = {
   players: MinimalLeaderboardPlayer[];
   summary: LeaderboardSummary;
+  prizePool?: string | null;
+  viewerPosition: LeaderboardViewerPosition;
   pending: boolean;
   unavailable?: boolean;
   showPodium?: boolean;
@@ -126,6 +133,32 @@ function Summary({ summary, onPeriodEnd }: { summary: LeaderboardSummary; onPeri
       </div>
       <p className="mt-2 text-xs font-semibold text-white/50 tabular-nums">{percent.toFixed(1)}%</p>
     </section>
+  );
+}
+
+function PrizePool({ amount }: { amount: string }) {
+  return (
+    <div className="mt-5 text-center">
+      <p className="text-[9px] font-semibold uppercase tracking-[0.24em] text-white/40">Total prize pool</p>
+      <p className="mt-1 text-2xl font-bold text-pump-green tabular-nums sm:text-3xl">{amount}</p>
+    </div>
+  );
+}
+
+function YourPosition({ position }: { position: LeaderboardViewerPosition }) {
+  const value = position.kind === "loading"
+    ? "Loading…"
+    : position.kind === "ranked"
+      ? `#${position.rank} — ${position.score}`
+      : position.message;
+
+  return (
+    <div className="mt-5 flex w-full max-w-sm items-center justify-between gap-4 border-t border-white/[0.08] py-3 text-sm">
+      <span className="text-white/45">Your position</span>
+      <span className={`truncate text-right font-semibold tabular-nums ${position.kind === "ranked" ? "text-white" : "text-white/40"}`}>
+        {value}
+      </span>
+    </div>
   );
 }
 
@@ -231,13 +264,14 @@ function HowItWorksDrawer({ open, onClose, explanation }: { open: boolean; onClo
   );
 }
 
-export default function MinimalLeaderboard({ players, summary, pending, unavailable = false, showPodium = true, explanation, onPeriodEnd }: Props) {
+export default function MinimalLeaderboard({ players, summary, prizePool = null, viewerPosition, pending, unavailable = false, showPodium = true, explanation, onPeriodEnd }: Props) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   return (
     <div className="min-h-screen bg-black px-5 pb-32 pt-6 text-white md:pt-8">
       <div className="mx-auto flex w-full max-w-2xl flex-col items-center">
         <h1 className="text-3xl font-bold tracking-[-0.04em] sm:text-4xl">Leaderboard</h1>
-        <div className="mt-7 flex w-full justify-center"><Summary summary={summary} onPeriodEnd={onPeriodEnd} /></div>
+        {prizePool && <PrizePool amount={prizePool} />}
+        <div className={`${prizePool ? "mt-5" : "mt-7"} flex w-full justify-center`}><Summary summary={summary} onPeriodEnd={onPeriodEnd} /></div>
         {showPodium && (
           <section className="mt-7 grid w-full grid-cols-3 grid-rows-[auto_auto] items-end gap-x-2 gap-y-0 sm:mt-8 sm:gap-x-8" aria-label="Top three players">
             {PODIUM.map((spot) => (
@@ -247,7 +281,8 @@ export default function MinimalLeaderboard({ players, summary, pending, unavaila
             ))}
           </section>
         )}
-        <button onClick={() => setDrawerOpen(true)} className="mt-6 inline-flex h-10 items-center gap-2 rounded-full border border-white/12 bg-white/[0.03] px-5 text-sm font-medium text-white/65 transition hover:border-pump-green/40 hover:text-pump-green focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pump-green/70">
+        <YourPosition position={viewerPosition} />
+        <button onClick={() => setDrawerOpen(true)} className="mt-3 inline-flex h-10 items-center gap-2 rounded-full border border-white/12 bg-white/[0.03] px-5 text-sm font-medium text-white/65 transition hover:border-pump-green/40 hover:text-pump-green focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pump-green/70">
           <Info className="h-4 w-4" /> How it works
         </button>
       </div>

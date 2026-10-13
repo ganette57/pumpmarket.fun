@@ -2,6 +2,7 @@
 
 import MinimalLeaderboard, { type MinimalLeaderboardPlayer } from "@/components/leaderboard/MinimalLeaderboard";
 import { useRealLeaderboard, type RealLeaderboardResponse, type RealLeaderboardRowView } from "@/components/real/useRealLeaderboard";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 
 function shortWallet(wallet: string) {
   return wallet.length <= 10 ? wallet : `${wallet.slice(0, 4)}…${wallet.slice(-4)}`;
@@ -43,7 +44,8 @@ function formatUsdVolume(value: number) {
 }
 
 export default function RealLeaderboardView() {
-  const { data, pending, error } = useRealLeaderboard({ limit: 3 });
+  const { ready, connected, address } = useFunMarketWallet();
+  const { data, pending, error } = useRealLeaderboard({ limit: 3, wallet: address });
   const road = data?.road ?? null;
   const hasProgress =
     road?.total_real_volume_usd != null &&
@@ -67,11 +69,20 @@ export default function RealLeaderboardView() {
           kind: "empty",
           message: error ? "Leaderboard unavailable" : "Volume progress unavailable",
         } as const);
+  const viewer = data?.viewer ?? null;
+  const viewerPosition = !ready || pending
+    ? ({ kind: "loading" } as const)
+    : !connected || !address
+      ? ({ kind: "empty", message: "Connect wallet" } as const)
+      : viewer
+        ? ({ kind: "ranked", rank: viewer.rank, score: scoreOf(viewer.claimed_profit_sol) } as const)
+        : ({ kind: "empty", message: "Not ranked" } as const);
 
   return (
     <MinimalLeaderboard
       players={(data?.rows ?? []).slice(0, 3).map(playerOf)}
       summary={summary}
+      viewerPosition={viewerPosition}
       pending={pending}
       unavailable={error}
       explanation={{

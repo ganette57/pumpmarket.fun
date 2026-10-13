@@ -3,6 +3,8 @@
 import { useCallback } from "react";
 import MinimalLeaderboard, { type MinimalLeaderboardPlayer } from "@/components/leaderboard/MinimalLeaderboard";
 import { usePlayContest } from "@/components/play/usePlayContest";
+import { usePlaySession } from "@/components/play/PlaySessionProvider";
+import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 import { formatUsd, toCents, type PlayContestRowView, type PlayPublicContestView } from "@/lib/playClient";
 
 function shortWallet(wallet: string) {
@@ -40,6 +42,8 @@ function rewardCopy(contest: PlayPublicContestView | null) {
 
 export default function PlayLeaderboardView() {
   const { data, pending, error, refresh } = usePlayContest({ limit: 3 });
+  const { ready, connected } = useFunMarketWallet();
+  const { authenticated } = usePlaySession();
   const contest = data?.contest ?? null;
   const now = Date.now();
   const startsAt = contest ? new Date(contest.starts_at).getTime() : Number.NaN;
@@ -58,11 +62,23 @@ export default function PlayLeaderboardView() {
     : activeContest
       ? ({ kind: "countdown", endsAt: activeContest.ends_at } as const)
       : ({ kind: "empty", message: error ? "Leaderboard unavailable" : "No active contest" } as const);
+  const viewer = activeContest ? data?.viewer ?? null : null;
+  const viewerPosition = !ready || pending
+    ? ({ kind: "loading" } as const)
+    : !connected
+      ? ({ kind: "empty", message: "Connect wallet" } as const)
+      : !authenticated
+        ? ({ kind: "empty", message: "Sign in to view" } as const)
+        : viewer
+          ? ({ kind: "ranked", rank: viewer.rank, score: scoreOf(viewer.realized_pnl_usd) } as const)
+          : ({ kind: "empty", message: "Not ranked" } as const);
 
   return (
     <MinimalLeaderboard
       players={activeContest ? (data?.ranking ?? []).slice(0, 3).map(playerOf) : []}
       summary={summary}
+      prizePool={activeContest ? formatUsd(activeContest.prize_pool_usd, { compact: true }) : null}
+      viewerPosition={viewerPosition}
       pending={pending}
       unavailable={error}
       showPodium={pending || !!activeContest}
