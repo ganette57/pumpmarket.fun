@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { ChevronLeft, ChevronRight, ChevronDown, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, ChevronDown } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import MarketCard from "@/components/MarketCard";
 import FeaturedMarketCardFull from "@/components/FeaturedMarketCardFull";
@@ -22,6 +22,7 @@ import HomeFeedActionRail from "@/components/HomeFeedActionRail";
 import HomeFeedCommentsSheet from "@/components/HomeFeedCommentsSheet";
 import ModeSwitch from "@/components/mode/ModeSwitch";
 import ModeBalancePill from "@/components/mode/ModeBalancePill";
+import MobileHeaderActions from "@/components/MobileHeaderActions";
 import { useTradingMode } from "@/components/mode/ModeProvider";
 import {
   useMarketSnapshotActions,
@@ -1280,22 +1281,14 @@ export default function Home() {
               className="fixed top-0 left-0 right-0 z-[60] pointer-events-none"
               style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
             >
-              <div className="grid h-16 grid-cols-[1fr_auto_1fr] items-center gap-2 px-3">
+              <div className="grid h-16 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-1.5 px-2.5 min-[390px]:gap-2 min-[390px]:px-3">
                 <div className="flex min-w-0 items-center justify-start">
                   <ModeBalancePill variant="header" className="pointer-events-auto backdrop-blur-sm" />
                 </div>
 
                 <ModeSwitch size="sm" variant="header" className="pointer-events-auto backdrop-blur-sm" />
 
-                <div className="flex min-w-0 items-center justify-end">
-                  <Link
-                    href="/search"
-                    className="pointer-events-auto h-11 w-11 shrink-0 flex items-center justify-center rounded-full bg-black/40 backdrop-blur-sm"
-                    aria-label="Search markets"
-                  >
-                    <Search className="w-[22px] h-[22px] text-white/90" />
-                  </Link>
-                </div>
+                <MobileHeaderActions className="backdrop-blur-sm" />
               </div>
             </div>
 

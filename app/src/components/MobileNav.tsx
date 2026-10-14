@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { Search } from "lucide-react";
 import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 import { usePrivyIdentity } from "@/components/privy/PrivyIdentityProvider";
 
@@ -36,7 +37,7 @@ function Item({
       onClick={onClick}
       aria-label={label}
       aria-current={active ? "page" : undefined}
-      className="flex h-10 w-10 items-center justify-center rounded-xl"
+      className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-pump-green"
     >
       <Icon active={active}>{icon}</Icon>
     </Link>
@@ -70,18 +71,9 @@ export default function MobileNav() {
     }
   };
 
-  const handleLeaderboardTap = (e: React.MouseEvent) => {
-    // Retap on the leaderboard tab while already there: just scroll back to
-    // the top instead of re-navigating to the same route.
-    if (isActive("/leaderboard")) {
-      e.preventDefault();
-      window.scrollTo(0, 0);
-    }
-  };
-
   return (
-    <div className="md:hidden fixed bottom-0 left-0 right-0 z-50 h-14 border-t border-gray-800 bg-black/90 backdrop-blur">
-      <div className="mx-auto max-w-md px-4 py-2 flex items-center justify-between">
+    <div className="fixed bottom-0 left-0 right-0 z-50 box-content h-14 border-t border-gray-800 bg-black/90 pb-[env(safe-area-inset-bottom,0px)] backdrop-blur md:hidden">
+      <nav aria-label="Primary" className="mx-auto grid h-14 max-w-md grid-cols-5 items-center px-4">
         {/* Home */}
         <Item
           href="/"
@@ -96,28 +88,21 @@ export default function MobileNav() {
           }
         />
 
-        {/* Leaderboard */}
+        {/* Search — opens the existing full mobile search experience. */}
         <Item
-          href="/leaderboard"
-          label="Leaderboard"
-          active={isActive("/leaderboard")}
-          onClick={handleLeaderboardTap}
+          href="/search"
+          label="Search"
+          active={isActive("/search")}
           icon={
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6" />
-              <path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18" />
-              <path d="M4 22h16" />
-              <path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22" />
-              <path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22" />
-              <path d="M18 2H6v7a6 6 0 0 0 12 0V2Z" />
-            </svg>
+            <Search className="h-6 w-6" strokeWidth={2} aria-hidden="true" />
           }
         />
 
         {/* Create (center action) */}
         <Link
           href="/create"
-          className="-mt-1 flex h-10 w-10 items-center justify-center rounded-2xl bg-[#61ff9a] text-black shadow"
+          aria-label="Create"
+          className="mx-auto -mt-1 flex h-11 w-11 items-center justify-center rounded-2xl bg-[#61ff9a] text-black shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
         >
           <svg
             viewBox="0 0 24 24"
@@ -174,7 +159,7 @@ export default function MobileNav() {
             </svg>
           }
         />
-      </div>
+      </nav>
     </div>
   );
 }
