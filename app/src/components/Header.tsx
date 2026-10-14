@@ -1,44 +1,18 @@
 'use client';
 
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
-import AccountPanel from "@/components/wallet/AccountPanel";
-import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
-import { getProfile } from '@/lib/profiles';
 import ModeSwitch from '@/components/mode/ModeSwitch';
 import ModeBalancePill from '@/components/mode/ModeBalancePill';
-import { useOnboarding } from '@/components/onboarding/OnboardingProvider';
-
-// --- Hook pour fermer le menu avatar quand on clique en dehors ---
-function useClickOutside(ref: React.RefObject<HTMLDivElement>, onClose: () => void) {
-  useEffect(() => {
-    function handleClick(event: MouseEvent) {
-      if (!ref.current) return;
-      if (!ref.current.contains(event.target as Node)) onClose();
-    }
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, [ref, onClose]);
-}
+import ProfileMenu from '@/components/ProfileMenu';
 
 export default function Header() {
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
-  const { connected, publicKey, disconnect } = useFunMarketWallet();
-  const onboarding = useOnboarding();
 
   const [search, setSearch] = useState('');
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [headerAvatarUrl, setHeaderAvatarUrl] = useState<string | null>(null);
-
-  const menuRef = useRef<HTMLDivElement>(null);
-  useClickOutside(menuRef, () => setMenuOpen(false));
-
-  const DOCS_URL = "https://funmarket.gitbook.io/funmarket/";
-  const TERMS_URL = "https://funmarket.gitbook.io/funmarket/terms-of-use";
-  const PRIVACY_URL = "https://funmarket.gitbook.io/funmarket/privacy-policy";
 
   // Check if we're on explorer/search page
   const isOnSearchPage = pathname === '/search' || pathname === '/explorer';
@@ -49,23 +23,6 @@ export default function Header() {
     const q = sp.get('q') || '';
     setSearch(q);
   }, [sp]);
-
-  const avatarLabel = useMemo(() => {
-    return publicKey ? publicKey.toBase58().slice(0, 2).toUpperCase() : '??';
-  }, [publicKey]);
-
-  // Fetch profile avatar for header
-  useEffect(() => {
-    if (!connected || !publicKey) {
-      setHeaderAvatarUrl(null);
-      return;
-    }
-    let cancelled = false;
-    getProfile(publicKey.toBase58()).then((p) => {
-      if (!cancelled) setHeaderAvatarUrl(p?.avatar_url ?? null);
-    });
-    return () => { cancelled = true; };
-  }, [connected, publicKey]);
 
   // Navigate to search page on focus (if not already there)
   const handleSearchFocus = () => {
@@ -174,141 +131,7 @@ export default function Header() {
             </Link>
 
             {/* Avatar/Menu (always visible) */}
-            <div className="relative" ref={menuRef}>
-              <button
-                type="button"
-                onClick={() => setMenuOpen((v) => !v)}
-                className="flex h-8 w-8 items-center justify-center rounded-full
-                           border border-gray-700
-                           bg-gray-900
-                           text-l font-semibold text-gray-200
-                           hover:border-gray-400 hover:text-white
-                           transition overflow-hidden"
-                aria-label="Open menu"
-              >
-                {connected && headerAvatarUrl ? (
-                  <img src={headerAvatarUrl} alt="" className="w-full h-full object-cover" />
-                ) : connected ? avatarLabel : "☰"}
-              </button>
-
-              {menuOpen && (
-                <div className="absolute right-0 mt-2 w-64 rounded-xl border border-pump-border bg-pump-gray shadow-lg py-2 text-sm text-gray-100 z-[100]">
-                  {/* Account: Google sign-in, Real wallet, add funds */}
-                  <AccountPanel onNavigate={() => setMenuOpen(false)} />
-
-                  <div className="h-px bg-gray-700/50 my-1" />
-
-                  {/* Connected-only */}
-                  {connected && publicKey && (
-                    <Link
-                      href={`/profile/${publicKey.toBase58()}`}
-                      className="block px-4 py-2 hover:bg-pump-dark"
-                      onClick={() => setMenuOpen(false)}
-                    >
-                      👤 Profile
-                    </Link>
-                  )}
-                  {connected && (
-                    <Link
-                      href="/dashboard"
-                      className="block px-4 py-2 hover:bg-pump-dark"
-                      onClick={() => setMenuOpen(false)}
-                    >
-                      Dashboard
-                    </Link>
-                  )}
-
-                  {/* Public pages */}
-                  <Link
-                    href="/leaderboard"
-                    className="block px-4 py-2 hover:bg-pump-dark"
-                    onClick={() => setMenuOpen(false)}
-                  >
-                    🏆 Leaderboard
-                  </Link>
-
-                  <Link
-                    href="/referrals"
-                    className="block px-4 py-2 hover:bg-pump-dark"
-                    onClick={() => setMenuOpen(false)}
-                  >
-                    🤝 Referrals
-                  </Link>
-
-                  <Link
-                    href="/treasury"
-                    className="block px-4 py-2 hover:bg-pump-dark"
-                    onClick={() => setMenuOpen(false)}
-                  >
-                    💰 Treasury
-                  </Link>
-
-                  <a
-                    href={DOCS_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block px-4 py-2 hover:bg-pump-dark"
-                    onClick={() => setMenuOpen(false)}
-                  >
-                    📚 Documentation
-                  </a>
-
-                  <a
-                    href={TERMS_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block px-4 py-2 hover:bg-pump-dark"
-                    onClick={() => setMenuOpen(false)}
-                  >
-                    📜 Terms of Use
-                  </a>
-
-                  <a
-                    href={PRIVACY_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block px-4 py-2 hover:bg-pump-dark"
-                    onClick={() => setMenuOpen(false)}
-                  >
-                    🔒 Privacy Policy
-                  </a>
-
-                  {/* Replays the three-step tour. Same steps as first run;
-                      opening it here never resets the first-run flag. */}
-                  <button
-                    type="button"
-                    className="block w-full px-4 py-2 text-left font-bold text-pump-green hover:bg-pump-dark"
-                    onClick={() => {
-                      setMenuOpen(false);
-                      onboarding.open();
-                    }}
-                  >
-                    How it works
-                  </button>
-
-                  {/* Disconnect */}
-                  {connected && (
-                    <>
-                      <div className="h-px bg-gray-700/50 my-1" />
-                      <button
-                        type="button"
-                        className="block w-full px-4 py-2 text-left text-red-400 hover:bg-pump-dark hover:text-red-300"
-                        onClick={async () => {
-                          setMenuOpen(false);
-                          try {
-                            await disconnect();
-                          } catch {
-                            // ignore
-                          }
-                        }}
-                      >
-                        Disconnect
-                      </button>
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
+            <ProfileMenu trigger="avatar" />
           </div>
         </div>
       </header>

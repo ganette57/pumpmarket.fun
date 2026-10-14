@@ -25,6 +25,7 @@ import ActivityList from "@/components/ActivityList";
 import { useTradingMode } from "@/components/mode/ModeProvider";
 import RealOpenPositions from "@/components/RealOpenPositions";
 import PlayProfileView from "@/components/play/PlayProfileView";
+import ProfileMenu from "@/components/ProfileMenu";
 import { UserPlus, Check, Pencil } from "lucide-react";
 
 type DbMarketRow = {
@@ -63,8 +64,19 @@ export default function PublicProfilePage() {
   const params = useParams<{ wallet: string }>();
   const wallet = String(params?.wallet || "").trim();
 
-  if (isPlay) return <PlayProfileView key={wallet} wallet={wallet} />;
-  return <RealProfilePage key={wallet} />;
+  return (
+    <div className="relative">
+      <div className="absolute right-4 top-3 z-[60] md:hidden">
+        <ProfileMenu trigger="ellipsis" />
+      </div>
+
+      {isPlay ? (
+        <PlayProfileView key={wallet} wallet={wallet} />
+      ) : (
+        <RealProfilePage key={wallet} />
+      )}
+    </div>
+  );
 }
 
 /** Existing Real profile with read-only open holdings. */
