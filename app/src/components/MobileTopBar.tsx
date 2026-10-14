@@ -11,9 +11,9 @@
 // for on mobile, so the wordmark is gone and the switch remains prominent.
 // Branding still lives in the tab title, the favicon and the desktop header.
 //
-// The first grid column is the only flexible one. It absorbs balance-length
-// changes while the mode switch and the two fixed-size actions stay aligned
-// and cannot be pushed outside narrow iPhone viewports.
+// Equal minmax side columns keep the mode switch centred on the viewport,
+// independently of the different widths of the balance and quick actions.
+// The compact mobile balance fits inside its side without moving the centre.
 //
 // DELIBERATELY COMPACT. The immersive home feed enlarges its own copies of
 // these controls to 44px — see src/app/page.tsx — because there they float
@@ -66,9 +66,9 @@ export default function MobileTopBar({ showSearch, showClose = false, actions }:
         style={{ paddingTop: "env(safe-area-inset-top, 0px)", boxSizing: "content-box" }}
       >
         {/* Row 1 */}
-        <div className="grid h-16 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-1.5 px-2.5 min-[390px]:gap-2 min-[390px]:px-3">
+        <div className="grid h-16 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-1.5 px-2.5 min-[390px]:gap-2 min-[390px]:px-3">
           {/* Left: active-mode balance */}
-          <div className="flex min-w-0 items-center justify-start">
+          <div className="flex min-w-0 items-center justify-start overflow-hidden">
             {showClose ? <button
               type="button"
               aria-label="Close market"
@@ -76,7 +76,7 @@ export default function MobileTopBar({ showSearch, showClose = false, actions }:
               className="flex h-11 w-11 items-center justify-center rounded-full text-gray-200 transition-colors hover:bg-white/5 hover:text-white focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-pump-green"
             >
               <X size={22} strokeWidth={1.6} aria-hidden="true" />
-            </button> : <ModeBalancePill variant="header" />}
+            </button> : <ModeBalancePill variant="header" className="max-w-full" />}
           </div>
 
           {/* Centre: Play / Real mode — the primary control on mobile */}

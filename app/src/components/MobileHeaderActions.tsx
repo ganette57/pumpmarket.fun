@@ -20,7 +20,7 @@ export default function MobileHeaderActions({
   return (
     <nav
       aria-label="Quick links"
-      className={`pointer-events-auto flex shrink-0 items-center gap-1 ${className}`}
+      className={`pointer-events-auto flex shrink-0 justify-self-end items-center gap-1 ${className}`}
     >
       <Link
         href="/leaderboard"

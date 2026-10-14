@@ -35,7 +35,12 @@ import { useTradingMode } from "@/components/mode/ModeProvider";
 import { usePlaySession } from "@/components/play/PlaySessionProvider";
 import { useSolBalance } from "@/hooks/useSolBalance";
 import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
-import { formatBalanceSol, formatBalanceUsd } from "@/lib/compactBalance";
+import {
+  formatBalanceSol,
+  formatBalanceUsd,
+  formatMobileHeaderBalanceSol,
+  formatMobileHeaderBalanceUsd,
+} from "@/lib/compactBalance";
 
 /**
  * `header`  — solid surfaces, chip-sized (kept for any caller that wants the
@@ -99,10 +104,15 @@ export default function ModeBalancePill({
 
   // Play needs BOTH conditions: a live session, and a balance actually read
   // back from it. Either one missing means "unknown", not "empty".
+  const compactHeader = variant === "header";
   const value = isPlay
     ? play.authenticated && play.balanceUsd !== null
-      ? formatBalanceUsd(play.balanceUsd)
+      ? compactHeader
+        ? formatMobileHeaderBalanceUsd(play.balanceUsd)
+        : formatBalanceUsd(play.balanceUsd)
       : null
+    : compactHeader
+    ? formatMobileHeaderBalanceSol(sol.lamports)
     : formatBalanceSol(sol.lamports);
 
   const hero = variant === "hero";

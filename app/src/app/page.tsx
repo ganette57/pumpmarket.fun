@@ -1281,9 +1281,9 @@ export default function Home() {
               className="fixed top-0 left-0 right-0 z-[60] pointer-events-none"
               style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
             >
-              <div className="grid h-16 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-1.5 px-2.5 min-[390px]:gap-2 min-[390px]:px-3">
-                <div className="flex min-w-0 items-center justify-start">
-                  <ModeBalancePill variant="header" className="pointer-events-auto backdrop-blur-sm" />
+              <div className="grid h-16 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-1.5 px-2.5 min-[390px]:gap-2 min-[390px]:px-3">
+                <div className="flex min-w-0 items-center justify-start overflow-hidden">
+                  <ModeBalancePill variant="header" className="pointer-events-auto max-w-full backdrop-blur-sm" />
                 </div>
 
                 <ModeSwitch size="sm" variant="header" className="pointer-events-auto backdrop-blur-sm" />

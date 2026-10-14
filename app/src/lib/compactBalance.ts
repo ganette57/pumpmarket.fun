@@ -86,6 +86,25 @@ export function formatBalanceUsd(value: unknown): string | null {
 }
 
 /**
+ * Mobile-header-only Play balance. The underlying decimal value is left
+ * untouched; this is only a nearest-dollar presentation with no separators,
+ * so even a seven-digit balance stays narrow enough for the centred header.
+ */
+export function formatMobileHeaderBalanceUsd(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (!/^-?\d+(\.\d+)?$/.test(String(value).trim())) return null;
+
+  const cents = toCents(value);
+  if (cents === null) return null;
+
+  const negative = cents < BIG_ZERO;
+  const abs = negative ? -cents : cents;
+  const roundedDollars = (abs + BigInt(50)) / BIG_HUNDRED;
+  const sign = negative && roundedDollars !== BIG_ZERO ? "-" : "";
+  return `${sign}$${roundedDollars}`;
+}
+
+/**
  * Wallet balance for the header pill: "0.28 SOL", "2.4 SOL", "125 SOL".
  *
  * Takes raw lamports (what `connection.getBalance` returns) so no precision
@@ -125,4 +144,17 @@ export function formatBalanceSol(lamports: number | null | undefined): string | 
   // 100 SOL and up: whole SOL only. The hundredths stop carrying meaning at
   // that size and cost more header width than they are worth.
   return `${sign}${group(whole)} SOL`;
+}
+
+/** Mobile-header-only Real balance, rounded to the nearest whole SOL. */
+export function formatMobileHeaderBalanceSol(
+  lamports: number | null | undefined
+): string | null {
+  if (lamports === null || lamports === undefined) return null;
+  if (!Number.isFinite(lamports)) return null;
+
+  const negative = lamports < 0;
+  const roundedSol = Math.round(Math.abs(lamports) / LAMPORTS_PER_SOL);
+  const sign = negative && roundedSol !== 0 ? "-" : "";
+  return `${sign}${roundedSol} SOL`;
 }
