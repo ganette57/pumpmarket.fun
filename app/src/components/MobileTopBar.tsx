@@ -23,16 +23,19 @@
 
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import ModeSwitch from "@/components/mode/ModeSwitch";
 import ModeBalancePill from "@/components/mode/ModeBalancePill";
 import MobileHeaderActions from "@/components/MobileHeaderActions";
+import ProfileMenu from "@/components/ProfileMenu";
 
 export default function MobileTopBar({ showSearch, showClose = false, actions }: { showSearch: boolean; showClose?: boolean; actions?: React.ReactNode }) {
   const router = useRouter();
+  const pathname = usePathname();
   const sp = useSearchParams();
+  const isProfile = pathname?.startsWith("/profile/");
 
   const initialQ = useMemo(() => sp.get("q") || "", [sp]);
   const [q, setQ] = useState(initialQ);
@@ -82,10 +85,13 @@ export default function MobileTopBar({ showSearch, showClose = false, actions }:
           {/* Centre: Play / Real mode — the primary control on mobile */}
           <ModeSwitch size="sm" variant="header" />
 
-          {/* Right: the two public destinations promoted by the mobile nav. */}
+          {/* Right: Profile owns its account menu; other pages keep the two
+              public destinations promoted by the mobile nav. */}
           <div className="flex min-w-0 items-center justify-end">
             {showClose ? (
               <div className="flex h-11 w-[88px] items-center">{actions}</div>
+            ) : isProfile ? (
+              <ProfileMenu trigger="avatar" />
             ) : (
               <MobileHeaderActions />
             )}
