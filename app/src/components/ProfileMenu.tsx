@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { Gift } from "lucide-react";
 import AccountPanel from "@/components/wallet/AccountPanel";
 import { useFunMarketWallet } from "@/components/wallet/FunMarketWalletProvider";
 import { useOnboarding } from "@/components/onboarding/OnboardingProvider";
@@ -116,6 +117,15 @@ export default function ProfileMenu(_props: ProfileMenuProps = {}) {
             onClick={() => setMenuOpen(false)}
           >
             💰 Treasury
+          </Link>
+
+          <Link
+            href="/referrals"
+            className="flex items-center gap-2 px-4 py-2 hover:bg-pump-dark"
+            onClick={() => setMenuOpen(false)}
+          >
+            <Gift className="h-4 w-4" aria-hidden="true" />
+            Referrals
           </Link>
 
           <a
